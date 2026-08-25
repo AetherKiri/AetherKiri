@@ -214,6 +214,10 @@ struct GodotGpuOp {
     RID src3;
     RID dst;
     PackedByteArray data;
+    uint32_t profile_width = 0;
+    uint32_t profile_height = 0;
+    double profile_pack_ms = 0.0;
+    std::chrono::steady_clock::time_point profile_enqueued_at{};
     std::shared_ptr<ArtemisGpuShaderRequest> artemis_shader;
     std::vector<float> vertices;
     Color clear_color;
@@ -294,6 +298,54 @@ constexpr uint32_t kGodotGpuPreserveMinifiedDetail = 0x40000000u;
 
 constexpr auto kGodotGpuSyncWaitTimeout = std::chrono::milliseconds(900);
 
+bool GodotGpuTextureProfileEnabled() {
+    static const bool enabled = [] {
+        const char *value =
+            std::getenv("AETHERKIRI_GODOT_TEXTURE_PROFILE");
+        if (value != nullptr && value[0] != '\0') {
+            return std::strcmp(value, "0") != 0;
+        }
+        value = std::getenv("AETHERKIRI_MOTION_RENDER_PROFILE");
+        return value != nullptr && value[0] != '\0' &&
+               std::strcmp(value, "0") != 0;
+    }();
+    return enabled;
+}
+
+double GodotGpuTextureProfileSlowMs() {
+    static const double threshold = [] {
+        const char *value =
+            std::getenv("AETHERKIRI_GODOT_TEXTURE_SLOW_MS");
+        if (value == nullptr || value[0] == '\0') return 5.0;
+        char *end = nullptr;
+        const double parsed = std::strtod(value, &end);
+        return end != value && std::isfinite(parsed) && parsed > 0.0
+                   ? parsed
+                   : 5.0;
+    }();
+    return threshold;
+}
+
+void LogGodotGpuUpdateProfile(const char *phase, uint32_t width,
+                              uint32_t height, size_t bytes, double elapsed_ms,
+                              double pack_ms, double queue_ms, bool result,
+                              bool on_render_thread) {
+    if (!GodotGpuTextureProfileEnabled() ||
+        elapsed_ms < GodotGpuTextureProfileSlowMs()) {
+        return;
+    }
+    std::ostringstream message;
+    message << std::fixed << std::setprecision(3)
+            << "godot gpu update profile: phase="
+            << (phase != nullptr ? phase : "unknown")
+            << " elapsed_ms=" << elapsed_ms << " pack_ms=" << pack_ms
+            << " queue_ms=" << queue_ms << " size=" << width << "x"
+            << height << " bytes=" << bytes << " result="
+            << (result ? 1 : 0) << " render_thread="
+            << (on_render_thread ? 1 : 0);
+    UtilityFunctions::print(String(message.str().c_str()));
+}
+
 bool GodotGpuBarrierShadowEnabled() {
     static const bool enabled = [] {
         const char *value =
@@ -357,6 +409,31 @@ void AndroidLogPrintf(const char *level, const char *format, ...) {
 
 #define AK_ANDROID_LOGI(...) AndroidLogPrintf("info", __VA_ARGS__)
 #define AK_ANDROID_LOGW(...) AndroidLogPrintf("warn", __VA_ARGS__)
+
+struct AndroidGodotStoragePermissionState {
+    bool read = false;
+    bool write = false;
+    bool manage = false;
+};
+
+AndroidGodotStoragePermissionState AndroidGetGodotStoragePermissionState() {
+    AndroidGodotStoragePermissionState state;
+    OS *os = OS::get_singleton();
+    if (os == nullptr) {
+        AK_ANDROID_LOGW("storage permission Godot OS unavailable");
+        return state;
+    }
+
+    const PackedStringArray granted = os->get_granted_permissions();
+    state.read = granted.has(String("android.permission.READ_EXTERNAL_STORAGE"));
+    state.write = granted.has(String("android.permission.WRITE_EXTERNAL_STORAGE"));
+    state.manage = granted.has(String("android.permission.MANAGE_EXTERNAL_STORAGE"));
+    AK_ANDROID_LOGI(
+        "storage permission Godot OS state read=%d write=%d manage=%d count=%d",
+        state.read ? 1 : 0, state.write ? 1 : 0, state.manage ? 1 : 0,
+        granted.size());
+    return state;
+}
 
 JavaClassWrapper *AndroidJavaWrapper() {
     JavaClassWrapper *wrapper = JavaClassWrapper::get_singleton();
@@ -536,6 +613,8 @@ void AndroidClearJniException(JNIEnv *env) {
         env->ExceptionClear();
     }
 }
+
+int AndroidGetSdkInt();
 
 void AndroidDeleteLocalRef(JNIEnv *env, jobject ref) {
     if (env != nullptr && ref != nullptr) {
@@ -776,6 +855,8 @@ bool AndroidHasRuntimePermission(const char *permission) {
                                           permission_string);
     const bool ok =
         !env->ExceptionCheck() && result == kAndroidPermissionGranted;
+    AK_ANDROID_LOGI("storage permission check permission=%s result=%d granted=%d",
+                    permission, static_cast<int>(result), ok ? 1 : 0);
     AndroidClearJniException(env);
     env->DeleteLocalRef(permission_string);
     env->DeleteLocalRef(context_class);
@@ -851,6 +932,9 @@ bool AndroidRequestRuntimeStoragePermissions() {
     env->CallVoidMethod(activity, request_permissions, permission_array,
                         kAndroidStoragePermissionRequestCode);
     const bool ok = !env->ExceptionCheck();
+    AK_ANDROID_LOGI(
+        "storage permission runtime request sdk=%d permissions=READ,WRITE dispatched=%d",
+        AndroidGetSdkInt(), ok ? 1 : 0);
     AndroidClearJniException(env);
     env->DeleteLocalRef(permission_array);
     env->DeleteLocalRef(string_class);
@@ -861,13 +945,27 @@ bool AndroidRequestRuntimeStoragePermissions() {
 }
 
 bool AndroidHasExternalStoragePermission() {
+    const AndroidGodotStoragePermissionState godot_state =
+        AndroidGetGodotStoragePermissionState();
+    if (godot_state.read || godot_state.write || godot_state.manage) {
+        AK_ANDROID_LOGI("storage permission effective granted via Godot OS");
+        return true;
+    }
+
     const int sdk = AndroidGetSdkInt();
     if (sdk > 0 && sdk < 23) {
         return true;
     }
     if (sdk > 0 && sdk < 30) {
-        return AndroidHasRuntimePermission(
-            "android.permission.READ_EXTERNAL_STORAGE");
+        AK_ANDROID_LOGI(
+            "storage permission state sdk=%d read=%d write=%d effective_read=0",
+            sdk, godot_state.read ? 1 : 0, godot_state.write ? 1 : 0);
+        return false;
+    }
+    if (sdk <= 0) {
+        AK_ANDROID_LOGW(
+            "storage permission state unavailable: Android SDK/JNI not ready");
+        return false;
     }
 
     const int java_result = AndroidHasExternalStoragePermissionViaGodotJava();
@@ -1029,14 +1127,37 @@ bool AndroidStartSettingsIntent(JNIEnv *env, jobject context, const char *action
 }
 
 bool AndroidRequestExternalStoragePermission() {
+    const AndroidGodotStoragePermissionState before =
+        AndroidGetGodotStoragePermissionState();
+    if (before.read || before.write || before.manage) {
+        AK_ANDROID_LOGI("storage permission already granted");
+        return true;
+    }
+
+    // Calling through Godot's OS keeps this path on the Activity that owns
+    // the current Godot instance. This is important on Android 6-9, where
+    // the extension may be loaded as an ELF dependency and JNI_OnLoad is not
+    // guaranteed to have run for engine_api.so yet.
+    OS *os = OS::get_singleton();
+    if (os != nullptr) {
+        const bool dispatched = os->request_permissions();
+        AK_ANDROID_LOGI(
+            "storage permission request via Godot OS dispatched=%d",
+            dispatched ? 1 : 0);
+        if (dispatched) {
+            const int sdk = AndroidGetSdkInt();
+            if (sdk <= 0 || sdk < 30) {
+                return true;
+            }
+        }
+    }
+
     const int sdk = AndroidGetSdkInt();
     AK_ANDROID_LOGI("storage permission request sdk=%d", sdk);
     if (sdk > 0 && sdk < 30) {
-        AK_ANDROID_LOGI("storage permission request using runtime permissions");
-        return AndroidRequestRuntimeStoragePermissions();
+        return false;
     }
     if (AndroidHasExternalStoragePermission()) {
-        AK_ANDROID_LOGI("storage permission already granted");
         return true;
     }
 
@@ -1815,6 +1936,14 @@ uint remove_const_opacity(uint d, uint strength) {
     return (d & 0x00ffffffu) | (a << 24);
 }
 
+int reflect101_index(int value, int extent) {
+    if (extent <= 1) return 0;
+    int period = (extent - 1) * 2;
+    int wrapped = value % period;
+    if (wrapped < 0) wrapped += period;
+    return wrapped < extent ? wrapped : period - wrapped;
+}
+
 void main() {
     ivec2 local = ivec2(gl_GlobalInvocationID.xy);
     if (local.x >= pc.rect1.x || local.y >= pc.rect1.y) {
@@ -1825,7 +1954,22 @@ void main() {
     uint opa = uint(clamp(pc.rect1.w, 0, 255));
     uint out_color = 0u;
 
-    if (pc.rect1.z == 5) {
+    if (pc.rect1.z == 26) {
+        int radius_x = clamp(pc.rect1.w, 0, 64);
+        int radius_y = clamp(pc.color0.x, 0, 64);
+        ivec2 extent = max(pc.rect1.xy, ivec2(1));
+        vec4 sum = vec4(0.0);
+        int samples = 0;
+        for (int oy = -radius_y; oy <= radius_y; ++oy) {
+            int sy = reflect101_index(local.y + oy, extent.y);
+            for (int ox = -radius_x; ox <= radius_x; ++ox) {
+                int sx = reflect101_index(local.x + ox, extent.x);
+                sum += imageLoad(src_img, pc.rect0.zw + ivec2(sx, sy));
+                ++samples;
+            }
+        }
+        out_color = pack_u8(vec4_to_u8(sum / float(max(samples, 1))));
+    } else if (pc.rect1.z == 5) {
         out_color = (uint(pc.color0.x) & 0xffu) |
                     ((uint(pc.color0.y) & 0xffu) << 8) |
                     ((uint(pc.color0.z) & 0xffu) << 16) |
@@ -4413,7 +4557,8 @@ void ExecuteGodotGpuLive2DRasterBatch(
 bool DispatchGodotGpuBlend(RenderingDevice *rd,
                            const std::shared_ptr<GodotGpuOp> &op,
                            int64_t compute_list,
-                           std::vector<RID> &uniform_sets) {
+                           std::vector<RID> &uniform_sets,
+                           const RID &source_override = RID()) {
     const bool alpha_blend_a = op->mode == TVP_GODOT_GPU_BLEND_ALPHA_BLEND_A;
     if (alpha_blend_a) {
         if (!EnsureAlphaBlendAPipeline(rd)) return false;
@@ -4421,15 +4566,26 @@ bool DispatchGodotGpuBlend(RenderingDevice *rd,
         return false;
     }
 
+    const RID source = source_override.is_valid() ? source_override : op->src;
     RID uniform_set = GetCachedBlendUniformSet(
         rd,
         alpha_blend_a ? g_gpu_pipeline_state->alpha_blend_a_shader
                       : g_gpu_pipeline_state->blend_shader,
-        op->src, op->dst);
+        source, op->dst);
     if (!uniform_set.is_valid()) return false;
     (void)uniform_sets;
 
-    const PackedByteArray push_constants = PackGpuPushConstants(*op);
+    PackedByteArray push_constants = PackGpuPushConstants(*op);
+    if (source_override.is_valid() && op->mode == TVP_GODOT_GPU_BLEND_BOX_BLUR_ALPHA) {
+        // The alias scratch texture is tightly sized to the source rectangle.
+        // Its local origin replaces the original source texture coordinates.
+        int32_t zero = 0;
+        uint8_t *bytes = push_constants.ptrw();
+        if (bytes != nullptr) {
+            std::memcpy(bytes + 2 * sizeof(int32_t), &zero, sizeof(zero));
+            std::memcpy(bytes + 3 * sizeof(int32_t), &zero, sizeof(zero));
+        }
+    }
     rd->compute_list_bind_compute_pipeline(
         compute_list,
         alpha_blend_a ? g_gpu_pipeline_state->alpha_blend_a_pipeline
@@ -4490,7 +4646,10 @@ bool DispatchGodotGpuBlend3(RenderingDevice *rd,
 bool ExecuteGodotGpuBlend(RenderingDevice *rd,
                           const std::shared_ptr<GodotGpuOp> &op) {
     if (rd == nullptr || op == nullptr) return false;
-    if (op->src == op->dst &&
+    const bool alias_box_blur =
+        op->src == op->dst &&
+        op->mode == TVP_GODOT_GPU_BLEND_BOX_BLUR_ALPHA;
+    if (op->src == op->dst && !alias_box_blur &&
         op->mode != TVP_GODOT_GPU_BLEND_FILL_ARGB &&
         op->mode != TVP_GODOT_GPU_BLEND_REMOVE_CONST_OPACITY &&
         op->mode != TVP_GODOT_GPU_BLEND_FILL_MASK) {
@@ -4499,8 +4658,26 @@ bool ExecuteGodotGpuBlend(RenderingDevice *rd,
     }
 
     std::vector<RID> uniform_sets;
+    RID alias_source;
+    if (alias_box_blur) {
+        Ref<RDTextureView> view;
+        view.instantiate();
+        TypedArray<PackedByteArray> initial_data;
+        alias_source = rd->texture_create(
+            MakeRgbaTextureFormat(static_cast<uint32_t>(op->size.x),
+                                  static_cast<uint32_t>(op->size.y)),
+            view, initial_data);
+        if (!alias_source.is_valid()) return false;
+        if (rd->texture_copy(op->src, alias_source, op->src_pos, Vector3(),
+                             op->size, 0, 0, 0, 0) != OK) {
+            rd->free_rid(alias_source);
+            return false;
+        }
+        ApplyGodotGpuBarrier(rd);
+    }
     int64_t compute_list = rd->compute_list_begin();
-    const bool ok = DispatchGodotGpuBlend(rd, op, compute_list, uniform_sets);
+    const bool ok = DispatchGodotGpuBlend(
+        rd, op, compute_list, uniform_sets, alias_source);
     if (ok) {
         rd->compute_list_add_barrier(compute_list);
     }
@@ -4510,6 +4687,10 @@ bool ExecuteGodotGpuBlend(RenderingDevice *rd,
     }
     for (const RID &uniform_set : uniform_sets) {
         rd->free_rid(uniform_set);
+    }
+    if (alias_source.is_valid()) {
+        InvalidateGodotGpuUniformSetsForResource(rd, alias_source);
+        rd->free_rid(alias_source);
     }
     return ok;
 }
@@ -4814,10 +4995,28 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
     bool result = false;
     bool wrote_texture = false;
     switch (op->type) {
-        case GodotGpuOp::Type::Update:
+        case GodotGpuOp::Type::Update: {
+            const auto update_started = std::chrono::steady_clock::now();
+            const double queue_ms =
+                op->profile_enqueued_at.time_since_epoch().count() != 0
+                    ? std::chrono::duration<double, std::milli>(
+                          update_started - op->profile_enqueued_at)
+                          .count()
+                    : 0.0;
             result = rd->texture_update(op->dst, 0, op->data) == OK;
+            const double update_ms =
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - update_started)
+                    .count();
+            RenderingServer *server = RenderingServer::get_singleton();
+            LogGodotGpuUpdateProfile(
+                "texture_update", op->profile_width, op->profile_height,
+                static_cast<size_t>(op->data.size()), update_ms,
+                op->profile_pack_ms, queue_ms, result,
+                server != nullptr && server->is_on_render_thread());
             wrote_texture = true;
             break;
+        }
         case GodotGpuOp::Type::Clear:
             result = rd->texture_clear(op->dst, op->clear_color, 0, 1, 0, 1) == OK;
             wrote_texture = true;
@@ -6511,12 +6710,23 @@ uint64_t BridgeCreateRgba(uint32_t width, uint32_t height, const void *pixels,
         return 0;
     }
 
+    const auto create_started = std::chrono::steady_clock::now();
     Ref<RDTextureView> view;
     view.instantiate();
     TypedArray<PackedByteArray> initial_data;
     initial_data.push_back(PackRgbaBytes(pixels, width, height, stride_bytes));
     RID rid = rd->texture_create(MakeRgbaTextureFormat(width, height), view,
                                  initial_data);
+    const double create_ms = std::chrono::duration<double, std::milli>(
+                                 std::chrono::steady_clock::now() -
+                                 create_started)
+                                 .count();
+    LogGodotGpuUpdateProfile(
+        "texture_create", width, height,
+        static_cast<size_t>(width) * static_cast<size_t>(height) * 4u,
+        create_ms, 0.0, 0.0, rid.is_valid(),
+        RenderingServer::get_singleton() != nullptr &&
+            RenderingServer::get_singleton()->is_on_render_thread());
     if (!rid.is_valid()) return 0;
 
     GodotGpuTextureRecord record;
@@ -6682,13 +6892,32 @@ bool BridgeUpdateRgba(uint64_t texture, const void *pixels,
         rect->bottom != static_cast<int>(record.height)) {
         return false;
     }
+    const auto bridge_started = std::chrono::steady_clock::now();
     PackedByteArray data =
         PackRgbaBytes(pixels, record.width, record.height, stride_bytes);
+    const auto packed_at = std::chrono::steady_clock::now();
+    const double pack_ms = std::chrono::duration<double, std::milli>(
+                               packed_at - bridge_started)
+                               .count();
     auto op = std::make_shared<GodotGpuOp>();
     op->type = GodotGpuOp::Type::Update;
     op->dst = record.rid;
     op->data = data;
-    return RunGodotGpuOpAsync(op);
+    op->profile_width = record.width;
+    op->profile_height = record.height;
+    op->profile_pack_ms = pack_ms;
+    op->profile_enqueued_at = packed_at;
+    const bool result = RunGodotGpuOpAsync(op);
+    const double bridge_ms = std::chrono::duration<double, std::milli>(
+                                 std::chrono::steady_clock::now() -
+                                 bridge_started)
+                                 .count();
+    RenderingServer *server = RenderingServer::get_singleton();
+    LogGodotGpuUpdateProfile(
+        "bridge_update_rgba", record.width, record.height,
+        static_cast<size_t>(data.size()), bridge_ms, pack_ms, 0.0, result,
+        server != nullptr && server->is_on_render_thread());
+    return result;
 }
 
 bool BridgeClearRgba(uint64_t texture, uint32_t argb, const tTVPRect *rect) {
@@ -10480,12 +10709,12 @@ private:
 
     bool platform_prefers_raw_source() const {
 #if defined(IOS_ENABLED)
-        // KiriKiri/Artemis' logical GPU frame is complete, while its extra
-        // scaled surface copy is not reliably sampleable through Metal on iOS.
-        // Let Godot scale the provider-owned source texture, which also avoids
-        // an unnecessary full-resolution GPU pass. ONScripter owns a separate
-        // presentation contract and keeps its existing surface output.
-        return runtime_id_ != "onscripter";
+        // Prefer the configured high-resolution surface on iOS. Keep the
+        // previous raw-source route as an explicit emergency fallback for
+        // devices whose Metal bridge cannot sample the scaled surface.
+        const char *raw_source = std::getenv("AETHERKIRI_IOS_RAW_SOURCE");
+        return raw_source != nullptr && raw_source[0] != '\0' &&
+               std::strcmp(raw_source, "0") != 0;
 #else
         return false;
 #endif

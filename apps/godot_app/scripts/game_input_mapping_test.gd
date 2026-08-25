@@ -34,17 +34,17 @@ func _initialize() -> void:
         return
 
     # Regression: frame enhancement publishes a raw 4:3 frame and scales it
-    # to 1440x1080, while the runtime still accepts input on a 1920x1080
-    # surface. DrawDevice maps the entire surface back to its 800x600 layer,
-    # so the visible frame must map across the entire surface on both axes.
+    # to 1440x1080, while Artemis still accepts input on a 1920x1080 surface.
+    # Artemis presents the 4:3 logical frame aspect-fit inside that surface,
+    # leaving 240 px side bars; surface input must mirror that viewport.
     var enhanced_top_left := GameInputMapping.map_point_to_surface(
         Vector2(240, 0),
         Rect2(240, 0, 1440, 1080),
         Vector2(800, 600),
         Vector2(1920, 1080)
     )
-    if not enhanced_top_left.is_equal_approx(Vector2.ZERO):
-        _fail("enhanced 4:3 top-left missed surface origin: %s" % enhanced_top_left)
+    if not enhanced_top_left.is_equal_approx(Vector2(240, 0)):
+        _fail("enhanced 4:3 top-left missed surface viewport: %s" % enhanced_top_left)
         return
 
     var enhanced_center := GameInputMapping.map_point_to_surface(
@@ -63,8 +63,8 @@ func _initialize() -> void:
         Vector2(800, 600),
         Vector2(1920, 1080)
     )
-    if not enhanced_bottom_right.is_equal_approx(Vector2(1920, 1080)):
-        _fail("enhanced 4:3 bottom-right missed surface edge: %s" % enhanced_bottom_right)
+    if not enhanced_bottom_right.is_equal_approx(Vector2(1680, 1080)):
+        _fail("enhanced 4:3 bottom-right missed surface viewport: %s" % enhanced_bottom_right)
         return
 
     var enhanced_delta := GameInputMapping.map_delta_to_surface(
@@ -73,7 +73,7 @@ func _initialize() -> void:
         Vector2(800, 600),
         Vector2(1920, 1080)
     )
-    if not enhanced_delta.is_equal_approx(Vector2(192, 108)):
+    if not enhanced_delta.is_equal_approx(Vector2(144, 108)):
         _fail("enhanced 4:3 drag delta was rescaled incorrectly: %s" % enhanced_delta)
         return
 

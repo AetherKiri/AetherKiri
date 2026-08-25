@@ -106,6 +106,19 @@ if(BUILD_GPU_BRIDGE)
 endif()
 
 find_package(WebP CONFIG REQUIRED)
+# Keep the engine debuggable without paying the full cost of an unoptimized
+# third-party WebP decoder.  The vcpkg Debug archive is built without decoder
+# optimizations and makes multi-megapixel PSD layers take hundreds of ms to
+# materialize.  Use the ABI-compatible Release WebP archives for Debug builds;
+# this only affects the third-party codec, not the engine's own debug symbols.
+if(NOT WIN32)
+    foreach(_webp_target WebP::webp WebP::webpdecoder WebP::webpdemux WebP::sharpyuv)
+        if(TARGET ${_webp_target})
+            set_property(TARGET ${_webp_target} PROPERTY
+                         MAP_IMPORTED_CONFIG_DEBUG Release)
+        endif()
+    endforeach()
+endif()
 target_link_libraries(${PROJECT_NAME} INTERFACE WebP::webp WebP::webpdecoder WebP::webpdemux)
 
 

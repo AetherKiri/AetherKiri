@@ -653,6 +653,12 @@ namespace motion {
         std::shared_ptr<detail::PlayerRuntime> _runtime;
         std::unique_ptr<MotionNativePlayerBackend> _nativeBackend;
         std::string _nativeBackendSourcePath;
+        // A newly-created native E-mote player starts with the SDK's default
+        // pose. Keep the previous presentation until the first timeline
+        // progress has applied the restored/scripted variables, otherwise a
+        // cold expression switch exposes that default pose for one frame.
+        bool _nativeBackendPresentationReady = true;
+        bool _nativeBackendPresentationHoldLogged = false;
         ResourceManager _resourceManagerNative;
         int _completionType = 0;
         tTJSVariant _metadata;

@@ -21,6 +21,20 @@ func _initialize() -> void:
     assert(app.output_resolution == "1080p")
     assert(String(snapshot.get("output_resolution", "")) == "1080p")
     assert("output_resolution" in app.SETTINGS_DRAFT_KEYS)
+    assert(app.upscale_algorithm == "bicubic")
+    assert(String(snapshot.get("upscale_algorithm", "")) == "bicubic")
+
+    snapshot["upscale_algorithm"] = "nearest"
+    app._apply_settings_snapshot(snapshot)
+    assert(app.upscale_algorithm == "nearest")
+    assert(String(app._current_settings_snapshot().get("upscale_algorithm", "")) == "nearest")
+    for algorithm in ["smooth", "linear", "bicubic", "lanczos"]:
+        snapshot["upscale_algorithm"] = algorithm
+        app._apply_settings_snapshot(snapshot)
+        assert(app.upscale_algorithm == algorithm)
+        assert(String(app._current_settings_snapshot().get("upscale_algorithm", "")) == algorithm)
+    assert(app._resampling_frame_material("bicubic") != null)
+    assert(app._resampling_frame_material("lanczos") != null)
 
     snapshot["frame_enhancement_kind"] = "preset"
     app._apply_settings_snapshot(snapshot)
