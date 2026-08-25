@@ -111,18 +111,38 @@ func _poll_movie() -> void:
 # --- WA2 audio playback pool (docs/M2_REPORT.md §5) --------------------------
 # The runtime translates audio commands into pendingAudio events (absolute
 # extracted file paths + channel/volume/fade); this host owns playback via an
-# AudioStreamPlayer pool and acks each event through
-# set_engine_option("wa2.audio.finished", <seq>). BGM uses a two-player
-# crossfade pair, SE has 4 loop-capable stream channels + a rotating oneshot
-# pool, voice is single-channel with new-line preemption.
+# AudioStreamPlayer pool and acknowledges events through
+# set_engine_option("wa2.audio.finished", <seq>).
+#
+# F4 contract (fixes restart-loop / freeze / stutter):
+#   - Each event is HANDLED exactly once (audio_handled guard): a pending
+#     event must never re-enter _handle_audio_event, otherwise every play
+#     would p.play() from sample 0 again each frame (F3 regression: the same
+#     seq was restarted 400+ times in /tmp/wa2_gui.log).
+#   - Looping streams (BGM, SEP rain) never reach ENDED, so they ack ON
+#     CONSUMPTION (runtime header contract: "everything else on consumption");
+#     finite streams ack through the finished signal.
+#   - Decoded AudioStream resources are cached per path (LRU): decoding a
+#     100 s stereo OGG on the main thread every frame starved the mix.
+#   - Lost-ack recovery: an ack whose event is still visible in pendingAudio
+#     after the grace window is re-sent (bounded retries) — VW/SEW latches
+#     must not starve on a dropped set_option.
 const AUDIO_ONESHOT_COUNT := 8
+const AUDIO_STREAM_CACHE_MAX := 16
+const AUDIO_ACK_RESEND_GRACE_FRAMES := 20     # ~0.33 s before presuming loss
+const AUDIO_ACK_RESEND_INTERVAL_FRAMES := 30  # ~0.5 s between resends
+const AUDIO_ACK_RESEND_MAX_TRIES := 5
 
 var bgm_players: Array = []
 var se_players: Array = []
 var oneshot_players: Array = []
 var voice_player: AudioStreamPlayer = null
-var audio_state := {}      # player instance_id -> event state dict
-var audio_acked := {}      # seq -> true (locally consumed)
+var audio_state := {}       # player instance_id -> event state dict
+var audio_handled := {}     # seq -> true (exactly-once processing guard)
+var audio_ack_sent := {}    # seq -> true (set_option sent at least once)
+var audio_resend := {}      # seq -> {tries, due_frame} lost-ack recovery
+var audio_stream_cache := {}  # path -> AudioStream, insertion order = LRU
+var audio_frame := 0
 var oneshot_cursor := 0
 var audio_host_announced := false
 
@@ -165,27 +185,51 @@ func _players_on_channel(channel: String) -> Array:
 
 
 func _load_audio_stream(path: String) -> AudioStream:
+    # LRU decode cache (F4): the same file used to be re-read + re-decoded on
+    # EVERY poll frame while its event sat un-acked in the runtime queue.
+    if audio_stream_cache.has(path):
+        var cached: AudioStream = audio_stream_cache[path]
+        audio_stream_cache.erase(path)
+        audio_stream_cache[path] = cached  # touch -> most recently used
+        return cached
     var bytes := FileAccess.get_file_as_bytes(path)
     if bytes.is_empty():
         printerr("[wa2gui][audio] cannot read path=%s" % path)
         return null
+    var stream: AudioStream = null
     if path.to_lower().ends_with(".ogg"):
         if ClassDB.class_has_method("AudioStreamOggVorbis", "load_from_buffer"):
-            return AudioStreamOggVorbis.load_from_buffer(bytes)
+            stream = AudioStreamOggVorbis.load_from_buffer(bytes)
     else:
         if ClassDB.class_has_method("AudioStreamWAV", "load_from_buffer"):
-            return AudioStreamWAV.load_from_buffer(bytes)
-    printerr("[wa2gui][audio] no decoder for path=%s" % path)
-    return null
+            stream = AudioStreamWAV.load_from_buffer(bytes)
+    if stream == null:
+        printerr("[wa2gui][audio] no decoder for path=%s" % path)
+        return null
+    audio_stream_cache[path] = stream
+    while audio_stream_cache.size() > AUDIO_STREAM_CACHE_MAX:
+        var oldest: String = audio_stream_cache.keys()[0]
+        audio_stream_cache.erase(oldest)
+    return stream
 
 
 func _ack_audio(seq: int) -> void:
-    if audio_acked.has(seq):
+    if audio_ack_sent.has(seq):
         return
-    audio_acked[seq] = true
-    if audio_acked.size() > 1024:
-        audio_acked.clear()
+    _send_audio_ack(seq)
+
+
+func _send_audio_ack(seq: int) -> void:
     player.set_engine_option("wa2.audio.finished", str(seq))
+    audio_ack_sent[seq] = true
+    if audio_ack_sent.size() > 4096:
+        audio_ack_sent.clear()
+    # Arm lost-ack recovery: if this seq is still visible in pendingAudio
+    # after the grace window, _prune_and_resend re-sends it.
+    audio_resend[seq] = {
+        "tries": 0,
+        "due": audio_frame + AUDIO_ACK_RESEND_GRACE_FRAMES,
+    }
 
 
 func _on_audio_finished(p: AudioStreamPlayer) -> void:
@@ -201,6 +245,14 @@ func _on_audio_finished(p: AudioStreamPlayer) -> void:
 
 func _handle_audio_event(ev: Dictionary) -> void:
     var seq := int(ev.get("id", 0))
+    # Exactly-once guard (F4): mark BEFORE dispatch. A pending event that is
+    # not acked yet (finite stream still playing) must never be re-handled —
+    # re-playing it restarts the sample and cancels its own ENDED forever.
+    if audio_handled.has(seq):
+        return
+    audio_handled[seq] = true
+    if audio_handled.size() > 4096:
+        audio_handled.clear()
     var action := String(ev.get("action", ""))
     var channel := String(ev.get("channel", ""))
     match action:
@@ -234,6 +286,11 @@ func _handle_audio_event(ev: Dictionary) -> void:
             p.play()
             print("[wa2gui][audio] play seq=%d ch=%s vol=%d fade=%d loop=%d path=%s" % [
                 seq, channel, vol, fade, int(ev.get("loop", 0)), ev.get("path", "")])
+            if int(ev.get("loop", 0)) != 0:
+                # Looping streams never reach ENDED: ack on consumption so the
+                # runtime queue drains (F4 — this event used to sit pending
+                # forever and be restarted every frame).
+                _ack_audio(seq)
             # Finite streams ack through the finished signal (see above).
         "stop":
             var fade_stop := int(ev.get("fade", 0))
@@ -293,26 +350,55 @@ func _update_audio_fades() -> void:
         audio_state.erase(key2)
 
 
+func _prune_and_resend(pending_seqs: Dictionary) -> void:
+    # Lost-ack recovery (F4): an ack we already sent whose event is STILL
+    # visible in pendingAudio after the grace window is presumed dropped by
+    # the transport — re-send it with bounded retries so runtime VW/SEW-style
+    # latches and the EndMessage voice hold cannot starve. Events that left
+    # the queue were delivered -> prune.
+    var done: Array = []
+    for seq in audio_resend.keys():
+        if not pending_seqs.has(seq):
+            done.append(seq)
+            continue
+        var entry: Dictionary = audio_resend[seq]
+        if audio_frame < int(entry.get("due", 0)):
+            continue
+        entry["tries"] = int(entry.get("tries", 0)) + 1
+        if int(entry["tries"]) > AUDIO_ACK_RESEND_MAX_TRIES:
+            done.append(seq)
+            print("[wa2gui][audio] ack resend GIVE UP seq=%d after %d tries" % [
+                seq, AUDIO_ACK_RESEND_MAX_TRIES])
+            continue
+        entry["due"] = audio_frame + AUDIO_ACK_RESEND_INTERVAL_FRAMES
+        audio_resend[seq] = entry
+        player.set_engine_option("wa2.audio.finished", str(seq))
+        print("[wa2gui][audio] ack RESEND seq=%d try=%d" % [seq, int(entry["tries"])])
+    for seq2 in done:
+        audio_resend.erase(seq2)
+
+
 func _poll_audio() -> void:
+    audio_frame += 1
     if not audio_host_announced:
         audio_host_announced = true
         # Announce a live output path: enables the message-engine implicit
         # voice hold (text never runs ahead of speech, docs/M2_REPORT.md §3.5).
         player.set_engine_option("wa2.audio.host", "1")
     var info: String = player.get_plugin_debug_info()
-    if info.is_empty():
-        _update_audio_fades()
-        return
-    var parsed = JSON.parse_string(info)
-    if parsed == null or not (parsed is Dictionary):
-        _update_audio_fades()
-        return
-    var events: Array = parsed.get("pendingAudio", [])
+    var events: Array = []
+    if not info.is_empty():
+        var parsed = JSON.parse_string(info)
+        if parsed != null and (parsed is Dictionary):
+            events = parsed.get("pendingAudio", [])
+    var pending_seqs := {}
     for ev in events:
         if ev is Dictionary:
             var seq := int(ev.get("id", 0))
-            if not audio_acked.has(seq):
+            pending_seqs[seq] = true
+            if not audio_handled.has(seq):
                 _handle_audio_event(ev)
+    _prune_and_resend(pending_seqs)
     _update_audio_fades()
 
 
