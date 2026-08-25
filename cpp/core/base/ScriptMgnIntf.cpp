@@ -2362,6 +2362,34 @@ const tjs_char *TVPGetD3DStandSourcePatchScript() {
         "})();\r\n");
 }
 
+// Some layered CGs have a flat PNG with the same basename.  When the scene
+// supplies layer-selection options, prefer the PIMG source so later seton
+// changes redraw its layers instead of leaving the flat PNG on screen.
+const tjs_char *TVPGetLayeredPimgSourcePatchScript() {
+    return TJS_W(
+        "(function() {\r\n"
+        "\tif (typeof global.findAffineSource == \"undefined\") return;\r\n"
+        "\tif (typeof global.__aetherKiriOrigFindAffineSource != \"undefined\") return;\r\n"
+        "\tglobal.__aetherKiriOrigFindAffineSource = &global.findAffineSource;\r\n"
+        "\tglobal.findAffineSource = function(filename, options=void) {\r\n"
+        "\t\tvar sourceInfo = global.__aetherKiriOrigFindAffineSource(filename, options);\r\n"
+        "\t\tif (sourceInfo === void || sourceInfo.sourceClass !== void) return sourceInfo;\r\n"
+        "\t\tif (options === void || typeof global.AffineSourcePSD == \"undefined\") return sourceInfo;\r\n"
+        "\t\tvar layered = false;\r\n"
+        "\t\ttry {\r\n"
+        "\t\t\tlayered = options.seton !== void || options.layon !== void || options.layoff !== void || options.diff !== void;\r\n"
+        "\t\t} catch(e) {}\r\n"
+        "\t\tif (!layered || Storages.extractStorageExt(filename) != \"\") return sourceInfo;\r\n"
+        "\t\tvar pimgStorage = filename + \".pimg\";\r\n"
+        "\t\tif (!Storages.isExistentStorage(pimgStorage)) return sourceInfo;\r\n"
+        "\t\tsourceInfo.sourceClass = global.AffineSourcePSD;\r\n"
+        "\t\tsourceInfo.storage = pimgStorage;\r\n"
+        "\t\tsourceInfo.ext = \".PIMG\";\r\n"
+        "\t\treturn sourceInfo;\r\n"
+        "\t};\r\n"
+        "})();\r\n");
+}
+
 const tjs_char *TVPGetD3DEmoteGpuBatchPatchScript() {
     return TJS_W(
         "(function() {\r\n"
@@ -2399,6 +2427,9 @@ const tjs_char *TVPGetD3DEmoteGpuBatchPatchScript() {
 static void TVPApplyPostScriptCompatibilityPatches(const ttstr &shortname) {
     const ttstr lower = shortname.AsLowerCase();
     const bool patchWorld = lower == TJS_W("world.tjs");
+    const bool patchAffineSource =
+        lower == TJS_W("affinesource.tjs") ||
+        lower == TJS_W("affinesourcelayer.tjs");
     const bool patchD3DLayer = lower == TJS_W("d3d.tjs");
     const bool patchD3DMotion =
         patchD3DLayer || lower == TJS_W("d3daffinesourcemotion.tjs");
@@ -2407,9 +2438,21 @@ static void TVPApplyPostScriptCompatibilityPatches(const ttstr &shortname) {
         lower == TJS_W("affinesourcemotion.tjs");
     const bool patchMessageText = lower == TJS_W("msghack.tjs");
     const bool patchQuickMenu = lower == TJS_W("quickmenu.tjs");
-    if(!patchWorld && !patchD3DLayer && !patchD3DMotion &&
+    if(!patchWorld && !patchAffineSource && !patchD3DLayer && !patchD3DMotion &&
        !patchD3DEmote && !patchMessageText && !patchQuickMenu)
         return;
+
+    if(patchAffineSource) try {
+        TVPExecuteScript(
+            TVPGetLayeredPimgSourcePatchScript(),
+            TJS_W("AetherKiriLayeredPimgSourcePatch"), 0,
+            (tTJSVariant *)nullptr);
+        spdlog::info(
+            "Applied compatibility hook for layered PIMG source routing");
+    } catch(...) {
+        spdlog::warn(
+            "Failed to apply compatibility hook for layered PIMG source routing");
+    }
 
     if(patchD3DEmote) try {
         TVPExecuteScript(

@@ -229,6 +229,66 @@ TEST_CASE("D3D stand source patch uses the layer affine contract") {
                           TJS_W("standLayer._image.optionsSet")) == 1);
 }
 
+TEST_CASE("Layered PIMG source patch only overrides flat image aliases") {
+    ScriptEngineOwner engine;
+    engine->ExecScript(TJS_W(
+        "class TestStorages {\n"
+        "  function extractStorageExt(filename) {\n"
+        "    return filename == \"ev111a\" ? \"\" : \".PNG\";\n"
+        "  }\n"
+        "  function isExistentStorage(filename) {\n"
+        "    return filename == \"ev111a.pimg\";\n"
+        "  }\n"
+        "}\n"
+        "var Storages = new TestStorages();\n"
+        "class AffineSourcePSD {}\n"
+        "class ExistingSource {}\n"
+        "function findAffineSource(filename, options=void) {\n"
+        "  var sourceClass = filename == \"motion\" ? ExistingSource : void;\n"
+        "  return %[sourceClass: sourceClass, storage: filename + \".png\",\n"
+        "           ext: \".PNG\"];\n"
+        "}\n"));
+
+    REQUIRE_NOTHROW(
+        engine->ExecScript(TVPGetLayeredPimgSourcePatchScript()));
+    REQUIRE_NOTHROW(engine->ExecScript(TJS_W(
+        "var layeredPimg = findAffineSource(\"ev111a\", %[seton: \"Bb:Ba\"]);\n"
+        "var plainImage = findAffineSource(\"ev111a\");\n"
+        "var explicitImage = findAffineSource(\"ev111a.png\", %[seton: \"Aa\"]);\n"
+        "var specialized = findAffineSource(\"motion\", %[seton: \"Aa\"]);\n")));
+
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("layeredPimg.sourceClass === AffineSourcePSD ? 1 : 0")) ==
+          1);
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("layeredPimg.storage == \"ev111a.pimg\" ? 1 : 0")) == 1);
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("layeredPimg.ext == \".PIMG\" ? 1 : 0")) == 1);
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("plainImage.sourceClass === void ? 1 : 0")) == 1);
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("plainImage.storage == \"ev111a.png\" ? 1 : 0")) == 1);
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("explicitImage.sourceClass === void ? 1 : 0")) == 1);
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("specialized.sourceClass === ExistingSource ? 1 : 0")) == 1);
+
+    // Reapplying the hook must remain idempotent.
+    REQUIRE_NOTHROW(
+        engine->ExecScript(TVPGetLayeredPimgSourcePatchScript()));
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("findAffineSource(\"ev111a\", %[diff: \"Bb\"]).sourceClass === AffineSourcePSD ? 1 : 0")) ==
+          1);
+}
+
 TEST_CASE("D3DEmote GPU transaction hook pairs batches around drawAffine") {
     ScriptEngineOwner engine;
     engine->ExecScript(TJS_W(
