@@ -7382,14 +7382,12 @@ void tTJSNI_BaseLayer::FireButtonClick() {
                 return false;
 
             // LinkButtonLayerBase stores the actual command in
-            // controlOwner.links[linkNum].exp.  In the native engine the
-            // owner callback evaluates that record, but page-sheet copies in
-            // this game expose a lightweight owner whose callback only
-            // acknowledges the click.  Resolve and execute the link record
-            // here when the wrapper has no inline onclick.  This is the
-            // generic path used by gallery tabs, save/load entries and the
-            // title Continue/Additional buttons; it deliberately does not
-            // special-case any game or link number.
+            // controlOwner.links[linkNum].exp.  Most engines execute it from
+            // the owner callback, but page-sheet copies in this game expose
+            // a lightweight owner callback that only updates selection state.
+            // Resolve and execute the link record here when the wrapper has
+            // no inline onclick.  This is the generic KAG link path; it is
+            // deliberately independent of game names and link numbers.
             static ttstr links_name(TJS_W("links"));
             tTJSVariant links_value;
             const tjs_error links_hr = control_owner.PropGet(
@@ -7398,6 +7396,7 @@ void tTJSNI_BaseLayer::FireButtonClick() {
             tTJSVariantClosure link_object;
             ttstr link_expression;
             bool have_link_expression = false;
+            bool have_link_target = false;
             if(TJS_SUCCEEDED(links_hr) && links_value.Type() == tvtObject) {
                 tTJSVariantClosure links =
                     links_value.AsObjectClosureNoAddRef();
@@ -7411,6 +7410,18 @@ void tTJSNI_BaseLayer::FireButtonClick() {
                     link_object = link_value.AsObjectClosureNoAddRef();
                     have_link_expression = TVPReadExplicitLayerExpression(
                         link_object, &link_expression);
+                    static ttstr target_name(TJS_W("target"));
+                    tTJSVariant target_value;
+                    if(TJS_SUCCEEDED(link_object.PropGet(
+                           0, target_name.c_str(), target_name.GetHint(),
+                           &target_value, link_object.ObjThis)) &&
+                       target_value.Type() != tvtVoid) {
+                        try {
+                            have_link_target = !ttstr(target_value).IsEmpty();
+                        } catch(...) {
+                            have_link_target = false;
+                        }
+                    }
                     if(TVPLayerInputTraceEnabled()) {
                         TVPTraceObjectForButtonClick(
                             "button.fire.controlOwner.link", link_object);
@@ -7436,7 +7447,13 @@ void tTJSNI_BaseLayer::FireButtonClick() {
                     static_cast<int>(links_value.Type()));
             }
 
-            if(!has_inline_click && have_link_expression) {
+            // A link target is part of the same KAG transaction as its
+            // expression.  Let the owner callback evaluate the expression
+            // and perform that navigation together.  Only execute the
+            // expression directly for target-less page-sheet controls whose
+            // lightweight owner callback does not dispatch the command.
+            if(!has_inline_click && have_link_expression &&
+               !have_link_target) {
                 const bool evaluated = TVPEvaluateLayerExplicitExpression(
                     this, link_object, link_expression);
                 if(TVPLayerInputTraceEnabled()) {
@@ -10918,9 +10935,8 @@ void tTJSNI_BaseLayer::BeforeCompletion() {
         }
     }
 
-    bool use_cached_transition_frames = TransUpdateType == tutDivisible;
-#ifdef __ANDROID__
-    use_cached_transition_frames = use_cached_transition_frames ||
+    const bool use_cached_transition_frames =
+        TransUpdateType == tutDivisible ||
         TransUpdateType == tutDivisibleFade;
     TransDrawable.SkipSnapshotFrame = false;
     if(InTransition && TransWithChildren && use_cached_transition_frames &&
@@ -10928,7 +10944,6 @@ void tTJSNI_BaseLayer::BeforeCompletion() {
         --TransDrawable.SnapshotWarmupFrames;
         TransDrawable.SkipSnapshotFrame = true;
     }
-#endif
     if(InTransition && TransWithChildren && use_cached_transition_frames &&
        !TransDrawable.SkipSnapshotFrame) {
         // Complete each stable page once. Transition Update() invalidates the
@@ -10945,28 +10960,20 @@ void tTJSNI_BaseLayer::BeforeCompletion() {
                 InTransition = true;
                 throw;
             }
-#ifdef __ANDROID__
             if(completed) {
                 auto *snapshot = new tTVPBaseTexture(*completed);
                 snapshot->Independ();
                 TransDrawable.Src1Bmp = snapshot;
             }
-#else
-            TransDrawable.Src1Bmp = completed;
-#endif
         }
 
         if(TransSrc && !TransDrawable.Src2Bmp) {
             tTVPBaseTexture *completed = TransSrc->Complete();
-#ifdef __ANDROID__
             if(completed) {
                 auto *snapshot = new tTVPBaseTexture(*completed);
                 snapshot->Independ();
                 TransDrawable.Src2Bmp = snapshot;
             }
-#else
-            TransDrawable.Src2Bmp = completed;
-#endif
         }
     }
 
@@ -11461,7 +11468,6 @@ void tTJSNI_BaseLayer::Draw_GPU(tTVPDrawable *target, int x, int y,
         // rearrange pipe line for transition
         if(InTransition && TransWithChildren) {
             TransDrawable.Init(this, target);
-#ifdef __ANDROID__
             // UI scripts can finish hiding/reparenting outgoing controls one
             // event tick after StartTransition. Keep the last presented frame
             // during that tick instead of exposing and freezing the transient
@@ -11484,7 +11490,6 @@ void tTJSNI_BaseLayer::Draw_GPU(tTVPDrawable *target, int x, int y,
                 CurrentDrawTarget = nullptr;
                 return;
             }
-#endif
             target = &TransDrawable;
         }
         if(GetVisibleChildrenCount() == 0) {
@@ -12683,21 +12688,11 @@ void tTJSNI_BaseLayer::StartTransition(const ttstr &name, bool withchildren,
 
         // set to cache
         TransWithChildren = withchildren;
-#ifdef __ANDROID__
         delete TransDrawable.Src1Bmp;
         delete TransDrawable.Src2Bmp;
-#endif
         TransDrawable.Src1Bmp = nullptr;
         TransDrawable.Src2Bmp = nullptr;
-#ifdef __ANDROID__
-        // The page scripts have already assembled both transition trees before
-        // StartTransition. Waiting one more event tick can catch their own
-        // temporary full-screen dimmer at peak opacity and then freeze it into
-        // the cached frame for the entire transition.
         TransDrawable.SnapshotWarmupFrames = 0;
-#else
-        TransDrawable.SnapshotWarmupFrames = 0;
-#endif
         TransDrawable.SkipSnapshotFrame = false;
         if(TransWithChildren) {
             IncCacheEnabledCount();
@@ -12787,10 +12782,8 @@ void tTJSNI_BaseLayer::InternalStopTransition() {
         spdlog::trace("[TransTrace] StopTransition type={}", (int)TransType);
         InTransition = false;
         TransCompEventPrevented = false;
-#ifdef __ANDROID__
         delete TransDrawable.Src1Bmp;
         delete TransDrawable.Src2Bmp;
-#endif
         TransDrawable.Src1Bmp = nullptr;
         TransDrawable.Src2Bmp = nullptr;
         TransDrawable.SnapshotWarmupFrames = 0;
@@ -13045,12 +13038,9 @@ void tTJSNI_BaseLayer::tTransDrawable::DrawCompleted(const tTVPRect &destrect,
     data.Height = cliprect.get_height();
 
     tTVPBaseTexture *src1bmp;
-    bool use_cached_transition_frames =
-        Owner->TransUpdateType == tutDivisible;
-#ifdef __ANDROID__
-    use_cached_transition_frames = use_cached_transition_frames ||
+    const bool use_cached_transition_frames =
+        Owner->TransUpdateType == tutDivisible ||
         Owner->TransUpdateType == tutDivisibleFade;
-#endif
     if(use_cached_transition_frames)
         src1bmp = Src1Bmp;
     else
