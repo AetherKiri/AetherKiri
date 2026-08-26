@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <spdlog/spdlog.h>
 
 #ifndef TJS_INTF_METHOD
 #define TJS_INTF_METHOD
@@ -20,6 +23,28 @@ struct LayerPixels {
     std::uint8_t *write = nullptr;
     const std::uint8_t *read = nullptr;
 };
+
+// `mainImageBufferForWrite` marks the bitmap dirty, but GPU-backed layers
+// also need an explicit update notification after a plug-in writes pixels
+// through the raw buffer.  The original desktop renderer happened to observe
+// the CPU buffer directly; Godot's texture bridge otherwise keeps presenting
+// the old (usually black) texture.
+bool notifyLayerUpdate(iTJSDispatch2 *layer, tjs_int left, tjs_int top,
+                       tjs_int width, tjs_int height) {
+    if(!layer || width <= 0 || height <= 0)
+        return false;
+    tTJSVariant values[4] = {tTJSVariant(left), tTJSVariant(top),
+                             tTJSVariant(width), tTJSVariant(height)};
+    tTJSVariant *params[4] = {&values[0], &values[1], &values[2], &values[3]};
+    static tjs_uint32 updateHint = 0;
+    return TJS_SUCCEEDED(layer->FuncCall(0, TJS_W("update"), &updateHint,
+                                         nullptr, 4, params, layer));
+}
+
+bool shrinkCopyTraceEnabled() {
+    const char *value = std::getenv("AETHERKIRI_SHRINK_COPY_TRACE");
+    return value && *value && *value != '0';
+}
 
 bool getBoolProp(iTJSDispatch2 *object, const tjs_char *name) {
     tTJSVariant value;
@@ -149,7 +174,29 @@ struct ShrinkCopy {
 
         LayerPixels src;
         LayerPixels dst;
-        if(!readLayer(srcObj, src) || !writeLayer(dstObj, dst))
+        const bool srcOk = readLayer(srcObj, src);
+        const bool dstOk = writeLayer(dstObj, dst);
+        if(shrinkCopyTraceEnabled()) {
+            const auto sample = [](const LayerPixels &layer, tjs_int x,
+                                   tjs_int y) -> tjs_uint32 {
+                if(!layer.read || x < 0 || y < 0 || x >= layer.width ||
+                   y >= layer.height)
+                    return 0;
+                const auto *p = pixelAt(layer, x, y);
+                return static_cast<tjs_uint32>(p[0]) |
+                       (static_cast<tjs_uint32>(p[1]) << 8) |
+                       (static_cast<tjs_uint32>(p[2]) << 16) |
+                       (static_cast<tjs_uint32>(p[3]) << 24);
+            };
+            spdlog::info(
+                "shrinkCopy trace src={} {}x{} dst={} {}x{} params={} {} {}x{} srcRect={} {} {}x{} samples=0x{:08x}/0x{:08x}",
+                srcOk ? 1 : 0, src.width, src.height, dstOk ? 1 : 0,
+                dst.width, dst.height, dx, dy, dw, dh, sx, sy, sw, sh,
+                sample(src, sx, sy),
+                sample(src, sx + std::max<tjs_int>(0, sw / 2),
+                       sy + std::max<tjs_int>(0, sh / 2)));
+        }
+        if(!srcOk || !dstOk)
             return TJS_E_INVALIDPARAM;
 
         const tjs_int dleft = std::max<tjs_int>(0, static_cast<tjs_int>(std::floor(dx)));
@@ -179,6 +226,19 @@ struct ShrinkCopy {
                 averageRect(src, sleft, stop, sright, sbottom,
                             pixelAtWrite(dst, x, y));
             }
+        }
+
+        notifyLayerUpdate(dstObj, dleft, dtop, dright - dleft,
+                           dbottom - dtop);
+
+        if(shrinkCopyTraceEnabled()) {
+            const auto *pixel = pixelAt(dst, dleft, dtop);
+            spdlog::info("shrinkCopy result rgba={},{},{},{} update={}",
+                         pixel[0], pixel[1], pixel[2], pixel[3],
+                         notifyLayerUpdate(dstObj, dleft, dtop,
+                                           dright - dleft, dbottom - dtop)
+                             ? 1
+                             : 0);
         }
 
         return TJS_S_OK;
@@ -224,6 +284,8 @@ struct ShrinkCopyFast {
                             pixelAtWrite(dst, x, y));
             }
         }
+
+        notifyLayerUpdate(dstObj, 0, 0, width, height);
 
         return TJS_S_OK;
     }

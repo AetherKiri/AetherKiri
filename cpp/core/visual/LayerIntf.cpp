@@ -1755,8 +1755,98 @@ static bool TVPExecuteCafeStellaCurrentExpression(
                      trace.AsStdString());
     };
 
+    // Gallery page links are routed through the script-level Current proxy.
+    // Keep a compact, opt-in state snapshot around changeGroup so we can tell
+    // whether the command failed to dispatch or dispatched but selected an
+    // empty/unbound page group.  This is deliberately generic and has no game
+    // or filename knowledge; it is only enabled with the existing input trace.
+    auto trace_gallery_state = [&](const char *phase) {
+        if(!TVPLayerInputTraceEnabled() ||
+           expression.AsStdString().find("changeGroup") == std::string::npos)
+            return;
+        const tjs_char *queries[] = {
+            TJS_W("Current._object._currentPageGroup"),
+            TJS_W("Current._object.pageGroupNames.join(',')"),
+            TJS_W("Current._object.pageGroupBinds.join(',')"),
+            TJS_W("Current._object.pageGroups.miu.start"),
+            TJS_W("Current._object.pageGroups.miu.end"),
+            TJS_W("Current._object.pageGroups.azu.start"),
+            TJS_W("Current._object.pageGroups.azu.end"),
+            TJS_W("Current._object.pageGroups.rio.start"),
+            TJS_W("Current._object.pageGroups.rio.end"),
+            TJS_W("Current._object.pageGroups.eri.start"),
+            TJS_W("Current._object.pageGroups.eri.end"),
+            TJS_W("Current._object.pageGroups.nic.start"),
+            TJS_W("Current._object.pageGroups.nic.end"),
+            TJS_W("Current._object.pageGroups.etc.start"),
+            TJS_W("Current._object.pageGroups.etc.end"),
+            TJS_W("Current._object.count"),
+            TJS_W("Current._object.items.count"),
+            TJS_W("Current._object.scutil.page"),
+            TJS_W("Current._object.scutil.scroll"),
+            TJS_W("Current._object.scutil._scrollMax"),
+            TJS_W("Current._object.scutil.blockStep"),
+            TJS_W("Current._object._rowcol"),
+            TJS_W("Current._object.items[0].thumb"),
+            TJS_W("Current._object.items[0].orig"),
+            TJS_W("Current._object.items[0].scene.storage"),
+            TJS_W("Current._object.items[0].scene.target"),
+            TJS_W("Current._object.items[1].thumb"),
+            TJS_W("Current._object.items[1].orig"),
+            TJS_W("Current._object.items[1].scene.storage"),
+            TJS_W("Current._object.items[2].thumb"),
+            TJS_W("Current._object.items[2].orig"),
+            TJS_W("Current._object.items[2].scene.storage"),
+            TJS_W("Current._object.items[3].thumb"),
+            TJS_W("Current._object.items[3].orig"),
+            TJS_W("Current._object.items[3].scene.storage"),
+            TJS_W("Current._object.items[4].thumb"),
+            TJS_W("Current._object.items[4].orig"),
+            TJS_W("Current._object.items[4].scene.storage"),
+            TJS_W("Current._object.items[5].thumb"),
+            TJS_W("Current._object.items[5].orig"),
+            TJS_W("Current._object.items[5].scene.storage"),
+            TJS_W("Current._object.items[6].thumb"),
+            TJS_W("Current._object.items[6].orig"),
+            TJS_W("Current._object.items[6].scene.storage"),
+            TJS_W("Current._object.items[7].thumb"),
+            TJS_W("Current._object.items[7].orig"),
+            TJS_W("Current._object.items[7].scene.storage"),
+            TJS_W("Current._object.items[8].thumb"),
+            TJS_W("Current._object.items[8].orig"),
+            TJS_W("Current._object.items[8].scene.storage"),
+            TJS_W("(-1 \\ 9)"),
+            TJS_W("(0 > 0)"),
+            TJS_W("(0 < 0)"),
+        };
+        std::string values;
+        for(const tjs_char *query : queries) {
+            tTJSVariant value;
+            try {
+                TVPExecuteExpression(ttstr(query), source_owner, &value);
+                if(!values.empty())
+                    values += " | ";
+                values += ttstr(query).AsStdString();
+                values += "=";
+                values += TVPVariantDebugString(value);
+            } catch(...) {
+                if(!values.empty())
+                    values += " | ";
+                values += ttstr(query).AsStdString();
+                values += "=<error>";
+            }
+        }
+        spdlog::info("LayerIntf gallery state phase={} parent={} source={} {}",
+                     phase ? phase : "",
+                     parent_layer ? parent_layer->GetName().AsStdString() : "",
+                     source_layer ? source_layer->GetName().AsStdString() : "",
+                     values);
+    };
+
     try {
+        trace_gallery_state("before");
         TVPExecuteExpression(expression, source_owner, result);
+        trace_gallery_state("after");
         if(TVPLayerInputTraceEnabled()) {
             spdlog::info("LayerIntf onButtonClick item direct expression parent={} source={} index={} expr={} result={} hr=0",
                          parent_layer ? parent_layer->GetName().AsStdString() : "",
@@ -2798,6 +2888,44 @@ static bool TVPLayerDebugShouldLogBitmap(const iTVPBaseBitmap *src,
     }
     return TVPLayerDebugTake() ||
         TVPLayerDebugBitmapLooksThumbnail(src, srcrect);
+}
+
+// Temporary, narrowly scoped inspection for gallery thumbnails.  The normal
+// layer debug output intentionally omits object names because it is used for
+// broad render profiling; this switch lets us distinguish the source atlas,
+// scratch layer, and final tile while chasing a black thumbnail without
+// changing the default log volume.
+static bool TVPCopyTraceEnabled() {
+    const char *value = std::getenv("AETHERKIRI_COPY_TRACE");
+    return value && *value && *value != '0';
+}
+
+static bool TVPCopyTraceTake() {
+    if(!TVPCopyTraceEnabled())
+        return false;
+    const char *all = std::getenv("AETHERKIRI_COPY_TRACE_ALL");
+    if(all && *all && *all != '0')
+        return true;
+    static std::atomic<int> count{0};
+    return count.fetch_add(1, std::memory_order_relaxed) < 5000;
+}
+
+static bool TVPCopyTraceThumbnail(const iTVPBaseBitmap *src,
+                                  const tTVPRect &rect) {
+    const char *thumbs = std::getenv("AETHERKIRI_COPY_TRACE_THUMBS");
+    if(!thumbs || !*thumbs || *thumbs == '0')
+        return true;
+    if(!src)
+        return false;
+    const int width = static_cast<int>(src->GetWidth());
+    const int height = static_cast<int>(src->GetHeight());
+    const int rw = rect.get_width();
+    const int rh = rect.get_height();
+    return (width == 432 && height == 243) ||
+           (width == 460 && height == 271) ||
+           (width == 1380 && height == 271) ||
+           (rw == 432 && rh == 243) || (rw == 460 && rh == 271) ||
+           (rw == 1380 && rh == 271);
 }
 
 static const char *TVPLayerDebugDrawFaceName(tTVPDrawFace face) {
@@ -6213,8 +6341,9 @@ iTJSDispatch2 *tTJSNI_BaseLayer::LoadImages(const ttstr &name,
            TVPLayerDebugNameLooksThumbnail(name) ||
            TVPLayerDebugNameLooksThumbnail(load_name)) {
             spdlog::info(
-                "Layer.loadImages name={} loaded={} size={}x{} colorkey=0x{:08x}",
+                "Layer.loadImages name={} loaded={} layer={} size={}x{} colorkey=0x{:08x}",
                 name.AsStdString(), load_name.AsStdString(),
+                GetName().AsStdString(),
                 static_cast<int>(MainImage->GetWidth()),
                 static_cast<int>(MainImage->GetHeight()),
                 static_cast<unsigned int>(colorkey));
@@ -7091,10 +7220,24 @@ static bool TVPEvaluateLayerExplicitExpression(
     if(!layer || !object.Object || expression.IsEmpty())
         return false;
 
+    // Page-sheet link records are plain data objects.  Evaluating through
+    // their `eval` member makes the VM use the record as the expression
+    // context; commands which dispatch through the global `Current` proxy
+    // (for example gallery group changes) can then resolve a stale/invalid
+    // owner and report success without changing the live page.  The native
+    // button path already has the current layer's script owner, so use that
+    // context first.  Keep the record-eval path as a fallback for wrappers
+    // that intentionally provide a private evaluator.
+    tTJSVariant result;
+    if(TVPExecuteCafeStellaCurrentExpression(expression, layer, layer, 0,
+                                              &result)) {
+        return true;
+    }
+
     static ttstr eval_name(TJS_W("eval"));
     tTJSVariant expression_arg(expression);
     tTJSVariant *args[1] = {&expression_arg};
-    tTJSVariant result;
+    result.Clear();
     try {
         const tjs_error eval_hr = object.FuncCall(
             0, eval_name.c_str(), eval_name.GetHint(), &result, 1, args,
@@ -8819,6 +8962,29 @@ void tTJSNI_BaseLayer::CopyRect(tjs_int dx, tjs_int dy, iTVPBaseBitmap *src,
     tTVPRect rect;
     if(!ClipDestPointAndSrcRect(dx, dy, rect, srcrect))
         return; // out of the clipping rect
+    const bool copy_trace = TVPCopyTraceThumbnail(src, rect) &&
+                            TVPCopyTraceTake();
+    if(copy_trace) {
+        const auto sample = [](const iTVPBaseBitmap *bitmap, int x,
+                               int y) -> tjs_uint32 {
+            if(!bitmap || x < 0 || y < 0 ||
+               x >= static_cast<int>(bitmap->GetWidth()) ||
+               y >= static_cast<int>(bitmap->GetHeight()))
+                return 0;
+            return bitmap->GetPoint(x, y);
+        };
+        spdlog::info(
+            "Layer.copyTrace.before target={} parent={} face={} dest=({},{} {}x{}) srcSize={}x{} src00=0x{:08x} srcCenter=0x{:08x} dst00=0x{:08x}",
+            GetName().AsStdString(),
+            Parent ? Parent->GetName().AsStdString() : "<none>",
+            TVPLayerDebugDrawFaceName(DrawFace), dx, dy, rect.get_width(),
+            rect.get_height(), src ? static_cast<int>(src->GetWidth()) : -1,
+            src ? static_cast<int>(src->GetHeight()) : -1,
+            sample(src, rect.left, rect.top),
+            sample(src, rect.left + rect.get_width() / 2,
+                   rect.top + rect.get_height() / 2),
+            sample(MainImage, dx, dy));
+    }
     const bool dialog_trace = TVPDialogLayerTraceEnabled(this) &&
                               TVPDialogLayerTraceTake();
     if(dialog_trace) {
@@ -8919,6 +9085,21 @@ void tTJSNI_BaseLayer::CopyRect(tjs_int dx, tjs_int dy, iTVPBaseBitmap *src,
                             dy + rect.get_height() / 2),
             TVPStage2Sample(this, 14, 1241),
             TVPStage2Sample(this, 200, 1270));
+    }
+
+    if(copy_trace) {
+        const auto sample = [](const iTVPBaseBitmap *bitmap, int x,
+                               int y) -> tjs_uint32 {
+            if(!bitmap || x < 0 || y < 0 ||
+               x >= static_cast<int>(bitmap->GetWidth()) ||
+               y >= static_cast<int>(bitmap->GetHeight()))
+                return 0;
+            return bitmap->GetPoint(x, y);
+        };
+        spdlog::info("Layer.copyTrace.after target={} dst00=0x{:08x} dstCenter=0x{:08x}",
+                     GetName().AsStdString(), sample(MainImage, dx, dy),
+                     sample(MainImage, dx + rect.get_width() / 2,
+                            dy + rect.get_height() / 2));
     }
 
     tTVPRect ur = rect;
@@ -13890,16 +14071,16 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
 
         iTVPBaseBitmap *src = nullptr;
         iTVPBaseBitmap *provinceSrc = nullptr;
+        tTJSNI_BaseLayer *sourceLayer = nullptr;
         tTJSVariantClosure clo = param[2]->AsObjectClosureNoAddRef();
         if(clo.Object) {
-            tTJSNI_BaseLayer *srclayer = nullptr;
             if(TJS_FAILED(clo.Object->NativeInstanceSupport(
                    TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
-                   (iTJSNativeInstance **)&srclayer)))
+                   (iTJSNativeInstance **)&sourceLayer)))
                 src = provinceSrc = nullptr;
             else {
-                src = srclayer->GetMainImage();
-                provinceSrc = srclayer->GetProvinceImage();
+                src = sourceLayer->GetMainImage();
+                provinceSrc = sourceLayer->GetProvinceImage();
             }
 
             if(src == nullptr) { // try to get bitmap interface
@@ -13914,6 +14095,24 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
         }
         if(!src && !provinceSrc)
             TVPThrowExceptionMessage(TVPSpecifyLayerOrBitmap);
+
+        // Temporary source-name tracing is opt-in and limited to the gallery
+        // thumbnail path.  The bitmap-level trace above cannot distinguish a
+        // valid thumbnail atlas from the scratch layer that may have been
+        // cleared by a failed load, so retain the actual script layer name.
+        if(sourceLayer && TVPCopyTraceEnabled()) {
+            const char *source_trace = std::getenv("AETHERKIRI_COPY_SOURCE_TRACE");
+            const std::string targetName = _this->GetName().AsStdString();
+            if(source_trace && *source_trace && *source_trace != '0' &&
+               (targetName.find("DecorationButton") != std::string::npos ||
+                targetName.find("一時") != std::string::npos)) {
+                spdlog::info(
+                    "Layer.copyRect.source target={} source={} sourceSize={}x{}",
+                    targetName, sourceLayer->GetName().AsStdString(),
+                    src ? static_cast<int>(src->GetWidth()) : -1,
+                    src ? static_cast<int>(src->GetHeight()) : -1);
+            }
+        }
 
         tTVPRect rect(*param[3], *param[4], *param[5], *param[6]);
         rect.right += rect.left;

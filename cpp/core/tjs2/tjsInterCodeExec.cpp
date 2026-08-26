@@ -31,6 +31,7 @@
 #include <set>
 #include <mutex>
 #include <string>
+#include <unordered_set>
 #include <unordered_map>
 #include <vector>
 
@@ -100,6 +101,43 @@ namespace TJS {
             return value && *value && *value != '0';
         }();
         return enabled;
+    }
+
+    static bool TJSThumbnailOwnerTraceEnabled() {
+        static const bool enabled = [] {
+            const char *value = std::getenv("AETHERKIRI_THUMB_OWNER_TRACE");
+            return value && *value && *value != '0';
+        }();
+        return enabled;
+    }
+
+    static void TJSTraceThumbnailOwner(const char *phase,
+                                       iTJSDispatch2 *object,
+                                       iTJSDispatch2 *objthis,
+                                       tjs_error result,
+                                       const tTJSVariant *value) {
+        if(!TJSThumbnailOwnerTraceEnabled())
+            return;
+        std::string class_name;
+        if(object) {
+            tTJSVariant name;
+            if(TJS_SUCCEEDED(object->ClassInstanceInfo(TJS_CII_GET, 0,
+                                                        &name)))
+                class_name = ttstr(name).AsStdString();
+        }
+        const std::string object_type = object
+            ? TJSGetObjectTypeInfo(object).AsStdString()
+            : std::string();
+        const std::string objthis_type = objthis
+            ? TJSGetObjectTypeInfo(objthis).AsStdString()
+            : std::string();
+        spdlog::info(
+            "AetherInternal thumbnail lookup phase={} object={} objthis={} class={} objectType={} objthisType={} hr={} valueType={} valueObj={}",
+            phase, static_cast<const void *>(object),
+            static_cast<const void *>(objthis), class_name, object_type,
+            objthis_type, result, value ? static_cast<int>(value->Type()) : -1,
+            value ? static_cast<const void *>(value->AsObjectNoAddRef())
+                  : nullptr);
     }
 
     static bool TJSCrashTraceEnabled() {
@@ -194,7 +232,11 @@ namespace TJS {
             "getItemButton", "updateItemView", "ownerCallback"
             ,"uiloadEntry", "uiloadWithFuncTable", "internalUiloadPacked",
             "uiloadParseMain", "uiloadEvals", "callExtra", "setExtraType",
-            "UIListParser.doLine", "doLine"
+            "UIListParser.doLine", "doLine", "CustomGalleryModule",
+            "changeGroup", "pageGroup", "jumpScroll", "restoreItems",
+            "DialogModeManager", "dmproxy", "cmd_func", "cmd",
+            "renewItemPage", "_openPageGroup", "_closePageGroup",
+            "readCsvDoFirstChar", "readCsvDoLine", "_initPageGroup"
         };
         for(const char *pattern : patterns) {
             if(text.find(pattern) != std::string::npos)
@@ -278,6 +320,69 @@ namespace TJS {
         }
     }
 
+    // The CSV-driven gallery code passes each parsed row as a Dictionary.
+    // Keep this opt-in diagnostic deliberately narrow: it lets us inspect the
+    // row shape without changing script-visible behavior or dumping arbitrary
+    // game data.
+    static std::string TJSSaveTraceObjectField(const tTJSVariant &value,
+                                               const char *name) {
+        if(value.Type() != tvtObject || !name)
+            return "<not-object>";
+        try {
+            const tTJSVariantClosure closure = value.AsObjectClosureNoAddRef();
+            if(!closure.Object)
+                return "<null-object>";
+            tTJSVariant field;
+            const ttstr member(name);
+            const tjs_error hr = closure.Object->PropGet(
+                TJS_IGNOREPROP, member.c_str(), nullptr, &field,
+                closure.ObjThis);
+            if(TJS_FAILED(hr))
+                return "<missing>";
+            return TJSSaveTraceVariantString(field);
+        } catch(...) {
+            return "<error>";
+        }
+    }
+
+    static std::string TJSSaveTraceGalleryArgFields(const tTJSVariant &value) {
+        if(value.Type() != tvtObject)
+            return {};
+        static const char *fields[] = {"0", "1", "2", "3", "count",
+                                       "name", "start", "end", "tag",
+                                       "list", "line"};
+        std::string out;
+        for(const char *field : fields) {
+            const std::string fieldValue =
+                TJSSaveTraceObjectField(value, field);
+            if(fieldValue == "<missing>")
+                continue;
+            if(!out.empty())
+                out += ", ";
+            out += field;
+            out += "=";
+            out += fieldValue;
+        }
+        return out;
+    }
+
+    static std::string TJSSaveTraceThisField(iTJSDispatch2 *objthis,
+                                             const char *name) {
+        if(!objthis || !name)
+            return "<null>";
+        try {
+            tTJSVariant value;
+            const ttstr member(name);
+            const tjs_error hr = objthis->PropGet(
+                0, member.c_str(), nullptr, &value, objthis);
+            if(TJS_FAILED(hr))
+                return "<missing>";
+            return TJSSaveTraceVariantString(value);
+        } catch(...) {
+            return "<error>";
+        }
+    }
+
     static void TJSTraceSaveFunctionEnter(const tTJSInterCodeContext *ctx,
                                           iTJSDispatch2 *objthis,
                                           tTJSVariant **args,
@@ -288,10 +393,46 @@ namespace TJS {
             ctx->GetShortDescriptionWithClassName().AsStdString();
         if(!TJSSaveTraceMatches(desc))
             return;
+        const bool galleryTarget =
+            TJSSceneTraceEnabled() &&
+            (desc.find("GalleryMode") != std::string::npos ||
+             desc.find("UiBasedPageSheet") != std::string::npos ||
+             desc.find("PageSheet") != std::string::npos ||
+             desc.find("renewItemPage") != std::string::npos ||
+             desc.find("_openPageGroup") != std::string::npos ||
+             desc.find("_closePageGroup") != std::string::npos ||
+             desc.find("readCsvDoFirstChar") != std::string::npos ||
+             desc.find("readCsvDoLine") != std::string::npos ||
+             desc.find("_initPageGroup") != std::string::npos);
         static int logged = 0;
-        if(logged >= 8000)
-            return;
-        ++logged;
+        static int galleryLogged = 0;
+        if(galleryTarget) {
+            if(galleryLogged >= 3000)
+                return;
+            ++galleryLogged;
+        } else {
+            if(logged >= 8000)
+                return;
+            ++logged;
+        }
+        if(galleryTarget &&
+           (desc.find("_closePageGroup") != std::string::npos ||
+            desc.find("_openPageGroup") != std::string::npos)) {
+            spdlog::info(
+                "TJSSaveTrace gallery boundary desc=\"{}\" count={} rowcol={} current={} "
+                "miu={} azu={} rio={} eri={} nic={} etc={} binds={} names={}",
+                desc, TJSSaveTraceThisField(objthis, "count"),
+                TJSSaveTraceThisField(objthis, "_rowcol"),
+                TJSSaveTraceThisField(objthis, "_currentPageGroup"),
+                TJSSaveTraceThisField(objthis, "pageGroups.miu"),
+                TJSSaveTraceThisField(objthis, "pageGroups.azu"),
+                TJSSaveTraceThisField(objthis, "pageGroups.rio"),
+                TJSSaveTraceThisField(objthis, "pageGroups.eri"),
+                TJSSaveTraceThisField(objthis, "pageGroups.nic"),
+                TJSSaveTraceThisField(objthis, "pageGroups.etc"),
+                TJSSaveTraceThisField(objthis, "pageGroupBinds"),
+                TJSSaveTraceThisField(objthis, "pageGroupNames"));
+        }
         std::string arg_text;
         const tjs_int trace_arg_count = std::min<tjs_int>(numargs, 4);
         for(tjs_int i = 0; i < trace_arg_count; ++i) {
@@ -301,6 +442,15 @@ namespace TJS {
                                     args && args[i]
                                         ? TJSSaveTraceVariantString(*args[i])
                                         : std::string("<null>"));
+            if(galleryTarget && args && args[i]) {
+                const std::string fields =
+                    TJSSaveTraceGalleryArgFields(*args[i]);
+                if(!fields.empty()) {
+                    arg_text += " {";
+                    arg_text += fields;
+                    arg_text += "}";
+                }
+            }
         }
         spdlog::info("TJSSaveTrace enter desc=\"{}\" args={} [{}] this={}",
                      desc, numargs, arg_text,
@@ -476,7 +626,8 @@ namespace TJS {
                                        const ttstr &name,
                                        tTJSVariant **args,
                                        tjs_int numargs,
-                                       tjs_error hr) {
+                                       tjs_error hr,
+                                       iTJSDispatch2 *call_this = nullptr) {
         if(!TJSSaveTraceEnabled() || !ctx)
             return;
         const std::string desc =
@@ -485,13 +636,19 @@ namespace TJS {
         const bool failed = TJS_FAILED(hr);
         const bool errorImageDiagnostic =
             TJSSceneTraceEnabled() && member == "errorImage";
+        const bool galleryCommandDiagnostic =
+            TJSSceneTraceEnabled() &&
+            (member == "changeGroup" || member == "jumpScroll" ||
+             member == "restoreItems" || member == "cmd_func" ||
+             member == "dmproxy");
         const bool interestingFailure =
             failed && TJSSceneTraceEnabled() && TJSSaveTraceMatches(desc);
         if(!TJSSaveTraceMatches(desc) && !TJSSaveTraceMemberMatches(member) &&
            !interestingFailure && !errorImageDiagnostic)
             return;
         static int logged = 0;
-        if(!interestingFailure && !errorImageDiagnostic && logged >= 16000)
+        if(!interestingFailure && !errorImageDiagnostic &&
+           !galleryCommandDiagnostic && logged >= 16000)
             return;
         ++logged;
         std::string arg_text;
@@ -504,8 +661,19 @@ namespace TJS {
                                         ? TJSSaveTraceVariantString(*args[i])
                                         : std::string("<null>"));
         }
-        spdlog::info("TJSSaveTrace call {} desc=\"{}\" member={} args={} [{}] hr={}",
-                     kind, desc, member, numargs, arg_text, hr);
+        std::string this_text;
+        if(galleryCommandDiagnostic ||
+           (TJSSceneTraceEnabled() &&
+            desc.find("GalleryMode.renewItemPage") != std::string::npos)) {
+            this_text = fmt::format(" this_count={} this_type={}",
+                                    call_this
+                                        ? TJSSaveTraceThisField(call_this, "count")
+                                        : std::string("<null>"),
+                                    call_this ? typeid(*call_this).name()
+                                              : "<null>");
+        }
+        spdlog::info("TJSSaveTrace call {} desc=\"{}\" member={} args={} [{}] hr={}{}",
+                     kind, desc, member, numargs, arg_text, hr, this_text);
     }
 
     static void TJSTraceSaveCallOp(const tTJSInterCodeContext *ctx,
@@ -1613,7 +1781,33 @@ namespace TJS {
                         TJS_DEF_VM_P(SUB, operator-=);
                         TJS_DEF_VM_P(MOD, operator%=);
                         TJS_DEF_VM_P(DIV, operator/=);
-                        TJS_DEF_VM_P(IDIV, idivequal);
+                        case VM_IDIV:
+                        {
+                            const bool trace_idiv =
+                                TJSSaveTraceEnabled() && TJSSceneTraceEnabled() &&
+                                GetShortDescriptionWithClassName()
+                                        .AsStdString()
+                                        .find("GalleryMode") != std::string::npos;
+                            if(trace_idiv) {
+                                spdlog::info(
+                                    "TJSSaveTrace idiv desc=\"{}\" lhs={} rhs={} lhs_type={} rhs_type={}",
+                                    GetShortDescriptionWithClassName().AsStdString(),
+                                    TJSSaveTraceVariantString(TJS_GET_VM_REG(ra, code[1])),
+                                    TJSSaveTraceVariantString(TJS_GET_VM_REG(ra, code[2])),
+                                    static_cast<int>(TJS_GET_VM_REG(ra, code[1]).Type()),
+                                    static_cast<int>(TJS_GET_VM_REG(ra, code[2]).Type()));
+                            }
+                            TJS_GET_VM_REG(ra, code[1]).idivequal(
+                                TJS_GET_VM_REG(ra, code[2]));
+                            if(trace_idiv) {
+                                spdlog::info(
+                                    "TJSSaveTrace idiv result={} desc=\"{}\"",
+                                    TJSSaveTraceVariantString(TJS_GET_VM_REG(ra, code[1])),
+                                    GetShortDescriptionWithClassName().AsStdString());
+                            }
+                            code += 3;
+                            break;
+                        }
                         TJS_DEF_VM_P(MUL, operator*=);
 
 #undef TJS_DEF_VM_P
@@ -2231,6 +2425,33 @@ namespace TJS {
 
         tTJSVariantClosure clo = ra_code1->AsObjectClosure();
         tTJSVariant *ra_code2 = TJS_GET_VM_REG_ADDR(ra, code[2]);
+        const bool trace_indirect =
+            TJSSaveTraceEnabled() && TJSSceneTraceEnabled();
+        const auto trace_indirect_result = [&](const std::string &key,
+                                                tjs_error hr) {
+            if(!trace_indirect)
+                return;
+            static const std::unordered_set<std::string> interesting_keys = {
+                "start", "end", "miu", "azu", "rio", "eri", "nic",
+                "etc", "sd", "pageGroupBinds", "pageGroups",
+                "pageGroupNames"};
+            static int logged = 0;
+            if(interesting_keys.find(key) == interesting_keys.end() &&
+               logged >= 30000)
+                return;
+            ++logged;
+            spdlog::info(
+                "TJSSaveTrace set indirect desc=\"{}\" key={} hr={} "
+                "target={} object={} objthis={} flags={} value={}",
+                "<static>", key, hr,
+                static_cast<const void *>(ra_code1->AsObjectNoAddRef()),
+                static_cast<const void *>(clo.Object),
+                static_cast<const void *>(clo.ObjThis), flags,
+                TJS_SUCCEEDED(hr)
+                    ? TJSSaveTraceVariantString(
+                          *TJS_GET_VM_REG_ADDR(ra, code[3]))
+                    : std::string("<failed>"));
+        };
         if(ra_code2->Type() != tvtInteger) {
             tTJSVariantString *str;
             try {
@@ -2248,6 +2469,9 @@ namespace TJS {
                     hr = clo.PropSet(
                         flags, *str, nullptr, TJS_GET_VM_REG_ADDR(ra, code[3]),
                         clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+                trace_indirect_result(
+                    str ? ttstr(*str).AsStdString() : std::string("<null>"),
+                    hr);
                 if(TJS_FAILED(hr))
                     TJSThrowFrom_tjs_error(hr, *str);
             } catch(...) {
@@ -2266,6 +2490,8 @@ namespace TJS {
                     flags, (tjs_int)ra_code2->AsInteger(),
                     TJS_GET_VM_REG_ADDR(ra, code[3]),
                     clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+                trace_indirect_result(
+                    fmt::format("{}", (tjs_int)ra_code2->AsInteger()), hr);
                 if(TJS_FAILED(hr))
                     ThrowFrom_tjs_error_num(hr, (tjs_int)ra_code2->AsInteger());
             } catch(...) {
@@ -2541,6 +2767,8 @@ namespace TJS {
         // ra[code[1]] = typeof ra[code[2]][DataArea[ra[code[3]]]];
         tTJSVariantType type = TJS_GET_VM_REG(ra, code[2]).Type();
         if(type == tvtVoid) {
+            TJSTraceThumbnailOwner("void-base", nullptr, nullptr,
+                                   TJS_E_MEMBERNOTFOUND, nullptr);
             TJS_GET_VM_REG(ra, code[1]) = TJS_W("undefined");
             return;
         }
@@ -2563,10 +2791,20 @@ namespace TJS {
         tTJSVariantClosure clo = TJS_GET_VM_REG(ra, code[2]).AsObjectClosure();
         try {
             tTJSVariant *name = TJS_GET_VM_REG_ADDR(DataArea, code[3]);
+            const bool thumbnailLookup =
+                name && name->GetString() &&
+                !TJS_strcmp(name->GetString(), TJS_W("makeThumbnailEffect"));
+            if(thumbnailLookup)
+                TJSTraceThumbnailOwner("before-direct", clo.Object,
+                                       clo.ObjThis, TJS_S_OK, nullptr);
             hr = clo.PropGet(flags, name->GetString(), name->GetHint(),
                              TJS_GET_VM_REG_ADDR(ra, code[1]),
                              clo.ObjThis ? clo.ObjThis
                                          : ra[-1].AsObjectNoAddRef());
+            if(thumbnailLookup)
+                TJSTraceThumbnailOwner("after-direct", clo.Object,
+                                       clo.ObjThis, hr,
+                                       TJS_GET_VM_REG_ADDR(ra, code[1]));
         } catch(...) {
             clo.Release();
             throw;
@@ -2622,10 +2860,19 @@ namespace TJS {
             }
 
             try {
+                const bool thumbnailLookup =
+                    str && !TJS_strcmp(*str, TJS_W("makeThumbnailEffect"));
+                if(thumbnailLookup)
+                    TJSTraceThumbnailOwner("before-indirect", clo.Object,
+                                           clo.ObjThis, TJS_S_OK, nullptr);
                 // TODO: verify here needs hint holding
                 hr = clo.PropGet(
                     flags, *str, nullptr, TJS_GET_VM_REG_ADDR(ra, code[1]),
                     clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+                if(thumbnailLookup)
+                    TJSTraceThumbnailOwner("after-indirect", clo.Object,
+                                           clo.ObjThis, hr,
+                                           TJS_GET_VM_REG_ADDR(ra, code[1]));
                 if(hr == TJS_S_OK) {
                     TypeOf(TJS_GET_VM_REG(ra, code[1]));
                 } else // if(hr == TJS_E_MEMBERNOTFOUND)
@@ -2839,6 +3086,7 @@ namespace TJS {
         TJS_BEGIN_FUNC_CALL_ARGS(code + 4)
 
         tTJSVariantType type = TJS_GET_VM_REG(ra, code[2]).Type();
+        iTJSDispatch2 *trace_call_this = nullptr;
         tTJSVariant *name = TJS_GET_VM_REG_ADDR(DataArea, code[3]);
         if(type == tvtVoid) {
             if(code[1])
@@ -2860,6 +3108,8 @@ namespace TJS {
         } else {
             tTJSVariantClosure clo =
                 TJS_GET_VM_REG(ra, code[2]).AsObjectClosure();
+            trace_call_this =
+                clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef();
             try {
                 hr = clo.FuncCall(
                     0, name->GetString(), name->GetHint(),
@@ -2873,7 +3123,8 @@ namespace TJS {
             clo.Release();
         }
         TJSTraceSaveMemberCall(this, "direct", name->AsStringNoAddRef(),
-                               pass_args, pass_args_count, hr);
+                               pass_args, pass_args_count, hr,
+                               trace_call_this);
 
         TJS_END_FUNC_CALL_ARGS
 
@@ -2896,6 +3147,7 @@ namespace TJS {
         TJS_BEGIN_FUNC_CALL_ARGS(code + 4)
 
         tTJSVariantType type = TJS_GET_VM_REG(ra, code[2]).Type();
+        iTJSDispatch2 *trace_call_this = nullptr;
         if(type == tvtString) {
             ProcessStringFunction(name.c_str(), TJS_GET_VM_REG(ra, code[2]),
                                   pass_args, pass_args_count,
@@ -2911,6 +3163,8 @@ namespace TJS {
         } else {
             tTJSVariantClosure clo =
                 TJS_GET_VM_REG(ra, code[2]).AsObjectClosure();
+            trace_call_this =
+                clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef();
             try {
                 hr = clo.FuncCall(
                     0, name.c_str(), name.GetHint(),
@@ -2924,7 +3178,7 @@ namespace TJS {
             clo.Release();
         }
         TJSTraceSaveMemberCall(this, "indirect", name, pass_args,
-                               pass_args_count, hr);
+                               pass_args_count, hr, trace_call_this);
 
         TJS_END_FUNC_CALL_ARGS
 
