@@ -615,10 +615,10 @@ struct Runtime::Impl final : EmbeddedMovieHost {
     engine_media_handle_t media = nullptr;
     MediaState latest_media_state;
     std::vector<uint8_t> media_rgba;
-    bool media_is_script_movie = false;
+    std::atomic<bool> media_is_script_movie{false};
     bool media_overlay_active = false;
     bool media_loop = false;
-    bool media_click_to_skip = false;
+    std::atomic<bool> media_click_to_skip{false};
     std::atomic<bool> media_skip_requested{false};
     MovieConfiguration next_movie_configuration;
     MovieConfiguration active_movie_configuration;
@@ -981,7 +981,17 @@ struct Runtime::Impl final : EmbeddedMovieHost {
     }
 
     void overlay_movie(Frame &frame) {
-        std::lock_guard<std::mutex> media_lock(media_mutex);
+        // Provider frame reads already hold the engine dispatch registry.
+        // The ONS interpreter updates script movies on its own thread while
+        // holding media_mutex, then enters the media engine dispatcher. A
+        // blocking lock here would invert those locks and freeze both the
+        // rendered frame and all later input. Missing one overlay refresh is
+        // harmless; the next frame will pick up the latest decoded image.
+        std::unique_lock<std::mutex> media_lock(
+            media_mutex, std::try_to_lock);
+        if (!media_lock.owns_lock()) {
+            return;
+        }
         if (!media_overlay_active || !latest_media_state.frame_ready ||
             media_rgba.empty() || latest_media_state.width == 0 ||
             latest_media_state.height == 0 || frame.rgba.empty()) {
@@ -1428,7 +1438,14 @@ bool Runtime::tick() {
         return false;
     }
     {
-        std::lock_guard<std::mutex> media_lock(impl_->media_mutex);
+        // See Impl::overlay_movie: provider calls must never wait for the
+        // interpreter while they own the engine dispatch registry.
+        std::unique_lock<std::mutex> media_lock(
+            impl_->media_mutex, std::try_to_lock);
+        if (!media_lock.owns_lock()) {
+            return !impl_->ended.load() &&
+                   impl_->startup.load() != StartupState::Failed;
+        }
         if (impl_->media != nullptr) {
             impl_->update_media_locked(true);
         }
@@ -1444,7 +1461,11 @@ bool Runtime::pause() {
     Mix_Pause(-1);
     Mix_PauseMusic();
     {
-        std::lock_guard<std::mutex> media_lock(impl_->media_mutex);
+        std::unique_lock<std::mutex> media_lock(
+            impl_->media_mutex, std::try_to_lock);
+        if (!media_lock.owns_lock()) {
+            return true;
+        }
         if (impl_->media != nullptr) {
             engine_media_pause(impl_->media);
         }
@@ -1459,7 +1480,11 @@ bool Runtime::resume() {
     Mix_ResumeMusic();
     Mix_Resume(-1);
     {
-        std::lock_guard<std::mutex> media_lock(impl_->media_mutex);
+        std::unique_lock<std::mutex> media_lock(
+            impl_->media_mutex, std::try_to_lock);
+        if (!media_lock.owns_lock()) {
+            return true;
+        }
         if (impl_->media != nullptr) {
             engine_media_play(impl_->media);
         }
@@ -1542,9 +1567,8 @@ bool Runtime::send_pointer_event(int type, int pointer_id, double x, double y,
         }
     }
     if (type == 3) {
-        std::lock_guard<std::mutex> media_lock(impl_->media_mutex);
-        if (impl_->media_is_script_movie &&
-            impl_->media_click_to_skip) {
+        if (impl_->media_is_script_movie.load() &&
+            impl_->media_click_to_skip.load()) {
             impl_->media_skip_requested.store(true);
         }
     }
@@ -1646,9 +1670,8 @@ bool Runtime::send_key_event(bool pressed, int key_code, int modifiers,
     }
     if (!pressed &&
         (key_code == 0x0d || key_code == 0x1b || key_code == 0x20)) {
-        std::lock_guard<std::mutex> media_lock(impl_->media_mutex);
-        if (impl_->media_is_script_movie &&
-            impl_->media_click_to_skip) {
+        if (impl_->media_is_script_movie.load() &&
+            impl_->media_click_to_skip.load()) {
             impl_->media_skip_requested.store(true);
         }
     }
