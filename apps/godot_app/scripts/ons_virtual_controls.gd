@@ -27,9 +27,14 @@ const VK_W := 0x57
 const MOD_CONTROL := 0x04
 const POINTER_MOD_RIGHT := 0x10
 const OVERLAY_LAYER := 120
-const BUTTON_MIN_SIZE := 42.0
-const BUTTON_MAX_SIZE := 58.0
-const CURSOR_SIZE := 38.0
+const BUTTON_MIN_SIZE := 44.0
+const BUTTON_MAX_SIZE := 68.0
+const CURSOR_SIZE := 32.0
+
+const REFERENCE_FILL := Color(0.30, 0.31, 0.33, 0.58)
+const REFERENCE_FILL_HOVER := Color(0.36, 0.37, 0.39, 0.72)
+const REFERENCE_BORDER := Color(0.82, 0.84, 0.88, 0.72)
+const REFERENCE_TEXT := Color(0.94, 0.95, 0.97, 0.84)
 
 var menu_button: Button
 var keyboard_button: Button
@@ -47,7 +52,11 @@ var mouse_left_button: Button
 var mouse_right_button: Button
 var scroll_up_button: Button
 var scroll_down_button: Button
-var cursor_handle: Label
+var cursor_handle: Control
+var dpad_backdrop: Panel
+var dpad_center: Panel
+var wheel_backdrop: Panel
+var wheel_dot: Label
 
 var _root: Control
 var _tokens
@@ -87,12 +96,34 @@ func setup(tokens) -> void:
     _root.add_child(keyboard_button)
     _root.add_child(virtual_controls_button)
 
+    _apply_edge_menu_style(menu_button)
+    _apply_menu_option_style(keyboard_button)
+    _apply_menu_option_style(virtual_controls_button)
+
+    dpad_backdrop = _create_decorative_panel(
+        "DpadBackdrop",
+        _button_style(Color(0.31, 0.32, 0.34, 0.46), REFERENCE_BORDER, true)
+    )
+    dpad_backdrop.z_index = -2
+    _root.add_child(dpad_backdrop)
+    _panel_controls.append(dpad_backdrop)
+
+    dpad_center = _create_decorative_panel(
+        "DpadCenter",
+        _button_style(Color(0.42, 0.43, 0.45, 0.46), REFERENCE_BORDER, true)
+    )
+    dpad_center.z_index = -1
+    _root.add_child(dpad_center)
+    _panel_controls.append(dpad_center)
+
     escape_button = _add_key_button("EscapeButton", "Esc", VK_ESCAPE)
     control_button = _add_key_button("ControlButton", "Ctrl", VK_CONTROL)
     w_button = _add_key_button("WButton", "W", VK_W)
     a_button = _add_key_button("AButton", "A", VK_A)
     s_button = _add_key_button("SButton", "S", VK_S)
     d_button = _add_key_button("DButton", "D", VK_D)
+    for direction_button in [w_button, a_button, s_button, d_button]:
+        _apply_dpad_button_style(direction_button)
     for index in range(4):
         var digit := _add_key_button(
             "Digit%dButton" % (index + 1),
@@ -103,26 +134,41 @@ func setup(tokens) -> void:
     enter_button = _add_key_button("EnterButton", "Enter", VK_RETURN, true)
     space_button = _add_key_button("SpaceButton", "Space", VK_SPACE, true)
 
-    mouse_left_button = _add_mouse_button("MouseLeftButton", "L Click", 0, 0)
+    mouse_left_button = _add_mouse_button("MouseLeftButton", "", 0, 0)
     mouse_right_button = _add_mouse_button(
-        "MouseRightButton", "R Click", 0, POINTER_MOD_RIGHT
+        "MouseRightButton", "", 0, POINTER_MOD_RIGHT
     )
-    scroll_up_button = _add_scroll_button("ScrollUpButton", "Wheel +", -1.0)
-    scroll_down_button = _add_scroll_button("ScrollDownButton", "Wheel -", 1.0)
+    _attach_mouse_icon(mouse_left_button, true)
+    _attach_mouse_icon(mouse_right_button, false)
 
-    cursor_handle = Label.new()
-    cursor_handle.name = "MouseCursor"
-    cursor_handle.text = "◎"
-    cursor_handle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    cursor_handle.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-    cursor_handle.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    cursor_handle.add_theme_font_size_override("font_size", 30)
-    cursor_handle.add_theme_color_override("font_color", Color.WHITE)
-    cursor_handle.add_theme_color_override(
-        "font_shadow_color", Color(0, 0, 0, 0.9)
+    wheel_backdrop = _create_decorative_panel(
+        "WheelBackdrop",
+        _button_style(Color(0.78, 0.80, 0.83, 0.78), REFERENCE_BORDER, true)
     )
-    cursor_handle.add_theme_constant_override("shadow_offset_x", 2)
-    cursor_handle.add_theme_constant_override("shadow_offset_y", 2)
+    wheel_backdrop.z_index = -1
+    _root.add_child(wheel_backdrop)
+    _panel_controls.append(wheel_backdrop)
+
+    scroll_up_button = _add_scroll_button("ScrollUpButton", "▲", -1.0)
+    scroll_down_button = _add_scroll_button("ScrollDownButton", "▼", 1.0)
+    _apply_wheel_button_style(scroll_up_button)
+    _apply_wheel_button_style(scroll_down_button)
+
+    wheel_dot = Label.new()
+    wheel_dot.name = "WheelDot"
+    wheel_dot.text = "●"
+    wheel_dot.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+    wheel_dot.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    wheel_dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    wheel_dot.add_theme_font_size_override("font_size", 8)
+    wheel_dot.add_theme_color_override("font_color", Color(0.08, 0.08, 0.09, 0.9))
+    _root.add_child(wheel_dot)
+    _panel_controls.append(wheel_dot)
+
+    cursor_handle = Control.new()
+    cursor_handle.name = "MouseCursor"
+    cursor_handle.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    _attach_pointer_visual(cursor_handle)
     _root.add_child(cursor_handle)
     _panel_controls.append(cursor_handle)
 
@@ -175,20 +221,20 @@ func layout(_window_size: Vector2, safe_rect: Rect2) -> void:
         return
     _safe_rect = safe_rect
     var short_edge := minf(safe_rect.size.x, safe_rect.size.y)
-    var diameter := clampf(short_edge * 0.125, BUTTON_MIN_SIZE, BUTTON_MAX_SIZE)
-    var gap := clampf(diameter * 0.16, 7.0, 10.0)
-    var margin := clampf(diameter * 0.2, 9.0, 13.0)
+    var diameter := clampf(short_edge * 0.13, BUTTON_MIN_SIZE, BUTTON_MAX_SIZE)
+    var gap := clampf(diameter * 0.13, 6.0, 9.0)
+    var margin := clampf(diameter * 0.2, 9.0, 14.0)
     var safe_end := safe_rect.end
     var key_size := Vector2(diameter, diameter)
 
-    var menu_size := Vector2(maxf(48.0, diameter), 34.0)
+    var menu_size := Vector2(maxf(46.0, diameter), maxf(42.0, diameter * 0.92))
     menu_button.position = Vector2(
         safe_end.x - menu_size.x,
         safe_rect.position.y + (safe_rect.size.y - menu_size.y) * 0.5
     )
     menu_button.size = menu_size
 
-    var option_size := Vector2(maxf(96.0, diameter * 1.9), 40.0)
+    var option_size := Vector2(maxf(108.0, diameter * 2.15), menu_size.y)
     var option_x := menu_button.position.x - option_size.x - gap
     var options_top := menu_button.position.y - option_size.y - gap * 0.5
     keyboard_button.position = Vector2(option_x, options_top)
@@ -202,19 +248,34 @@ func layout(_window_size: Vector2, safe_rect: Rect2) -> void:
     escape_button.position = safe_rect.position + Vector2(margin, margin)
     escape_button.size = key_size
 
+    var dpad_diameter := clampf(short_edge * 0.36, 118.0, 210.0)
     var dpad_origin := Vector2(
         safe_rect.position.x + margin,
-        safe_end.y - margin - diameter * 2.0 - gap
+        safe_end.y - margin - dpad_diameter
     )
-    w_button.position = dpad_origin + Vector2(diameter + gap, 0)
-    a_button.position = dpad_origin + Vector2(0, diameter + gap)
-    s_button.position = dpad_origin + Vector2(diameter + gap, diameter + gap)
-    d_button.position = dpad_origin + Vector2((diameter + gap) * 2.0, diameter + gap)
-    for button in [w_button, a_button, s_button, d_button]:
-        button.size = key_size
+    dpad_backdrop.position = dpad_origin
+    dpad_backdrop.size = Vector2.ONE * dpad_diameter
 
-    var digit_x := safe_end.x - margin - diameter - menu_size.x - gap
-    var digit_top := safe_rect.position.y + margin
+    var dpad_center_position := dpad_origin + Vector2.ONE * dpad_diameter * 0.5
+    var direction_size := Vector2.ONE * dpad_diameter * 0.36
+    var direction_offset := dpad_diameter * 0.30
+    w_button.position = dpad_center_position + Vector2(0, -direction_offset) \
+        - direction_size * 0.5
+    a_button.position = dpad_center_position + Vector2(-direction_offset, 0) \
+        - direction_size * 0.5
+    s_button.position = dpad_center_position + Vector2(0, direction_offset) \
+        - direction_size * 0.5
+    d_button.position = dpad_center_position + Vector2(direction_offset, 0) \
+        - direction_size * 0.5
+    for button in [w_button, a_button, s_button, d_button]:
+        button.size = direction_size
+
+    var center_size := dpad_diameter * 0.34
+    dpad_center.position = dpad_center_position - Vector2.ONE * center_size * 0.5
+    dpad_center.size = Vector2.ONE * center_size
+
+    var digit_x := menu_button.position.x - diameter - gap
+    var digit_top := safe_rect.position.y + margin + diameter * 0.24
     for index in range(digit_buttons.size()):
         digit_buttons[index].position = Vector2(
             digit_x,
@@ -224,39 +285,43 @@ func layout(_window_size: Vector2, safe_rect: Rect2) -> void:
 
     var bottom_y := safe_end.y - margin - diameter
     control_button.position = Vector2(
-        dpad_origin.x + (diameter + gap) * 3.0,
+        dpad_origin.x + dpad_diameter + gap,
         bottom_y
     )
     control_button.size = key_size
 
-    var wide_width := diameter * 1.55
-    space_button.position = Vector2(
-        safe_rect.position.x + (safe_rect.size.x - wide_width) * 0.5,
-        bottom_y
-    )
-    space_button.size = Vector2(wide_width, diameter)
-    enter_button.position = Vector2(
-        space_button.position.x + wide_width + gap,
-        bottom_y
-    )
-    enter_button.size = Vector2(wide_width, diameter)
+    var action_diameter := diameter * 1.12
+    var action_size := Vector2.ONE * action_diameter
+    var action_left := digit_x - action_diameter * 2.0 - gap * 2.0
+    var mouse_y := bottom_y - action_diameter - gap
+    mouse_left_button.position = Vector2(action_left, mouse_y)
+    mouse_right_button.position = Vector2(action_left + action_diameter + gap, mouse_y)
+    space_button.position = Vector2(action_left, bottom_y)
+    enter_button.position = Vector2(action_left + action_diameter + gap, bottom_y)
+    for action_button in [
+        mouse_left_button,
+        mouse_right_button,
+        space_button,
+        enter_button,
+    ]:
+        action_button.size = action_size
+    _layout_mouse_icon(mouse_left_button)
+    _layout_mouse_icon(mouse_right_button)
 
-    var mouse_width := maxf(72.0, diameter * 1.45)
-    mouse_right_button.position = Vector2(digit_x - mouse_width - gap, bottom_y)
-    mouse_right_button.size = Vector2(mouse_width, diameter)
-    mouse_left_button.position = Vector2(
-        mouse_right_button.position.x - mouse_width - gap,
-        bottom_y
+    var wheel_size := diameter * 1.1
+    var wheel_position := Vector2(
+        safe_rect.position.x + margin + (diameter - wheel_size) * 0.5,
+        safe_rect.position.y + (safe_rect.size.y - wheel_size) * 0.46
     )
-    mouse_left_button.size = Vector2(mouse_width, diameter)
-
-    var wheel_width := maxf(64.0, diameter * 1.25)
-    var wheel_x := safe_rect.position.x + margin
-    var wheel_y := safe_rect.position.y + (safe_rect.size.y - diameter * 2.0 - gap) * 0.5
-    scroll_up_button.position = Vector2(wheel_x, wheel_y)
-    scroll_up_button.size = Vector2(wheel_width, diameter)
-    scroll_down_button.position = Vector2(wheel_x, wheel_y + diameter + gap)
-    scroll_down_button.size = Vector2(wheel_width, diameter)
+    wheel_backdrop.position = wheel_position
+    wheel_backdrop.size = Vector2.ONE * wheel_size
+    var wheel_button_height := wheel_size * 0.43
+    scroll_up_button.position = wheel_position + Vector2(0, wheel_size * 0.03)
+    scroll_up_button.size = Vector2(wheel_size, wheel_button_height)
+    scroll_down_button.position = wheel_position + Vector2(0, wheel_size * 0.54)
+    scroll_down_button.size = Vector2(wheel_size, wheel_button_height)
+    wheel_dot.position = wheel_position + Vector2(0, wheel_size * 0.40)
+    wheel_dot.size = Vector2(wheel_size, wheel_size * 0.20)
 
     if (
         cursor_handle.position == Vector2.ZERO
@@ -372,25 +437,19 @@ func _create_control_button(node_name: String, label: String, wide: bool) -> But
     button.focus_mode = Control.FOCUS_NONE
     button.mouse_filter = Control.MOUSE_FILTER_STOP
     button.keep_pressed_outside = true
-    button.add_theme_font_size_override("font_size", 15 if wide else 17)
-    button.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 0.96))
+    button.add_theme_font_size_override("font_size", 14 if wide else 17)
+    button.add_theme_color_override("font_color", REFERENCE_TEXT)
     button.add_theme_color_override("font_hover_color", Color.WHITE)
     button.add_theme_color_override("font_pressed_color", Color.WHITE)
+    button.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.48))
+    button.add_theme_constant_override("outline_size", 2)
     button.add_theme_stylebox_override(
         "normal",
-        _button_style(
-            Color(0.035, 0.035, 0.04, 0.52),
-            Color(1.0, 1.0, 1.0, 0.42),
-            not wide
-        )
+        _button_style(REFERENCE_FILL, REFERENCE_BORDER, true)
     )
     button.add_theme_stylebox_override(
         "hover",
-        _button_style(
-            Color(0.08, 0.08, 0.09, 0.72),
-            Color(1.0, 1.0, 1.0, 0.7),
-            not wide
-        )
+        _button_style(REFERENCE_FILL_HOVER, Color.WHITE, true)
     )
     button.add_theme_stylebox_override(
         "pressed",
@@ -402,7 +461,7 @@ func _create_control_button(node_name: String, label: String, wide: bool) -> But
                 0.86
             ),
             Color.WHITE,
-            not wide
+            true
         )
     )
     button.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
@@ -413,15 +472,195 @@ func _create_action_button(node_name: String, label: String) -> Button:
     button.add_theme_font_size_override("font_size", 14)
     return button
 
-func _button_style(fill: Color, border: Color, circular: bool) -> StyleBoxFlat:
+func _create_decorative_panel(node_name: String, style: StyleBoxFlat) -> Panel:
+    var panel := Panel.new()
+    panel.name = node_name
+    panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    panel.add_theme_stylebox_override("panel", style)
+    return panel
+
+func _apply_dpad_button_style(button: Button) -> void:
+    var empty := StyleBoxEmpty.new()
+    button.add_theme_stylebox_override("normal", empty)
+    button.add_theme_stylebox_override("hover", empty)
+    button.add_theme_stylebox_override(
+        "pressed",
+        _button_style(
+            Color(_tokens.accent.r, _tokens.accent.g, _tokens.accent.b, 0.48),
+            Color.TRANSPARENT,
+            true,
+            0
+        )
+    )
+    button.add_theme_font_size_override("font_size", 24)
+
+func _apply_wheel_button_style(button: Button) -> void:
+    var empty := StyleBoxEmpty.new()
+    button.add_theme_stylebox_override("normal", empty)
+    button.add_theme_stylebox_override("hover", empty)
+    button.add_theme_stylebox_override("pressed", empty)
+    button.add_theme_color_override("font_color", Color(0.08, 0.08, 0.09, 0.94))
+    button.add_theme_color_override("font_hover_color", Color.BLACK)
+    button.add_theme_color_override("font_pressed_color", Color.BLACK)
+    button.add_theme_constant_override("outline_size", 0)
+    button.add_theme_font_size_override("font_size", 16)
+
+func _apply_edge_menu_style(button: Button) -> void:
+    button.text = "••\nMenu"
+    button.add_theme_font_size_override("font_size", 12)
+    for state in ["normal", "hover", "pressed"]:
+        var fill := Color(0.08, 0.08, 0.09, 0.76)
+        if state == "hover":
+            fill = Color(0.14, 0.14, 0.15, 0.86)
+        elif state == "pressed":
+            fill = Color(_tokens.accent.r, _tokens.accent.g, _tokens.accent.b, 0.88)
+        var style := _button_style(fill, REFERENCE_BORDER, false, 2)
+        style.corner_radius_top_right = 0
+        style.corner_radius_bottom_right = 0
+        button.add_theme_stylebox_override(state, style)
+
+func _apply_menu_option_style(button: Button) -> void:
+    for state in ["normal", "hover", "pressed"]:
+        var fill := Color(0.08, 0.08, 0.09, 0.82)
+        if state == "hover":
+            fill = Color(0.16, 0.16, 0.17, 0.9)
+        elif state == "pressed":
+            fill = Color(_tokens.accent.r, _tokens.accent.g, _tokens.accent.b, 0.9)
+        button.add_theme_stylebox_override(
+            state,
+            _button_style(fill, REFERENCE_BORDER, false, 2)
+        )
+
+func _attach_mouse_icon(button: Button, highlights_left: bool) -> void:
+    var icon := Control.new()
+    icon.name = "MouseIcon"
+    icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    icon.set_meta("highlights_left", highlights_left)
+    button.add_child(icon)
+
+    var base := Panel.new()
+    base.name = "Base"
+    base.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    var base_style := StyleBoxFlat.new()
+    base_style.bg_color = Color(0.84, 0.85, 0.87, 0.82)
+    base_style.corner_radius_top_left = 12
+    base_style.corner_radius_top_right = 12
+    base_style.corner_radius_bottom_left = 7
+    base_style.corner_radius_bottom_right = 7
+    base.add_theme_stylebox_override("panel", base_style)
+    icon.add_child(base)
+
+    var highlight := Panel.new()
+    highlight.name = "Highlight"
+    highlight.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    var highlight_style := StyleBoxFlat.new()
+    highlight_style.bg_color = Color(0.31, 0.60, 1.0, 0.95)
+    highlight.add_theme_stylebox_override("panel", highlight_style)
+    icon.add_child(highlight)
+
+    var shell := Panel.new()
+    shell.name = "Shell"
+    shell.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    var shell_style := StyleBoxFlat.new()
+    shell_style.bg_color = Color.TRANSPARENT
+    shell_style.border_color = Color(0.22, 0.23, 0.25, 0.92)
+    shell_style.set_border_width_all(2)
+    shell_style.corner_radius_top_left = 12
+    shell_style.corner_radius_top_right = 12
+    shell_style.corner_radius_bottom_left = 7
+    shell_style.corner_radius_bottom_right = 7
+    shell.add_theme_stylebox_override("panel", shell_style)
+    icon.add_child(shell)
+
+    var divider := ColorRect.new()
+    divider.name = "Divider"
+    divider.color = Color(0.22, 0.23, 0.25, 0.9)
+    divider.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    icon.add_child(divider)
+
+    var wheel := Panel.new()
+    wheel.name = "Wheel"
+    wheel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    wheel.add_theme_stylebox_override(
+        "panel",
+        _button_style(
+            Color(0.72, 0.74, 0.77, 1.0),
+            Color(0.22, 0.23, 0.25, 0.9),
+            true,
+            1
+        )
+    )
+    icon.add_child(wheel)
+
+func _layout_mouse_icon(button: Button) -> void:
+    var icon := button.get_node_or_null("MouseIcon") as Control
+    if icon == null:
+        return
+    var icon_size := Vector2(button.size.x * 0.46, button.size.y * 0.60)
+    icon.position = (button.size - icon_size) * 0.5
+    icon.size = icon_size
+
+    var highlight := icon.get_node("Highlight") as Panel
+    var base := icon.get_node("Base") as Panel
+    var shell := icon.get_node("Shell") as Panel
+    var divider := icon.get_node("Divider") as ColorRect
+    var wheel := icon.get_node("Wheel") as Panel
+    var highlights_left := bool(icon.get_meta("highlights_left", true))
+    var top_height := icon_size.y * 0.46
+    base.position = Vector2.ZERO
+    base.size = icon_size
+    highlight.position = Vector2(
+        2 if highlights_left else icon_size.x * 0.5,
+        2
+    )
+    highlight.size = Vector2(icon_size.x * 0.5 - 2, top_height - 2)
+    shell.position = Vector2.ZERO
+    shell.size = icon_size
+    divider.position = Vector2(icon_size.x * 0.5 - 0.75, 1)
+    divider.size = Vector2(1.5, top_height)
+    wheel.position = Vector2(icon_size.x * 0.5 - 2.0, icon_size.y * 0.1)
+    wheel.size = Vector2(4.0, icon_size.y * 0.22)
+
+func _attach_pointer_visual(pointer: Control) -> void:
+    var points := PackedVector2Array([
+        Vector2(2, 1),
+        Vector2(2, 25),
+        Vector2(8, 19),
+        Vector2(14, 31),
+        Vector2(20, 28),
+        Vector2(14, 17),
+        Vector2(27, 17),
+    ])
+    var shadow := Polygon2D.new()
+    shadow.name = "Shadow"
+    shadow.position = Vector2(2, 2)
+    shadow.polygon = points
+    shadow.color = Color(0, 0, 0, 0.72)
+    pointer.add_child(shadow)
+    var arrow := Polygon2D.new()
+    arrow.name = "Arrow"
+    arrow.polygon = points
+    arrow.color = Color(0.96, 0.97, 0.99, 1.0)
+    pointer.add_child(arrow)
+    var outline := Line2D.new()
+    outline.name = "Outline"
+    outline.points = points
+    outline.closed = true
+    outline.width = 1.6
+    outline.default_color = Color(0.06, 0.06, 0.07, 0.96)
+    pointer.add_child(outline)
+
+func _button_style(
+    fill: Color,
+    border: Color,
+    circular: bool,
+    border_width: int = 2
+) -> StyleBoxFlat:
     var style := StyleBoxFlat.new()
     style.bg_color = fill
     style.border_color = border
-    style.set_border_width_all(2)
+    style.set_border_width_all(border_width)
     style.set_corner_radius_all(999 if circular else 12)
-    style.shadow_color = Color(0.0, 0.0, 0.0, 0.28)
-    style.shadow_size = 7
-    style.shadow_offset = Vector2(0, 3)
     return style
 
 func _toggle_menu() -> void:

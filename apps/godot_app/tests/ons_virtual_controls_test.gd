@@ -61,6 +61,12 @@ func _run() -> void:
     if not safe_rect.encloses(controls.menu_button.get_global_rect()):
         _fail("Menu escaped the mobile safe area")
         return
+    if not is_equal_approx(
+        controls.menu_button.get_global_rect().end.x,
+        safe_rect.end.x
+    ):
+        _fail("Menu is not flush with the safe-area edge")
+        return
     controls.menu_button.emit_signal("pressed")
     if (
         not controls.is_menu_open()
@@ -93,6 +99,58 @@ func _run() -> void:
         if not control.visible or not safe_rect.encloses(control.get_global_rect()):
             _fail("required control is hidden or outside safe area: %s" % control.name)
             return
+
+    var reference_circles: Array[Button] = [
+        controls.escape_button,
+        controls.control_button,
+        controls.enter_button,
+        controls.space_button,
+        controls.mouse_left_button,
+        controls.mouse_right_button,
+    ]
+    reference_circles.append_array(controls.digit_buttons)
+    for button in reference_circles:
+        if not is_equal_approx(button.size.x, button.size.y):
+            _fail("UU-style control is not circular: %s" % button.name)
+            return
+        var normal_style := button.get_theme_stylebox("normal") as StyleBoxFlat
+        if normal_style == null or normal_style.corner_radius_top_left < button.size.x * 0.5:
+            _fail("UU-style circular treatment is missing: %s" % button.name)
+            return
+
+    var dpad_rect: Rect2 = controls.dpad_backdrop.get_global_rect()
+    for direction in [
+        controls.w_button,
+        controls.a_button,
+        controls.s_button,
+        controls.d_button,
+    ]:
+        if not dpad_rect.encloses(direction.get_global_rect()):
+            _fail("direction escaped the UU-style circular pad: %s" % direction.name)
+            return
+    if controls.dpad_backdrop.size.x < controls.w_button.size.x * 2.5:
+        _fail("direction pad is not the large UU-style disc")
+        return
+    if (
+        controls.mouse_left_button.get_node_or_null("MouseIcon") == null
+        or controls.mouse_right_button.get_node_or_null("MouseIcon") == null
+    ):
+        _fail("mouse buttons are missing the UU-style mouse icons")
+        return
+    if (
+        controls.wheel_backdrop == null
+        or not controls.wheel_backdrop.get_global_rect().encloses(
+            controls.scroll_up_button.get_global_rect()
+        )
+        or not controls.wheel_backdrop.get_global_rect().encloses(
+            controls.scroll_down_button.get_global_rect()
+        )
+    ):
+        _fail("scroll controls are not contained in the UU-style wheel")
+        return
+    if controls.cursor_handle.get_node_or_null("Arrow") == null:
+        _fail("draggable cursor is not rendered as a pointer arrow")
+        return
     if controls.digit_buttons[3].get_global_rect().intersects(
         controls.menu_button.get_global_rect()
     ):
