@@ -1,0 +1,89 @@
+{
+  "probe_script": "res://scripts/step_render_probe.gd",
+  "game_path": "天选庶民的真命之选",
+  "surface_size": [1920, 1080],
+  "coord_size": [1600, 900],
+  "warmup_frames": 1200,
+  "capture_startup": true,
+  "measure_frames": 1,
+  "runtime_debug": true,
+  "actions": [
+    {
+      "type": "click",
+      "label": "open_load",
+      "x": 100,
+      "y": 365,
+      "after_frames": 600
+    },
+    {
+      "type": "click",
+      "label": "select_save_3",
+      "x": 1260,
+      "y": 210,
+      "after_frames": 60
+    },
+    {
+      "type": "click",
+      "label": "confirm_load",
+      "x": 650,
+      "y": 445,
+      "after_frames": 1200
+    },
+    {
+      "type": "two_finger_tap",
+      "label": "hide_dialog_two_finger",
+      "x": 800,
+      "y": 450,
+      "first_finger_lead_ms": 0,
+      "after_frames": 30
+    },
+    {
+      "type": "two_finger_tap",
+      "label": "restore_dialog_two_finger",
+      "x": 800,
+      "y": 450,
+      "first_finger_lead_ms": 0,
+      "after_frames": 5
+    },
+    {
+      "type": "touch_click",
+      "label": "touch_during_restore",
+      "x": 800,
+      "y": 450,
+      "release_delay_ms": 48,
+      "after_frames": 120
+    },
+    {
+      "type": "touch_click",
+      "label": "advance_touch_2",
+      "x": 800,
+      "y": 450,
+      "release_delay_ms": 48,
+      "after_frames": 30
+    },
+    {
+      "type": "touch_click",
+      "label": "advance_touch_3",
+      "x": 800,
+      "y": 450,
+      "release_delay_ms": 48,
+      "after_frames": 30
+    },
+    {
+      "type": "touch_click",
+      "label": "advance_touch_4",
+      "x": 800,
+      "y": 450,
+      "release_delay_ms": 48,
+      "after_frames": 30
+    },
+    {
+      "type": "touch_click",
+      "label": "advance_touch_5",
+      "x": 800,
+      "y": 450,
+      "release_delay_ms": 48,
+      "after_frames": 30
+    }
+  ]
+}
