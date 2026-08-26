@@ -3,7 +3,12 @@ extends SceneTree
 const OnsVirtualControls = preload("res://scripts/ons_virtual_controls.gd")
 const AetherDesignTokens = preload("res://scripts/ui/aether_design_tokens.gd")
 
-var _events: Array[Dictionary] = []
+var _key_events: Array[Dictionary] = []
+var _pointer_moves: Array[Dictionary] = []
+var _pointer_buttons: Array[Dictionary] = []
+var _scroll_events: Array[Dictionary] = []
+var _keyboard_requests := 0
+var _virtual_requests := 0
 
 func _initialize() -> void:
     call_deferred("_run")
@@ -17,61 +22,178 @@ func _run() -> void:
         key_code: int,
         modifiers: int
     ):
-        _events.append({
+        _key_events.append({
             "pressed": pressed,
             "key_code": key_code,
             "modifiers": modifiers,
         })
     )
-    controls.layout(
-        Vector2(844, 390),
-        Rect2(Vector2(44, 0), Vector2(756, 369))
+    controls.pointer_move_requested.connect(func(position: Vector2, delta: Vector2):
+        _pointer_moves.append({"position": position, "delta": delta})
     )
+    controls.pointer_button_requested.connect(func(
+        pressed: bool,
+        button: int,
+        modifiers: int,
+        position: Vector2
+    ):
+        _pointer_buttons.append({
+            "pressed": pressed,
+            "button": button,
+            "modifiers": modifiers,
+            "position": position,
+        })
+    )
+    controls.pointer_scroll_requested.connect(func(delta_y: float, position: Vector2):
+        _scroll_events.append({"delta_y": delta_y, "position": position})
+    )
+    controls.keyboard_requested.connect(func(): _keyboard_requests += 1)
+    controls.virtual_controls_requested.connect(func(): _virtual_requests += 1)
+
+    var safe_rect := Rect2(Vector2(44, 0), Vector2(756, 369))
+    controls.layout(Vector2(844, 390), safe_rect)
     controls.set_enabled(true)
     await process_frame
 
-    if controls.escape_button.text != "Esc" or controls.control_button.text != "Ctrl":
-        _fail("virtual key labels are missing")
+    if not controls.menu_button.visible or controls.escape_button.visible:
+        _fail("collapsed state must expose only the edge Menu entry")
         return
-    var safe_rect := Rect2(Vector2(44, 0), Vector2(756, 369))
-    if not safe_rect.encloses(controls.escape_button.get_global_rect()):
-        _fail("Esc button escaped the mobile safe area")
+    if not safe_rect.encloses(controls.menu_button.get_global_rect()):
+        _fail("Menu escaped the mobile safe area")
         return
-    if not safe_rect.encloses(controls.control_button.get_global_rect()):
-        _fail("Ctrl button escaped the mobile safe area")
+    controls.menu_button.emit_signal("pressed")
+    if (
+        not controls.is_menu_open()
+        or not controls.keyboard_button.visible
+        or not controls.virtual_controls_button.visible
+    ):
+        _fail("Menu did not expose keyboard and virtual-control choices")
+        return
+    controls.keyboard_button.emit_signal("pressed")
+    if _keyboard_requests != 1 or controls.is_menu_open():
+        _fail("soft-keyboard action was not routed")
         return
 
+    controls.menu_button.emit_signal("pressed")
+    controls.virtual_controls_button.emit_signal("pressed")
+    await process_frame
+    if not controls.is_panel_open() or _virtual_requests != 1:
+        _fail("virtual-control panel did not open")
+        return
+    var required_controls: Array[Control] = [
+        controls.escape_button, controls.control_button,
+        controls.w_button, controls.a_button, controls.s_button, controls.d_button,
+        controls.enter_button, controls.space_button,
+        controls.mouse_left_button, controls.mouse_right_button,
+        controls.scroll_up_button, controls.scroll_down_button,
+        controls.cursor_handle,
+    ]
+    required_controls.append_array(controls.digit_buttons)
+    for control in required_controls:
+        if not control.visible or not safe_rect.encloses(control.get_global_rect()):
+            _fail("required control is hidden or outside safe area: %s" % control.name)
+            return
+    if controls.digit_buttons[3].get_global_rect().intersects(
+        controls.menu_button.get_global_rect()
+    ):
+        _fail("edge Menu overlaps the numeric controls")
+        return
+
+    var outside := InputEventScreenTouch.new()
+    outside.position = safe_rect.get_center() + Vector2(0, -70)
+    if controls.routes_pointer(outside):
+        _fail("pointer outside controls was captured")
+        return
     var inside := InputEventScreenTouch.new()
     inside.position = controls.escape_button.get_global_rect().get_center()
     if not controls.routes_pointer(inside):
-        _fail("pointer on Esc was allowed through to the game")
-        return
-    var outside := InputEventScreenTouch.new()
-    outside.position = safe_rect.get_center()
-    if controls.routes_pointer(outside):
-        _fail("pointer outside the controls was captured")
+        _fail("pointer on Esc leaked into the game")
         return
 
     controls.escape_button.emit_signal("button_down")
     controls.escape_button.emit_signal("button_down")
     controls.escape_button.emit_signal("button_up")
     controls.control_button.emit_signal("button_down")
-
-    var held_drag := InputEventScreenDrag.new()
-    held_drag.position = safe_rect.get_center()
-    if not controls.routes_pointer(held_drag):
-        _fail("held Ctrl drag leaked through to the game")
-        return
-
-    controls.set_enabled(false)
-    var expected := [
+    controls.control_button.emit_signal("button_up")
+    controls.w_button.emit_signal("button_down")
+    controls.w_button.emit_signal("button_up")
+    controls.digit_buttons[3].emit_signal("button_down")
+    controls.digit_buttons[3].emit_signal("button_up")
+    controls.enter_button.emit_signal("button_down")
+    controls.enter_button.emit_signal("button_up")
+    controls.space_button.emit_signal("button_down")
+    controls.space_button.emit_signal("button_up")
+    var expected_keys := [
         {"pressed": true, "key_code": 0x1B, "modifiers": 0},
         {"pressed": false, "key_code": 0x1B, "modifiers": 0},
         {"pressed": true, "key_code": 0x11, "modifiers": 0x04},
         {"pressed": false, "key_code": 0x11, "modifiers": 0},
+        {"pressed": true, "key_code": 0x57, "modifiers": 0},
+        {"pressed": false, "key_code": 0x57, "modifiers": 0},
+        {"pressed": true, "key_code": 0x34, "modifiers": 0},
+        {"pressed": false, "key_code": 0x34, "modifiers": 0},
+        {"pressed": true, "key_code": 0x0D, "modifiers": 0},
+        {"pressed": false, "key_code": 0x0D, "modifiers": 0},
+        {"pressed": true, "key_code": 0x20, "modifiers": 0},
+        {"pressed": false, "key_code": 0x20, "modifiers": 0},
     ]
-    if _events != expected:
-        _fail("unexpected key sequence: %s" % [_events])
+    if _key_events != expected_keys:
+        _fail("unexpected virtual-key sequence: %s" % [_key_events])
+        return
+
+    var cursor_before := controls.cursor_screen_position()
+    var cursor_down := InputEventScreenTouch.new()
+    cursor_down.index = 7
+    cursor_down.pressed = true
+    cursor_down.position = cursor_before
+    if not controls.routes_pointer(cursor_down):
+        _fail("cursor press was not captured")
+        return
+    var cursor_drag := InputEventScreenDrag.new()
+    cursor_drag.index = 7
+    cursor_drag.position = cursor_before + Vector2(31, -24)
+    if not controls.routes_pointer(cursor_drag) or _pointer_moves.size() != 1:
+        _fail("cursor drag did not route a pointer move")
+        return
+    var cursor_up := InputEventScreenTouch.new()
+    cursor_up.index = 7
+    cursor_up.pressed = false
+    cursor_up.position = cursor_drag.position
+    if not controls.routes_pointer(cursor_up):
+        _fail("cursor release was not captured")
+        return
+
+    controls.mouse_left_button.emit_signal("button_down")
+    controls.mouse_left_button.emit_signal("button_up")
+    controls.mouse_right_button.emit_signal("button_down")
+    controls.mouse_right_button.emit_signal("button_up")
+    if _pointer_buttons.size() != 4:
+        _fail("mouse buttons did not produce down/up pairs")
+        return
+    if (
+        _pointer_buttons[0].modifiers != 0
+        or _pointer_buttons[2].modifiers != 0x10
+    ):
+        _fail("left/right mouse modifiers are incorrect")
+        return
+    controls.scroll_up_button.emit_signal("pressed")
+    controls.scroll_down_button.emit_signal("pressed")
+    if (
+        _scroll_events.size() != 2
+        or _scroll_events[0].delta_y != -1.0
+        or _scroll_events[1].delta_y != 1.0
+    ):
+        _fail("mouse-wheel directions are incorrect")
+        return
+
+    controls.a_button.emit_signal("button_down")
+    controls.mouse_right_button.emit_signal("button_down")
+    controls.set_enabled(false)
+    if _key_events.back() != {"pressed": false, "key_code": 0x41, "modifiers": 0}:
+        _fail("hiding controls did not release held key")
+        return
+    if _pointer_buttons.back().pressed or _pointer_buttons.back().modifiers != 0x10:
+        _fail("hiding controls did not release held mouse button")
         return
     if controls.routes_pointer(inside):
         _fail("hidden controls still captured input")

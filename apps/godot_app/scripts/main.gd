@@ -1800,6 +1800,7 @@ var last_forwarded_touch_up_msec := 0
 var last_forwarded_touch_move_msec_by_id := {}
 var touch_input_busy_until_msec := 0
 var game_text_input_active := false
+var game_text_input_forced := false
 var game_text_input_attention_position := Vector2i(-1, -1)
 var game_text_input_reopen_requested := false
 var game_text_input_last_show_msec := 0
@@ -1881,6 +1882,7 @@ const TOUCH_BUSY_SUPPRESS_MS := 0
 const VIRTUAL_KEYBOARD_REOPEN_DELAY_MS := 750
 const TOUCH_POINTER_ID_OFFSET := 100000
 const TOUCH_SECONDARY_POINTER_ID := 0
+const ONS_VIRTUAL_POINTER_ID := TOUCH_POINTER_ID_OFFSET + 65535
 const TOUCH_SECONDARY_TAP_WINDOW_MS := 180
 const TOUCH_SINGLE_TAP_DELAY_MS := 90
 const ONS_TOUCH_CLICK_HOLD_MS := 48
@@ -2200,6 +2202,21 @@ func _build_ui() -> void:
     ons_virtual_controls.setup(ui_tokens)
     ons_virtual_controls.key_event_requested.connect(
         _on_ons_virtual_key_event
+    )
+    ons_virtual_controls.pointer_move_requested.connect(
+        _on_ons_virtual_pointer_move
+    )
+    ons_virtual_controls.pointer_button_requested.connect(
+        _on_ons_virtual_pointer_button
+    )
+    ons_virtual_controls.pointer_scroll_requested.connect(
+        _on_ons_virtual_pointer_scroll
+    )
+    ons_virtual_controls.keyboard_requested.connect(
+        _on_ons_virtual_keyboard_requested
+    )
+    ons_virtual_controls.virtual_controls_requested.connect(
+        _on_ons_virtual_controls_requested
     )
 
     _build_video_view()
@@ -13736,6 +13753,97 @@ func _on_ons_virtual_key_event(
             ]
         )
 
+func _on_ons_virtual_pointer_move(
+    screen_position: Vector2,
+    screen_delta: Vector2
+) -> void:
+    if player == null or not _can_forward_ons_virtual_input():
+        return
+    var mapped := _map_viewport_point(screen_position, true)
+    var mapped_delta := _map_viewport_delta(screen_delta)
+    _send_game_pointer_event(
+        POINTER_MOVE,
+        ONS_VIRTUAL_POINTER_ID,
+        mapped.x,
+        mapped.y,
+        mapped_delta.x,
+        mapped_delta.y,
+        0
+    )
+
+func _on_ons_virtual_pointer_button(
+    pressed: bool,
+    button: int,
+    modifiers: int,
+    screen_position: Vector2
+) -> void:
+    if player == null or active_runtime_kind != RUNTIME_ONSCRIPTER:
+        return
+    if pressed and not _can_forward_ons_virtual_input():
+        return
+    if not pressed and not game_running:
+        return
+    var mapped := _map_viewport_point(screen_position, true)
+    _send_game_pointer_event(
+        POINTER_DOWN if pressed else POINTER_UP,
+        ONS_VIRTUAL_POINTER_ID,
+        mapped.x,
+        mapped.y,
+        0.0,
+        0.0,
+        button,
+        modifiers
+    )
+    if pressed:
+        _hold_next_present_after_input()
+    else:
+        _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
+
+func _on_ons_virtual_pointer_scroll(
+    delta_y: float,
+    screen_position: Vector2
+) -> void:
+    if player == null or not _can_forward_ons_virtual_input():
+        return
+    var mapped := _map_viewport_point(screen_position, true)
+    _send_game_pointer_event(
+        POINTER_SCROLL,
+        ONS_VIRTUAL_POINTER_ID,
+        mapped.x,
+        mapped.y,
+        0.0,
+        delta_y,
+        0
+    )
+
+func _on_ons_virtual_keyboard_requested() -> void:
+    if not _can_forward_ons_virtual_input():
+        return
+    if (
+        _is_touch_platform()
+        and DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD)
+    ):
+        game_text_input_forced = true
+        var attention := Vector2i(get_viewport().get_visible_rect().get_center())
+        _show_game_virtual_keyboard(attention, {})
+        game_text_input_attention_position = attention
+        game_text_input_active = true
+    elif DisplayServer.has_feature(DisplayServer.FEATURE_IME):
+        game_text_input_forced = true
+        DisplayServer.window_set_ime_active(true)
+        game_text_input_active = true
+
+func _on_ons_virtual_controls_requested() -> void:
+    if game_text_input_active or game_text_input_forced:
+        _deactivate_game_text_input()
+
+func _can_forward_ons_virtual_input() -> bool:
+    return (
+        active_runtime_kind == RUNTIME_ONSCRIPTER
+        and _can_forward_game_input()
+        and not app_lifecycle_paused
+    )
+
 func _is_game_pointer_event(event: InputEvent) -> bool:
     return event is InputEventMouseButton or event is InputEventMouseMotion or event is InputEventScreenTouch or event is InputEventScreenDrag or event is InputEventPanGesture
 
@@ -14281,6 +14389,7 @@ func _deactivate_game_text_input() -> void:
         elif DisplayServer.has_feature(DisplayServer.FEATURE_IME):
             DisplayServer.window_set_ime_active(false)
     game_text_input_active = false
+    game_text_input_forced = false
     game_text_input_attention_position = Vector2i(-1, -1)
     game_text_input_reopen_requested = false
 
@@ -14314,6 +14423,10 @@ func _show_game_virtual_keyboard(attention_position: Vector2i, state: Dictionary
     game_text_input_last_show_msec = Time.get_ticks_msec()
 
 func _sync_game_text_input_state() -> void:
+    if game_text_input_forced:
+        if game_text_input_suspended or not _can_forward_game_input():
+            _deactivate_game_text_input()
+        return
     if game_text_input_suspended or not _can_forward_game_input():
         _deactivate_game_text_input()
         return
