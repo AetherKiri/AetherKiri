@@ -458,7 +458,6 @@ namespace motion::detail {
         std::vector<MotionNode> nodes;
         bool nodesBuilt = false;
         bool yuzuTitleFinalFrameRendered = false;
-        bool yuzuSdPresentationRetired = false;
         bool yuzuPresentationCenteredOriginConfirmed = false;
         float yuzuPresentationTranslateX = 0.0f;
         float yuzuPresentationTranslateY = 0.0f;

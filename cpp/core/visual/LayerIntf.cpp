@@ -65,21 +65,6 @@
 #include "PimgCompositeBounds.h"
 #include "../../plugins/psbfile/PSBMedia.h"
 
-extern "C" bool AetherKiriMotionRestoreCenteredPresentationLayer(
-    tTJSNI_BaseLayer *layer);
-extern "C" bool
-AetherKiriMotionPreserveCenteredPresentationLayerBeforeTransparentClear(
-    tTJSNI_BaseLayer *layer,
-    tjs_int x,
-    tjs_int y,
-    tjs_int width,
-    tjs_int height);
-extern "C" bool AetherKiriMotionShowCenteredPresentationHoldOverlay(
-    tTJSNI_BaseLayer *layer);
-extern "C" void AetherKiriMotionDismissCenteredPresentationHoldOverlaysForLayer(
-    tTJSNI_BaseLayer *layer);
-extern "C" void AetherKiriMotionTickCenteredPresentationHoldOverlays();
-
 extern void TVPSetFontRasterizer(tjs_int index);
 
 extern tjs_int TVPGetFontRasterizer();
@@ -3647,8 +3632,6 @@ void tTJSNI_BaseLayer::SetVisible(bool st) {
         if(st && _bitmapEvicted)
             EnsureBitmap();
         if(!st)
-            AetherKiriMotionShowCenteredPresentationHoldOverlay(this);
-        if(!st)
             Update();
         Visible = st;
         if(st)
@@ -3672,8 +3655,6 @@ void tTJSNI_BaseLayer::SetOpacity(tjs_int opa) {
             TVPThrowExceptionMessage(TVPCannotSetPrimaryInvisible);
         if(opa != 0 && Visible && _bitmapEvicted)
             EnsureBitmap();
-        if(opa == 0)
-            AetherKiriMotionShowCenteredPresentationHoldOverlay(this);
         Opacity = opa;
         if(Parent)
             Parent->NotifyChildrenVisualStateChanged();
@@ -6659,37 +6640,106 @@ void tTJSNI_BaseLayer::FireButtonClick() {
             if(!control_owner.Object)
                 return false;
 
+            static ttstr links_name(TJS_W("links"));
+            tTJSVariant links_value;
+            const tjs_error links_hr = control_owner.PropGet(
+                0, links_name.c_str(), links_name.GetHint(), &links_value,
+                control_owner.ObjThis);
+            tTJSVariant link_value;
+            tjs_error item_hr = TJS_E_FAIL;
+            const tjs_int link_index =
+                static_cast<tjs_int>(link_num.AsInteger());
+            if(TJS_SUCCEEDED(links_hr) &&
+               links_value.Type() == tvtObject) {
+                const tTJSVariantClosure links =
+                    links_value.AsObjectClosureNoAddRef();
+                item_hr = links.PropGetByNum(
+                    0, link_index, &link_value, links.ObjThis);
+            }
+
             if(TVPLayerInputTraceEnabled()) {
-                static ttstr links_name(TJS_W("links"));
-                tTJSVariant links_value;
-                const tjs_error links_hr = control_owner.PropGet(
-                    0, links_name.c_str(), links_name.GetHint(), &links_value,
-                    control_owner.ObjThis);
-                if(TJS_SUCCEEDED(links_hr) &&
-                   links_value.Type() == tvtObject) {
-                    tTJSVariantClosure links =
-                        links_value.AsObjectClosureNoAddRef();
-                    tTJSVariant link_value;
-                    const tjs_int link_index =
-                        static_cast<tjs_int>(link_num.AsInteger());
-                    const tjs_error item_hr = links.PropGetByNum(
-                        0, link_index, &link_value, links.ObjThis);
-                    if(TJS_SUCCEEDED(item_hr) &&
-                       link_value.Type() == tvtObject) {
+                if(TJS_SUCCEEDED(item_hr) &&
+                   link_value.Type() == tvtObject) {
                         TVPTraceObjectForButtonClick(
                             "button.fire.controlOwner.link",
                             link_value.AsObjectClosureNoAddRef());
-                    } else {
-                        spdlog::info(
-                            "LayerIntf FireButtonClick link inspect layer={} link={} hr={} type={}",
-                            GetName().AsStdString(), link_index, item_hr,
-                            static_cast<int>(link_value.Type()));
-                    }
                 } else {
                     spdlog::info(
-                        "LayerIntf FireButtonClick links inspect layer={} hr={} type={}",
-                        GetName().AsStdString(), links_hr,
-                        static_cast<int>(links_value.Type()));
+                        "LayerIntf FireButtonClick link inspect layer={} link={} links_hr={} links_type={} item_hr={} item_type={}",
+                        GetName().AsStdString(), link_index, links_hr,
+                        static_cast<int>(links_value.Type()), item_hr,
+                        static_cast<int>(link_value.Type()));
+                }
+            }
+
+            // LinkButtonLayerBase evaluates link expressions through its own
+            // eval method, which forwards to controlOwner.eval and preserves
+            // the script environment used to resolve dynamic symbols such as
+            // Current. Calling the expression globally (or invoking a generic
+            // owner callback without that environment) can return success
+            // while executing against the wrong UI module.
+            if(TJS_SUCCEEDED(item_hr) && link_value.Type() == tvtObject) {
+                const tTJSVariantClosure link =
+                    link_value.AsObjectClosureNoAddRef();
+                static ttstr exp_name(TJS_W("exp"));
+                tTJSVariant expression_value;
+                const tjs_error expression_hr = link.PropGet(
+                    0, exp_name.c_str(), exp_name.GetHint(),
+                    &expression_value, nullptr);
+                if(TJS_SUCCEEDED(expression_hr) &&
+                   expression_value.Type() != tvtVoid) {
+                    const ttstr expression(expression_value);
+                    if(!expression.IsEmpty()) {
+                        static ttstr eval_name(TJS_W("eval"));
+                        tTJSVariant expression_arg(expression);
+                        tTJSVariant *eval_args[1] = { &expression_arg };
+                        tTJSVariant eval_result;
+                        try {
+                            const tjs_error eval_hr = button_object.FuncCall(
+                                0, eval_name.c_str(), eval_name.GetHint(),
+                                &eval_result, 1, eval_args,
+                                button_object.ObjThis);
+                            if(TVPLayerInputTraceEnabled()) {
+                                spdlog::info(
+                                    "LayerIntf FireButtonClick link eval layer={} link={} expr={} hr={} result={}",
+                                    GetName().AsStdString(), link_index,
+                                    expression.AsStdString(), eval_hr,
+                                    TJS_SUCCEEDED(eval_hr)
+                                        ? TVPVariantDebugString(eval_result)
+                                        : "<failed>");
+                            }
+                            if(TJS_SUCCEEDED(eval_hr))
+                                return true;
+                        } catch(eTJSScriptError &e) {
+                            if(TVPLayerInputTraceEnabled()) {
+                                spdlog::info(
+                                    "LayerIntf FireButtonClick link eval layer={} link={} expr={} threw script message={} block={} line={} trace={}",
+                                    GetName().AsStdString(), link_index,
+                                    expression.AsStdString(),
+                                    e.GetMessage().AsStdString(),
+                                    e.GetBlockName()
+                                        ? ttstr(e.GetBlockName()).AsStdString()
+                                        : "",
+                                    e.GetSourceLine(),
+                                    e.GetTrace().AsStdString());
+                            }
+                        } catch(eTJS &e) {
+                            if(TVPLayerInputTraceEnabled()) {
+                                spdlog::info(
+                                    "LayerIntf FireButtonClick link eval layer={} link={} expr={} threw tjs message={}",
+                                    GetName().AsStdString(), link_index,
+                                    expression.AsStdString(),
+                                    e.GetMessage().AsStdString());
+                            }
+                        } catch(...) {
+                            if(TVPLayerInputTraceEnabled()) {
+                                spdlog::info(
+                                    "LayerIntf FireButtonClick link eval layer={} link={} expr={} threw",
+                                    GetName().AsStdString(), link_index,
+                                    expression.AsStdString());
+                            }
+                        }
+                    }
                 }
             }
 
@@ -6698,7 +6748,8 @@ void tTJSNI_BaseLayer::FireButtonClick() {
             try {
                 const tjs_error hr = control_owner.FuncCall(
                     0, on_button_click_name.c_str(),
-                    on_button_click_name.GetHint(), &result, 1, args, nullptr);
+                    on_button_click_name.GetHint(), &result, 1, args,
+                    control_owner.ObjThis);
                 if(TVPLayerInputTraceEnabled()) {
                     spdlog::info("LayerIntf FireButtonClick controlOwner.onButtonClick layer={} link={} hr={} result={}",
                                  GetName().AsStdString(),
@@ -11458,7 +11509,6 @@ void tTJSNI_BaseLayer::CompleteForWindow(tTVPDrawable *drawable) {
 
     InCompletion = false;
     AfterCompletion();
-    AetherKiriMotionTickCenteredPresentationHoldOverlays();
 }
 
 //---------------------------------------------------------------------------
@@ -12777,17 +12827,9 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
         tjs_int y = *param[1];
         const auto fillColor = static_cast<tjs_uint32>(
             static_cast<tjs_int64>(*param[4]));
-        const bool transparentFill = (fillColor & 0xff000000u) == 0;
-        if(transparentFill) {
-            AetherKiriMotionPreserveCenteredPresentationLayerBeforeTransparentClear(
-                _this, x, y, (tjs_int)*param[2], (tjs_int)*param[3]);
-        }
         _this->FillRect(
             tTVPRect(x, y, x + (tjs_int)*param[2], y + (tjs_int)*param[3]),
             fillColor);
-        if(transparentFill) {
-            AetherKiriMotionRestoreCenteredPresentationLayer(_this);
-        }
         return TJS_S_OK;
     }
     TJS_END_NATIVE_METHOD_DECL(/*func. name*/ fillRect)
@@ -14062,8 +14104,6 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
             TVPThrowExceptionMessage(TVPSpecifyLayer);
 
         _this->AssignImages(src);
-        AetherKiriMotionDismissCenteredPresentationHoldOverlaysForLayer(_this);
-        AetherKiriMotionRestoreCenteredPresentationLayer(_this);
 
         return TJS_S_OK;
     }
@@ -14091,8 +14131,6 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
             TVPThrowExceptionMessage(TVPSpecifyLayer);
 
         _this->AssignMotionImages(src);
-        AetherKiriMotionDismissCenteredPresentationHoldOverlaysForLayer(_this);
-        AetherKiriMotionRestoreCenteredPresentationLayer(_this);
 
         return TJS_S_OK;
     }
