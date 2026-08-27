@@ -1,0 +1,63 @@
+diff --git a/crates/siglus_scene_vm/src/lib.rs b/crates/siglus_scene_vm/src/lib.rs
+index e9911fd..e930245 100644
+--- a/crates/siglus_scene_vm/src/lib.rs
++++ b/crates/siglus_scene_vm/src/lib.rs
+@@ -17,6 +17,7 @@ pub mod mesh3d;
+ pub mod movie;
+ pub mod render_math;
+ pub mod resource;
++pub mod lang_variant;
+ #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+ pub mod emote_key;
+ pub mod emote;
+diff --git a/crates/siglus_scene_vm/src/original_save.rs b/crates/siglus_scene_vm/src/original_save.rs
+index f6eec16..2b292d2 100644
+--- a/crates/siglus_scene_vm/src/original_save.rs
++++ b/crates/siglus_scene_vm/src/original_save.rs
+@@ -707,6 +707,11 @@ impl<'a> OriginalStreamReader<'a> {
+ }
+ 
+ pub fn save_dir(project_dir: &Path) -> PathBuf {
++    // Language variant packages may ship a per-language save directory
++    // (e.g. savedata -> save_chs); it is only used when it already exists.
++    if let Some(dir) = crate::lang_variant::variant_save_dir(project_dir, "savedata") {
++        return dir;
++    }
+     project_dir.join("savedata")
+ }
+ 
+diff --git a/crates/siglus_scene_vm/src/resource.rs b/crates/siglus_scene_vm/src/resource.rs
+index 1c7c7f7..a0b58c8 100644
+--- a/crates/siglus_scene_vm/src/resource.rs
++++ b/crates/siglus_scene_vm/src/resource.rs
+@@ -150,6 +150,12 @@ pub(crate) fn resolve_windows_case_insensitive_path(path: &Path) -> Result<Optio
+ pub(crate) fn resolve_windows_case_insensitive_file(path: &Path) -> Result<Option<PathBuf>> {
+     #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+     {
++        if let Some(variant) = crate::lang_variant::map_file_candidate(path) {
++            if wasm_path_is_file(&variant) {
++                crate::lang_variant::note_variant_file_used(path, &variant);
++                return Ok(Some(variant));
++            }
++        }
+         return Ok(wasm_path_is_file(path).then_some(path.to_path_buf()));
+     }
+ 
+@@ -168,6 +174,17 @@ pub(crate) fn resolve_windows_case_insensitive_file(path: &Path) -> Result<Optio
+ 
+ #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+ fn resolve_windows_case_insensitive_file_uncached(path: &Path) -> Result<Option<PathBuf>> {
++    // Language variant packages (e.g. localized sibling files) win over the
++    // original file when they exist; the result is cached like any other
++    // resolution.
++    if let Some(variant) = crate::lang_variant::map_file_candidate(path) {
++        if let Some(resolved) = resolve_windows_case_insensitive_path(&variant)? {
++            if resolved.is_file() {
++                crate::lang_variant::note_variant_file_used(path, &resolved);
++                return Ok(Some(resolved));
++            }
++        }
++    }
+     if path.is_file() {
+         return Ok(Some(path.to_path_buf()));
+     }
