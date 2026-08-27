@@ -221,6 +221,7 @@ bool IsGpuRectFastPathEnabled(const char *name) {
         return std::strcmp(name, "FillARGB") == 0 ||
                std::strcmp(name, "FillMask") == 0 ||
                std::strcmp(name, "Copy") == 0 ||
+               std::strcmp(name, "CopyOpaqueImage") == 0 ||
                std::strcmp(name, "RemoveConstOpacity") == 0 ||
                std::strcmp(name, "AlphaBlend") == 0 ||
                std::strcmp(name, "AlphaBlend_a") == 0 ||
@@ -239,6 +240,7 @@ bool IsGpuRectFastPathEnabled(const char *name) {
                std::strcmp(name, "PsSubBlend") == 0 ||
                std::strcmp(name, "PsScreenBlend") == 0 ||
                std::strcmp(name, "PsMulBlend") == 0 ||
+               std::strcmp(name, "PsSoftLightBlend") == 0 ||
                std::strcmp(name, "BoxBlurAlpha") == 0;
     };
     static const std::string setting = []() {
@@ -1491,6 +1493,18 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         return;
     }
 
+    if (method_name == "CopyOpaqueImage" && dst != nullptr && src != nullptr &&
+        IsGpuRectFastPathEnabled("CopyOpaqueImage") &&
+        ShouldUseGpuRectFastPath(rctar, method_name.c_str(), dst, src) &&
+        RectBoundsInsideTexture(textures[0].second, src) &&
+        dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
+        src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
+        dst->BlendGpuFrom(src, rctar, textures[0].second,
+                          TVP_GODOT_GPU_BLEND_COPY_OPAQUE, 255, 0)) {
+        CountGpuFastPath(method_name);
+        return;
+    }
+
     if (method_name == "ApplyColorMap_a" && dst != nullptr && src != nullptr &&
         IsGpuRectFastPathEnabled("ApplyColorMap_a") &&
         RectAbsSizeMatches(rctar, textures[0].second) &&
@@ -1593,6 +1607,20 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
         dst->BlendGpuFrom(src, rctar, textures[0].second,
                           TVP_GODOT_GPU_BLEND_PS_ADD,
+                          godot_method != nullptr ? godot_method->Opacity() : 255,
+                          0)) {
+        CountGpuFastPath(method_name);
+        return;
+    }
+
+    if (method_name == "PsSoftLightBlend" && dst != nullptr && src != nullptr &&
+        IsGpuRectFastPathEnabled("PsSoftLightBlend") &&
+        ShouldUseGpuRectFastPath(rctar, method_name.c_str(), dst, src) &&
+        RectBoundsInsideTexture(textures[0].second, src) &&
+        dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
+        src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
+        dst->BlendGpuFrom(src, rctar, textures[0].second,
+                          TVP_GODOT_GPU_BLEND_PS_SOFT_LIGHT,
                           godot_method != nullptr ? godot_method->Opacity() : 255,
                           0)) {
         CountGpuFastPath(method_name);

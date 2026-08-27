@@ -1,0 +1,33 @@
+{
+  "name": "drciot_load_probe_local",
+  "game_path": "/Users/liuyu/gal/drciot",
+  "backend": "Godot Native",
+  "surface_size": [2560, 1440],
+  "window_size": [1600, 900],
+  "coord_size": [1600, 900],
+  "startup_timeout_frames": 2400,
+  "warmup_frames": 30,
+  "after_click_frames": 60,
+  "measure_frames": 60,
+  "runtime_debug": true,
+  "actions": [
+    {"type": "click", "label": "accept_warning", "x": 800, "y": 450, "after_frames": 30},
+    {"type": "wait", "label": "title_logo_1", "after_frames": 90},
+    {"type": "wait", "label": "title_logo_2", "after_frames": 90},
+    {"type": "wait", "label": "title_logo_3", "after_frames": 90},
+    {"type": "wait", "label": "title_logo_4", "after_frames": 90},
+    {"type": "wait", "label": "title_menu", "after_frames": 600},
+    {"type": "click", "label": "flowchart", "x": 1250, "y": 550, "after_frames": 180},
+    {"type": "wait", "label": "flowchart_open", "after_frames": 180},
+    {"type": "click", "label": "chapter_1_1", "x": 740, "y": 250, "after_frames": 180},
+    {"type": "wait", "label": "chapter_selected", "after_frames": 60},
+    {"type": "click", "label": "return_title", "x": 1160, "y": 845, "after_frames": 300},
+    {"type": "wait", "label": "title_after_flowchart", "after_frames": 600},
+    {"type": "click", "label": "load_menu_center", "x": 1365, "y": 430, "after_frames": 300},
+    {"type": "wait", "label": "load_menu_open", "after_frames": 180},
+    {"type": "repeat_click", "label": "save_card_double_click", "x": 840, "y": 270, "count": 2, "per_click_frames": 30, "after_frames": 120},
+    {"type": "click", "label": "confirm_load_yes", "x": 675, "y": 480, "after_frames": 180},
+    {"type": "wait", "label": "loaded_game", "after_frames": 180},
+    {"type": "click_stream", "label": "loaded_game_20_clicks", "x": 900, "y": 750, "frames": 300, "click_every_frames": 12, "max_clicks": 20, "capture_final": true, "deferred_capture_every": 0}
+  ]
+}

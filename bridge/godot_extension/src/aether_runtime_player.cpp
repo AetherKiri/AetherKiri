@@ -1881,6 +1881,34 @@ uint ps_sub_blend(uint d, uint s, uint opa) {
     return (d & 0xff000000u) | r | (g << 8) | (b << 16);
 }
 
+uint soft_light_channel(uint source, uint destination) {
+    float s = float(source) / 255.0;
+    float d = float(destination) / 255.0;
+    float exponent = source >= 128u
+        ? 128.0 / max(float(source), 1.0)
+        : (1.0 - s) / 0.5;
+    // TVP's table stores an unsigned char, so conversion intentionally
+    // truncates instead of rounding.
+    return uint(clamp(pow(max(d, 0.0), exponent) * 255.0, 0.0, 255.0));
+}
+
+uint ps_soft_light_blend(uint d, uint s, uint opa) {
+    uint a = (s >> 24) & 0xffu;
+    if (opa != 255u) {
+        a = (a * opa) >> 8;
+    }
+    int dr = int(d & 0xffu);
+    int dg = int((d >> 8) & 0xffu);
+    int db = int((d >> 16) & 0xffu);
+    int sr = int(soft_light_channel(s & 0xffu, d & 0xffu));
+    int sg = int(soft_light_channel((s >> 8) & 0xffu, (d >> 8) & 0xffu));
+    int sb = int(soft_light_channel((s >> 16) & 0xffu, (d >> 16) & 0xffu));
+    uint r = uint(clamp(dr + (((sr - dr) * int(a)) >> 8), 0, 255));
+    uint g = uint(clamp(dg + (((sg - dg) * int(a)) >> 8), 0, 255));
+    uint b = uint(clamp(db + (((sb - db) * int(a)) >> 8), 0, 255));
+    return (d & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
 uint additive_alpha_blend_hda(uint d, uint s, uint opa) {
     if (opa != 255u) {
         uint sr = ((s & 0xffu) * opa) >> 8;
@@ -1984,6 +2012,8 @@ void main() {
         uint s = pack_u8(vec4_to_u8(load_src(local)));
         if (pc.rect1.z == 20) {
         out_color = s;
+        } else if (pc.rect1.z == 27) {
+        out_color = (s & 0x00ffffffu) | 0xff000000u;
         } else if (pc.rect1.z == 19) {
         uint da = (d >> 24) & 0xffu;
         uint sa = (s >> 24) & 0xffu;
@@ -2021,6 +2051,8 @@ void main() {
         out_color = ps_add_blend(d, s, opa);
         } else if (pc.rect1.z == 17) {
         out_color = ps_sub_blend(d, s, opa);
+        } else if (pc.rect1.z == 28) {
+        out_color = ps_soft_light_blend(d, s, opa);
         } else if (pc.rect1.z == 23) {
         out_color = apply_color_map_a(
             d, s & 0xffu, opa,
@@ -7865,6 +7897,37 @@ uint32_t CpuPsSubBlend(uint32_t d, uint32_t s, int opacity) {
     return (d & 0xff000000u) | r | (g << 8) | (b << 16);
 }
 
+uint32_t CpuPsSoftLightBlend(uint32_t d, uint32_t s, int opacity) {
+    const auto channel = [](uint32_t source, uint32_t destination) {
+        const double sf = static_cast<double>(source) / 255.0;
+        const double df = static_cast<double>(destination) / 255.0;
+        const double exponent = source >= 128u
+            ? 128.0 / static_cast<double>(std::max(source, 1u))
+            : (1.0 - sf) / 0.5;
+        return static_cast<uint32_t>(std::clamp(
+            static_cast<int>(std::pow(std::max(df, 0.0), exponent) * 255.0),
+            0, 255));
+    };
+    uint32_t a = (s >> 24) & 0xffu;
+    const uint32_t opa = static_cast<uint32_t>(std::clamp(opacity, 0, 255));
+    if (opa != 255u) a = (a * opa) >> 8;
+    const int dr = static_cast<int>(d & 0xffu);
+    const int dg = static_cast<int>((d >> 8) & 0xffu);
+    const int db = static_cast<int>((d >> 16) & 0xffu);
+    const int sr = static_cast<int>(channel(s & 0xffu, d & 0xffu));
+    const int sg = static_cast<int>(channel((s >> 8) & 0xffu,
+                                            (d >> 8) & 0xffu));
+    const int sb = static_cast<int>(channel((s >> 16) & 0xffu,
+                                            (d >> 16) & 0xffu));
+    const uint32_t r = static_cast<uint32_t>(std::clamp(
+        dr + (((sr - dr) * static_cast<int>(a)) >> 8), 0, 255));
+    const uint32_t g = static_cast<uint32_t>(std::clamp(
+        dg + (((sg - dg) * static_cast<int>(a)) >> 8), 0, 255));
+    const uint32_t b = static_cast<uint32_t>(std::clamp(
+        db + (((sb - db) * static_cast<int>(a)) >> 8), 0, 255));
+    return (d & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
 uint32_t CpuAdditiveAlphaBlendHda(uint32_t d, uint32_t s, int opacity) {
     const uint32_t opa = static_cast<uint32_t>(std::clamp(opacity, 0, 255));
     if(opa != 255u) {
@@ -7928,6 +7991,8 @@ uint32_t CpuBlendReference(uint32_t mode, uint32_t d, uint32_t s,
                    (static_cast<uint32_t>(std::clamp(opacity, 0, 255)) << 24);
         case TVP_GODOT_GPU_BLEND_COPY_RGBA:
             return s;
+        case TVP_GODOT_GPU_BLEND_COPY_OPAQUE:
+            return (s & 0x00ffffffu) | 0xff000000u;
         case TVP_GODOT_GPU_BLEND_ALPHA_BLEND_A:
             return CpuAlphaBlendA(d, s, opacity);
         case TVP_GODOT_GPU_BLEND_CONST_ALPHA_D:
@@ -7940,6 +8005,8 @@ uint32_t CpuBlendReference(uint32_t mode, uint32_t d, uint32_t s,
             return CpuPsAddBlend(d, s, opacity);
         case TVP_GODOT_GPU_BLEND_PS_SUBTRACT:
             return CpuPsSubBlend(d, s, opacity);
+        case TVP_GODOT_GPU_BLEND_PS_SOFT_LIGHT:
+            return CpuPsSoftLightBlend(d, s, opacity);
         case TVP_GODOT_GPU_BLEND_APPLY_COLOR_MAP_A:
             return CpuApplyColorMapA(d, s & 0xffu, opacity, color);
         case TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA:
@@ -8004,6 +8071,9 @@ uint32_t BlendModeFromName(const String &mode_name) {
     if (lower == "copycolor" || lower == "copy_color") {
         return TVP_GODOT_GPU_BLEND_COPY_COLOR;
     }
+    if (lower == "copyopaqueimage" || lower == "copy_opaque_image") {
+        return TVP_GODOT_GPU_BLEND_COPY_OPAQUE;
+    }
     if (lower == "fillargb" || lower == "fill") {
         return TVP_GODOT_GPU_BLEND_FILL_ARGB;
     }
@@ -8054,6 +8124,9 @@ uint32_t BlendModeFromName(const String &mode_name) {
     }
     if (lower == "pssubblend" || lower == "ps_sub_blend") {
         return TVP_GODOT_GPU_BLEND_PS_SUBTRACT;
+    }
+    if (lower == "pssoftlightblend" || lower == "ps_soft_light_blend") {
+        return TVP_GODOT_GPU_BLEND_PS_SOFT_LIGHT;
     }
     return 0;
 }
