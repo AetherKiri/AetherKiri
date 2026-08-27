@@ -5387,6 +5387,7 @@ namespace motion {
                     1.0f, 1.0f, -1.0f, -1.0f
                 };
                 bool haveInheritedViewport = false;
+                bool inheritedFromComposite = false;
                 auto includeViewport = [&](const std::array<float, 4> &box) {
                     if(!std::isfinite(box[0]) || !std::isfinite(box[1]) ||
                        !std::isfinite(box[2]) || !std::isfinite(box[3]) ||
@@ -5530,6 +5531,7 @@ namespace motion {
                                 compositeViewport[3], compositeCorners[ci * 2 + 1]);
                         }
                         includeViewport(compositeViewport);
+                        inheritedFromComposite = true;
                     }
                 }
 
@@ -5537,6 +5539,9 @@ namespace motion {
                     return;
                 }
                 for(auto &entry : pending.entries) {
+                    entry.viewportInheritedFromComposite =
+                        entry.viewportInheritedFromComposite ||
+                        inheritedFromComposite;
                     if(entry.hasViewport &&
                        entry.viewport[2] >= entry.viewport[0] &&
                        entry.viewport[3] >= entry.viewport[1]) {
