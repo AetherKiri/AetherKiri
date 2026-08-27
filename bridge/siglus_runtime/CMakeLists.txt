@@ -21,8 +21,11 @@ if(NOT siglus_scene_vm_rs_FOUND)
     return()
 endif()
 
+find_package(SDL2 CONFIG REQUIRED)
+
 add_library(aether_siglus_runtime STATIC
     src/siglus_runtime_provider.cpp
+    src/siglus_audio_output.cpp
 )
 
 target_compile_features(aether_siglus_runtime PUBLIC cxx_std_17)
@@ -40,4 +43,11 @@ target_include_directories(aether_siglus_runtime PUBLIC
 target_link_libraries(aether_siglus_runtime PUBLIC
     engine_api
     siglus_scene_vm_rs
+)
+
+# Audio PCM consumer: drains the Rust kira mixer FIFO into an SDL2 device
+# (same link setup as bridge/onscripter_runtime so the shared GDExtension
+# object picks up SDL2 transitively).
+target_link_libraries(aether_siglus_runtime PRIVATE
+    $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
 )
