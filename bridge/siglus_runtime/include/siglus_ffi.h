@@ -97,6 +97,35 @@ int32_t siglus_ak_submit_messagebox_result(void *handle, uint64_t request_id,
 /* Last error for this shell; valid until the next FFI call on it. */
 const char *siglus_ak_last_error(void *handle);
 
+/*
+ * Audio PCM bridge.
+ *
+ * The Rust mixer runs on a private kira backend (see
+ * overlay/files/aether_audio_bridge.rs) and pushes interleaved stereo f32
+ * samples into an in-process FIFO instead of owning an audio device. The C++
+ * provider drains the FIFO through the calls below and feeds an SDL2 audio
+ * device. All functions are process-global (independent of any shell handle)
+ * and additive to 0x00010000 of this header.
+ */
+
+/* Negotiated stream format; constant for the process lifetime. Returns
+ * SIGLUS_AK_OK, or SIGLUS_AK_INVALID_ARGUMENT when both out pointers are
+ * null. */
+int32_t siglus_ak_audio_get_format(uint32_t *out_sample_rate,
+                                   uint32_t *out_channels);
+
+/* Drains up to out_capacity_samples interleaved stereo f32 samples into
+ * out_samples. Returns the number of samples written (0..capacity), or a
+ * negative SIGLUS_AK_* code (SIGLUS_AK_INVALID_STATE until a game opened its
+ * mixer). Safe to call from an audio callback thread: never blocks. */
+int64_t siglus_ak_read_audio_f32(float *out_samples,
+                                 size_t out_capacity_samples);
+
+/* Cumulative mixer-side counters, useful to detect stalls: written frames
+ * advancing while read samples stall means the consumer is not keeping up. */
+int32_t siglus_ak_audio_stats(uint64_t *out_written_frames,
+                              uint64_t *out_dropped_samples);
+
 #ifdef __cplusplus
 }  /* extern "C" */
 #endif

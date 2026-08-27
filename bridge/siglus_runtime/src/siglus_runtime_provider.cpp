@@ -1,6 +1,7 @@
 #include "siglus_runtime.h"
 
 #include "engine_runtime_provider.h"
+#include "siglus_audio_output.h"
 #include "siglus_ffi.h"
 
 #include <algorithm>
@@ -210,6 +211,7 @@ namespace aetherkiri::siglus {
             if(instance == nullptr) {
                 return;
             }
+            audio::StopOutput();
             if(instance->ak != nullptr) {
                 siglus_ak_destroy(instance->ak);
                 instance->ak = nullptr;
@@ -248,6 +250,13 @@ namespace aetherkiri::siglus {
             instance->opened = true;
             instance->error.clear();
             LogHost(instance, ENGINE_RUNTIME_LOG_INFO, "siglus game opened");
+            // Wire the kira mixer FIFO to an SDL2 audio device; failure only
+            // downgrades to silence, the game itself stays usable.
+            std::string audio_error;
+            if(!audio::StartOutput(audio_error)) {
+                LogHost(instance, ENGINE_RUNTIME_LOG_WARNING,
+                        ("siglus audio disabled: " + audio_error).c_str());
+            }
             return ENGINE_RESULT_OK;
         }
 
