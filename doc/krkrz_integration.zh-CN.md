@@ -130,16 +130,31 @@ upstream 实现分离。
 
 ## 构建与验证
 
-默认构建会使用七个叶子适配器、layerExSave codec bridge 以及选定的 extNagano
-算法，并要求 submodule 已初始化：
+完整产品构建会使用七个叶子适配器、layerExSave codec bridge 以及选定的
+extNagano 算法，并在相同 target 上扩展 AetherInternal 兼容 provider。macOS Debug
+构建方式如下：
 
 ```bash
-cmake -S . -B out/krkrz-debug \
+git submodule update --init --recursive third_party/krkrz_dev
+git submodule update --init --recursive packages/AetherInternal
+AETHERKIRI_ENABLE_INTERNAL=ON ./build.sh macos debug --jobs=2
+```
+
+配置输出必须包含 `AetherInternal E-mote/Live2D package: enabled`。`build.sh`
+会使用全新的 CMake cache 配置，因此之前缓存的
+`AETHERKIRI_ENABLE_INTERNAL=OFF` 不会把下一次产品构建静默变成仅公开实现的产物。
+如果构建提示 package 被显式关闭或不可用，该产物可以用于公开 fallback 测试，
+但不能作为完整游戏兼容包交付。
+
+如需隔离验证公开 fallback 与 krkrz adapter，请使用独立构建目录：
+
+```bash
+cmake -S . -B out/krkrz-public-debug \
   -DAETHER_USE_KRKRZ_LEAF_PLUGINS=ON \
   -DAETHERKIRI_ENABLE_INTERNAL=OFF \
   -DENABLE_TESTS=ON
-cmake --build out/krkrz-debug --target krkr2plugin --parallel
-ctest --test-dir out/krkrz-debug --output-on-failure
+cmake --build out/krkrz-public-debug --target krkr2plugin --parallel
+ctest --test-dir out/krkrz-public-debug --output-on-failure
 ```
 
 `AETHER_USE_KRKRZ_LEAF_PLUGINS=OFF` 只是开发/构建时用于对比七个叶子适配器和历史

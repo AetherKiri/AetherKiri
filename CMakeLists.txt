@@ -137,6 +137,10 @@ endif()
 
 if(AETHERKIRI_INTERNAL_ENABLED)
     message(STATUS "AetherInternal E-mote/Live2D package: enabled")
+elseif(NOT AETHERKIRI_ENABLE_INTERNAL)
+    message(STATUS
+        "AetherInternal package: explicitly disabled; building public "
+        "fallbacks only (not the full compatibility product)")
 else()
     message(STATUS "AetherInternal package: unavailable; using public fallbacks")
 endif()

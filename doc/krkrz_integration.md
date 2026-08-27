@@ -151,16 +151,34 @@ contract is reviewed.
 
 ## Build and verification
 
-The default build consumes the seven leaf adapters, the layerExSave codec
-bridge, and the selected extNagano algorithms; it requires the submodule:
+The complete product build consumes the seven leaf adapters, the layerExSave
+codec bridge, and the selected extNagano algorithms, then extends the same
+targets with AetherInternal compatibility providers. For a macOS Debug build:
 
 ```bash
-cmake -S . -B out/krkrz-debug \
+git submodule update --init --recursive third_party/krkrz_dev
+git submodule update --init --recursive packages/AetherInternal
+AETHERKIRI_ENABLE_INTERNAL=ON ./build.sh macos debug --jobs=2
+```
+
+The configure output must contain
+`AetherInternal E-mote/Live2D package: enabled`. `build.sh` configures with a
+fresh CMake cache, so a previously cached `AETHERKIRI_ENABLE_INTERNAL=OFF`
+cannot silently turn the next product build into a public-only artifact. A
+build that reports the package as explicitly disabled or unavailable is valid
+for public fallback testing, but must not be handed off as a full game
+compatibility build.
+
+To validate the public fallback and the krkrz adapters in isolation, use a
+separate build directory:
+
+```bash
+cmake -S . -B out/krkrz-public-debug \
   -DAETHER_USE_KRKRZ_LEAF_PLUGINS=ON \
   -DAETHERKIRI_ENABLE_INTERNAL=OFF \
   -DENABLE_TESTS=ON
-cmake --build out/krkrz-debug --target krkr2plugin --parallel
-ctest --test-dir out/krkrz-debug --output-on-failure
+cmake --build out/krkrz-public-debug --target krkr2plugin --parallel
+ctest --test-dir out/krkrz-public-debug --output-on-failure
 ```
 
 `AETHER_USE_KRKRZ_LEAF_PLUGINS=OFF` is a developer build-time source-selection

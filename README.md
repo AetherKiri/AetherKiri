@@ -219,7 +219,10 @@ git submodule update --init packages/AetherInternal
 CMake enables it automatically when present. Use
 `-DAETHERKIRI_ENABLE_INTERNAL=OFF` to test the public fallback, or
 `-DAETHERKIRI_INTERNAL_DIR=/absolute/path/to/AetherInternal` to use a separate
-checkout. Trusted runs of the `Build` GitHub Actions workflow use the
+checkout. An `OFF` build is a public-fallback artifact and must not be used to
+validate games that depend on private compatibility providers; a complete
+configuration prints `AetherInternal E-mote/Live2D package: enabled`. Trusted
+runs of the `Build` GitHub Actions workflow use the
 `AETHERSECRET` repository secret as a read-only SSH key and initialize the
 private submodule recursively. Fork and Dependabot pull requests cannot access
 repository secrets, so those untrusted runs use the public fallback.
