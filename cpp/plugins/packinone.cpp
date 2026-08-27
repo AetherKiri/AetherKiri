@@ -6,15 +6,19 @@
 // pre-registration callback to install the recovered SliceLayer/ProxyStorage
 // bridge.  Data-pack callbacks are retried from ScriptsEx as well because the
 // Scripts global can be created lazily on some hosts.
+#ifdef AETHERKIRI_INTERNAL_KRKR2_PLUGIN
 extern "C" void TVPRegisterSliceLayerCompat();
 extern "C" void TVPRegisterDataPackCompatPluginAnchor();
+#endif
 
 namespace {
 
 void registerPackinOneCompat() {
+#ifdef AETHERKIRI_INTERNAL_KRKR2_PLUGIN
     TVPAddLog(TJS_W("AetherInternal PackinOne public compat callback entered"));
     TVPRegisterSliceLayerCompat();
     TVPRegisterDataPackCompatPluginAnchor();
+#endif
 }
 
 } // namespace
