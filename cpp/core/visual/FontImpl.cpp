@@ -21,6 +21,7 @@
 #include <vector>
 #include <algorithm>
 #include <cctype>
+#include <limits>
 #include <dirent.h>
 #include <limits.h>
 #include <sys/stat.h>
@@ -180,21 +181,79 @@ static int TVPInternalEnumFonts(
  */
 int TVPEnumFontsProc(const ttstr &FontPath,
                      std::vector<ttstr> *fontNames) {
-    if(!TVPIsExistentStorageNoSearch(FontPath)) {
-        return 0;
+    bool storageExists = false;
+    try {
+        storageExists = TVPIsExistentStorageNoSearch(FontPath);
+    } catch(...) {
+        storageExists = false;
     }
 
-    tTJSBinaryStream *Stream = TVPCreateStream(FontPath, TJS_BS_READ);
-    if(!Stream) {
-        return 0;
+    if(storageExists) {
+        tTJSBinaryStream *stream = TVPCreateStream(FontPath, TJS_BS_READ);
+        if(!stream)
+            return 0;
+        const tjs_int64 size = stream->GetSize();
+        if(size <= 0 || size > static_cast<tjs_int64>(std::numeric_limits<int>::max())) {
+            delete stream;
+            return 0;
+        }
+        const int bufflen = static_cast<int>(size);
+        std::vector<FT_Byte> buf(static_cast<size_t>(bufflen));
+        stream->ReadBuffer(buf.data(), bufflen);
+        delete stream;
+        return TVPInternalEnumFonts(buf.data(), bufflen, FontPath, nullptr,
+                                    fontNames);
     }
-    int bufflen = Stream->GetSize();
-    std::vector<FT_Byte> buf;
-    buf.resize(bufflen);
-    Stream->ReadBuffer(&buf.front(), bufflen);
-    delete Stream;
-    return TVPInternalEnumFonts(&buf.front(), bufflen, FontPath, nullptr,
-                                fontNames);
+
+    // A native absolute path is a valid krkrz `addFont` input even when the
+    // logical storage table has not been mounted yet. Read it directly and
+    // retain a memory-stream getter for every registered face so aliases can
+    // be resolved later by the shared core font registry.
+    std::string nativePath = FontPath.AsStdString();
+    if(nativePath.rfind("file://", 0) == 0) {
+        try {
+            const ttstr local = TVPGetLocallyAccessibleName(FontPath);
+            if(!local.IsEmpty())
+                nativePath = local.AsStdString();
+        } catch(...) {
+        }
+    }
+    std::ifstream input(nativePath, std::ios::binary | std::ios::ate);
+    if(!input.is_open())
+        return 0;
+    const std::streamoff end = input.tellg();
+    if(end <= 0 || end > static_cast<std::streamoff>(std::numeric_limits<int>::max()))
+        return 0;
+    const int bufflen = static_cast<int>(end);
+    std::vector<FT_Byte> buf(static_cast<size_t>(bufflen));
+    input.seekg(0, std::ios::beg);
+    input.read(reinterpret_cast<char *>(buf.data()), bufflen);
+    if(input.gcount() != bufflen)
+        return 0;
+    const ttstr nativeStorage(nativePath.c_str());
+    return TVPInternalEnumFonts(
+        buf.data(), bufflen, nativeStorage,
+        [](TVPFontNamePathInfo *info) -> tTJSBinaryStream * {
+            if(!info)
+                return nullptr;
+            std::ifstream stream(info->Path.AsStdString(),
+                                 std::ios::binary | std::ios::ate);
+            if(!stream.is_open())
+                return nullptr;
+            const std::streamoff end = stream.tellg();
+            if(end <= 0)
+                return nullptr;
+            std::vector<uint8_t> data(static_cast<size_t>(end));
+            stream.seekg(0, std::ios::beg);
+            stream.read(reinterpret_cast<char *>(data.data()), end);
+            if(stream.gcount() != end)
+                return nullptr;
+            auto *ret = new tTVPMemoryStream();
+            ret->WriteBuffer(data.data(), data.size());
+            ret->SetPosition(0);
+            return ret;
+        },
+        fontNames);
 }
 
 tTJSBinaryStream *TVPCreateFontStream(const ttstr &fontname) {
@@ -379,7 +438,10 @@ void TVPInitFontNames() {
 
     do {
         tTJSVariant defaultFontOpt;
-        if(TVPGetCommandLine(TJS_W("default_font"), &defaultFontOpt)) {
+        // Font registration is also used by optional plugins before the full
+        // application bootstrap. Do not force the legacy data-path
+        // initialization just to inspect an optional command-line override.
+        if(TVPGetCommandLineNoInit(TJS_W("default_font"), &defaultFontOpt)) {
             ttstr defaultFontPath(defaultFontOpt);
             if(tryLoadFontStorageOrDirect(defaultFontPath))
                 break;
@@ -527,7 +589,7 @@ void TVPInitFontNames() {
     }
 
     tTJSVariant fontDirOpt;
-    if(TVPGetCommandLine(TJS_W("font_dir"), &fontDirOpt)) {
+    if(TVPGetCommandLineNoInit(TJS_W("font_dir"), &fontDirOpt)) {
         enumDirectFontDir(ttstr(fontDirOpt));
     }
 
@@ -539,7 +601,9 @@ void TVPInitFontNames() {
             enumDirectFontDir(path + "/fonts");
         }
 #endif
-        enumStorageFontDir(TVPGetAppPath() + "/fonts");
+        const ttstr appPath = TVPGetAppPath();
+        if(!appPath.IsEmpty())
+            enumStorageFontDir(appPath + "/fonts");
     }
 
     if(TVPDefaultFontName.IsEmpty() && TVPFontNames.GetCount() > 0) {
@@ -566,6 +630,27 @@ TVPFontNamePathInfo *TVPFindFont(const ttstr &fontname) {
         info = TVPFontNames.Find(fontname);
     }
     return info;
+}
+
+bool TVPRegisterFontAlias(const ttstr &alias, const ttstr &fontName) {
+    if(alias.IsEmpty() || fontName.IsEmpty())
+        return false;
+
+    // Re-registering an alias is deliberately idempotent.  This is useful
+    // when a game reloads its vector-font bootstrap script between scenes.
+    if(alias == fontName)
+        return TVPFindFont(fontName) != nullptr;
+
+    TVPFontNamePathInfo *source = TVPFindFont(fontName);
+    if(!source)
+        return false;
+
+    // Copy the complete path/getter/index tuple.  Backends with an
+    // index-aware getter can therefore retain the selected TTC/OTC face;
+    // stream-only consumers continue to use their established face-zero
+    // fallback.
+    TVPFontNames.Add(alias, *source);
+    return TVPFindFont(alias) != nullptr;
 }
 
 tjs_uint32 tTVPttstrHash::Make(const ttstr &val) {

@@ -3450,10 +3450,40 @@ NCB_GDIP_METHOD(RotateFlip);
 // 自前記述クラス登録
 // ------------------------------------------------------
 
+static tjs_error FontInfoFactory(FontInfo **result, tjs_int numparams,
+                                 tTJSVariant **params, iTJSDispatch2 *) {
+    if(!result)
+        return TJS_E_NATIVECLASSCRASH;
+    if(numparams == 0) {
+        *result = new FontInfo();
+        return TJS_S_OK;
+    }
+    if(numparams < 1 || numparams > 3 || !params || !params[0] ||
+       params[0]->Type() != tvtString)
+        return TJS_E_INVALIDPARAM;
+    if((numparams >= 2 && (!params[1] ||
+                           (params[1]->Type() != tvtInteger &&
+                            params[1]->Type() != tvtReal))) ||
+       (numparams >= 3 && (!params[2] ||
+                           (params[2]->Type() != tvtInteger &&
+                            params[2]->Type() != tvtReal))))
+        return TJS_E_INVALIDPARAM;
+    const tjs_real emSize = numparams >= 2
+                                ? static_cast<tjs_real>(*params[1])
+                                : static_cast<tjs_real>(12);
+    const tjs_int style = numparams >= 3 ? static_cast<tjs_int>(*params[2]) : 0;
+    *result = new FontInfo(params[0]->GetString(), emSize, style);
+    return TJS_S_OK;
+}
+
 NCB_REGISTER_SUBCLASS(FontInfo) {
-    NCB_CONSTRUCTOR((const tjs_char *, tjs_real, tjs_int));
+    // Accept both the legacy (family, size, style) form and krkrz's vector
+    // (family, size) form while keeping one native FontInfo implementation.
+    Factory(FontInfoFactory);
     NCB_PROPERTY(familyName, getFamilyName, setFamilyName);
     NCB_PROPERTY(emSize, getEmSize, setEmSize);
+    NCB_PROPERTY(fontFamily, getFamilyName, setFamilyName);
+    NCB_PROPERTY(fontSize, getEmSize, setEmSize);
     NCB_PROPERTY(style, getStyle, setStyle);
     NCB_PROPERTY(forceSelfPathDraw, getForceSelfPathDraw, setForceSelfPathDraw);
     NCB_PROPERTY_RO(ascent, getAscent);

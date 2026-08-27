@@ -17838,7 +17838,19 @@ static tjs_error TVPAddFontForScript(tTJSVariant *result, tjs_int numparams,
         return TJS_E_BADPARAMCOUNT;
 
     std::vector<ttstr> fontNames;
-    const ttstr filename = TVPGetPlacedPath(*param[0]);
+    // Keep the original path as a fallback.  Desktop krkrz scripts may pass
+    // an absolute native font path; storage placement intentionally returns
+    // an empty value for a missing logical path, but the native file can still
+    // be opened directly by the font enumerator.
+    ttstr filename;
+    try {
+        filename = TVPGetPlacedPath(*param[0]);
+    } catch(...) {
+        // A malformed logical name should follow the same false/empty result
+        // path as a missing font instead of aborting script startup.
+    }
+    if(filename.IsEmpty() && param[0]->Type() == tvtString)
+        filename = param[0]->GetString();
     if(filename.length())
         TVPEnumFontsProc(filename, &fontNames);
 

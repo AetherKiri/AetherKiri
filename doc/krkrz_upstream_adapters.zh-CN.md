@@ -33,5 +33,13 @@ extNagano 的 `3duniversal` 和 `imagewipe` 保留 Aether fallback；选项转�
 也会自动 fallback。更复杂的插件在运行时契约得到验证前，继续采用 hybrid 或
 Aether-owned 方案。
 
+`layerExVector.dll` 是一个不复制 ThorVG 的 hybrid 适配：
+`cpp/plugins/krkrzLayerExVectorCompat.cpp` 先加载 Aether 的 `layerExDraw`，再在
+同一个 TJS 类上补齐 `GdiPlus.loadFont`（包括桌面原生字体路径）、字体别名、
+`fontFamily`/`fontSize`/`italic`/`letterSpacing` 和 `drawStringArea`。
+`lineSpacing` 继续使用 Aether 的原生字体度量语义，不伪装成 ThorVG 的比例
+属性。因此 vector 游戏与原有 LayerExDraw 游戏共享一套 renderer 和字体流；
+`unloadFont` 按进程生命周期保留已注册字体，避免仍在使用的 Font 对象悬空。
+
 这是实现层的兼容规则，不是运行时开关：Aether 只有一个插件 registry；无论 upstream
 操作是否接受输入，游戏看到的模块/provider 名称都保持不变。

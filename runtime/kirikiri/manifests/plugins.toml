@@ -283,10 +283,11 @@ adapter = "cpp/plugins/motionplayer"
 
 [[plugins]]
 name = "layerExVector.dll"
-status = "optional"
-implementation = "upstream-pending-adapter"
+status = "hybrid"
+implementation = "aether-layerexdraw-vector-compat"
 upstream_path = "src/plugins/layerExVector"
-notes = "Enable only after the vector backend and ABI contract are explicitly validated."
+adapter = "cpp/plugins/krkrzLayerExVectorCompat.cpp"
+notes = "The krkrz vector API is forwarded to Aether's single LayerExDraw renderer. Font loading (including aliases and desktop native paths), drawStringArea, and the common Font property names are adapted without linking ThorVG or registering a second global renderer. lineSpacing keeps Aether's native metric semantics."
 
 [[plugins]]
 name = "krkr_richtext.dll"

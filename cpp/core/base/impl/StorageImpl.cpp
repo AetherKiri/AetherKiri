@@ -432,6 +432,22 @@ void tTVPFileMedia::GetLocallyAccessibleName(ttstr &name) {
         name = ttstr(ptr);
         return;
     }
+#else
+#if !defined(__APPLE__) || !TARGET_OS_IPHONE
+    // Native absolute paths are valid font/image inputs on desktop too. The
+    // case-recovery walker below starts at the leading slash and otherwise
+    // returns an empty path, making TVPGetPlacedPath() reject an already
+    // readable file. Preserve an exact path and, for a normalized lower-case
+    // path on case-sensitive hosts, run the same directory walk from `/`.
+    if(*ptr == TJS_W('/')) {
+        if(TVPCheckExistentLocalFile(ttstr(ptr))) {
+            name = ttstr(ptr);
+            return;
+        }
+        newname.Clear();
+        ++ptr;
+    }
+#endif
 #endif
     if(!TJS_strncmp(ptr, TJS_W("./"), 2)) {
         ptr += 2; // skip "./"

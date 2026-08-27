@@ -68,8 +68,9 @@ if(AETHER_USE_KRKRZ_OPTIONAL_PLUGINS)
             "krkrz_dev checkout at ${AETHER_KRKRZ_DEV_ROOT}")
     endif()
     # These plugins pull in platform/rendering SDKs and old registration
-    # contracts.  Validate that the pinned source is present, but do not put
-    # it on krkr2plugin until a dedicated Aether adapter and test exist.
+    # contracts.  The layerExVector contract is consumed by the lightweight
+    # Aether bridge in krkrzLayerExVectorCompat.cpp; the remaining projects are
+    # still source-validated only until dedicated adapters and tests exist.
     foreach(_aether_krkrz_optional_source
             "layerExVector/main.cpp"
             "krkr_richtext/src/main.cpp"
@@ -78,7 +79,8 @@ if(AETHER_USE_KRKRZ_OPTIONAL_PLUGINS)
         aether_krkrz_require_source("${_aether_krkrz_optional_source}")
     endforeach()
     message(STATUS
-        "krkrz_dev optional plugin sources validated; ABI adapters remain disabled")
+        "krkrz_dev optional plugin sources validated; layerExVector uses the "
+        "Aether LayerExDraw compatibility bridge")
 endif()
 
 add_library(${PROJECT_NAME} STATIC)
@@ -173,6 +175,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     clipboardEx.cpp
     compatLegacyPlugins.cpp
     compatMediaLayerPlugins.cpp
+    krkrzLayerExVectorCompat.cpp
     compatSystemPlugins.cpp
     stubs/dummy_plugin_stubs.cpp
     pluginAnchors.cpp

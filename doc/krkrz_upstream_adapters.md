@@ -38,6 +38,16 @@ texture-provider ABI does not match; option conversion failures also fall back
 automatically. More invasive plugins remain hybrid or Aether-owned until their
 runtime contract is proven.
 
+`layerExVector.dll` is a hybrid adapter that does not copy or link ThorVG:
+`cpp/plugins/krkrzLayerExVectorCompat.cpp` loads Aether's `layerExDraw` first and
+adds `GdiPlus.loadFont` (including desktop native font paths), font aliases, the
+`fontFamily`/`fontSize`/`italic`/`letterSpacing` properties, and `drawStringArea`
+to the same TJS classes. `lineSpacing` deliberately keeps Aether's native metric
+semantics instead of pretending to be ThorVG's scale value. Vector games and
+existing LayerExDraw games therefore share one renderer and one font stream
+registry; `unloadFont` keeps registered streams alive for the process lifetime
+so existing Font objects cannot dangle.
+
 This is an implementation-level compatibility rule, not a runtime switch:
 there is one Aether plugin registry, and a game sees the same module/provider
 names regardless of whether an upstream operation accepts its inputs.

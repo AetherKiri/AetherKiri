@@ -19,7 +19,16 @@ struct FontEx {
         if(numparams < 1)
             return TJS_E_BADPARAMCOUNT;
 
-        ttstr filename = TVPGetPlacedPath(*param[0]);
+        ttstr filename;
+        try {
+            filename = TVPGetPlacedPath(*param[0]);
+        } catch(...) {
+            // Keep malformed/missing files on the documented zero-result path.
+        }
+        // Match krkrz's native-path fallback: an absolute desktop path may
+        // be readable even when no logical storage placement exists.
+        if(filename.IsEmpty() && param[0]->Type() == tvtString)
+            filename = param[0]->GetString();
         if(filename.length()) {
             int ret = TVPEnumFontsProc(filename);
             if(result) {

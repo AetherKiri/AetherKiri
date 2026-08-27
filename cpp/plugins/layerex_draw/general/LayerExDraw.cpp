@@ -640,15 +640,32 @@ void layerex::FontInfo::setFamilyName(const tjs_char *fName) {
     gdiPlusUnsupportedFont = true;
     this->familyName = fName;
 
-    const std::unique_ptr<tTJSBinaryStream> stream{ TVPCreateFontStream(
-        TVPGetDefaultFontName()) };
+    // Prefer the requested family.  The old placeholder always opened the
+    // default face, which made a font loaded through layerExVector either
+    // render with the wrong glyphs or dereference a null stream when no
+    // default font had been selected yet.  Fall back to the default only for
+    // legacy/system names that are not present in the shared font table.
+    std::unique_ptr<tTJSBinaryStream> stream{
+        TVPCreateFontStream(this->familyName) };
+    if(!stream && !TVPGetDefaultFontName().IsEmpty()) {
+        stream.reset(TVPCreateFontStream(TVPGetDefaultFontName()));
+    }
+    if(!stream) {
+        return;
+    }
     const auto bufferSize = static_cast<FT_Long>(stream->GetSize());
+    if(bufferSize <= 0) {
+        return;
+    }
 
     buffer = std::make_unique<FT_Byte[]>(bufferSize);
     stream->ReadBuffer(buffer.get(), bufferSize);
 
-    FT_New_Memory_Face(TVPGetFontLibrary(), buffer.get(), bufferSize, 0,
-                       &this->ftFace);
+    if(FT_New_Memory_Face(TVPGetFontLibrary(), buffer.get(), bufferSize, 0,
+                          &this->ftFace) != 0) {
+        buffer.reset();
+        return;
+    }
 
     const float dpi = gdip_get_display_dpi();
     FT_Set_Char_Size(this->ftFace, 0, emSize * 64, dpi, dpi);

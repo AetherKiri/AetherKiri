@@ -3,10 +3,13 @@
 #include "PluginImpl.h"
 #include "ScriptMgnIntf.h"
 #include "TransIntf.h"
+#include "FontImpl.h"
 #include "ncbind.hpp"
 #include "tjsDictionary.h"
 
 #include <cstring>
+#include <filesystem>
+#include <memory>
 #include <utility>
 
 extern tTJS *TVPScriptEngine;
@@ -142,6 +145,7 @@ TEST_CASE("first-pass compatibility stubs are registered") {
         TJS_W("layerExAgg.dll"),
         TJS_W("layerExCairo.dll"),
         TJS_W("layerExGdiPlus.dll"),
+        TJS_W("layerExVector.dll"),
         TJS_W("magickpp.dll"),
         TJS_W("mkpj.dll"),
         TJS_W("onigruma.dll"),
@@ -242,6 +246,151 @@ TEST_CASE("krkrz leaf adapters expose their declared modules") {
         INFO(ttstr(module).AsStdString());
         CHECK(ncbAutoRegister::HasModule(module));
     }
+}
+
+TEST_CASE("krkrz layerExVector reuses the Aether LayerExDraw surface") {
+    ensurePluginRegistryRuntime();
+
+    REQUIRE(ncbAutoRegister::HasModule(TJS_W("layerExVector.dll")));
+    // Catch2 may randomize this case with the font-alias case below. Reset
+    // the internal module so registration is exercised with a fresh Layer
+    // attach point every time.
+    ncbAutoRegister::UnloadModule(TJS_W("layerExVector.dll"));
+    // The lightweight script host used by this test binary does not create a
+    // window/layer class until a game starts.  Provide the same attach point
+    // that the real runtime exposes before loading the forwarding module.
+    TVPExecuteScript(TJS_W("class Layer {}"));
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("layerExVector.dll")));
+
+    const tTJSVariant gdiPlus = getGlobalProp(TJS_W("GdiPlus"));
+    REQUIRE(gdiPlus.Type() == tvtObject);
+    const tTJSVariant loadFont =
+        getProp(gdiPlus, TJS_W("loadFont"));
+    CHECK(loadFont.Type() == tvtObject);
+    tTJSVariant missingFontPath(TJS_W("__aether_missing_vector_font__.ttf"));
+    tTJSVariant *loadParams[] = { &missingFontPath };
+    tTJSVariant loadResult;
+    REQUIRE_NOTHROW(loadFont.AsObjectClosureNoAddRef().FuncCall(
+        0, nullptr, nullptr, &loadResult, 1, loadParams,
+        gdiPlus.AsObjectNoAddRef()));
+    CHECK(loadResult.Type() == tvtInteger);
+    CHECK(static_cast<tjs_int>(loadResult) == 0);
+
+    const tTJSVariant fontClass = getProp(gdiPlus, TJS_W("Font"));
+    REQUIRE(fontClass.Type() == tvtObject);
+    // The unit-test host does not mount an application font directory.  An
+    // empty family is still a valid constructor probe because it exercises
+    // the two-argument vector form without asking a backend to rasterize text.
+    const ttstr defaultFont;
+    tTJSVariant family(defaultFont);
+    tTJSVariant size(static_cast<tjs_real>(12));
+    tTJSVariant *fontParams[] = { &family, &size };
+    iTJSDispatch2 *fontObject = nullptr;
+    REQUIRE(TJS_SUCCEEDED(fontClass.AsObjectClosureNoAddRef().CreateNew(
+        0, nullptr, nullptr, &fontObject, 2, fontParams, nullptr)));
+    REQUIRE(fontObject != nullptr);
+
+    tTJSVariant vectorFamily;
+    REQUIRE(TJS_SUCCEEDED(fontObject->PropGet(
+        0, TJS_W("fontFamily"), nullptr, &vectorFamily, fontObject)));
+    CHECK(ttstr(vectorFamily) == defaultFont);
+
+    tTJSVariant vectorSize;
+    REQUIRE(TJS_SUCCEEDED(fontObject->PropGet(
+        0, TJS_W("fontSize"), nullptr, &vectorSize, fontObject)));
+    CHECK(static_cast<tjs_real>(vectorSize) == 12);
+
+    const tTJSVariant spacing(static_cast<tjs_real>(1.25));
+    REQUIRE(TJS_SUCCEEDED(fontObject->PropSet(
+        TJS_MEMBERENSURE, TJS_W("letterSpacing"), nullptr, &spacing,
+        fontObject)));
+    tTJSVariant spacingReadback;
+    REQUIRE(TJS_SUCCEEDED(fontObject->PropGet(
+        0, TJS_W("letterSpacing"), nullptr, &spacingReadback, fontObject)));
+    CHECK(static_cast<tjs_real>(spacingReadback) == 1.25);
+
+    const tTJSVariant italic(static_cast<tjs_real>(0.18));
+    REQUIRE(TJS_SUCCEEDED(fontObject->PropSet(
+        TJS_MEMBERENSURE, TJS_W("italic"), nullptr, &italic, fontObject)));
+    tTJSVariant italicReadback;
+    REQUIRE(TJS_SUCCEEDED(fontObject->PropGet(
+        0, TJS_W("italic"), nullptr, &italicReadback, fontObject)));
+    CHECK(static_cast<tjs_real>(italicReadback) > 0);
+
+    fontObject->Release();
+
+    const tTJSVariant layerClass = getGlobalProp(TJS_W("Layer"));
+    REQUIRE(layerClass.Type() == tvtObject);
+    tTJSVariant drawStringArea;
+    REQUIRE(TJS_SUCCEEDED(layerClass.AsObjectNoAddRef()->PropGet(
+        0, TJS_W("drawStringArea"), nullptr, &drawStringArea,
+        layerClass.AsObjectNoAddRef())));
+    CHECK(drawStringArea.Type() == tvtObject);
+    CHECK(getProp(layerClass, TJS_W("drawString")).Type() == tvtObject);
+    CHECK(getProp(layerClass, TJS_W("measureString")).Type() == tvtObject);
+}
+
+TEST_CASE("krkrz layerExVector aliases loaded fonts in the core registry") {
+    ensurePluginRegistryRuntime();
+    ncbAutoRegister::UnloadModule(TJS_W("layerExVector.dll"));
+    TVPExecuteScript(TJS_W("class Layer {}"));
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("layerExVector.dll")));
+
+    // The fixture lives in the pinned submodule.  Derive the repository root
+    // from this source path so the test remains independent of CTest's
+    // working directory; skip gracefully in a deliberately shallow checkout.
+    const std::filesystem::path fixtureRelative =
+        "third_party/krkrz_dev/src/plugins/layerExVector/data/NotoSansJP-VF.ttf";
+    std::filesystem::path fontPath;
+    const std::filesystem::path sourcePath(__FILE__);
+    std::filesystem::path probe =
+        sourcePath.parent_path().parent_path().parent_path();
+    for(int depth = 0; depth < 8 && !probe.empty(); ++depth) {
+        const auto candidate = probe / fixtureRelative;
+        if(std::filesystem::exists(candidate)) {
+            fontPath = candidate;
+            break;
+        }
+        const auto parent = probe.parent_path();
+        if(parent == probe)
+            break;
+        probe = parent;
+    }
+    if(fontPath.empty()) {
+        probe = std::filesystem::current_path();
+        for(int depth = 0; depth < 8 && !probe.empty(); ++depth) {
+            const auto candidate = probe / fixtureRelative;
+            if(std::filesystem::exists(candidate)) {
+                fontPath = candidate;
+                break;
+            }
+            const auto parent = probe.parent_path();
+            if(parent == probe)
+                break;
+            probe = parent;
+        }
+    }
+    if(fontPath.empty())
+        SKIP("krkrz_dev font fixture is not available");
+
+    const tTJSVariant gdiPlus = getGlobalProp(TJS_W("GdiPlus"));
+    REQUIRE(gdiPlus.Type() == tvtObject);
+    const tTJSVariant loadFont = getProp(gdiPlus, TJS_W("loadFont"));
+    REQUIRE(loadFont.Type() == tvtObject);
+
+    const ttstr path(fontPath.string());
+    const ttstr alias(TJS_W("AetherVectorFixture"));
+    tTJSVariant pathValue(path), aliasValue(alias), loadResult;
+    tTJSVariant *params[] = { &pathValue, &aliasValue };
+    REQUIRE(TJS_SUCCEEDED(loadFont.AsObjectClosureNoAddRef().FuncCall(
+        0, nullptr, nullptr, &loadResult, 2, params,
+        gdiPlus.AsObjectNoAddRef())));
+    REQUIRE(loadResult.Type() == tvtInteger);
+    REQUIRE(static_cast<tjs_int>(loadResult) != 0);
+
+    std::unique_ptr<tTJSBinaryStream> stream(TVPCreateFontStream(alias));
+    REQUIRE(stream != nullptr);
+    CHECK(stream->GetSize() > 0);
 }
 
 TEST_CASE("extNagano transition providers survive a module reload") {

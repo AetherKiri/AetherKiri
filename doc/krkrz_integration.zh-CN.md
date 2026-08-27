@@ -119,9 +119,14 @@ upstream core 有复用价值，但不是 Aether core 的直接替代品。manif
 ## Optional 插件与 Stub
 
 开启 `AETHER_USE_KRKRZ_OPTIONAL_PLUGINS=ON` 会验证固定源码中是否存在
-`layerExVector`、`krkr_richtext`、`krkreffekseer` 和 `krkrthreepp`；不会链接这些
-依赖 SDK 的插件。每个插件都需要专用 adapter、依赖策略和运行时测试，之后才能
-把 manifest 状态从 `optional` 改掉。
+`layerExVector`、`krkr_richtext`、`krkreffekseer` 和 `krkrthreepp`。
+`layerExVector.dll` 已通过
+[`cpp/plugins/krkrzLayerExVectorCompat.cpp`](../cpp/plugins/krkrzLayerExVectorCompat.cpp)
+接入：它加载 Aether 唯一的 `layerExDraw` renderer，并适配 `GdiPlus.loadFont`、
+字体别名（包括桌面原生字体路径）、`fontFamily`/`fontSize`/`italic`/`letterSpacing`
+属性和 `drawStringArea`，不会再链接 ThorVG 或第二套全局类。`lineSpacing` 保留
+Aether 的原生字体度量语义，未伪装成 ThorVG 的比例值。其余三个
+依赖 SDK 的插件仍只做源码校验，需要各自的 adapter、依赖策略和运行时测试后再接入。
 
 兼容性注册位于 [`cpp/plugins/stubs`](../cpp/plugins/stubs)，规则见
 [`krkrz_plugin_stubs.zh-CN.md`](krkrz_plugin_stubs.zh-CN.md)。Stub 可以保留模块名或脚本形状，
