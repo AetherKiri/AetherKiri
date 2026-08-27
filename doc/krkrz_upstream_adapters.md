@@ -10,6 +10,9 @@ includes the business translation unit from the pinned
 (the layerExSave codecs and selected extNagano algorithms) are also compiled
 directly, but they are always reached through an Aether-owned wrapper or
 detached provider; the upstream registry and lifecycle are never imported.
+The seven direct leaf plugins have no local fallback copy in the parent
+repository; the pinned submodule plus these adapters is their single source
+path.
 
 Keep these rules when adding an adapter:
 

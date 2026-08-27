@@ -8,6 +8,8 @@ Aether 构建的唯一入口。每个适配器先建立 Aether 的 `ncbind`/TJS 
 单元。少量可移植 upstream 实现文件（layerExSave codec 和选定的 extNagano
 算法）也会直接编译，但它们始终通过 Aether 自有 wrapper 或 detached provider
 使用；不会导入 upstream registry 或生命周期。
+七个直接叶子插件在父仓库中不再保留本地 fallback 副本；固定版本 submodule 加上这些
+适配器就是它们唯一的源码路径。
 
 新增适配器时请遵守以下规则：
 

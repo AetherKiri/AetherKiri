@@ -153,8 +153,8 @@ set(KRKR2CORE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cpp/core)
 set(KRKR2PLUGIN_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cpp/plugins)
 
 # Selected krkrz_dev business sources are consumed through Aether adapters.
-# The upstream checkout is a required, pinned submodule for the default
-# integration build; its standalone ABI and CMake registry are never linked.
+# The upstream checkout is a required, pinned submodule for every integration
+# build; its standalone ABI and CMake registry are never linked.
 set(AETHER_KRKRZ_DEV_ROOT
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/krkrz_dev"
     CACHE PATH "Pinned krkrz_dev checkout used for source-level reuse")
@@ -163,8 +163,15 @@ set(AETHER_KRKRZ_DEV_ROOT
 # helper repeats this assignment in its local scope for standalone consumers.
 set(AETHER_KRKRZ_PLUGIN_ROOT
     "${AETHER_KRKRZ_DEV_ROOT}/src/plugins")
-option(AETHER_USE_KRKRZ_LEAF_PLUGINS
-       "Use pinned krkrz_dev sources for the low-risk leaf plugins" ON)
+# Older build directories may still contain this cache entry. The leaf
+# adapters now always consume the pinned submodule; remove the obsolete entry
+# so a stale OFF value cannot make the build select deleted local copies.
+if(DEFINED AETHER_USE_KRKRZ_LEAF_PLUGINS)
+    message(STATUS
+        "AETHER_USE_KRKRZ_LEAF_PLUGINS is obsolete; using the pinned "
+        "krkrz_dev leaf adapters unconditionally")
+    unset(AETHER_USE_KRKRZ_LEAF_PLUGINS CACHE)
+endif()
 option(AETHER_USE_KRKRZ_OPTIONAL_PLUGINS
        "Validate experimental krkrz_dev plugin sources without linking them" OFF)
 option(AETHER_BUILD_KRKRZ_CORE_PARITY

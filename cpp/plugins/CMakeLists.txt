@@ -11,67 +11,54 @@ aether_krkrz_require_source("layerExSave/LodePNG/lodepng.h")
 aether_krkrz_require_source("layerExSave/tlg5/slide.cpp")
 aether_krkrz_require_source("layerExSave/tlg5/slide.h")
 
-if(AETHER_USE_KRKRZ_LEAF_PLUGINS)
-    if(NOT EXISTS "${AETHER_KRKRZ_DEV_ROOT}/.git" AND
-       NOT EXISTS "${AETHER_KRKRZ_DEV_ROOT}/CMakeLists.txt")
+# These low-risk leaf plugins have one implementation path: a small Aether
+# ABI/module-name bridge that includes the business translation unit from the
+# pinned krkrz_dev submodule. Historical local copies were deliberately
+# removed so a stale build option cannot select a second implementation.
+aether_krkrz_require_source("layerExAreaAverage/main.cpp")
+aether_krkrz_require_source("layerExRaster/main.cpp")
+aether_krkrz_require_source("layerExRaster/layerExBase.hpp")
+aether_krkrz_require_source("layerExImage/layerExBase.hpp")
+aether_krkrz_require_source("layerExImage/LayerExImage.cpp")
+aether_krkrz_require_source("layerExImage/Main.cpp")
+aether_krkrz_require_source("layerExLongExposure/Main.cpp")
+aether_krkrz_require_source("getSample/main.cpp")
+aether_krkrz_require_source("layerExBTOA/Main.cpp")
+aether_krkrz_require_source("shrinkCopy/main.cpp")
+
+# The extNagano sources are self-contained transition algorithms. The two
+# rule-provider variants (3duniversal/imagewipe) require texture methods that
+# are not present in Aether's scan-line ABI, so they remain on the Aether
+# fallback provider; the other algorithms are detached and wrapped by
+# upstream_bridge/extNaganoProviders.cpp.
+set(AETHER_EXTNAGANO_UPSTREAM_SOURCES
+    "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/blurfade.cpp"
+    "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/book.cpp"
+    "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/flutter.cpp"
+    "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/honeyturn.cpp"
+    "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/morphing.cpp"
+    "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/multiripple.cpp"
+    "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/rgbfade.cpp"
+    "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/scanline.cpp"
+    "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/spin.cpp"
+    "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/zoomfade.cpp")
+foreach(_aether_extnagano_source IN LISTS AETHER_EXTNAGANO_UPSTREAM_SOURCES)
+    if(NOT EXISTS "${_aether_extnagano_source}")
         message(FATAL_ERROR
-            "AETHER_USE_KRKRZ_LEAF_PLUGINS is enabled but krkrz_dev is not "
-            "initialized at ${AETHER_KRKRZ_DEV_ROOT}. Run: git submodule "
-            "update --init --recursive third_party/krkrz_dev")
-    endif()
-    aether_krkrz_require_source("layerExAreaAverage/main.cpp")
-    aether_krkrz_require_source("layerExRaster/main.cpp")
-    aether_krkrz_require_source("layerExRaster/layerExBase.hpp")
-    aether_krkrz_require_source("layerExImage/layerExBase.hpp")
-    aether_krkrz_require_source("layerExImage/LayerExImage.cpp")
-    aether_krkrz_require_source("layerExImage/Main.cpp")
-    aether_krkrz_require_source("layerExLongExposure/Main.cpp")
-    aether_krkrz_require_source("getSample/main.cpp")
-    aether_krkrz_require_source("layerExBTOA/Main.cpp")
-    aether_krkrz_require_source("shrinkCopy/main.cpp")
-    # The extNagano sources are self-contained transition algorithms.  The
-    # two rule-provider variants (3duniversal/imagewipe) require texture
-    # methods that are not present in Aether's scan-line ABI, so they remain
-    # on the Aether fallback provider; the other algorithms are detached and
-    # wrapped by upstream_bridge/extNaganoProviders.cpp.
-    set(AETHER_EXTNAGANO_UPSTREAM_SOURCES
-        "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/blurfade.cpp"
-        "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/book.cpp"
-        "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/flutter.cpp"
-        "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/honeyturn.cpp"
-        "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/morphing.cpp"
-        "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/multiripple.cpp"
-        "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/rgbfade.cpp"
-        "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/scanline.cpp"
-        "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/spin.cpp"
-        "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/zoomfade.cpp")
-    foreach(_aether_extnagano_source IN LISTS AETHER_EXTNAGANO_UPSTREAM_SOURCES)
-        if(NOT EXISTS "${_aether_extnagano_source}")
-            message(FATAL_ERROR
-                "Selected extNagano upstream source is missing: "
-                "${_aether_extnagano_source}")
-        endif()
-        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+            "Selected extNagano upstream source is missing: "
             "${_aether_extnagano_source}")
-    endforeach()
-    set(AETHER_LAYEREX_AREA_AVERAGE_SOURCE
-        upstream_bridge/layerExAreaAverage.cpp)
-    set(AETHER_LAYEREX_RASTER_SOURCE upstream_bridge/layerExRaster.cpp)
-    set(AETHER_LAYEREX_LONG_EXPOSURE_SOURCE
-        upstream_bridge/layerExLongExposure.cpp)
-    set(AETHER_GET_SAMPLE_SOURCE upstream_bridge/getSample.cpp)
-    set(AETHER_LAYEREX_BTOA_SOURCE upstream_bridge/layerExBTOA.cpp)
-    set(AETHER_LAYEREX_IMAGE_SOURCE upstream_bridge/layerExImage.cpp)
-    set(AETHER_SHRINK_COPY_SOURCE upstream_bridge/shrinkCopy.cpp)
-else()
-    set(AETHER_LAYEREX_AREA_AVERAGE_SOURCE layerExAreaAverage.cpp)
-    set(AETHER_LAYEREX_RASTER_SOURCE layerExRaster.cpp)
-    set(AETHER_LAYEREX_LONG_EXPOSURE_SOURCE layerExLongExposure.cpp)
-    set(AETHER_GET_SAMPLE_SOURCE getSample.cpp)
-    set(AETHER_LAYEREX_BTOA_SOURCE layerExBTOA.cpp)
-    set(AETHER_LAYEREX_IMAGE_SOURCE layerExImage.cpp)
-    set(AETHER_SHRINK_COPY_SOURCE shrinkCopy.cpp)
-endif()
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${_aether_extnagano_source}")
+endforeach()
+set(AETHER_LAYEREX_AREA_AVERAGE_SOURCE upstream_bridge/layerExAreaAverage.cpp)
+set(AETHER_LAYEREX_RASTER_SOURCE upstream_bridge/layerExRaster.cpp)
+set(AETHER_LAYEREX_LONG_EXPOSURE_SOURCE
+    upstream_bridge/layerExLongExposure.cpp)
+set(AETHER_GET_SAMPLE_SOURCE upstream_bridge/getSample.cpp)
+set(AETHER_LAYEREX_BTOA_SOURCE upstream_bridge/layerExBTOA.cpp)
+set(AETHER_LAYEREX_IMAGE_SOURCE upstream_bridge/layerExImage.cpp)
+set(AETHER_SHRINK_COPY_SOURCE upstream_bridge/shrinkCopy.cpp)
 
 if(AETHER_USE_KRKRZ_OPTIONAL_PLUGINS)
     if(NOT EXISTS "${AETHER_KRKRZ_DEV_ROOT}/.git" AND
@@ -96,35 +83,33 @@ endif()
 
 add_library(${PROJECT_NAME} STATIC)
 
-if(AETHER_USE_KRKRZ_LEAF_PLUGINS)
-    # Keep the include scanner honest when a selected upstream translation
-    # unit changes in place. The wrapper itself remains the only product
-    # source; the object dependency merely triggers a rebuild.
-    aether_krkrz_track_source(
-        "${CMAKE_CURRENT_SOURCE_DIR}/${AETHER_LAYEREX_AREA_AVERAGE_SOURCE}"
-        "layerExAreaAverage/main.cpp")
-    aether_krkrz_track_source(
-        "${CMAKE_CURRENT_SOURCE_DIR}/${AETHER_LAYEREX_RASTER_SOURCE}"
-        "layerExRaster/main.cpp")
-    aether_krkrz_track_source(
-        "${CMAKE_CURRENT_SOURCE_DIR}/${AETHER_LAYEREX_LONG_EXPOSURE_SOURCE}"
-        "layerExLongExposure/Main.cpp")
-    aether_krkrz_track_source(
-        "${CMAKE_CURRENT_SOURCE_DIR}/${AETHER_GET_SAMPLE_SOURCE}"
-        "getSample/main.cpp")
-    aether_krkrz_track_source(
-        "${CMAKE_CURRENT_SOURCE_DIR}/${AETHER_LAYEREX_BTOA_SOURCE}"
-        "layerExBTOA/Main.cpp")
-    aether_krkrz_track_source(
-        "${CMAKE_CURRENT_SOURCE_DIR}/${AETHER_LAYEREX_IMAGE_SOURCE}"
-        "layerExImage/Main.cpp")
-    aether_krkrz_track_source(
-        "${CMAKE_CURRENT_SOURCE_DIR}/${AETHER_LAYEREX_IMAGE_SOURCE}"
-        "layerExImage/LayerExImage.cpp")
-    aether_krkrz_track_source(
-        "${CMAKE_CURRENT_SOURCE_DIR}/${AETHER_SHRINK_COPY_SOURCE}"
-        "shrinkCopy/main.cpp")
-endif()
+# Keep the include scanner honest when a pinned upstream translation unit
+# changes in place. The bridge remains the only product source; the object
+# dependency merely triggers a rebuild.
+aether_krkrz_track_source(
+    "${CMAKE_CURRENT_SOURCE_DIR}/${AETHER_LAYEREX_AREA_AVERAGE_SOURCE}"
+    "layerExAreaAverage/main.cpp")
+aether_krkrz_track_source(
+    "${CMAKE_CURRENT_SOURCE_DIR}/${AETHER_LAYEREX_RASTER_SOURCE}"
+    "layerExRaster/main.cpp")
+aether_krkrz_track_source(
+    "${CMAKE_CURRENT_SOURCE_DIR}/${AETHER_LAYEREX_LONG_EXPOSURE_SOURCE}"
+    "layerExLongExposure/Main.cpp")
+aether_krkrz_track_source(
+    "${CMAKE_CURRENT_SOURCE_DIR}/${AETHER_GET_SAMPLE_SOURCE}"
+    "getSample/main.cpp")
+aether_krkrz_track_source(
+    "${CMAKE_CURRENT_SOURCE_DIR}/${AETHER_LAYEREX_BTOA_SOURCE}"
+    "layerExBTOA/Main.cpp")
+aether_krkrz_track_source(
+    "${CMAKE_CURRENT_SOURCE_DIR}/${AETHER_LAYEREX_IMAGE_SOURCE}"
+    "layerExImage/Main.cpp")
+aether_krkrz_track_source(
+    "${CMAKE_CURRENT_SOURCE_DIR}/${AETHER_LAYEREX_IMAGE_SOURCE}"
+    "layerExImage/LayerExImage.cpp")
+aether_krkrz_track_source(
+    "${CMAKE_CURRENT_SOURCE_DIR}/${AETHER_SHRINK_COPY_SOURCE}"
+    "shrinkCopy/main.cpp")
 
 target_sources(${PROJECT_NAME} PRIVATE
     scriptsEx.cpp
@@ -194,18 +179,16 @@ target_sources(${PROJECT_NAME} PRIVATE
     fstat/main.cpp
 )
 
-if(AETHER_USE_KRKRZ_LEAF_PLUGINS)
-    target_sources(${PROJECT_NAME} PRIVATE
-        upstream_bridge/extNaganoProviders.cpp
-        ${AETHER_EXTNAGANO_UPSTREAM_SOURCES})
-    target_compile_definitions(${PROJECT_NAME} PRIVATE
-        AETHER_KRKRZ_EXTNAGANO_UPSTREAM=1)
-    # Aether's local tp_stub intentionally omits the generated calling-convention
-    # macro.  The upstream files expect it to expand to an empty token on
-    # non-Windows hosts; apply that definition only to these selected sources.
-    set_source_files_properties(${AETHER_EXTNAGANO_UPSTREAM_SOURCES}
-        PROPERTIES COMPILE_DEFINITIONS "TJS_INTF_METHOD=")
-endif()
+target_sources(${PROJECT_NAME} PRIVATE
+    upstream_bridge/extNaganoProviders.cpp
+    ${AETHER_EXTNAGANO_UPSTREAM_SOURCES})
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+    AETHER_KRKRZ_EXTNAGANO_UPSTREAM=1)
+# Aether's local tp_stub intentionally omits the generated calling-convention
+# macro. The upstream files expect it to expand to an empty token on
+# non-Windows hosts; apply that definition only to these selected sources.
+set_source_files_properties(${AETHER_EXTNAGANO_UPSTREAM_SOURCES}
+    PROPERTIES COMPILE_DEFINITIONS "TJS_INTF_METHOD=")
 
 if(BUILD_GPU_BRIDGE)
     target_sources(${PROJECT_NAME} PRIVATE krkrgles.cpp)
@@ -269,13 +252,11 @@ endif()
 target_include_directories(${PROJECT_NAME} PUBLIC ${KRKR2PLUGIN_PATH} ${KRKR2PLUGIN_PATH}/simplebinder)
 target_include_directories(${PROJECT_NAME} PRIVATE
     "${AETHER_KRKRZ_PLUGIN_ROOT}/layerExSave")
-if(AETHER_USE_KRKRZ_LEAF_PLUGINS)
-    # Wrappers include upstream translation units by plugin-relative path so
-    # an alternate checkout can be supplied with -DAETHER_KRKRZ_DEV_ROOT=...
-    # without editing source files.
-    target_include_directories(${PROJECT_NAME} PRIVATE
-        "${AETHER_KRKRZ_PLUGIN_ROOT}")
-endif()
+# Wrappers include upstream translation units by plugin-relative path so an
+# alternate pinned checkout can be supplied with -DAETHER_KRKRZ_DEV_ROOT=...
+# without editing source files.
+target_include_directories(${PROJECT_NAME} PRIVATE
+    "${AETHER_KRKRZ_PLUGIN_ROOT}")
 target_link_libraries(${PROJECT_NAME} PUBLIC krkr2core)
 
 add_subdirectory(psdfile)

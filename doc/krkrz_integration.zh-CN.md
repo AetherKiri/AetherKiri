@@ -150,18 +150,19 @@ AETHERKIRI_ENABLE_INTERNAL=ON ./build.sh macos debug --jobs=2
 
 ```bash
 cmake -S . -B out/krkrz-public-debug \
-  -DAETHER_USE_KRKRZ_LEAF_PLUGINS=ON \
   -DAETHERKIRI_ENABLE_INTERNAL=OFF \
   -DENABLE_TESTS=ON
 cmake --build out/krkrz-public-debug --target krkr2plugin --parallel
 ctest --test-dir out/krkrz-public-debug --output-on-failure
 ```
 
-`AETHER_USE_KRKRZ_LEAF_PLUGINS=OFF` 只是开发/构建时用于对比七个叶子适配器和历史
-Aether 实现的源码选择项，不是运行时或面向游戏的开关：产品只有一个插件 registry，
-hybrid provider 在 upstream 操作不能使用时会自动选择 Aether fallback。正常集成目标
-仍提供 layerExSave codec bridge。公开 fallback 与私有 AetherInternal 配置都受支持；
-后者是扩展目标，不会替换其余实现。
+七个叶子适配器现在是强制的源码级集成：配置阶段会校验已初始化的固定版本
+submodule，并始终编译 `upstream_bridge` 翻译单元。旧的
+`AETHER_USE_KRKRZ_LEAF_PLUGINS` 源码选择项及其历史本地实现已经删除，因此只剩一条
+实现路径，过期的 cache 值也不能再选中第二份代码。这不是运行时或面向游戏的开关：
+产品只有一个插件 registry，hybrid provider 在 upstream 操作不能使用时会自动选择
+Aether fallback。正常集成目标仍提供 layerExSave codec bridge。公开 fallback 与私有
+AetherInternal 配置都受支持；后者是扩展目标，不会替换其余实现。
 
 提交前至少执行：
 

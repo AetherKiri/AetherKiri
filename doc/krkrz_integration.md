@@ -174,21 +174,23 @@ separate build directory:
 
 ```bash
 cmake -S . -B out/krkrz-public-debug \
-  -DAETHER_USE_KRKRZ_LEAF_PLUGINS=ON \
   -DAETHERKIRI_ENABLE_INTERNAL=OFF \
   -DENABLE_TESTS=ON
 cmake --build out/krkrz-public-debug --target krkr2plugin --parallel
 ctest --test-dir out/krkrz-public-debug --output-on-failure
 ```
 
-`AETHER_USE_KRKRZ_LEAF_PLUGINS=OFF` is a developer build-time source-selection
-option for comparing the seven leaf adapters with the historical Aether
-implementations. It is not a runtime/game switch: the product has one plugin
-registry, and hybrid providers select their Aether fallback automatically when
-an upstream operation cannot be used. The layerExSave codec bridge remains
-available in the normal integration target. Both public fallback and private
-AetherInternal configurations are supported; the latter extends targets
-instead of replacing them.
+The seven leaf adapters are mandatory source-level integrations: configure
+validates the initialized pinned submodule and always compiles the bridge
+translation units. The old `AETHER_USE_KRKRZ_LEAF_PLUGINS` source-selection
+option and its historical local implementations have been removed, so there is
+only one implementation path and no stale cache value can select a second copy.
+This is not a runtime/game switch: the product has one plugin registry, and
+hybrid providers select their Aether fallback automatically when an upstream
+operation cannot be used. The layerExSave codec bridge remains available in the
+normal integration target. Both public fallback and private AetherInternal
+configurations are supported; the latter extends targets instead of replacing
+them.
 
 The minimum pre-submit checks are:
 

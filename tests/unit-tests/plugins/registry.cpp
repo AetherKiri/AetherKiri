@@ -227,7 +227,7 @@ TEST_CASE("krkrz leaf adapters expose their declared modules") {
 
     // These seven entries are compiled from the pinned krkrz_dev checkout
     // through cpp/plugins/upstream_bridge. Keep the assertion at the public
-    // registry boundary so a source switch cannot silently drop a module.
+    // registry boundary so a missing bridge cannot silently drop a module.
     const tjs_char *modules[] = {
         TJS_W("layerExAreaAverage.dll"),
         TJS_W("layerExRaster.dll"),
