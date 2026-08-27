@@ -268,6 +268,14 @@ function(aetherkiri_add_siglus_rs imported_target)
         set_property(TARGET ${imported_target} APPEND PROPERTY
             INTERFACE_LINK_LIBRARIES
             ntdll user32 gdi32 shell32 ws2_2 bcrypt advapi32 ole32 oleaut32)
+    elseif(UNIX AND NOT ANDROID)
+        # Rodio's ALSA backend (siglus_rs movie/media audio) references
+        # libasound directly from the static archive. Cargo cannot propagate
+        # system link flags through a staticlib consumer, so link it here to
+        # give every consumer a proper DT_NEEDED entry.
+        find_library(SIGLUS_ALSA_LIBRARY NAMES asound REQUIRED)
+        set_property(TARGET ${imported_target} APPEND PROPERTY
+            INTERFACE_LINK_LIBRARIES "${SIGLUS_ALSA_LIBRARY}")
     endif()
 
     set(${imported_target}_FOUND TRUE PARENT_SCOPE)
