@@ -1,5 +1,7 @@
 # Compatibility stubs
 
+[English](krkrz_plugin_stubs.md) | [简体中文](krkrz_plugin_stubs.zh-CN.md)
+
 `cpp/plugins/stubs/dummy_plugin_stubs.cpp` contains deliberately small
 registrations for legacy KiriKiri modules whose native implementation is not
 part of the portable Aether runtime. Keeping the source in a separate

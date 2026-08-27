@@ -1,6 +1,6 @@
 # 已验证游戏
 
-[English](verified_games.md)
+[English](verified_games.md) | [简体中文](verified_games.zh-CN.md)
 
 最后更新：2026-08-19
 

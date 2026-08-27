@@ -1,5 +1,7 @@
 # AetherKiri × krkrz_dev integration
 
+[English](krkrz_integration.md) | [简体中文](krkrz_integration.zh-CN.md)
+
 This document is the implementation contract for reusing
 [`wamsoft/krkrz_dev`](https://github.com/wamsoft/krkrz_dev) in AetherKiri. The
 goal is source-level reuse where the upstream business logic is compatible,

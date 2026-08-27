@@ -1,3 +1,11 @@
+# KiriKiri2 plugin reference
+
+[English](krkr2_plugins.md) | [简体中文](krkr2_plugins.zh-CN.md)
+
+Historical plugin source and binary references. The current Aether capability
+boundary is maintained separately in
+[`runtime/kirikiri/manifests/plugins.toml`](../runtime/kirikiri/manifests/plugins.toml).
+
 | DLL name               | Source or binary location                                                                               |
 |:-----------------------|:--------------------------------------------------------------------------------------------------------|
 | AlphaMovie.dll         | http://kaede-software.com/krlm/plugin/alphamovie.zip                                                    |

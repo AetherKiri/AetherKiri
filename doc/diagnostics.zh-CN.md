@@ -1,5 +1,7 @@
 # 统一诊断会话
 
+[English](diagnostics.md) | [简体中文](diagnostics.zh-CN.md)
+
 [English](diagnostics.md) | 简体中文
 
 统一诊断会话用于替代手工拼接 Godot 输出、C++ 日志、平台日志和临时性能探针。Debug 构建默认使用低开销 `baseline`，Release 默认关闭；Release 可在应用设置中显式开启，主机采集也会为本次会话覆盖该设置。

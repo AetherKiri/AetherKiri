@@ -1,6 +1,6 @@
 # Verified Games
 
-[简体中文](verified_games.zh-CN.md)
+[English](verified_games.md) | [简体中文](verified_games.zh-CN.md)
 
 Last updated: 2026-08-19
 

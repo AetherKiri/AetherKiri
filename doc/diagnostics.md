@@ -1,6 +1,6 @@
 # Unified Diagnostic Sessions
 
-English | [简体中文](diagnostics.zh-CN.md)
+[English](diagnostics.md) | [简体中文](diagnostics.zh-CN.md)
 
 Diagnostic sessions replace manual correlation of Godot output, native logs, platform logs, and temporary performance probes. Debug builds use the bounded low-overhead `baseline` profile by default; Release defaults to off and can be enabled explicitly in settings or by a host capture request.
 

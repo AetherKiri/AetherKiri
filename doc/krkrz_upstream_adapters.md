@@ -1,5 +1,7 @@
 # krkrz source adapters
 
+[English](krkrz_upstream_adapters.md) | [简体中文](krkrz_upstream_adapters.zh-CN.md)
+
 The translation units in `cpp/plugins/upstream_bridge` are the only place
 where selected `krkrz_dev` plugin sources enter the Aether build. Each adapter
 establishes the Aether `ncbind`/TJS ABI, names the module explicitly, and then
