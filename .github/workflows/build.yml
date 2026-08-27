@@ -951,7 +951,7 @@ jobs:
       - name: Install Build Systems
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build pkg-config autoconf autoconf-archive automake libtool gettext bison flex gobjc gobjc++ curl unzip zip zstd ccache jq mono-complete nasm
+          sudo apt-get install -y cmake ninja-build pkg-config autoconf autoconf-archive automake libtool gettext bison flex gobjc gobjc++ libx11-dev curl unzip zip zstd ccache jq mono-complete nasm
 
       - name: Install Godot export tools
         run: |
