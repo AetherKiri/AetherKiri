@@ -21,9 +21,11 @@
 #include <stdlib.h>
 #include <algorithm>
 #include <array>
-#include <cstdio>
-#include <fstream>
 #include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
 #include <limits>
 #include <string>
 #include <vector>
@@ -35,6 +37,17 @@ bool TVPTLGFormatTraceEnabled() {
     static const bool enabled = [] {
         const char *value = std::getenv("AETHERKIRI_TLG_HEADER_TRACE");
         return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+
+bool TLGDecodeTraceEnabled() {
+    static const bool enabled = [] {
+        const char *image_trace = std::getenv("AETHERKIRI_IMAGE_LOAD_TRACE");
+        const char *motion_trace =
+            std::getenv("AETHERKIRI_MOTION_RENDER_PROFILE");
+        return (image_trace && *image_trace && *image_trace != '0') ||
+               (motion_trace && *motion_trace && *motion_trace != '0');
     }();
     return enabled;
 }
@@ -1043,6 +1056,37 @@ static bool TVPReadTLGMuxHeader(tTJSBinaryStream *src, tjs_int &width,
     height = static_cast<tjs_int>(TVPReadTLGUInt32LE(header + 16));
     return colors == 3 || colors == 4;
 }
+
+class TLGDecodeTrace {
+    const char *version_;
+    tjs_int width_ = 0;
+    tjs_int height_ = 0;
+    tjs_int colors_ = 0;
+    std::chrono::steady_clock::time_point start_;
+
+public:
+    explicit TLGDecodeTrace(const char *version)
+        : version_(version), start_(std::chrono::steady_clock::now()) {}
+
+    void SetSize(tjs_int width, tjs_int height, tjs_int colors) {
+        width_ = width;
+        height_ = height;
+        colors_ = colors;
+    }
+
+    ~TLGDecodeTrace() {
+        if(!TLGDecodeTraceEnabled())
+            return;
+        const auto elapsed = std::chrono::duration<double, std::milli>(
+                                  std::chrono::steady_clock::now() - start_)
+                                  .count();
+        if(elapsed < 5.0)
+            return;
+        spdlog::info(
+            "tlg decode profile: version={} size={}x{} colors={} elapsed_ms={:.3f}",
+            version_, width_, height_, colors_, elapsed);
+    }
+};
 } // namespace
 
 static inline void *TLGArenaAlloc(size_t size, int align) {
@@ -1083,6 +1127,7 @@ void TVPLoadTLG5(void *formatdata, void *callbackdata,
                  tTVPGraphicScanLineCallback scanlinecallback,
                  tTJSBinaryStream *src, tjs_int keyidx,
                  tTVPGraphicLoadMode mode) {
+    TLGDecodeTrace trace("5");
     // load TLG v5.0 lossless compressed graphic
     if(mode != glmNormal)
         TVPThrowExceptionMessage(
@@ -1096,6 +1141,7 @@ void TVPLoadTLG5(void *formatdata, void *callbackdata,
     width = src->ReadI32LE();
     height = src->ReadI32LE();
     blockheight = src->ReadI32LE();
+    trace.SetSize(width, height, colors);
 
     if(colors != 3 && colors != 4)
         TVPThrowExceptionMessage(TVPTLGLoadError,
@@ -1245,6 +1291,7 @@ void TVPLoadTLG6(void *formatdata, void *callbackdata,
                  tTVPGraphicSizeCallback sizecallback,
                  tTVPGraphicScanLineCallback scanlinecallback,
                  tTJSBinaryStream *src, tjs_int keyidx, bool palettized) {
+    TLGDecodeTrace trace("6");
     // load TLG v6.0 lossless/near-lossless compressed graphic
 #if 0
 	if(palettized)
@@ -1279,6 +1326,7 @@ void TVPLoadTLG6(void *formatdata, void *callbackdata,
 
     width = src->ReadI32LE();
     height = src->ReadI32LE();
+    trace.SetSize(width, height, colors);
 
     tjs_int max_bit_length;
 

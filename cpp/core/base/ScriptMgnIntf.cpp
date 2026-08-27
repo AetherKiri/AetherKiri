@@ -1303,7 +1303,6 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
                   "\t\t\tinstance._storageType = _storageType;\r\n"
                   "\t\t\tinstance._aetherKiriHasMotion = _aetherKiriHasMotion;\r\n"
                   "\t\t\tinstance._aetherKiriLastMotion = _aetherKiriLastMotion;\r\n"
-                  "\t\t\tinstance._aetherKiriImmediateMotionOwner = void;\r\n"
                   "\t\t\tinstance.createPlayer(this);\r\n"),
             false);
         if(hasStorageTypePlayerLifecycle) {
@@ -1332,8 +1331,7 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
             TJS_W("\t// 最後に指定した否ループタイムライン\r\n"
                   "\tvar _lastTimeline; \r\n"
                   "\tvar _aetherKiriHasMotion = false;\r\n"
-                  "\tvar _aetherKiriLastMotion;\r\n"
-                  "\tvar _aetherKiriImmediateMotionOwner;\r\n"),
+                  "\tvar _aetherKiriLastMotion;\r\n"),
             false);
         patched.Replace(
             TJS_W("\tfunction checkOption(name) {\r\n"
@@ -1371,27 +1369,6 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
                   "\t\t} catch(e) {}\r\n"
                   "\t}\r\n"
                   "\r\n"
-                  "\tfunction _aetherKiriDrawMotionOwnerNow(owner) {\r\n"
-                  "\t\ttry {\r\n"
-                  "\t\t\tif (owner === void || _player === void || !_aetherKiriHasMotion || _aetherKiriImmediateMotionOwner === owner) return false;\r\n"
-                  "\t\t\tvar motion = ((string)_aetherKiriLastMotion).toLowerCase();\r\n"
-                  "\t\t\tif (motion.substr(0, 2) != \"sd\" || !(owner instanceof \"AffineLayer\")) return false;\r\n"
-                  "\t\t\tif (_separate && typeof owner._motionSeparateAdaptor == \"undefined\") {\r\n"
-                  "\t\t\t\towner._motionSeparateAdaptor = new Motion.SeparateLayerAdaptor(owner incontextof global.Layer);\r\n"
-                  "\t\t\t\towner._motionSeparateAdaptorCount = 0;\r\n"
-                  "\t\t\t\towner.type = ltBinder if owner.type == ltAlpha;\r\n"
-                  "\t\t\t}\r\n"
-                  "\t\t\t_aetherKiriBindMotionTarget(owner);\r\n"
-                  "\t\t\tdrawAffine(owner, owner);\r\n"
-                  "\t\t\t_aetherKiriImmediateMotionOwner = owner;\r\n"
-                  "\t\t\tif (typeof owner.entryFlip != \"undefined\") owner.entryFlip();\r\n"
-                  "\t\t\treturn true;\r\n"
-                  "\t\t} catch(e) {\r\n"
-                  "\t\t\t_aetherKiriImmediateMotionOwner = void if _aetherKiriImmediateMotionOwner === owner;\r\n"
-                  "\t\t\treturn false;\r\n"
-                  "\t\t}\r\n"
-                  "\t}\r\n"
-                  "\r\n"
                   "\tfunction removePlayer() {\r\n"),
             false);
         patched.Replace(
@@ -1400,8 +1377,7 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
             TJS_W("\t\t\t_player = void;\r\n"
                   "\t\t\t_lastTimeline = void;\r\n"
                   "\t\t\t_aetherKiriHasMotion = false;\r\n"
-                  "\t\t\t_aetherKiriLastMotion = void;\r\n"
-                  "\t\t\t_aetherKiriImmediateMotionOwner = void;\r\n"),
+                  "\t\t\t_aetherKiriLastMotion = void;\r\n"),
             false);
         patched.Replace(
             TJS_W("\t\t\t}\r\n"
@@ -1414,12 +1390,6 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
                   "\t\t_aetherKiriBindMotionTarget(owner);\r\n"
                   "\t\tif (_aetherKiriHasMotion) {\r\n"
                   "\t\t\t_aetherKiriTouchMotionOwner(owner);\r\n"
-                  "\t\t\ttry {\r\n"
-                  "\t\t\t\tvar __akMotion = ((string)_aetherKiriLastMotion).toLowerCase();\r\n"
-                  "\t\t\t\tif (__akMotion.substr(0, 2) == \"sd\" && owner instanceof \"AffineLayer\" && _aetherKiriImmediateMotionOwner !== owner) {\r\n"
-                  "\t\t\t\t\ttry { drawAffine(owner, owner); _aetherKiriImmediateMotionOwner = owner; } catch(__akImmediateDrawE) { throw __akImmediateDrawE; }\r\n"
-                  "\t\t\t\t}\r\n"
-                  "\t\t\t} catch(__akDrawE) {}\r\n"
                   "\t\t}\r\n"
                   "\t}\r\n"
                   "\r\n"
@@ -1459,7 +1429,6 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
                   "\t\t\t\t\t_player.play(elm.motion, flags);\r\n"
                   "\t\t\t\t\t_aetherKiriHasMotion = true;\r\n"
                   "\t\t\t\t\t_aetherKiriLastMotion = elm.motion;\r\n"
-                  "\t\t\t\t\t_aetherKiriImmediateMotionOwner = void;\r\n"
                   "\t\t\t\t\tstart = true;\r\n"
                   "\t\t\t\t\tret = \"motion\" if ret === void;\r\n"
                   "\t\t\t\t}\r\n"),
@@ -1540,21 +1509,10 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
             TJS_W("\t\t\tvar delays = tagconv.convert(text.text);\r\n"),
             TJS_W("\t\t\tvar delays = tagconv.convert(kag.getLangInfo(text, \"text\"));\r\n"),
             false);
-        patched.Replace(
-            TJS_W("\t\towner[name] = imageSource;\r\n"
-                  "\t\towner.calcUpdate();\r\n"),
-            TJS_W("\t\towner[name] = imageSource;\r\n"
-                  "\t\ttry {\r\n"
-                  "\t\t\tif (imageSource !== void && imageSource instanceof \"MotionAffineSourceLayer\" && typeof imageSource._aetherKiriDrawMotionOwnerNow != \"undefined\") {\r\n"
-                  "\t\t\t\timageSource._aetherKiriDrawMotionOwnerNow(owner);\r\n"
-                  "\t\t\t}\r\n"
-                  "\t\t} catch(__akMotionDrawE) {}\r\n"
-                  "\t\towner.calcUpdate();\r\n"),
-            false);
         if(patched != buffer) {
             buffer = patched;
             spdlog::info(
-                "Applied compatibility patches for localized scene text and immediate SD motion presentation");
+                "Applied compatibility patches for localized scene text");
         }
     }
 
@@ -1996,20 +1954,9 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
             false);
         patched.Replace(
             TJS_W("\t\towner[name] = imageSource;\r\n"
-                  "\t\ttry {\r\n"
-                  "\t\t\tif (imageSource !== void && imageSource instanceof \"MotionAffineSourceLayer\" && typeof imageSource._aetherKiriDrawMotionOwnerNow != \"undefined\") {\r\n"
-                  "\t\t\t\timageSource._aetherKiriDrawMotionOwnerNow(owner);\r\n"
-                  "\t\t\t}\r\n"
-                  "\t\t} catch(__akMotionDrawE) {}\r\n"
                   "\t\towner.calcUpdate();\r\n"),
             TJS_W("\t\towner[name] = imageSource;\r\n"
                   "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] updateImageSource result owner:${owner !== void ? owner.name : void} slot:${name} source:${imageSource} filename:${imageSource !== void ? imageSource.filename : void}\"); } catch(e) {}\r\n"
-                  "\t\ttry {\r\n"
-                  "\t\t\tif (imageSource !== void && imageSource instanceof \"MotionAffineSourceLayer\" && typeof imageSource._aetherKiriDrawMotionOwnerNow != \"undefined\") {\r\n"
-                  "\t\t\t\tvar __akImmediateDraw = imageSource._aetherKiriDrawMotionOwnerNow(owner);\r\n"
-                  "\t\t\t\tDebug.notice(@\"[AETHERKIRI_SCENE] updateImageSource immediate motion draw owner:${owner !== void ? owner.name : void} file:${file} drawn:${__akImmediateDraw}\");\r\n"
-                  "\t\t\t}\r\n"
-                  "\t\t} catch(__akMotionDrawE) { Debug.notice(@\"[AETHERKIRI_SCENE] updateImageSource immediate motion draw failed:${__akMotionDrawE.message}\"); }\r\n"
                   "\t\towner.calcUpdate();\r\n"),
             false);
         patched.Replace(
@@ -2415,6 +2362,34 @@ const tjs_char *TVPGetD3DStandSourcePatchScript() {
         "})();\r\n");
 }
 
+// Some layered CGs have a flat PNG with the same basename.  When the scene
+// supplies layer-selection options, prefer the PIMG source so later seton
+// changes redraw its layers instead of leaving the flat PNG on screen.
+const tjs_char *TVPGetLayeredPimgSourcePatchScript() {
+    return TJS_W(
+        "(function() {\r\n"
+        "\tif (typeof global.findAffineSource == \"undefined\") return;\r\n"
+        "\tif (typeof global.__aetherKiriOrigFindAffineSource != \"undefined\") return;\r\n"
+        "\tglobal.__aetherKiriOrigFindAffineSource = &global.findAffineSource;\r\n"
+        "\tglobal.findAffineSource = function(filename, options=void) {\r\n"
+        "\t\tvar sourceInfo = global.__aetherKiriOrigFindAffineSource(filename, options);\r\n"
+        "\t\tif (sourceInfo === void || sourceInfo.sourceClass !== void) return sourceInfo;\r\n"
+        "\t\tif (options === void || typeof global.AffineSourcePSD == \"undefined\") return sourceInfo;\r\n"
+        "\t\tvar layered = false;\r\n"
+        "\t\ttry {\r\n"
+        "\t\t\tlayered = options.seton !== void || options.layon !== void || options.layoff !== void || options.diff !== void;\r\n"
+        "\t\t} catch(e) {}\r\n"
+        "\t\tif (!layered || Storages.extractStorageExt(filename) != \"\") return sourceInfo;\r\n"
+        "\t\tvar pimgStorage = filename + \".pimg\";\r\n"
+        "\t\tif (!Storages.isExistentStorage(pimgStorage)) return sourceInfo;\r\n"
+        "\t\tsourceInfo.sourceClass = global.AffineSourcePSD;\r\n"
+        "\t\tsourceInfo.storage = pimgStorage;\r\n"
+        "\t\tsourceInfo.ext = \".PIMG\";\r\n"
+        "\t\treturn sourceInfo;\r\n"
+        "\t};\r\n"
+        "})();\r\n");
+}
+
 const tjs_char *TVPGetD3DEmoteGpuBatchPatchScript() {
     return TJS_W(
         "(function() {\r\n"
@@ -2569,6 +2544,9 @@ static void TVPApplyPostScriptCompatibilityPatches(const ttstr &shortname) {
         }
     }
     const bool patchWorld = lower == TJS_W("world.tjs");
+    const bool patchAffineSource =
+        lower == TJS_W("affinesource.tjs") ||
+        lower == TJS_W("affinesourcelayer.tjs");
     const bool patchD3DLayer = lower == TJS_W("d3d.tjs");
     const bool patchD3DMotion =
         patchD3DLayer || lower == TJS_W("d3daffinesourcemotion.tjs");
@@ -2588,7 +2566,7 @@ static void TVPApplyPostScriptCompatibilityPatches(const ttstr &shortname) {
                                       const char *trace = std::getenv("AETHERKIRI_DIALOG_TRACE");
                                       return trace && *trace && *trace != '0';
                                   })();
-    if(!patchWorld && !patchD3DLayer && !patchD3DMotion &&
+    if(!patchWorld && !patchAffineSource && !patchD3DLayer && !patchD3DMotion &&
        !patchD3DEmote && !patchMessageText && !patchQuickMenu &&
        !patchSimpleAnim && !patchAction && !patchDialogTrace &&
        !patchUiAutoTrace)
@@ -2646,6 +2624,18 @@ static void TVPApplyPostScriptCompatibilityPatches(const ttstr &shortname) {
     } catch(...) {
         spdlog::warn(
             "Failed to apply compatibility hook for action layer properties");
+    }
+
+    if(patchAffineSource) try {
+        TVPExecuteScript(
+            TVPGetLayeredPimgSourcePatchScript(),
+            TJS_W("AetherKiriLayeredPimgSourcePatch"), 0,
+            (tTJSVariant *)nullptr);
+        spdlog::info(
+            "Applied compatibility hook for layered PIMG source routing");
+    } catch(...) {
+        spdlog::warn(
+            "Failed to apply compatibility hook for layered PIMG source routing");
     }
 
     if(patchD3DEmote) try {

@@ -130,17 +130,6 @@ namespace {
         return out.str();
     }
 
-    bool layerBelongsToCgViewForQuery(tTJSNI_BaseLayer *layer) {
-        for(auto *current = layer; current; current = current->GetParent()) {
-            const auto name = motion::internal::psbDebugLowercase(
-                motion::detail::narrow(current->GetName()));
-            if(name.find("cg view layer") != std::string::npos) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     iTJSDispatch2 *selectVariantDispatchTarget(tTJSVariant *value) {
         if(!value || value->Type() != tvtObject) {
             return nullptr;
@@ -1774,9 +1763,6 @@ namespace motion {
         if(started && !label.IsEmpty()) {
             _motionKey = label;
         }
-        if(_allplaying) {
-            claimYuzuSdAutoProgress();
-        }
         return started;
     }
 
@@ -2111,18 +2097,6 @@ namespace motion {
                 : std::string{};
         tTJSVariant *arg = (numparams > 0 && param) ? param[0] : nullptr;
         iTJSDispatch2 *paramObj = selectVariantDispatchTarget(arg);
-        if(nativeInstance->isYuzuSdPreviewAnimationFrozen() &&
-           nativeInstance->restoreFrozenYuzuSdPreviewFrame(paramObj)) {
-            if(result) {
-                if(arg) {
-                    *result = *arg;
-                } else {
-                    *result = nativeInstance->_runtime->lastCanvas;
-                }
-            }
-            releaseDeferredEndedTimelineHold();
-            return TJS_S_OK;
-        }
         tTJSNI_BaseLayer *argLayer = nullptr;
         const bool argIsLayer = arg && tryGetLayerObject(*arg, argLayer);
         iTJSDispatch2 *resolvedLayerObject =
@@ -2560,7 +2534,6 @@ namespace motion {
             self->_runtime->nodes.clear();
             self->_runtime->nodesBuilt = false;
             self->_runtime->nodeLabelMap.clear();
-            self->claimYuzuSdAutoProgress();
         }
         if(motionDebugEnabled() && LOGGER) {
             std::string controlSummary = "<none>";
@@ -2617,12 +2590,6 @@ namespace motion {
         if(delta < 0 || delta > 60000) {
             delta = 0;
         }
-        if(self->isYuzuSdPreviewAnimationFrozen()) {
-            if(result) {
-                *result = tTJSVariant(self->getProgressCompat());
-            }
-            return TJS_S_OK;
-        }
 
         self->_runtime->pendingEvents.clear();
         self->frameProgress(delta * kMotionFramesPerMillisecond);
@@ -2655,126 +2622,11 @@ namespace motion {
         }
         self->calcBounds();
 
-        // MotionAffineSourceLayer calls progress() immediately before draw().
-        // Rendering an SD here as well races KAG's back/front-page clone and
-        // lets the outgoing page overwrite the new composite surface.
-        const bool scriptOwnedYuzuSdDraw =
-            isYuzuSdPresentationMotionPath(motionPath) &&
-            self->_targetLayer.Type() == tvtObject;
-        if(!scriptOwnedYuzuSdDraw && !self->_autoProgressRendering &&
-           !self->_presentationHoldRendering) {
-            iTJSDispatch2 *target = nullptr;
-            std::string staleSdTargetName;
-            if(self->_targetLayer.Type() == tvtObject) {
-                tTJSVariant targetValue = self->_targetLayer;
-                target = tryResolveLayerDispatch(targetValue);
-            }
-            if(!target && objthis) {
-                tTJSVariant dispatchValue(objthis, objthis);
-                target = tryResolveLayerDispatch(dispatchValue);
-            }
-            if(!target && self->_runtime->lastCanvas.Type() == tvtObject) {
-                target = tryResolveLayerDispatch(self->_runtime->lastCanvas);
-            }
-            if(target && isYuzuSdPresentationMotionPath(motionPath) &&
-               !yuzuSdPresentationTargetIsUsable(target)) {
-                staleSdTargetName =
-                    yuzuSdPresentationTargetLayerName(target);
-                if(LOGGER && motionDebugEnabled()) {
-                    LOGGER->info(
-                        "motion progress discarded stale sd presentation target: motion={} target={}",
-                        motionPath, static_cast<const void *>(target));
-                }
-                target = nullptr;
-                self->_targetLayer.Clear();
-            }
-            if(!target) {
-                target = resolveYuzuTitlePresentationTargetFromLayerTree(
-                    motionPath);
-                if(target) {
-                    self->_targetLayer = tTJSVariant(target, target);
-                }
-            }
-            if(!target) {
-                target = resolveRememberedYuzuSdPresentationTarget(
-                    motionPath);
-                if(target) {
-                    self->_targetLayer = tTJSVariant(target, target);
-                    if(LOGGER && motionDebugEnabled()) {
-                        LOGGER->info(
-                            "motion progress reused sd presentation target: motion={} target={}",
-                            motionPath, static_cast<const void *>(target));
-                    }
-                }
-            }
-            if(!target) {
-                target = resolveYuzuSdPresentationTargetFromLayerTree(
-                    motionPath,
-                    self->_runtime->lastExplicitTimelineLabel,
-                    staleSdTargetName);
-                if(target) {
-                    self->_targetLayer = tTJSVariant(target, target);
-                }
-            }
-            if(target) {
-                tTJSVariant targetValue(target, target);
-                tTJSNI_BaseLayer *targetLayer = nullptr;
-                tryGetLayerObject(targetValue, targetLayer);
-                if(layerBelongsToCgViewForQuery(targetLayer)) {
-                    if(LOGGER && motionDebugEnabled()) {
-                        LOGGER->info(
-                            "motion progress render skipped for CG View scripted layer: motion={} target=[{}]",
-                            motionPath,
-                            describeLayerForQueryDebug(targetLayer));
-                    }
-                    // CustomCgViewLayer drives its AffineLayer through the SLA
-                    // draw that immediately follows progress(). A second direct
-                    // render here bypasses the script-owned zoom and produces a
-                    // differently sized duplicate frame.
-                    target = nullptr;
-                }
-            }
-            if(target) {
-                rememberYuzuSdPresentationTarget(motionPath, target);
-                self->_autoProgressRendering = true;
-                try {
-                    if(LOGGER && motionDebugEnabled()) {
-                        LOGGER->info(
-                            "motion progress render target: motion={} target={}",
-                            motionPath, static_cast<const void *>(target));
-                    }
-                    if(self->_d3dDrawMode) {
-                        self->renderViaSharedD3DAdaptor(target);
-                    } else {
-                        self->renderToLayer(target);
-                    }
-                } catch(const std::exception &e) {
-                    if(LOGGER) {
-                        LOGGER->warn(
-                            "motion progress render failed: motion={} error={}",
-                            motionPath, e.what());
-                    }
-                } catch(...) {
-                    if(LOGGER) {
-                        LOGGER->warn(
-                            "motion progress render failed: motion={} error=<unknown>",
-                            motionPath);
-                    }
-                }
-                self->_autoProgressRendering = false;
-            } else if(LOGGER && motionDebugEnabled() &&
-                      motionPath.find("title") != std::string::npos) {
-                static int missingProgressTargetLogs = 0;
-                if(missingProgressTargetLogs < 12) {
-                    ++missingProgressTargetLogs;
-                    LOGGER->info(
-                        "motion progress render target missing: motion={} objthis={} targetLayerType={} lastCanvasType={}",
-                        motionPath, static_cast<const void *>(objthis),
-                        static_cast<int>(self->_targetLayer.Type()),
-                        static_cast<int>(self->_runtime->lastCanvas.Type()));
-                }
-            }
-        }
+        // Match krkrsdl3: progress() advances/evaluates state only.  The TJS
+        // MotionAffineSourceLayer immediately follows it with draw(), which
+        // selects Layer, D3DAdaptor or SeparateLayerAdaptor.  Presenting here
+        // as well creates a second frame that bypasses the authored affine
+        // owner and is visible for one host frame at a different origin.
 
         if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
            motionPath.find("m2logo.mtn") != std::string::npos &&

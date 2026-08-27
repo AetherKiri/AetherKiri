@@ -13,6 +13,7 @@
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
 #include <dlfcn.h>
+#include <chrono>
 #include <mutex>
 #include "environ/android/KrkrJniHelper.h"
 
@@ -27,7 +28,7 @@
 
 static JavaVM* g_javaVM = nullptr;
 static std::mutex g_jvm_mutex;
-static bool g_jvm_recovery_attempted = false;
+static std::chrono::steady_clock::time_point g_last_jvm_recovery_attempt;
 
 namespace {
 
@@ -65,11 +66,19 @@ JavaVM* RecoverJavaVMFromRuntime() {
 } // namespace
 
 JavaVM* krkr_GetJavaVM() {
+    const auto now = std::chrono::steady_clock::now();
     {
         std::lock_guard<std::mutex> lock(g_jvm_mutex);
         if (g_javaVM) return g_javaVM;
-        if (g_jvm_recovery_attempted) return nullptr;
-        g_jvm_recovery_attempted = true;
+        // The Godot extension can be called before the Android VM is fully
+        // visible through the process linker namespace. Do not permanently
+        // cache that early failure; retry at a low rate until JNI_OnLoad or
+        // JNI_GetCreatedJavaVMs becomes available.
+        if (g_last_jvm_recovery_attempt.time_since_epoch().count() != 0 &&
+            now - g_last_jvm_recovery_attempt < std::chrono::seconds(1)) {
+            return nullptr;
+        }
+        g_last_jvm_recovery_attempt = now;
     }
 
     JavaVM* vm = RecoverJavaVMFromRuntime();
@@ -78,7 +87,6 @@ JavaVM* krkr_GetJavaVM() {
     {
         std::lock_guard<std::mutex> lock(g_jvm_mutex);
         g_javaVM = vm;
-        g_jvm_recovery_attempted = true;
     }
     krkr::JniHelper::setJavaVM(vm);
     return vm;
@@ -147,7 +155,7 @@ extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void* reserved) {
     {
         std::lock_guard<std::mutex> lock(g_jvm_mutex);
         g_javaVM = vm;
-        g_jvm_recovery_attempted = true;
+        g_last_jvm_recovery_attempt = std::chrono::steady_clock::now();
     }
 
     // Also set JavaVM for the KrkrJniHelper (used by AndroidUtils.cpp)

@@ -39,6 +39,7 @@
 #include <complex>
 #include <list>
 #include <vector>
+#include <chrono>
 #include <spdlog/spdlog.h>
 
 #include "TVPDecodeArena.h"
@@ -107,6 +108,17 @@ void TVPTraceTLGHeader(const char *stage, const ttstr &name,
                  stage ? stage : "?", name.AsStdString(),
                  static_cast<unsigned long long>(size),
                  static_cast<unsigned long long>(position), hex);
+}
+
+bool TVPImageLoadTraceEnabled() {
+    static const bool enabled = [] {
+        const char *image_trace = std::getenv("AETHERKIRI_IMAGE_LOAD_TRACE");
+        const char *motion_trace =
+            std::getenv("AETHERKIRI_MOTION_RENDER_PROFILE");
+        return (image_trace && *image_trace && *image_trace != '0') ||
+               (motion_trace && *motion_trace && *motion_trace != '0');
+    }();
+    return enabled;
 }
 } // namespace
 
@@ -185,6 +197,12 @@ static void TVPLoadGraphicRouter(void *formatdata, void *callbackdata,
     tjs_uint64 origSrcPos = src->GetPosition();
     if(src->Read(header, sizeof(header)) == sizeof(header)) {
         src->SetPosition(origSrcPos);
+        if(TVPImageLoadTraceEnabled()) {
+            spdlog::info(
+                "graphic router profile: name={} header={:02x}{:02x}{:02x}{:02x}",
+                TVPCurrentGraphicLoadName.AsStdString(), header[0], header[1],
+                header[2], header[3]);
+        }
 #define CALL_LOAD_FUNC(f)                                                      \
     f(formatdata, callbackdata, sizecallback, scanlinecallback,                \
       metainfopushcallback, src, keyidx, mode)
@@ -1895,6 +1913,7 @@ TVPInternalLoadBitmap(const ttstr &_name, tjs_uint32 keyidx, tjs_uint desw,
     // than the given size, the graphic is to be tiled. give 0,0 to
     // obtain default size graphic.
 
+    const auto trace_start = std::chrono::steady_clock::now();
     ttstr name(_name), maskname;
     tTVPGraphicHandlerType *handler = TVPFindGraphicLoadHandler(
         name, &maskname, mode == glmNormal ? provincename : nullptr);
@@ -1979,6 +1998,20 @@ TVPInternalLoadBitmap(const ttstr &_name, tjs_uint32 keyidx, tjs_uint desw,
         TVPDoAlphaColorMat(data.Dest, alphamatcolor);
     }
 
+    if(TVPImageLoadTraceEnabled()) {
+        const double elapsed =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - trace_start)
+                .count();
+        if(elapsed >= 5.0) {
+            spdlog::info(
+                "graphic decode profile: requested={} resolved={} size={}x{} mode={} elapsed_ms={:.3f}",
+                _name.AsStdString(), name.AsStdString(),
+                data.Dest ? static_cast<int>(data.Dest->GetWidth()) : 0,
+                data.Dest ? static_cast<int>(data.Dest->GetHeight()) : 0,
+                mode == glmNormal ? "normal" : "palgray", elapsed);
+        }
+    }
     return data.Dest;
 }
 //---------------------------------------------------------------------------

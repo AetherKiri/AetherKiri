@@ -188,6 +188,12 @@ typedef enum engine_input_event_type_t {
   ENGINE_INPUT_EVENT_BACK = 8
 } engine_input_event_type_t;
 
+/* A gesture recognizer sets this on POINTER_UP when a forwarded press was
+ * reclassified and must be cancelled without completing a click. */
+typedef enum engine_input_modifier_t {
+  ENGINE_INPUT_MODIFIER_POINTER_CANCEL = 1u << 30
+} engine_input_modifier_t;
+
 typedef enum engine_text_input_state_flag_t {
   ENGINE_TEXT_INPUT_STATE_NONE = 0,
   ENGINE_TEXT_INPUT_STATE_ACTIVE = 1u << 0

@@ -8,6 +8,9 @@ const POINTER_DOWN := 1
 const POINTER_MOVE := 2
 const POINTER_UP := 3
 const POINTER_SCROLL := 4
+const POINTER_MOD_CANCEL := 1 << 30
+const TOUCH_POINTER_ID_OFFSET := 100000
+const TOUCH_SECONDARY_POINTER_ID := 0
 
 var player
 var rect: TextureRect
@@ -226,6 +229,25 @@ func _run_actions(step: int) -> int:
             _send_window_click(pos, 1)
             if label.is_empty() or label == "right_click":
                 label = "right_click_%d_%d" % [int(pos.x), int(pos.y)]
+        elif kind == "touch_click":
+            var pos := ProbeConfig.click_position(action)
+            await _send_window_touch_click(
+                pos,
+                int(action.get("touch_index", 0)),
+                max(0, int(action.get("release_delay_ms", 0)))
+            )
+            if label.is_empty() or label == "touch_click":
+                label = "touch_click_%d_%d" % [int(pos.x), int(pos.y)]
+        elif kind == "two_finger_tap":
+            var pos := ProbeConfig.click_position(action)
+            if not await _send_window_two_finger_tap(
+                pos,
+                max(0, int(action.get("first_finger_lead_ms", 0))),
+                bool(action.get("forward_first_finger", false))
+            ):
+                continue
+            if label.is_empty() or label == "two_finger_tap":
+                label = "two_finger_tap_%d_%d" % [int(pos.x), int(pos.y)]
         elif kind == "move":
             var pos := ProbeConfig.click_position(action)
             _send_window_move(pos)
@@ -572,6 +594,56 @@ func _send_window_click(window_pos: Vector2, button: int = 0) -> void:
     player.send_pointer_event(POINTER_DOWN, 0, mapped.x, mapped.y, 0.0, 0.0, button)
     player.tick(1.0 / 60.0)
     player.send_pointer_event(POINTER_UP, 0, mapped.x, mapped.y, 0.0, 0.0, button)
+
+func _send_window_touch_click(
+    window_pos: Vector2,
+    touch_index: int = 0,
+    release_delay_ms: int = 0
+) -> void:
+    var mapped := _map_window_point(window_pos)
+    if mapped.x < 0.0 or mapped.y < 0.0:
+        print("skip touch click outside texture window=%s mapped=%s" % [window_pos, mapped])
+        return
+    var pointer_id := TOUCH_POINTER_ID_OFFSET + touch_index
+    player.send_pointer_event(POINTER_MOVE, pointer_id, mapped.x, mapped.y, 0.0, 0.0, 0)
+    player.send_pointer_event(POINTER_DOWN, pointer_id, mapped.x, mapped.y, 0.0, 0.0, 0)
+    if release_delay_ms > 0:
+        await _advance_for_ms(release_delay_ms)
+    player.send_pointer_event(POINTER_UP, pointer_id, mapped.x, mapped.y, 0.0, 0.0, 0)
+
+func _send_window_two_finger_tap(
+    window_pos: Vector2,
+    first_finger_lead_ms: int = 0,
+    forward_first_finger: bool = false
+) -> bool:
+    var mapped := _map_window_point(window_pos)
+    if mapped.x < 0.0 or mapped.y < 0.0:
+        print("skip two-finger tap outside texture window=%s mapped=%s" % [window_pos, mapped])
+        return false
+    # iOS keeps the first touch in the gesture arbiter until the second touch
+    # arrives, so a qualifying two-finger gesture forwards only the synthetic
+    # secondary click. The opt-in primary path is useful for desktop probes.
+    var first_mapped := mapped - Vector2(12.0, 0.0)
+    if forward_first_finger:
+        player.send_pointer_event(POINTER_MOVE, TOUCH_POINTER_ID_OFFSET, first_mapped.x, first_mapped.y, 0.0, 0.0, 0)
+        player.send_pointer_event(POINTER_DOWN, TOUCH_POINTER_ID_OFFSET, first_mapped.x, first_mapped.y, 0.0, 0.0, 0)
+    if first_finger_lead_ms > 0:
+        await _advance_for_ms(first_finger_lead_ms)
+    player.send_pointer_event(POINTER_MOVE, TOUCH_SECONDARY_POINTER_ID, mapped.x, mapped.y, 0.0, 0.0, 0)
+    player.send_pointer_event(POINTER_DOWN, TOUCH_SECONDARY_POINTER_ID, mapped.x, mapped.y, 0.0, 0.0, 1)
+    player.send_pointer_event(POINTER_UP, TOUCH_SECONDARY_POINTER_ID, mapped.x, mapped.y, 0.0, 0.0, 1)
+    if forward_first_finger:
+        player.send_pointer_event(
+            POINTER_UP,
+            TOUCH_POINTER_ID_OFFSET,
+            first_mapped.x,
+            first_mapped.y,
+            0.0,
+            0.0,
+            0,
+            POINTER_MOD_CANCEL
+        )
+    return true
 
 func _advance_for_ms(duration_ms: int) -> void:
     if duration_ms <= 0:

@@ -2461,8 +2461,14 @@ public:
         int spitch = src->GetPitch();
         const uint8_t *sdata = (const uint8_t *)src->GetPixelData() +
             (rcsrc.top * spitch + rcsrc.left * 4);
-        uint8_t *ddata =
-            (uint8_t *)tar->GetScanLineForWrite(rcdst.top) + rcdst.left * 4;
+        const bool overwrites_full_destination =
+            rcdst.left <= 0 && rcdst.top <= 0 &&
+            rcdst.right >= static_cast<tjs_int>(tar->GetWidth()) &&
+            rcdst.bottom >= static_cast<tjs_int>(tar->GetHeight());
+        uint8_t *ddata = static_cast<uint8_t *>(
+            (overwrites_full_destination
+                 ? tar->GetScanLineForWriteUninitialized(rcdst.top)
+                 : tar->GetScanLineForWrite(rcdst.top))) + rcdst.left * 4;
         int dpitch = tar->GetPitch();
 
         cv::Mat src_img(sh, sw, CV_8UC4, (void *)sdata, spitch);

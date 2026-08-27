@@ -1172,8 +1172,10 @@ class AffineSourceMotion extends AffineSource, EmoteVariable {
 			var neutralColor = target.neutralColor;
 			var targetLayer = target;
 			var targetType = target.type;
+			var presentationHold = false;
 			if (_useD3D) {
 				target = _window.motionD3DAdaptor;
+				target.setPresentationTarget(targetLayer);
 				target.clearEnabled = true;
 			} else if (target == src && typeof src._motionSeparateAdaptor != "undefined" && _redrawList.count == 0) {
 				target = src._motionSeparateAdaptor;
@@ -1226,14 +1228,18 @@ class AffineSourceMotion extends AffineSource, EmoteVariable {
 			// 書き戻し
 			if (target instanceof "D3DAdaptor") {
 				var work = workLayer;
+				presentationHold = target.presentationHold;
 				target.captureCanvas(work);
 				target.unloadUnusedTextures();
-				_redrawImage(work);
-				if (typeof Layer.assignMotionImages != "undefined") {
-					(Layer.assignMotionImages incontextof targetLayer)(work);
-				} else {
-					(Layer.assignImages incontextof targetLayer)(work);
+				if (!presentationHold) {
+					_redrawImage(work);
+					if (typeof Layer.assignMotionImages != "undefined") {
+						(Layer.assignMotionImages incontextof targetLayer)(work);
+					} else {
+						(Layer.assignImages incontextof targetLayer)(work);
+					}
 				}
+				target.clearPresentationTarget();
 			} else if (target instanceof "Layer") {
 				_redrawImage(target);
 				if (typeof Layer.assignMotionImages != "undefined") {

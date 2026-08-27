@@ -6,6 +6,7 @@
 #include "tjsHashSearch.h"
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
@@ -73,6 +74,19 @@ std::atomic<bool> g_gpu_fastpath_enabled{true};
 std::unordered_map<std::string, uint64_t> g_gpu_method_stats;
 std::unordered_map<std::string, uint64_t> g_copy_fallback_stats;
 
+struct RenderTimingStats {
+    uint64_t count = 0;
+    uint64_t total_ns = 0;
+    uint64_t max_ns = 0;
+};
+
+std::unordered_map<std::string, RenderTimingStats> g_render_timing_stats;
+uint64_t g_upload_count = 0;
+uint64_t g_upload_success_count = 0;
+uint64_t g_upload_bytes = 0;
+uint64_t g_upload_total_ns = 0;
+uint64_t g_upload_max_ns = 0;
+
 bool DetailedRenderStats() {
     static const bool enabled = []() {
         const char *value = std::getenv("AETHERKIRI_GODOT_RENDER_STATS");
@@ -80,6 +94,77 @@ bool DetailedRenderStats() {
     }();
     return enabled;
 }
+
+bool RenderTimingEnabled() {
+    static const bool enabled = []() {
+        const char *value = std::getenv("AETHERKIRI_GODOT_RENDER_TIMING");
+        if (value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0) {
+            return true;
+        }
+        return DetailedRenderStats();
+    }();
+    return enabled;
+}
+
+void RecordRenderTiming(const std::string &name, uint64_t elapsed_ns) {
+    if (!RenderTimingEnabled()) return;
+    std::lock_guard<std::mutex> lock(g_method_stats_mutex);
+    auto &stats = g_render_timing_stats[name];
+    ++stats.count;
+    stats.total_ns += elapsed_ns;
+    stats.max_ns = std::max(stats.max_ns, elapsed_ns);
+}
+
+class ScopedRenderTiming final {
+public:
+    explicit ScopedRenderTiming(const std::string &name)
+        : enabled_(RenderTimingEnabled()), name_(name), start_(
+              enabled_ ? std::chrono::steady_clock::now()
+                       : std::chrono::steady_clock::time_point()) {}
+
+    ~ScopedRenderTiming() {
+        if (!enabled_) return;
+        const auto elapsed = std::chrono::steady_clock::now() - start_;
+        RecordRenderTiming(
+            name_, static_cast<uint64_t>(
+                       std::chrono::duration_cast<std::chrono::nanoseconds>(
+                           elapsed).count()));
+    }
+
+private:
+    bool enabled_ = false;
+    std::string name_;
+    std::chrono::steady_clock::time_point start_;
+};
+
+class ScopedUploadTiming final {
+public:
+    ScopedUploadTiming(bool active, size_t bytes)
+        : enabled_(active && RenderTimingEnabled()), bytes_(bytes), start_(
+              enabled_ ? std::chrono::steady_clock::now()
+                       : std::chrono::steady_clock::time_point()) {}
+
+    void Succeeded() { success_ = true; }
+
+    ~ScopedUploadTiming() {
+        if (!enabled_) return;
+        const auto elapsed = std::chrono::steady_clock::now() - start_;
+        const uint64_t elapsed_ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count());
+        std::lock_guard<std::mutex> lock(g_method_stats_mutex);
+        ++g_upload_count;
+        if (success_) ++g_upload_success_count;
+        g_upload_bytes += static_cast<uint64_t>(bytes_);
+        g_upload_total_ns += elapsed_ns;
+        g_upload_max_ns = std::max(g_upload_max_ns, elapsed_ns);
+    }
+
+private:
+    bool enabled_ = false;
+    bool success_ = false;
+    size_t bytes_ = 0;
+    std::chrono::steady_clock::time_point start_;
+};
 
 void CountMethodFallback(iTVPRenderMethod *method) {
     g_software_fallback_count.fetch_add(1, std::memory_order_relaxed);
@@ -153,7 +238,8 @@ bool IsGpuRectFastPathEnabled(const char *name) {
                std::strcmp(name, "PsAddBlend") == 0 ||
                std::strcmp(name, "PsSubBlend") == 0 ||
                std::strcmp(name, "PsScreenBlend") == 0 ||
-               std::strcmp(name, "PsMulBlend") == 0;
+               std::strcmp(name, "PsMulBlend") == 0 ||
+               std::strcmp(name, "BoxBlurAlpha") == 0;
     };
     static const std::string setting = []() {
         const char *value = std::getenv("AETHERKIRI_GODOT_GPU_RECT_FASTPATH");
@@ -371,6 +457,10 @@ int GodotRenderMethod::EnumParameterID(const char *name) {
     const int id = delegate_ != nullptr ? delegate_->EnumParameterID(name) : -1;
     if(name != nullptr && std::strcmp(name, "phase") == 0) phase_id_ = id;
     if(name != nullptr && std::strcmp(name, "vague") == 0) vague_id_ = id;
+    if(name != nullptr && std::strcmp(name, "area_left") == 0) area_left_id_ = id;
+    if(name != nullptr && std::strcmp(name, "area_top") == 0) area_top_id_ = id;
+    if(name != nullptr && std::strcmp(name, "area_right") == 0) area_right_id_ = id;
+    if(name != nullptr && std::strcmp(name, "area_bottom") == 0) area_bottom_id_ = id;
     return id;
 }
 void GodotRenderMethod::SetParameterUInt(int id, unsigned int Value) {
@@ -379,6 +469,10 @@ void GodotRenderMethod::SetParameterUInt(int id, unsigned int Value) {
 void GodotRenderMethod::SetParameterInt(int id, int Value) {
     if(id == phase_id_) phase_ = Value;
     if(id == vague_id_) vague_ = Value;
+    if(id == area_left_id_) area_left_ = Value;
+    if(id == area_top_id_) area_top_ = Value;
+    if(id == area_right_id_) area_right_ = Value;
+    if(id == area_bottom_id_) area_bottom_ = Value;
     if (delegate_) delegate_->SetParameterInt(id, Value);
 }
 void GodotRenderMethod::SetParameterPtr(int id, const void *Value) {
@@ -532,6 +626,8 @@ bool GodotTexture2D::EnsureGpuHandle() {
     if (gpu_handle_ == 0) {
         CreateGpuHandle(nullptr, 0);
     } else if (cpu_dirty_) {
+        ScopedUploadTiming upload_timing(
+            true, static_cast<size_t>(Width) * static_cast<size_t>(Height) * 4u);
         const auto *bridge = TVPGodotGpuBridgeGet();
         if (bridge == nullptr || bridge->update_rgba == nullptr ||
             pixels_.empty()) {
@@ -566,6 +662,7 @@ bool GodotTexture2D::EnsureGpuHandle() {
         gpu_dirty_ = false;
         cpu_dirty_ = false;
         if(!retain_cpu_shadow_) DiscardCpuStorage();
+        upload_timing.Succeeded();
     }
     return gpu_handle_ != 0;
 }
@@ -658,6 +755,16 @@ const void *GodotTexture2D::GetScanLineForRead(tjs_uint l) {
 void *GodotTexture2D::GetScanLineForWrite(tjs_uint l) {
     EnsureCpuReadable();
     if (l >= static_cast<tjs_uint>(Height) || pixels_.empty()) return nullptr;
+    retain_cpu_shadow_ = true;
+    MarkOpacityUnknown();
+    MarkCpuDirty();
+    return pixels_.data() + static_cast<size_t>(l) * pitch_;
+}
+
+void *GodotTexture2D::GetScanLineForWriteUninitialized(tjs_uint l) {
+    if (l >= static_cast<tjs_uint>(Height)) return nullptr;
+    EnsureCpuStorage();
+    if (pixels_.empty()) return nullptr;
     retain_cpu_shadow_ = true;
     MarkOpacityUnknown();
     MarkCpuDirty();
@@ -917,7 +1024,8 @@ bool GodotTexture2D::BlendGpuFrom(GodotTexture2D *src, const tTVPRect &dst_rc,
     }
     if (src == this &&
         mode != TVP_GODOT_GPU_BLEND_REMOVE_CONST_OPACITY &&
-        mode != TVP_GODOT_GPU_BLEND_FILL_MASK) {
+        mode != TVP_GODOT_GPU_BLEND_FILL_MASK &&
+        mode != TVP_GODOT_GPU_BLEND_BOX_BLUR_ALPHA) {
         return false;
     }
     const auto *bridge = TVPGodotGpuBridgeGet();
@@ -979,6 +1087,8 @@ bool GodotTexture2D::BlendGpuFrom3(
 }
 
 bool GodotTexture2D::UploadCpuToGpu(bool flush_pending_gpu_writes) {
+    ScopedUploadTiming upload_timing(
+        cpu_dirty_, static_cast<size_t>(Width) * static_cast<size_t>(Height) * 4u);
     if (!cpu_dirty_) {
         if (gpu_dirty_ && flush_pending_gpu_writes) {
             const auto *bridge = TVPGodotGpuBridgeGet();
@@ -995,6 +1105,7 @@ bool GodotTexture2D::UploadCpuToGpu(bool flush_pending_gpu_writes) {
     if (bridge == nullptr) return false;
     if (gpu_handle_ == 0) {
         CreateGpuHandle(pixels_.data(), pitch_);
+        if (gpu_handle_ != 0) upload_timing.Succeeded();
         return gpu_handle_ != 0;
     }
     if (bridge->update_rgba == nullptr) return false;
@@ -1006,6 +1117,7 @@ bool GodotTexture2D::UploadCpuToGpu(bool flush_pending_gpu_writes) {
     gpu_dirty_ = false;
     cpu_dirty_ = false;
     if(!retain_cpu_shadow_) DiscardCpuStorage();
+    upload_timing.Succeeded();
     return true;
 }
 
@@ -1168,6 +1280,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         godot_method != nullptr ? godot_method->Delegate() : method;
     const std::string method_name =
         method != nullptr ? method->GetName() : std::string();
+    ScopedRenderTiming render_timing(method_name.empty() ? "(null)" : method_name);
 
     auto *dst = dynamic_cast<GodotTexture2D *>(tar);
     auto *src = textures.size() == 1
@@ -1218,6 +1331,60 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
                      rctar.get_height());
     }
 
+    if (RenderTimingEnabled() && method_name == "BoxBlurAlpha") {
+        std::fprintf(
+            stderr,
+            "godot_box_blur rect=(%d,%d,%d,%d) src_rect=(%d,%d,%d,%d) "
+            "dst=%dx%d src=%dx%d dst_gpu=%llu src_gpu=%llu "
+            "dst_pending=%d src_pending=%d area=(%d,%d,%d,%d)\n",
+            rctar.left, rctar.top, rctar.right, rctar.bottom,
+            textures.size() == 1 ? textures[0].second.left : 0,
+            textures.size() == 1 ? textures[0].second.top : 0,
+            textures.size() == 1 ? textures[0].second.right : 0,
+            textures.size() == 1 ? textures[0].second.bottom : 0,
+            dst != nullptr ? dst->GetWidth() : 0,
+            dst != nullptr ? dst->GetHeight() : 0,
+            src != nullptr ? src->GetWidth() : 0,
+            src != nullptr ? src->GetHeight() : 0,
+            static_cast<unsigned long long>(dst != nullptr
+                                                ? dst->GetGodotGpuHandle()
+                                                : 0),
+            static_cast<unsigned long long>(src != nullptr
+                                                ? src->GetGodotGpuHandle()
+                                                : 0),
+            dst != nullptr && dst->RequiresGpuReadback() ? 1 : 0,
+            src != nullptr && src->RequiresGpuReadback() ? 1 : 0,
+            godot_method != nullptr ? godot_method->AreaLeft() : 0,
+            godot_method != nullptr ? godot_method->AreaTop() : 0,
+            godot_method != nullptr ? godot_method->AreaRight() : 0,
+            godot_method != nullptr ? godot_method->AreaBottom() : 0);
+    }
+
+    // BoxBlurAlpha used to fall through to the software delegate. On a
+    // GPU-backed E-mote texture that first performs a synchronous full-frame
+    // readback before OpenCV runs, which is the source of the 200ms spikes.
+    // The game uses symmetric blur areas; dispatch those through the existing
+    // queued blend ABI so the source stays GPU-resident. Alias cases are
+    // handled by the bridge with a temporary source texture because sampling
+    // and writing one image in the same compute dispatch is undefined.
+    if (method_name == "BoxBlurAlpha" && godot_method != nullptr &&
+        dst != nullptr && src != nullptr &&
+        IsGpuRectFastPathEnabled("BoxBlurAlpha") &&
+        godot_method->AreaLeft() == -godot_method->AreaRight() &&
+        godot_method->AreaTop() == -godot_method->AreaBottom() &&
+        godot_method->AreaLeft() <= 0 && godot_method->AreaTop() <= 0 &&
+        RectAbsSizeMatches(rctar, textures[0].second) &&
+        RectBoundsInsideTexture(textures[0].second, src) &&
+        dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
+        src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
+        dst->BlendGpuFrom(
+            src, rctar, textures[0].second,
+            TVP_GODOT_GPU_BLEND_BOX_BLUR_ALPHA,
+            std::abs(godot_method->AreaLeft()),
+            static_cast<uint32_t>(std::abs(godot_method->AreaTop())))) {
+        CountGpuFastPath(method_name);
+        return;
+    }
     if (method_name == "Copy" && dst != nullptr && src != nullptr &&
         IsGpuRectFastPathEnabled("Copy") &&
         ShouldUseGpuRectFastPath(rctar, method_name.c_str(), dst, src) &&
@@ -1659,7 +1826,25 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         }
     }
 
+    if (DetailedRenderStats() && method_name == "FillARGB") {
+        if (dst == nullptr) {
+            CountCopyFallbackReason("fill_dst_not_godot");
+        } else if (!IsGpuRectFastPathEnabled("FillARGB")) {
+            CountCopyFallbackReason("fill_disabled");
+        } else if (!IsGpuRectLargeEnoughForMethod(rctar, "FillARGB") &&
+                   !dst->HasPendingGpuWrites() &&
+                   !dst->RequiresGpuReadback()) {
+            CountCopyFallbackReason("fill_small_rect");
+        } else if (!dst->HasGodotGpuHandle()) {
+            CountCopyFallbackReason("fill_no_gpu_handle");
+        } else {
+            CountCopyFallbackReason("fill_fastpath_failed");
+        }
+    }
+
     CountMethodFallback(method);
+    ScopedRenderTiming software_timing(
+        method_name.empty() ? "software:(null)" : "software:" + method_name);
     SoftwareDelegate()->OperateRect(delegate_method, tar, reftar, rctar, textures);
     if (dst != nullptr) {
         dst->MarkCpuDirty();
@@ -2070,6 +2255,12 @@ std::string TVPGetGodotRenderManagerFallbackStats() {
     uint64_t gpu_fastpaths = 0;
     std::vector<std::pair<std::string, uint64_t>> gpu_entries;
     std::vector<std::pair<std::string, uint64_t>> copy_fallback_entries;
+    std::vector<std::pair<std::string, RenderTimingStats>> timing_entries;
+    uint64_t upload_count = 0;
+    uint64_t upload_success_count = 0;
+    uint64_t upload_bytes = 0;
+    uint64_t upload_total_ns = 0;
+    uint64_t upload_max_ns = 0;
     if (DetailedRenderStats()) {
         std::lock_guard<std::mutex> lock(g_method_stats_mutex);
         entries.reserve(g_method_stats.size());
@@ -2084,6 +2275,17 @@ std::string TVPGetGodotRenderManagerFallbackStats() {
         for (const auto &entry : g_copy_fallback_stats) {
             copy_fallback_entries.push_back(entry);
         }
+        if (RenderTimingEnabled()) {
+            timing_entries.reserve(g_render_timing_stats.size());
+            for (const auto &entry : g_render_timing_stats) {
+                timing_entries.push_back(entry);
+            }
+            upload_count = g_upload_count;
+            upload_success_count = g_upload_success_count;
+            upload_bytes = g_upload_bytes;
+            upload_total_ns = g_upload_total_ns;
+            upload_max_ns = g_upload_max_ns;
+        }
     }
     texture_creates = g_texture_create_count.load(std::memory_order_relaxed);
     texture_clones = g_texture_clone_count.load(std::memory_order_relaxed);
@@ -2096,6 +2298,10 @@ std::string TVPGetGodotRenderManagerFallbackStats() {
               [](const auto &a, const auto &b) { return a.second > b.second; });
     std::sort(copy_fallback_entries.begin(), copy_fallback_entries.end(),
               [](const auto &a, const auto &b) { return a.second > b.second; });
+    std::sort(timing_entries.begin(), timing_entries.end(),
+              [](const auto &a, const auto &b) {
+                  return a.second.total_ns > b.second.total_ns;
+              });
 
     std::ostringstream out;
     out << " fallback_ops=" << fallbacks
@@ -2123,7 +2329,24 @@ std::string TVPGetGodotRenderManagerFallbackStats() {
         if (i != 0) out << ",";
         out << copy_fallback_entries[i].first << ":" << copy_fallback_entries[i].second;
     }
-    out << "]";
+    out << "] timing_hot=[";
+    const size_t timing_limit = std::min<size_t>(timing_entries.size(), 8);
+    for (size_t i = 0; i < timing_limit; ++i) {
+        if (i != 0) out << ",";
+        const auto &entry = timing_entries[i];
+        const uint64_t avg_us = entry.second.count == 0
+                                    ? 0
+                                    : entry.second.total_ns /
+                                          entry.second.count / 1000u;
+        const uint64_t max_us = entry.second.max_ns / 1000u;
+        out << entry.first << ":" << entry.second.count
+            << "/avg" << avg_us << "us/max" << max_us << "us";
+    }
+    out << "] uploads=" << upload_count
+        << "/ok" << upload_success_count
+        << "/bytes" << upload_bytes
+        << "/avg" << (upload_count == 0 ? 0 : upload_total_ns / upload_count / 1000u)
+        << "us/max" << upload_max_ns / 1000u << "us";
     return out.str();
 }
 

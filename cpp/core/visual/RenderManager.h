@@ -124,6 +124,12 @@ public:
     virtual void *GetScanLineForWrite(tjs_uint l) {
         return (void *)GetScanLineForRead(l);
     }
+    // The caller promises to overwrite the complete destination texture (or
+    // the complete destination region) before reading it. GPU-backed textures
+    // can use this to skip a synchronizing readback of stale destination data.
+    virtual void *GetScanLineForWriteUninitialized(tjs_uint l) {
+        return GetScanLineForWrite(l);
+    }
     virtual tjs_int GetPitch() const { return 0x100000; }
     bool IsIndependent() const { return RefCount == 1; }
 

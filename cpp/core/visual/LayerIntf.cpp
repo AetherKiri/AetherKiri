@@ -66,21 +66,6 @@
 #include "PimgCompositeBounds.h"
 #include "../../plugins/psbfile/PSBMedia.h"
 
-extern "C" bool AetherKiriMotionRestoreCenteredPresentationLayer(
-    tTJSNI_BaseLayer *layer);
-extern "C" bool
-AetherKiriMotionPreserveCenteredPresentationLayerBeforeTransparentClear(
-    tTJSNI_BaseLayer *layer,
-    tjs_int x,
-    tjs_int y,
-    tjs_int width,
-    tjs_int height);
-extern "C" bool AetherKiriMotionShowCenteredPresentationHoldOverlay(
-    tTJSNI_BaseLayer *layer);
-extern "C" void AetherKiriMotionDismissCenteredPresentationHoldOverlaysForLayer(
-    tTJSNI_BaseLayer *layer);
-extern "C" void AetherKiriMotionTickCenteredPresentationHoldOverlays();
-
 extern void TVPSetFontRasterizer(tjs_int index);
 
 extern tjs_int TVPGetFontRasterizer();
@@ -92,6 +77,50 @@ extern void TVPMapPrerenderedFont(const tTVPFont &font, const ttstr &storage);
 extern void TVPUnmapPrerenderedFont(const tTVPFont &font);
 
 extern tjs_int TVPGetCursor(const ttstr &name);
+
+namespace {
+    struct LayerCompletionProfileState {
+        bool active = false;
+        std::size_t beforeCalls = 0;
+        std::size_t onPaintCalls = 0;
+        double onPaintMs = 0.0;
+        double maxOnPaintMs = 0.0;
+        std::string maxOnPaintLayer;
+        std::size_t transitionCalls = 0;
+        std::size_t maxDepth = 0;
+        std::size_t depth = 0;
+        std::size_t completionCalls = 0;
+        std::chrono::steady_clock::time_point started{};
+    };
+
+    thread_local LayerCompletionProfileState g_layerCompletionProfile;
+
+    inline bool layerCompletionProfileEnabled() {
+        const char *enabled = std::getenv("AETHERKIRI_MOTION_RENDER_PROFILE");
+        return enabled && *enabled && std::strcmp(enabled, "0") != 0;
+    }
+
+    inline double layerCompletionProfileSlowMs() {
+        const char *value = std::getenv("AETHERKIRI_MOTION_RENDER_SLOW_MS");
+        if (!value || !*value) return 100.0;
+        char *end = nullptr;
+        const double parsed = std::strtod(value, &end);
+        return end != value && std::isfinite(parsed) && parsed > 0.0
+            ? parsed
+            : 100.0;
+    }
+
+    inline double motionAssignmentProfileSlowMs() {
+        const char *value =
+            std::getenv("AETHERKIRI_MOTION_ASSIGN_SLOW_MS");
+        if(!value || !*value) return 5.0;
+        char *end = nullptr;
+        const double parsed = std::strtod(value, &end);
+        return end != value && std::isfinite(parsed) && parsed > 0.0
+            ? parsed
+            : 5.0;
+    }
+}
 
 //---------------------------------------------------------------------------
 // global flags
@@ -115,6 +144,8 @@ static std::unordered_map<const tTJSNI_BaseLayer *,
     TVPHiddenKagAssignmentStreaks;
 static std::unordered_set<const tTJSNI_BaseLayer *>
     TVPMotionSwapAssignmentTargets;
+
+static bool TVPLayerTransitionTraceEnabled();
 
 static bool TVPIsKagBackgroundPair(const tTJSNI_BaseLayer *first,
                                    const tTJSNI_BaseLayer *second) {
@@ -157,6 +188,55 @@ static bool TVPIsKagTransitionMotionAssignment(
         }
     }
     return false;
+}
+
+// D3DEmote keeps the result of each character render in one invisible,
+// full-stage scratch layer.  The legacy assignImages() path aliases the
+// source texture into the destination; the next character then clears and
+// rewrites that same texture, making the preceding character disappear.  A
+// scratch layer is safe to hand off with AssignMotionImages(), which swaps
+// the completed bitmap out of the destination and gives the old bitmap back
+// to the scratch layer for the next render.
+static bool TVPIsAffineSourceMotionScratch(
+    const tTJSNI_BaseLayer *target,
+    const tTJSNI_BaseLayer *source) {
+    if(!target || !target->GetVisible() || target->GetName().IsEmpty() ||
+       !source || source->GetVisible() || !source->GetName().IsEmpty()) {
+        return false;
+    }
+    auto *source_parent = source->GetParent();
+    auto *target_parent = target->GetParent();
+    if(!source_parent || !target_parent ||
+       source_parent->GetName().AsStdString() != "AffineSource情報プール用") {
+        return false;
+    }
+    // Title-page and UI composition also use the same hidden pool.  Their
+    // internal work layers are not visible page targets and must retain the
+    // ordinary assignImages() semantics.
+    return target_parent->GetName().AsStdString() !=
+        "AffineSource情報プール用";
+}
+
+static bool TVPShouldDeferKagTransitionMotionAssignment(
+    const tTJSNI_BaseLayer *target,
+    const tTJSNI_BaseLayer *source) {
+    if(!target || !source || source->GetName().IsEmpty() == false ||
+       source->GetVisible()) {
+        return false;
+    }
+    const auto target_name = target->GetName().AsStdString();
+    if(target_name.rfind("trans_", 0) != 0) {
+        return false;
+    }
+    auto *target_page = target->GetParent();
+    if(!target_page || !target_page->DebugIsInTransition()) {
+        return false;
+    }
+    // The scratch layer used by D3DEmote lives under トップレイヤ, not under
+    // 裏-背景.  The relevant relationship is therefore the destination's
+    // active transition, not source->Parent().
+    const auto page_name = target_page->GetName().AsStdString();
+    return page_name == "表-背景" || page_name == "裏-背景";
 }
 
 static void TVPClearExchangedKagPageRouting(
@@ -246,6 +326,29 @@ static tTJSNI_BaseLayer *TVPResolveExchangedKagAssignmentTarget(
            candidate->GetWidth() != target->GetWidth() ||
            candidate->GetHeight() != target->GetHeight()) {
             continue;
+        }
+        // The visible page's `trans_*` child is the destination of the
+        // upcoming crossfade.  Before StartTransition() sets InTransition,
+        // redirecting the hidden-page motion frame into that child presents
+        // the new frame for one tick (new -> fade -> new).  Keep the frame on
+        // the hidden page so the transition snapshots old/new pages in the
+        // intended order.  Once a transition is active, the assignment path
+        // below is already guarded by TVPShouldDefer...().
+        const auto candidate_name = candidate->GetName().AsStdString();
+        const bool candidate_is_transition_layer =
+            candidate_name.rfind("trans_", 0) == 0;
+        if(known_stale && candidate_is_transition_layer &&
+           !hidden_page->DebugIsInTransition() &&
+           !visible_page->DebugIsInTransition()) {
+            if(TVPLayerTransitionTraceEnabled()) {
+                spdlog::info(
+                    "LayerAssign route=transition-source target={} source={} "
+                    "resolved={} reason=pre-transition-visible-trans",
+                    static_cast<const void *>(target),
+                    static_cast<const void *>(source),
+                    static_cast<const void *>(candidate));
+            }
+            return nullptr;
         }
         return known_stale ? candidate : nullptr;
     }
@@ -4124,8 +4227,6 @@ void tTJSNI_BaseLayer::SetVisible(bool st) {
         if(st && _bitmapEvicted)
             EnsureBitmap();
         if(!st)
-            AetherKiriMotionShowCenteredPresentationHoldOverlay(this);
-        if(!st)
             Update();
         Visible = st;
         if(st)
@@ -4169,8 +4270,6 @@ void tTJSNI_BaseLayer::SetOpacity(tjs_int opa) {
             TVPThrowExceptionMessage(TVPCannotSetPrimaryInvisible);
         if(opa != 0 && Visible && _bitmapEvicted)
             EnsureBitmap();
-        if(opa == 0)
-            AetherKiriMotionShowCenteredPresentationHoldOverlay(this);
         Opacity = opa;
         if(Parent)
             Parent->NotifyChildrenVisualStateChanged();
@@ -5450,6 +5549,19 @@ void tTJSNI_BaseLayer::AllocateDefaultImage() {
 
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::AssignImages(tTJSNI_BaseLayer *src) {
+    const bool assignmentTrace =
+        TVPLayerTransitionTraceEnabled() && src &&
+        (GetWidth() >= 512 || GetHeight() >= 512 ||
+         src->GetWidth() >= 512 || src->GetHeight() >= 512);
+    if(TVPShouldDeferKagTransitionMotionAssignment(this, src)) {
+        if(assignmentTrace) {
+            spdlog::info(
+                "LayerAssign route=defer-transition kind=images target={} source={}",
+                static_cast<const void *>(this), static_cast<const void *>(src));
+        }
+        return;
+    }
+
     // KAG's EnvGraphicLayer.copyImage contract flushes a pending onPaint on
     // the source before copying its image.  Hidden fore/back pages do not
     // otherwise participate in window completion, so copying immediately can
@@ -5474,6 +5586,35 @@ void tTJSNI_BaseLayer::AssignImages(tTJSNI_BaseLayer *src) {
         if(src && src != this)
             TVPTraceStage2Lifecycle("assign-images-source", src);
     }
+
+    if(assignmentTrace) {
+        auto *targetParent = GetParent();
+        auto *sourceParent = src->GetParent();
+        spdlog::info(
+            "LayerAssign enter kind=images target={} targetName={} targetParent={} targetParentName={} targetVisible={} targetParentVisible={} targetOpacity={} targetOrder={} targetOverallOrder={} targetPos=({}, {}) targetSize={}x{} targetImagePos=({}, {}) targetMainImage={} targetTexture={} source={} sourceName={} sourceParent={} sourceParentName={} sourceVisible={} sourceParentVisible={} sourceOpacity={} sourceOrder={} sourceOverallOrder={} sourcePos=({}, {}) sourceSize={}x{} sourceImagePos=({}, {}) sourceMainImage={} sourceTexture={}",
+            static_cast<const void *>(this), GetName().AsStdString(),
+            static_cast<const void *>(targetParent),
+            targetParent ? targetParent->GetName().AsStdString()
+                         : std::string("<none>"),
+            GetVisible() ? 1 : 0, GetParentVisible() ? 1 : 0,
+            GetOpacity(), GetOrderIndex(), GetOverallOrderIndex(), GetLeft(),
+            GetTop(), GetWidth(), GetHeight(), GetImageLeft(), GetImageTop(),
+            static_cast<const void *>(MainImage),
+            MainImage ? static_cast<const void *>(MainImage->GetTexture())
+                      : nullptr,
+            static_cast<const void *>(src),
+            src->GetName().AsStdString(), static_cast<const void *>(sourceParent),
+            sourceParent ? sourceParent->GetName().AsStdString()
+                         : std::string("<none>"),
+            src->GetVisible() ? 1 : 0, src->GetParentVisible() ? 1 : 0,
+            src->GetOpacity(), src->GetOrderIndex(),
+            src->GetOverallOrderIndex(), src->GetLeft(), src->GetTop(),
+            src->GetWidth(), src->GetHeight(), src->GetImageLeft(),
+            src->GetImageTop(), static_cast<const void *>(src->MainImage),
+            src->MainImage
+                ? static_cast<const void *>(src->MainImage->GetTexture())
+                : nullptr);
+    }
     if(src && src != this && src->GetName().IsEmpty() &&
        !src->GetVisible()) {
         bool use_motion_swap =
@@ -5486,15 +5627,36 @@ void tTJSNI_BaseLayer::AssignImages(tTJSNI_BaseLayer *src) {
                 TVPMotionSwapAssignmentTargets.end();
         }
         if(use_motion_swap) {
+            if(assignmentTrace) {
+                spdlog::info("LayerAssign route=motion-swap target={} source={}",
+                             static_cast<const void *>(this),
+                             static_cast<const void *>(src));
+            }
             AssignMotionImages(src);
             return;
         }
     }
     if(auto *visible_target =
            TVPResolveExchangedKagAssignmentTarget(this, src)) {
+        if(assignmentTrace) {
+            spdlog::info(
+                "LayerAssign route=exchanged-target target={} source={} resolved={}",
+                static_cast<const void *>(this), static_cast<const void *>(src),
+                static_cast<const void *>(visible_target));
+        }
         if(visible_target != this) {
             visible_target->AssignImages(src);
             return;
+        }
+        AssignMotionImages(src);
+        return;
+    }
+    if(TVPIsAffineSourceMotionScratch(this, src)) {
+        if(assignmentTrace) {
+            spdlog::info(
+                "LayerAssign route=motion-scratch-swap target={} source={}",
+                static_cast<const void *>(this),
+                static_cast<const void *>(src));
         }
         AssignMotionImages(src);
         return;
@@ -5683,8 +5845,55 @@ void tTJSNI_BaseLayer::AssignMotionImages(tTJSNI_BaseLayer *src) {
     if(!src || src == this) {
         return;
     }
+    const bool assignmentProfile = layerCompletionProfileEnabled();
+    const auto assignmentStarted =
+        assignmentProfile ? std::chrono::steady_clock::now()
+                          : std::chrono::steady_clock::time_point{};
+    double prepareMs = 0.0;
+    double detachMs = 0.0;
+    double swapMs = 0.0;
+    double provinceMs = 0.0;
+    double geometryMs = 0.0;
+    double updateMs = 0.0;
+    bool detachedSharedTexture = false;
+    const bool assignmentTrace =
+        TVPLayerTransitionTraceEnabled() &&
+        (GetWidth() >= 512 || GetHeight() >= 512 ||
+         src->GetWidth() >= 512 || src->GetHeight() >= 512);
+    if(assignmentTrace) {
+        auto *targetParent = GetParent();
+        auto *sourceParent = src->GetParent();
+        spdlog::info(
+            "LayerAssign enter kind=motion target={} targetName={} targetParent={} targetParentName={} targetVisible={} targetParentVisible={} targetOrder={} source={} sourceName={} sourceParent={} sourceParentName={} sourceVisible={} sourceParentVisible={} sourceOrder={} targetImage={}x{} sourceImage={}x{}",
+            static_cast<const void *>(this), GetName().AsStdString(),
+            static_cast<const void *>(targetParent),
+            targetParent ? targetParent->GetName().AsStdString()
+                         : std::string("<none>"),
+            GetVisible() ? 1 : 0, GetParentVisible() ? 1 : 0,
+            GetOrderIndex(), static_cast<const void *>(src),
+            src->GetName().AsStdString(), static_cast<const void *>(sourceParent),
+            sourceParent ? sourceParent->GetName().AsStdString()
+                         : std::string("<none>"),
+            src->GetVisible() ? 1 : 0, src->GetParentVisible() ? 1 : 0,
+            src->GetOrderIndex(), GetImageWidth(), GetImageHeight(),
+            src->GetImageWidth(), src->GetImageHeight());
+    }
+    if(TVPShouldDeferKagTransitionMotionAssignment(this, src)) {
+        if(assignmentTrace) {
+            spdlog::info(
+                "LayerAssign route=defer-transition kind=motion target={} source={}",
+                static_cast<const void *>(this), static_cast<const void *>(src));
+        }
+        return;
+    }
     if(auto *visible_target =
            TVPResolveExchangedKagAssignmentTarget(this, src)) {
+        if(assignmentTrace) {
+            spdlog::info(
+                "LayerAssign route=exchanged-target kind=motion target={} source={} resolved={}",
+                static_cast<const void *>(this), static_cast<const void *>(src),
+                static_cast<const void *>(visible_target));
+        }
         if(visible_target != this) {
             visible_target->AssignMotionImages(src);
             return;
@@ -5702,12 +5911,82 @@ void tTJSNI_BaseLayer::AssignMotionImages(tTJSNI_BaseLayer *src) {
     // destination instead: the destination's old texture becomes an
     // independent, already-sized buffer for the next scratch render.
     if(!MainImage) {
+        const auto prepareStarted = std::chrono::steady_clock::now();
         AllocateDefaultImage();
+        prepareMs += std::chrono::duration<double, std::milli>(
+                         std::chrono::steady_clock::now() - prepareStarted)
+                         .count();
     }
+
+    // A character layer may have gone through the legacy AssignImages path
+    // before it was recognized as an Emote scratch hand-off.  That path keeps
+    // separate bitmap wrappers but aliases their underlying GPU texture.  A
+    // pointer swap alone cannot break that alias: the next render into the
+    // scratch layer would still overwrite the character that just received
+    // the frame.  Detach the destination first, then swap the rendered
+    // scratch texture into it.
+    if(MainImage && src->MainImage &&
+       MainImage->GetTexture() == src->MainImage->GetTexture()) {
+        const auto detachStarted = std::chrono::steady_clock::now();
+        detachedSharedTexture = true;
+        auto *oldImage = MainImage;
+        const auto width = std::max<tjs_uint>(1, oldImage->GetWidth());
+        const auto height = std::max<tjs_uint>(1, oldImage->GetHeight());
+        MainImage = new tTVPBaseTexture(width, height);
+        MainImage->Fill(tTVPRect(0, 0, width, height), NeutralColor);
+        MainImage->SetFont(Font);
+        TVPLayerBitmapTotalBytes.fetch_add(
+            TVPCalcMainImageBytes(MainImage) -
+                TVPCalcMainImageBytes(oldImage),
+            std::memory_order_relaxed);
+        // In the normal case oldImage is owned only by this layer.  If a
+        // malformed/legacy path made both layers point at the same wrapper,
+        // leave it alive for src and only replace this layer's reference.
+        if(oldImage != src->MainImage) {
+            delete oldImage;
+        }
+        if(assignmentTrace) {
+            spdlog::info(
+                "LayerAssign route=motion-scratch-detach-shared-texture target={} source={} texture={}",
+                static_cast<const void *>(this),
+                static_cast<const void *>(src),
+                static_cast<const void *>(src->MainImage->GetTexture()));
+        }
+        detachMs = std::chrono::duration<double, std::milli>(
+                       std::chrono::steady_clock::now() - detachStarted)
+                       .count();
+    }
+    const auto swapStarted = std::chrono::steady_clock::now();
     std::swap(MainImage, src->MainImage);
     FontChanged = true;
     src->FontChanged = true;
+    swapMs = std::chrono::duration<double, std::milli>(
+                 std::chrono::steady_clock::now() - swapStarted)
+                 .count();
 
+    // Some games create the visible E-mote destination as an otherwise
+    // untouched Layer, whose engine default geometry is 32x32.  Swapping in
+    // the full-stage bitmap changes the image size but InternalSetImageSize()
+    // intentionally never enlarges the layer rectangle, so the character is
+    // clipped to that tiny placeholder.  Grow only this recognizable E-mote
+    // scratch hand-off; authored layers that intentionally crop their image
+    // keep their existing geometry.
+    const auto completedWidth = MainImage->GetWidth();
+    const auto completedHeight = MainImage->GetHeight();
+    if(TVPIsAffineSourceMotionScratch(this, src) && GetWidth() == 32 &&
+       GetHeight() == 32 &&
+       (completedWidth != GetWidth() || completedHeight != GetHeight())) {
+        if(assignmentTrace) {
+            spdlog::info(
+                "LayerAssign route=motion-scratch-resize-target target={} source={} from=32x32 to={}x{}",
+                static_cast<const void *>(this),
+                static_cast<const void *>(src), completedWidth,
+                completedHeight);
+        }
+        SetSize(completedWidth, completedHeight);
+    }
+
+    const auto provinceStarted = std::chrono::steady_clock::now();
     if(src->ProvinceImage) {
         if(ProvinceImage)
             ProvinceImage->Assign(*src->ProvinceImage);
@@ -5717,8 +5996,12 @@ void tTJSNI_BaseLayer::AssignMotionImages(tTJSNI_BaseLayer *src) {
     } else if(ProvinceImage) {
         DeallocateProvinceImage();
     }
+    provinceMs = std::chrono::duration<double, std::milli>(
+                     std::chrono::steady_clock::now() - provinceStarted)
+                     .count();
 
-    InternalSetImageSize(MainImage->GetWidth(), MainImage->GetHeight());
+    const auto geometryStarted = std::chrono::steady_clock::now();
+    InternalSetImageSize(completedWidth, completedHeight);
     ResetClip();
     if(src->MainImage) {
         src->InternalSetImageSize(src->MainImage->GetWidth(),
@@ -5728,7 +6011,40 @@ void tTJSNI_BaseLayer::AssignMotionImages(tTJSNI_BaseLayer *src) {
 
     ImageModified = true;
     src->ImageModified = true;
+    geometryMs = std::chrono::duration<double, std::milli>(
+                     std::chrono::steady_clock::now() - geometryStarted)
+                     .count();
+    const auto updateStarted = std::chrono::steady_clock::now();
     Update(false);
+    updateMs = std::chrono::duration<double, std::milli>(
+                   std::chrono::steady_clock::now() - updateStarted)
+                   .count();
+
+    if(assignmentProfile) {
+        const double totalMs = std::chrono::duration<double, std::milli>(
+                                   std::chrono::steady_clock::now() -
+                                   assignmentStarted)
+                                   .count();
+        const double threshold = motionAssignmentProfileSlowMs();
+        if(totalMs >= threshold || prepareMs >= threshold ||
+           detachMs >= threshold || provinceMs >= threshold ||
+           geometryMs >= threshold || updateMs >= threshold) {
+            if(auto logger = spdlog::get("core")) {
+                logger->info(
+                    "motion assign profile: total_ms={:.3f} "
+                    "prepare_ms={:.3f} detach_ms={:.3f} swap_ms={:.3f} "
+                    "province_ms={:.3f} geometry_ms={:.3f} "
+                    "update_ms={:.3f} detached={} target={} "
+                    "target_name={} source={} source_name={} size={}x{}",
+                    totalMs, prepareMs, detachMs, swapMs, provinceMs,
+                    geometryMs, updateMs, detachedSharedTexture ? 1 : 0,
+                    static_cast<const void *>(this), GetName().AsStdString(),
+                    static_cast<const void *>(src),
+                    src->GetName().AsStdString(), completedWidth,
+                    completedHeight);
+            }
+        }
+    }
 }
 
 //---------------------------------------------------------------------------
@@ -7676,7 +7992,8 @@ void tTJSNI_BaseLayer::FireButtonClick() {
             try {
                 const tjs_error hr = control_owner.FuncCall(
                     0, on_button_click_name.c_str(),
-                    on_button_click_name.GetHint(), &result, 1, args, nullptr);
+                    on_button_click_name.GetHint(), &result, 1, args,
+                    control_owner.ObjThis);
                 if(TVPLayerInputTraceEnabled()) {
                     spdlog::info("LayerIntf FireButtonClick controlOwner.onButtonClick layer={} link={} hr={} result={}",
                                  GetName().AsStdString(),
@@ -11143,13 +11460,42 @@ void tTJSNI_BaseLayer::BeforeCompletion() {
         return;
     // calling during completion more than once is not allowed
 
+    const bool profileCompletion = g_layerCompletionProfile.active;
+    if(profileCompletion) {
+        ++g_layerCompletionProfile.beforeCalls;
+        ++g_layerCompletionProfile.depth;
+        g_layerCompletionProfile.maxDepth = std::max(
+            g_layerCompletionProfile.maxDepth,
+            g_layerCompletionProfile.depth);
+        if(InTransition) {
+            ++g_layerCompletionProfile.transitionCalls;
+        }
+    }
+
     // fire onPaint
     if(CallOnPaint) {
         TVPTraceStage2Lifecycle("paint-dispatch-before", this);
+        if(profileCompletion) {
+            ++g_layerCompletionProfile.onPaintCalls;
+        }
         CallOnPaint = false;
         static ttstr eventname(TJS_W("onPaint"));
+        const auto onPaintStarted = profileCompletion
+            ? std::chrono::steady_clock::now()
+            : std::chrono::steady_clock::time_point{};
         TVPPostEvent(Owner, Owner, eventname, 0, TVP_EPT_IMMEDIATE, 0, nullptr);
         TVPTraceStage2Lifecycle("paint-dispatch-after", this);
+        if(profileCompletion) {
+            const double onPaintMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - onPaintStarted).count();
+            g_layerCompletionProfile.onPaintMs += onPaintMs;
+            if(onPaintMs >= g_layerCompletionProfile.maxOnPaintMs) {
+                g_layerCompletionProfile.maxOnPaintMs = onPaintMs;
+                g_layerCompletionProfile.maxOnPaintLayer = fmt::format(
+                    "{}@{}", GetName().AsStdString(),
+                    static_cast<const void *>(this));
+            }
+        }
     }
 
     // for transition
@@ -11223,6 +11569,10 @@ void tTJSNI_BaseLayer::BeforeCompletion() {
     child->BeforeCompletion();
 
     TVP_LAYER_FOR_EACH_CHILD_END
+
+    if(profileCompletion) {
+        --g_layerCompletionProfile.depth;
+    }
 }
 
 //---------------------------------------------------------------------------
@@ -12559,7 +12909,42 @@ void tTJSNI_BaseLayer::InternalComplete(tTVPComplexRect &updateregion,
 
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::CompleteForWindow(tTVPDrawable *drawable) {
+    const bool profileCompletion = layerCompletionProfileEnabled() &&
+        !g_layerCompletionProfile.active;
+    if(profileCompletion) {
+        g_layerCompletionProfile = {};
+        g_layerCompletionProfile.active = true;
+        static thread_local std::size_t completionCallCounter = 0;
+        g_layerCompletionProfile.completionCalls = ++completionCallCounter;
+        g_layerCompletionProfile.started = std::chrono::steady_clock::now();
+    }
     BeforeCompletion();
+    if(profileCompletion) {
+        const double beforeMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() -
+            g_layerCompletionProfile.started).count();
+        if(beforeMs >= layerCompletionProfileSlowMs() ||
+           g_layerCompletionProfile.completionCalls % 120u == 0u) {
+            if(auto logger = spdlog::get("core")) {
+                logger->info(
+                    "layer completion profile: root={} before_ms={:.3f} "
+                    "before_calls={} onPaint_calls={} onPaint_ms={:.3f} "
+                    "max_onPaint_ms={:.3f} max_onPaint_layer={} "
+                    "transition_calls={} "
+                    "max_depth={} completion_call={}",
+                    static_cast<const void *>(this), beforeMs,
+                    g_layerCompletionProfile.beforeCalls,
+                    g_layerCompletionProfile.onPaintCalls,
+                    g_layerCompletionProfile.onPaintMs,
+                    g_layerCompletionProfile.maxOnPaintMs,
+                    g_layerCompletionProfile.maxOnPaintLayer,
+                    g_layerCompletionProfile.transitionCalls,
+                    g_layerCompletionProfile.maxDepth,
+                    g_layerCompletionProfile.completionCalls);
+            }
+        }
+        g_layerCompletionProfile.active = false;
+    }
 
     if(Manager)
         Manager->NotifyUpdateRegionFixed();
@@ -12611,7 +12996,6 @@ void tTJSNI_BaseLayer::CompleteForWindow(tTVPDrawable *drawable) {
 
     InCompletion = false;
     AfterCompletion();
-    AetherKiriMotionTickCenteredPresentationHoldOverlays();
 }
 
 //---------------------------------------------------------------------------
@@ -13941,17 +14325,9 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
         tjs_int y = *param[1];
         const auto fillColor = static_cast<tjs_uint32>(
             static_cast<tjs_int64>(*param[4]));
-        const bool transparentFill = (fillColor & 0xff000000u) == 0;
-        if(transparentFill) {
-            AetherKiriMotionPreserveCenteredPresentationLayerBeforeTransparentClear(
-                _this, x, y, (tjs_int)*param[2], (tjs_int)*param[3]);
-        }
         _this->FillRect(
             tTVPRect(x, y, x + (tjs_int)*param[2], y + (tjs_int)*param[3]),
             fillColor);
-        if(transparentFill) {
-            AetherKiriMotionRestoreCenteredPresentationLayer(_this);
-        }
         return TJS_S_OK;
     }
     TJS_END_NATIVE_METHOD_DECL(/*func. name*/ fillRect)
@@ -15270,8 +15646,6 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
             TVPThrowExceptionMessage(TVPSpecifyLayer);
 
         _this->AssignImages(src);
-        AetherKiriMotionDismissCenteredPresentationHoldOverlaysForLayer(_this);
-        AetherKiriMotionRestoreCenteredPresentationLayer(_this);
 
         return TJS_S_OK;
     }
@@ -15299,8 +15673,6 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
             TVPThrowExceptionMessage(TVPSpecifyLayer);
 
         _this->AssignMotionImages(src);
-        AetherKiriMotionDismissCenteredPresentationHoldOverlaysForLayer(_this);
-        AetherKiriMotionRestoreCenteredPresentationLayer(_this);
 
         return TJS_S_OK;
     }

@@ -1442,6 +1442,22 @@ void tTVPLayerManager::PrimaryClick(tjs_int x, tjs_int y) {
         // pages made gallery group selectors, settings controls, and the
         // language switch receive only the generic Layer.onClick event.
         if(l->HasButtonClickTarget()) {
+            // A normal captured button gesture is already completed by the
+            // captured layer's onMouseUp handler.  PrimaryClick is delivered
+            // before PrimaryMouseUp on the Godot host, so evaluating the
+            // bound expression here as well toggles state twice (open, then
+            // immediately closed).  Only synthesize the click when the
+            // button appeared after mouse-down and therefore does not own the
+            // capture; that case has no matching button mouse-up to dispatch
+            // its expression.
+            if(CaptureOwner == l) {
+                if(TVPInputTraceEnabled()) {
+                    spdlog::info(
+                        "LayerManager title link click deferred to captured mouseup layer={} primary=({}, {})",
+                    l->GetName().AsStdString(), x, y);
+                }
+                return;
+            }
             if(TVPInputTraceEnabled()) {
                 spdlog::info(
                     "LayerManager link click -> onButtonClick layer={} primary=({}, {})",
