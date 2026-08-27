@@ -410,6 +410,15 @@ void tTVPScenarioCacheItem::LoadScenario(const ttstr &name, bool isstring) {
             if(stream)
                 stream->Destruct();
             if(TVPHasCompiledScenarioStorage(name)) {
+                // Loading a compiled scenario normally stays script-driven.
+                // Compatibility probes can request a bounded PSB tree dump;
+                // force the registered resolver to open the sidecar so the
+                // parser instrumentation sees the exact authored structure.
+                if(const char *dump = std::getenv("AETHERKIRI_PSB_DUMP_PATH");
+                   dump && *dump) {
+                    TVPCompiledScenarioHasLabel(
+                        name, TJS_W("__aetherkiri_psb_dump_probe__"));
+                }
                 Buffer = TJS_W("*\n");
             } else {
                 throw;

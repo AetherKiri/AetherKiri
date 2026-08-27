@@ -80,9 +80,11 @@ namespace TJS {
             const char *save = std::getenv("AETHERKIRI_TJS_SAVE_TRACE");
             const char *scene = std::getenv("AETHERKIRI_TJS_SCENE_TRACE");
             const char *audio = std::getenv("AETHERKIRI_TJS_AUDIO_TRACE");
+            const char *replay = std::getenv("AETHERKIRI_TJS_REPLAY_TRACE");
             return (save && *save && *save != '0') ||
-                   (scene && *scene && *scene != '0') ||
-                   (audio && *audio && *audio != '0');
+                (scene && *scene && *scene != '0') ||
+                (audio && *audio && *audio != '0') ||
+                (replay && *replay && *replay != '0');
         }();
         return enabled;
     }
@@ -98,6 +100,14 @@ namespace TJS {
     static bool TJSAudioTraceEnabled() {
         static const bool enabled = [] {
             const char *value = std::getenv("AETHERKIRI_TJS_AUDIO_TRACE");
+            return value && *value && *value != '0';
+        }();
+        return enabled;
+    }
+
+    static bool TJSReplayTraceEnabled() {
+        static const bool enabled = [] {
+            const char *value = std::getenv("AETHERKIRI_TJS_REPLAY_TRACE");
             return value && *value && *value != '0';
         }();
         return enabled;
@@ -207,6 +217,40 @@ namespace TJS {
     }
 
     static bool TJSSceneTraceMatches(const std::string &text) {
+        if(TJSReplayTraceEnabled()) {
+            static const char *replay_patterns[] = {
+                "SceneGalleryMode.view",
+                "ExSceneGalleryBase",
+                "loadFunction",
+                "fixScenarioExt",
+                "checkLabelExist",
+                "checkConvertScenarioLabelExists",
+                "loadScenario",
+                "GoToLabel",
+                "onScenarioLoad",
+                "onScenarioLoaded",
+                "envstart",
+                "donereplay",
+                "endrecollection",
+                "start.ks",
+                "KAGEnvPlayer",
+                "StorageData",
+                ".scenestart",
+                ".sceneplay",
+                ".scenecheck",
+                ".startScene",
+                ".loadScene",
+                ".initStorage",
+                ".findScene",
+                "onScenarioExec",
+                "onSkipToLine",
+                "PSBFile"
+            };
+            for(const char *pattern : replay_patterns) {
+                if(text.find(pattern) != std::string::npos)
+                    return true;
+            }
+        }
         if(!TJSSceneTraceEnabled())
             return false;
         static const char *patterns[] = {
@@ -348,9 +392,27 @@ namespace TJS {
     static std::string TJSSaveTraceGalleryArgFields(const tTJSVariant &value) {
         if(value.Type() != tvtObject)
             return {};
-        static const char *fields[] = {"0", "1", "2", "3", "count",
-                                       "name", "start", "end", "tag",
-                                       "list", "line"};
+        static const char *fields[] = { "0",
+                                        "1",
+                                        "2",
+                                        "3",
+                                        "count",
+                                        "name",
+                                        "start",
+                                        "end",
+                                        "tag",
+                                        "list",
+                                        "line",
+                                        "storage",
+                                        "target",
+                                        "skipto",
+                                        "endlabel",
+                                        "endstorage",
+                                        "doneStorage",
+                                        "doneTarget",
+                                        "start_storage",
+                                        "start_target",
+                                        "envplay" };
         std::string out;
         for(const char *field : fields) {
             const std::string fieldValue =
@@ -394,8 +456,12 @@ namespace TJS {
         if(!TJSSaveTraceMatches(desc))
             return;
         const bool galleryTarget =
-            TJSSceneTraceEnabled() &&
+            (TJSSceneTraceEnabled() || TJSReplayTraceEnabled()) &&
             (desc.find("GalleryMode") != std::string::npos ||
+             desc.find("ExSceneGalleryBase") != std::string::npos ||
+             desc.find("global.loadFunction") != std::string::npos ||
+             desc.find("KAGEnvPlayer") != std::string::npos ||
+             desc.find("StorageData") != std::string::npos ||
              desc.find("UiBasedPageSheet") != std::string::npos ||
              desc.find("PageSheet") != std::string::npos ||
              desc.find("renewItemPage") != std::string::npos ||
@@ -474,14 +540,18 @@ namespace TJS {
             return;
         const std::string member = name.AsStdString();
         const bool failed = TJS_FAILED(hr);
+        const bool replayCritical = TJSReplayTraceEnabled() &&
+            (member == "envplay" || member == "playerExecMode" ||
+             member == "forcePlayerExecMode" ||
+             member == "envPlayerConvertEnabled");
         const bool interestingFailure =
             failed && TJSSceneTraceEnabled() && TJSSaveTracePropertyContext(ctx);
-        if(!TJSSaveTracePropertyContext(ctx) &&
+        if(!replayCritical && !TJSSaveTracePropertyContext(ctx) &&
            !TJSSaveTraceMemberMatches(member) && !interestingFailure) {
             return;
         }
         static int logged = 0;
-        if(!interestingFailure && logged >= 12000)
+        if(!replayCritical && !interestingFailure && logged >= 12000)
             return;
         ++logged;
         spdlog::info("TJSSaveTrace prop {} desc=\"{}\" name={} hr={} value={}",
@@ -604,14 +674,18 @@ namespace TJS {
             return;
         const std::string member = name.AsStdString();
         const bool failed = TJS_FAILED(hr);
+        const bool replayCritical = TJSReplayTraceEnabled() &&
+            (member == "envplay" || member == "playerExecMode" ||
+             member == "forcePlayerExecMode" ||
+             member == "envPlayerConvertEnabled");
         const bool interestingFailure =
             failed && TJSSceneTraceEnabled() && TJSSaveTracePropertyContext(ctx);
-        if(!TJSSaveTracePropertyContext(ctx) &&
+        if(!replayCritical && !TJSSaveTracePropertyContext(ctx) &&
            !TJSSaveTraceMemberMatches(member) && !interestingFailure) {
             return;
         }
         static int logged = 0;
-        if(!interestingFailure && logged >= 12000)
+        if(!replayCritical && !interestingFailure && logged >= 12000)
             return;
         ++logged;
         spdlog::info("TJSSaveTrace set {} desc=\"{}\" name={} hr={} value={}",
@@ -1594,6 +1668,13 @@ namespace TJS {
                                       tTJSVariant **args, tjs_int numargs,
                                       tTJSVariant *result, bool tryCatch) {
         // execute VM codes
+        if(TJSReplayTraceEnabled() &&
+           GetShortDescriptionWithClassName().AsStdString().find(
+               "loadFunction") != std::string::npos)
+            spdlog::info("TJSSaveTrace replay ExecuteCode desc=\"{}\" "
+                         "startip={} code0={}",
+                         GetShortDescriptionWithClassName().AsStdString(),
+                         startip, CodeArea ? CodeArea[0] : -1);
         tjs_int32 *codesave;
         try {
             if(!CodeArea) {
@@ -1611,6 +1692,22 @@ namespace TJS {
 
             while(true) {
                 codesave = code;
+                if(TJSReplayTraceEnabled()) {
+                    const std::string replayDesc =
+                        GetShortDescriptionWithClassName().AsStdString();
+                    if(replayDesc.find("ExSceneGalleryBase.loadFunction") !=
+                           std::string::npos &&
+                       (code - CodeArea) >= 0 && (code - CodeArea) < 260) {
+                        static int replayOpsLogged = 0;
+                        if(replayOpsLogged < 800) {
+                            ++replayOpsLogged;
+                            spdlog::info("TJSSaveTrace replay op desc=\"{}\" "
+                                         "ip={} opcode={} flag={}",
+                                         replayDesc, code - CodeArea, *code,
+                                         flag);
+                        }
+                    }
+                }
                 switch(*code) {
                     case VM_NOP:
                         code++;
@@ -1641,6 +1738,16 @@ namespace TJS {
 
                     case VM_TT:
                         flag = TJS_GET_VM_REG(ra, code[1]).operator bool();
+                        if(TJSReplayTraceEnabled() &&
+                           GetShortDescriptionWithClassName()
+                                   .AsStdString()
+                                   .find("loadFunction") != std::string::npos)
+                            spdlog::info("TJSSaveTrace replay branch op=tt "
+                                         "ip={} reg={} value={} flag={}",
+                                         code - CodeArea, code[1],
+                                         TJSSaveTraceVariantString(
+                                             TJS_GET_VM_REG(ra, code[1])),
+                                         flag);
                         code += 2;
                         break;
 
@@ -1658,6 +1765,21 @@ namespace TJS {
                     case VM_CDEQ:
                         flag = TJS_GET_VM_REG(ra, code[1])
                                    .DiscernCompare(TJS_GET_VM_REG(ra, code[2]));
+                        if(TJSReplayTraceEnabled() &&
+                           GetShortDescriptionWithClassName()
+                                   .AsStdString()
+                                   .find("loadFunction") != std::string::npos)
+                            spdlog::info("TJSSaveTrace replay branch op=cdeq "
+                                         "desc=\"{}\" ip={} lhs={} rhs={} "
+                                         "lhs_value={} rhs_value={} flag={}",
+                                         GetShortDescriptionWithClassName()
+                                             .AsStdString(),
+                                         code - CodeArea, code[1], code[2],
+                                         TJSSaveTraceVariantString(
+                                             TJS_GET_VM_REG(ra, code[1])),
+                                         TJSSaveTraceVariantString(
+                                             TJS_GET_VM_REG(ra, code[2])),
+                                         flag);
                         code += 3;
                         break;
 
@@ -1701,6 +1823,13 @@ namespace TJS {
                         break;
 
                     case VM_JNF:
+                        if(TJSReplayTraceEnabled() &&
+                           GetShortDescriptionWithClassName()
+                                   .AsStdString()
+                                   .find("loadFunction") != std::string::npos)
+                            spdlog::info("TJSSaveTrace replay branch op=jnf "
+                                         "ip={} target={} flag={}",
+                                         code - CodeArea, code[1], flag);
                         if(!flag)
                             TJS_ADD_VM_CODE_ADDR(code, code[1]);
                         else
@@ -2074,7 +2203,8 @@ namespace TJS {
         } catch(eTJSSilent &) {
             throw;
         } catch(eTJSScriptError &e) {
-            if(tryCatch && TJSSceneTraceEnabled()) {
+            if(tryCatch &&
+               (TJSSceneTraceEnabled() || TJSReplayTraceEnabled())) {
                 const std::string desc =
                     GetShortDescriptionWithClassName().AsStdString();
                 if(TJSSceneTraceMatches(desc)) {
@@ -2089,7 +2219,7 @@ namespace TJS {
             throw;
         } catch(eTJS &e) {
             if(tryCatch) {
-                if(TJSSceneTraceEnabled()) {
+                if(TJSSceneTraceEnabled() || TJSReplayTraceEnabled()) {
                     const std::string desc =
                         GetShortDescriptionWithClassName().AsStdString();
                     if(TJSSceneTraceMatches(desc)) {
@@ -2107,7 +2237,7 @@ namespace TJS {
             TJS_eTJSScriptError(e.GetMessage(), this, codesave - CodeArea);
         } catch(exception &e) {
             if(tryCatch) {
-                if(TJSSceneTraceEnabled()) {
+                if(TJSSceneTraceEnabled() || TJSReplayTraceEnabled()) {
                     const std::string desc =
                         GetShortDescriptionWithClassName().AsStdString();
                     if(TJSSceneTraceMatches(desc)) {
@@ -2124,7 +2254,7 @@ namespace TJS {
             TJS_eTJSScriptError(e.what(), this, codesave - CodeArea);
         } catch(const char *text) {
             if(tryCatch) {
-                if(TJSSceneTraceEnabled()) {
+                if(TJSSceneTraceEnabled() || TJSReplayTraceEnabled()) {
                     const std::string desc =
                         GetShortDescriptionWithClassName().AsStdString();
                     if(TJSSceneTraceMatches(desc)) {

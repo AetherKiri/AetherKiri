@@ -698,8 +698,13 @@ bool TVPIsGalleryItemLayer(tTJSNI_BaseLayer *layer) {
         if(!std::isdigit(static_cast<unsigned char>(name[i])))
             return false;
     }
-    return layer->GetWidth() >= 120 && layer->GetWidth() <= 360 &&
-           layer->GetHeight() >= 80 && layer->GetHeight() <= 240;
+    // Scene-gallery sheets are authored at more than one scale.  The
+    // compact layouts used by most titles are around 240x140, while
+    // drciot's replay sheet uses 460x271 cells.  Keep the predicate bounded
+    // so arbitrary full-screen `itemNN` layers are not treated as gallery
+    // controls, but accept both authored ranges.
+    return layer->GetWidth() >= 120 && layer->GetWidth() <= 640 &&
+        layer->GetHeight() >= 80 && layer->GetHeight() <= 360;
 }
 
 bool TVPIsConfirmableSelectionLayer(tTJSNI_BaseLayer *layer) {
@@ -1186,6 +1191,7 @@ tTJSNI_BaseLayer *tTVPLayerManager::GetClickableLayerAt(tjs_int x, tjs_int y) {
     layer = TVPFindMotionButtonOwnerForDisplayProxy(layer, x, y);
     layer = TVPRoutePassiveKagPresentationProxyToPage(layer, x, y);
     layer = TVPRouteAffinePresentationToMessageLayer(this, layer, x, y);
+
     if(TVPIsSaveLoadItemLayer(layer))
         TVPTraceLayersAt(this, "save-load-item", x, y);
     if(!layer || !TVPIsMessageLayer(layer) || !Primary)
@@ -2187,6 +2193,14 @@ void tTVPLayerManager::PrimaryKeyPress(tjs_char key) {
 //---------------------------------------------------------------------------
 void tTVPLayerManager::PrimaryMouseWheel(tjs_uint32 shift, tjs_int delta,
                                          tjs_int x, tjs_int y) {
+    if(TVPInputTraceEnabled()) {
+        tTJSNI_BaseLayer *hit = GetClickableLayerAt(x, y);
+        spdlog::info(
+            "LayerManager wheel primary=({}, {}) delta={} focused={} hit={}", x,
+            y, delta,
+            FocusedLayer ? FocusedLayer->GetName().AsStdString() : "<none>",
+            hit ? hit->GetName().AsStdString() : "<none>");
+    }
     if(FocusedLayer)
         FocusedLayer->FireMouseWheel(shift, delta, x, y);
 }

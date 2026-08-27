@@ -17,6 +17,7 @@
 #include <array>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <spdlog/spdlog.h>
@@ -33,6 +34,13 @@ extern "C" void TVPRegisterSliceLayerCompat();
 // and avoids trying to execute TJS while ProxyStorage is resolving a file.
 extern "C" void TVPPreparePackinOneVirtualResources(const ttstr &path,
                                                      const tTJSVariant &data);
+#ifdef AETHERKIRI_INTERNAL_KRKR2_PLUGIN
+// The private package owns PackinOne's recovered JPEG/PNG chunk format.  The
+// public loader only supplies bytes and consumes the decoded TJS value.
+extern "C" bool TVPDecodePackinOneDataPack(const void *data, std::size_t size,
+                                           const ttstr *outerIv,
+                                           tTJSVariant *result);
+#endif
 
 // PackinOne is loaded very early by the game, while the global Scripts and
 // Storages objects are created a little later by the script runtime.  The NCB
@@ -1069,6 +1077,36 @@ static tjs_error loadDataPack(tTJSVariant *result,
         if(result)
             result->Clear();
     }
+
+#ifdef AETHERKIRI_INTERNAL_KRKR2_PLUGIN
+    try {
+        const tjs_uint64 containerSize64 = stream->GetSize();
+        if(containerSize64 <=
+           static_cast<tjs_uint64>(std::numeric_limits<tjs_uint>::max())) {
+            std::vector<tjs_uint8> container(
+                static_cast<std::size_t>(containerSize64));
+            stream->SetPosition(0);
+            if(!container.empty())
+                stream->ReadBuffer(container.data(),
+                                   static_cast<tjs_uint>(container.size()));
+            if(TVPDecodePackinOneDataPack(container.data(), container.size(),
+                                          &outerIv,
+                                          result ? result : &binaryResult)) {
+                spdlog::info("Scripts.loadDataPack PackinOne image ok: {}",
+                             path.AsStdString());
+                TVPAddLog(
+                    ttstr(TJS_W("Scripts.loadDataPack PackinOne image ok: ")) +
+                    path);
+                TVPPreparePackinOneVirtualResources(
+                    path, result ? *result : binaryResult);
+                return TJS_S_OK;
+            }
+        }
+    } catch(...) {
+        if(result)
+            result->Clear();
+    }
+#endif
 
     try {
         stream->Seek(0, TJS_BS_SEEK_SET);

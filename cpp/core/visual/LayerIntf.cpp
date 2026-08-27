@@ -2522,6 +2522,37 @@ static bool TVPLayerStorageNameLooksThumbnail(const ttstr &name) {
            TVPLayerStorageNameLooksCafeStellaSaveThumbnail(name);
 }
 
+// UI scripts may first probe a language-specific image variant (for example
+// `thum_ev102.png_cn`) and then pass that probe result directly to
+// Layer.loadImages.  A large number of shipped games only provide the base
+// image, so a missing variant must fall back to the unqualified storage name
+// before the load is reported as an exception.  Keep this deliberately narrow
+// to known language tags; a normal filename containing an arbitrary suffix
+// must retain its existing behavior.
+static bool TVPLayerStripLanguageVariant(const ttstr &name, ttstr &base) {
+    const std::string text = name.AsStdString();
+    static constexpr const char *suffixes[] = { "_cn",  "_tw", "_en",
+                                                "_ja",  "_ko", "_chs",
+                                                "_cht", "_jp", "_kr" };
+    for(const char *suffix : suffixes) {
+        const std::size_t length = std::strlen(suffix);
+        if(text.size() <= length ||
+           text.compare(text.size() - length, length, suffix) != 0)
+            continue;
+
+        const std::size_t stem_end = text.size() - length;
+        // Require an extension before the language tag.  This avoids turning
+        // a legitimate extensionless storage called `chapter_cn` into
+        // `chapter`.
+        const std::size_t dot = text.find_last_of("./\\");
+        if(dot == std::string::npos || dot >= stem_end || text[dot] != '.')
+            continue;
+        base = ttstr{ text.substr(0, stem_end) };
+        return true;
+    }
+    return false;
+}
+
 static bool TVPLayerTargetSizeLooksExtraThumbnail(tjs_uint width,
                                                   tjs_uint height) {
     return width >= 120 && width <= 512 && height >= 70 && height <= 320;
@@ -6203,76 +6234,105 @@ iTJSDispatch2 *tTJSNI_BaseLayer::LoadImages(const ttstr &name,
         ttstr ext = TVPExtractStorageExt(name);
         ext.ToLowerCase();
 
-        ttstr fallback =
-            ext.IsEmpty() || ext == TJS_W(".dref")
-                ? (ext.IsEmpty() ? name : TVPChopStorageExt(name)) + TJS_W(".png")
-                : name;
-        if(!TVPIsExistentStorage(fallback)) {
-            if(!TVPLayerUseVirtualPackPlaceholder(name))
-                throw;
-
-            // Some native UI compilers publish logical atlases through a
-            // plug-in-owned virtual resource map instead of a physical file.
-            // Give the registered provider the first chance to materialize
-            // that image.  If no provider recognizes it, retain the safe
-            // transparent placeholder used for unsupported virtual packs.
-            if(TVPProvideVirtualGraphic(name, MainImage)) {
-                spdlog::info(
-                    "Layer.loadImages materialized virtual graphic: {} size={}x{}",
-                    name.AsStdString(),
-                    static_cast<unsigned>(MainImage->GetWidth()),
-                    static_cast<unsigned>(MainImage->GetHeight()));
-                load_name = name;
-                if(metainfo) {
-                    metainfo->Release();
-                    metainfo = nullptr;
-                }
-                provincename.Clear();
-            } else {
-
-                // A virtual atlas has no concrete fallback to inspect.
-                // Preserve any dimensions already assigned by the UI loader;
-                // otherwise allocate a bounded transparent canvas large
-                // enough for authored slice coordinates.
-                const tjs_uint existing_width = MainImage->GetWidth();
-                const tjs_uint existing_height = MainImage->GetHeight();
-                const tjs_uint placeholder_width = existing_width <= 32
-                                                       ? 2048
-                                                       : existing_width;
-                const tjs_uint placeholder_height = existing_height <= 32
-                                                        ? 2048
-                                                        : existing_height;
-                spdlog::warn(
-                    "Layer.loadImages transparent placeholder for missing virtual pack: {} existing={}x{} size={}x{}",
-                    name.AsStdString(), static_cast<unsigned>(existing_width),
-                    static_cast<unsigned>(existing_height),
-                    static_cast<unsigned>(placeholder_width),
-                    static_cast<unsigned>(placeholder_height));
-                MainImage->SetSize(placeholder_width, placeholder_height,
-                                   false);
-                MainImage->Fill(tTVPRect(0, 0, placeholder_width,
-                                         placeholder_height), 0x00000000);
-                load_name = name;
-                if(metainfo) {
-                    metainfo->Release();
-                    metainfo = nullptr;
-                }
-                provincename.Clear();
-            }
-        } else {
+        // `getExistImageName` in several UI script revisions returns the
+        // language-qualified probe even when only the base image is shipped.
+        // Retry that base name before applying the older extension/virtual
+        // pack fallbacks below.  This is especially important for gallery
+        // thumbnails, where an exception aborts the whole tile draw.
+        ttstr language_fallback;
+        bool language_recovered = false;
+        if(TVPLayerStripLanguageVariant(name, language_fallback) &&
+           TVPIsExistentStorage(language_fallback)) {
             try {
-                load_name = fallback;
-                load_graphic(fallback);
+                load_name = language_fallback;
+                load_graphic(language_fallback);
+                language_recovered = true;
+                if(TVPLayerDebugEnabled() && TVPLayerDebugTake())
+                    spdlog::info("Layer.loadImages language fallback: {} -> {}",
+                                 name.AsStdString(),
+                                 language_fallback.AsStdString());
             } catch(...) {
-                spdlog::warn("Layer.loadImages placeholder for unreadable image: {}",
-                             fallback.AsStdString());
-                MainImage->SetSize(1, 1, false);
-                MainImage->Fill(tTVPRect(0, 0, 1, 1), 0x00000000);
+                // Preserve the established fallback path if the base image
+                // exists in the index but cannot be decoded.
+                load_name = name;
             }
         }
-        if(fallback != name && TVPIsExistentStorage(fallback)) {
-            spdlog::warn("Layer.loadImages fallback: {} -> {}",
-                         name.AsStdString(), fallback.AsStdString());
+
+        if(!language_recovered) {
+            ttstr fallback = ext.IsEmpty() || ext == TJS_W(".dref")
+                ? (ext.IsEmpty() ? name : TVPChopStorageExt(name)) +
+                    TJS_W(".png")
+                : name;
+            if(!TVPIsExistentStorage(fallback)) {
+                if(!TVPLayerUseVirtualPackPlaceholder(name))
+                    throw;
+
+                // Some native UI compilers publish logical atlases through a
+                // plug-in-owned virtual resource map instead of a physical
+                // file. Give the registered provider the first chance to
+                // materialize that image. If no provider recognizes it,
+                // retain the safe transparent placeholder used for
+                // unsupported virtual packs.
+                if(TVPProvideVirtualGraphic(name, MainImage)) {
+                    spdlog::info("Layer.loadImages materialized virtual "
+                                 "graphic: {} size={}x{}",
+                                 name.AsStdString(),
+                                 static_cast<unsigned>(MainImage->GetWidth()),
+                                 static_cast<unsigned>(MainImage->GetHeight()));
+                    load_name = name;
+                    if(metainfo) {
+                        metainfo->Release();
+                        metainfo = nullptr;
+                    }
+                    provincename.Clear();
+                } else {
+
+                    // A virtual atlas has no concrete fallback to inspect.
+                    // Preserve any dimensions already assigned by the UI
+                    // loader; otherwise allocate a bounded transparent canvas
+                    // large enough for authored slice coordinates.
+                    const tjs_uint existing_width = MainImage->GetWidth();
+                    const tjs_uint existing_height = MainImage->GetHeight();
+                    const tjs_uint placeholder_width =
+                        existing_width <= 32 ? 2048 : existing_width;
+                    const tjs_uint placeholder_height =
+                        existing_height <= 32 ? 2048 : existing_height;
+                    spdlog::warn(
+                        "Layer.loadImages transparent placeholder for missing "
+                        "virtual pack: {} existing={}x{} size={}x{}",
+                        name.AsStdString(),
+                        static_cast<unsigned>(existing_width),
+                        static_cast<unsigned>(existing_height),
+                        static_cast<unsigned>(placeholder_width),
+                        static_cast<unsigned>(placeholder_height));
+                    MainImage->SetSize(placeholder_width, placeholder_height,
+                                       false);
+                    MainImage->Fill(
+                        tTVPRect(0, 0, placeholder_width, placeholder_height),
+                        0x00000000);
+                    load_name = name;
+                    if(metainfo) {
+                        metainfo->Release();
+                        metainfo = nullptr;
+                    }
+                    provincename.Clear();
+                }
+            } else {
+                try {
+                    load_name = fallback;
+                    load_graphic(fallback);
+                } catch(...) {
+                    spdlog::warn(
+                        "Layer.loadImages placeholder for unreadable image: {}",
+                        fallback.AsStdString());
+                    MainImage->SetSize(1, 1, false);
+                    MainImage->Fill(tTVPRect(0, 0, 1, 1), 0x00000000);
+                }
+            }
+            if(fallback != name && TVPIsExistentStorage(fallback)) {
+                spdlog::warn("Layer.loadImages fallback: {} -> {}",
+                             name.AsStdString(), fallback.AsStdString());
+            }
         }
     }
     TVPLayerBitmapTotalBytes.fetch_add(TVPCalcMainImageBytes(MainImage) - oldBytes,

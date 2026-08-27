@@ -504,7 +504,7 @@ namespace PSB {
     }
 
     bool PSBFile::loadPSBData(const void *data, size_t readSize,
-                              const ttstr &sourceName) {
+                              const ttstr &sourceName, bool loadResources) {
         const bool traceLoad = IsPSBLoadDebugEnabled();
         if(traceLoad) {
             LOGGER->info("PSBFile load begin: path={} seed={}",
@@ -837,16 +837,21 @@ namespace PSB {
         }
 
         _root = std::move(obj);
-        // Load Resource
-        LogPSBStage(sourceName, "load resources");
-        for(auto &res : resources) {
-            loadResource(*res, &stream);
-        }
+        // Load resource payloads only when the caller will consume them.  The
+        // object graph keeps resource indices intact, so metadata-only users
+        // can still inspect labels and file names without paying the cost of
+        // copying every embedded image/audio chunk.
+        if(loadResources) {
+            LogPSBStage(sourceName, "load resources");
+            for(auto &res : resources) {
+                loadResource(*res, &stream);
+            }
 
-        if(_header.version >= 4) {
-            LogPSBStage(sourceName, "load extra resources");
-            for(auto &res : extraResources) {
-                loadExtraResource(*res, &stream);
+            if(_header.version >= 4) {
+                LogPSBStage(sourceName, "load extra resources");
+                for(auto &res : extraResources) {
+                    loadExtraResource(*res, &stream);
+                }
             }
         }
 

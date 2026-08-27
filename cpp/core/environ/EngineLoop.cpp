@@ -446,6 +446,10 @@ void EngineLoop::HandlePointerScroll(const EngineInputEvent& event) {
     // TVP expects wheel delta in units (positive = up)
     const tjs_int delta = static_cast<tjs_int>(event.delta_y * 120.0);
 
+    AETHER_INPUT_TRACE_LOG(
+        "EngineLoop scroll id=%d x=%d y=%d delta_y=%.3f delta=%d shift=%u",
+        event.pointer_id, x, y, event.delta_y, delta, shift);
+
     if (delta != 0) {
         TVPPostInputEvent(
             new tTVPOnMouseWheelInputEvent(win, shift, delta, x, y));
