@@ -1008,6 +1008,7 @@ jobs:
             mkdir -p .devtools
             git clone https://github.com/microsoft/vcpkg.git .devtools/vcpkg
           fi
+          mkdir -p .devtools/vcpkg/downloads
           if [[ ! -x ".devtools/vcpkg/vcpkg" ]]; then
             (cd .devtools/vcpkg && ./bootstrap-vcpkg.sh -disableMetrics)
           fi
