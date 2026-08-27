@@ -24,7 +24,14 @@ fi
 
 feed_url="https://nuget.pkg.github.com/${GITHUB_REPOSITORY_OWNER}/index.json"
 source_name="AetherKiriGitHubPackages"
-nuget_exe="$($vcpkg_exe fetch nuget | tail -n 1)"
+nuget_exe="$($vcpkg_exe fetch nuget | tail -n 1 | tr -d '\r')"
+
+# Git Bash receives native Windows paths from vcpkg. Convert the NuGet path
+# before testing or invoking it so the same provider setup works on both hosts.
+if command -v cygpath >/dev/null 2>&1 &&
+   [[ "$nuget_exe" == [A-Za-z]:\\* || "$nuget_exe" == [A-Za-z]:/* ]]; then
+  nuget_exe="$(cygpath -u "$nuget_exe")"
+fi
 
 if [[ ! -f "$nuget_exe" ]]; then
   echo "vcpkg did not provide a NuGet executable: $nuget_exe" >&2
