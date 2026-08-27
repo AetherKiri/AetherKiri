@@ -11,3 +11,6 @@
 [submodule "packages/tjs2Decompiler"]
 	path = packages/tjs2Decompiler
 	url = git@github.com:AetherKiri/tjs2Decompiler.git
+[submodule "third_party/krkrz_dev"]
+	path = third_party/krkrz_dev
+	url = git@github.com:wamsoft/krkrz_dev.git
