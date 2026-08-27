@@ -55,7 +55,14 @@ func _run() -> void:
     controls.set_enabled(true)
     await process_frame
 
-    if not controls.menu_button.visible or controls.escape_button.visible:
+    if (
+        not controls.menu_button.visible
+        or controls.is_menu_open()
+        or controls.is_panel_open()
+        or controls.keyboard_button.visible
+        or controls.virtual_controls_button.visible
+        or controls.escape_button.visible
+    ):
         _fail("collapsed state must expose only the edge Menu entry")
         return
     if not safe_rect.encloses(controls.menu_button.get_global_rect()):
@@ -78,6 +85,19 @@ func _run() -> void:
         or controls.menu_button.get_node_or_null("MenuIcon") == null
     ):
         _fail("edge Menu must render as an icon without a text label")
+        return
+    var menu_style := controls.menu_button.get_theme_stylebox(
+        "normal"
+    ) as StyleBoxFlat
+    if (
+        menu_style == null
+        or menu_style.bg_color.a < 0.75
+        or menu_style.corner_radius_top_left < controls.menu_button.size.y * 0.5
+        or menu_style.corner_radius_bottom_left < controls.menu_button.size.y * 0.5
+        or menu_style.corner_radius_top_right != 0
+        or menu_style.corner_radius_bottom_right != 0
+    ):
+        _fail("edge Menu is missing its visible right-edge semicircle")
         return
 
     var menu_x: float = controls.menu_button.position.x
@@ -115,6 +135,7 @@ func _run() -> void:
     controls.menu_button.emit_signal("pressed")
     if (
         not controls.is_menu_open()
+        or controls.is_panel_open()
         or not controls.keyboard_button.visible
         or not controls.virtual_controls_button.visible
     ):

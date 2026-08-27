@@ -541,17 +541,41 @@ func _apply_wheel_button_style(button: Button) -> void:
 func _apply_edge_menu_style(button: Button) -> void:
     button.text = ""
     button.tooltip_text = "Menu"
-    button.add_theme_stylebox_override("normal", StyleBoxEmpty.new())
-    button.add_theme_stylebox_override("hover", StyleBoxEmpty.new())
     button.add_theme_stylebox_override(
-        "pressed",
-        _button_style(
-            Color(_tokens.accent.r, _tokens.accent.g, _tokens.accent.b, 0.28),
-            Color.TRANSPARENT,
-            true,
-            0
+        "normal", _edge_menu_style(
+            Color(0.10, 0.10, 0.11, 0.88),
+            Color(0.82, 0.84, 0.88, 0.78)
         )
     )
+    button.add_theme_stylebox_override(
+        "hover", _edge_menu_style(
+            Color(0.18, 0.19, 0.21, 0.96),
+            Color(0.92, 0.93, 0.95, 0.94)
+        )
+    )
+    button.add_theme_stylebox_override(
+        "pressed", _edge_menu_style(
+            Color(_tokens.accent.r, _tokens.accent.g, _tokens.accent.b, 0.82),
+            Color(0.95, 0.97, 1.0, 0.98)
+        )
+    )
+
+func _edge_menu_style(fill: Color, border: Color) -> StyleBoxFlat:
+    var style := StyleBoxFlat.new()
+    style.bg_color = fill
+    style.border_color = border
+    style.border_width_left = 2
+    style.border_width_top = 2
+    style.border_width_bottom = 2
+    style.border_width_right = 0
+    style.corner_radius_top_left = 999
+    style.corner_radius_bottom_left = 999
+    style.corner_radius_top_right = 0
+    style.corner_radius_bottom_right = 0
+    style.shadow_color = Color(0.0, 0.0, 0.0, 0.32)
+    style.shadow_size = 3
+    style.shadow_offset = Vector2(-2.0, 1.0)
+    return style
 
 func _attach_edge_menu_icon(button: Button) -> void:
     var icon := Control.new()
