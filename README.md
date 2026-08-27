@@ -83,6 +83,7 @@ Godot App Shell
 | `bridge/onscripter_runtime/` | Headless OnscripterYuri host, frame capture, and input bridge. |
 | `cpp/core/` | KiriKiri2 runtime, visual system, audio, storage, VM, and plugin support. |
 | `cpp/plugins/` | Bundled native plugin implementations and compatibility stubs. |
+| `third_party/krkrz_dev/` | Pinned public krkrz_dev source submodule, consumed only through Aether adapters. |
 | `packages/AetherInternal/` | Optional private E-mote package submodule; public builds work without it. |
 | `packages/OnscripterYuri/` | Public OnscripterYuri git submodule. |
 | `packages/tjs2Decompiler/` | Optional Rust helper for disassembling and analyzing compiled TJS2 bytecode; it is not linked into runtime builds. |
@@ -186,9 +187,14 @@ under `out/`; remove a Linux configuration with
 
 ## Build
 
-Initialize the public ONS runtime after cloning:
+The krkrz_dev reuse boundary, plugin manifest, core SIMD/audio/DAP policy, and
+verification commands are documented in
+[`doc/krkrz_integration.md`](doc/krkrz_integration.md).
+
+Initialize the public krkrz_dev source and ONS runtime after cloning:
 
 ```bash
+git submodule update --init --recursive third_party/krkrz_dev
 git submodule update --init packages/OnscripterYuri
 ```
 

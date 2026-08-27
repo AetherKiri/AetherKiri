@@ -25,7 +25,10 @@
 // The private PackinOne data-pack implementation is installed through an
 // explicit anchor after the Scripts object is available.  PackinOne also
 // calls this anchor during its early registration; keeping both call sites
-// makes startup order deterministic across hosts.
+// makes startup order deterministic across hosts.  Public builds retain the
+// portable TJS/ns0/KBAD loaders and deliberately do not reference these
+// private symbols, so the fallback remains linkable without AetherInternal.
+#ifdef AETHERKIRI_INTERNAL_KRKR2_PLUGIN
 extern "C" void TVPRegisterDataPackCompatPluginAnchor();
 extern "C" void TVPRegisterSliceLayerCompat();
 // PackinOne's generated UI atlases are prepared by the private compatibility
@@ -34,7 +37,6 @@ extern "C" void TVPRegisterSliceLayerCompat();
 // and avoids trying to execute TJS while ProxyStorage is resolving a file.
 extern "C" void TVPPreparePackinOneVirtualResources(const ttstr &path,
                                                      const tTJSVariant &data);
-#ifdef AETHERKIRI_INTERNAL_KRKR2_PLUGIN
 // The private package owns PackinOne's recovered JPEG/PNG chunk format.  The
 // public loader only supplies bytes and consumes the decoded TJS value.
 extern "C" bool TVPDecodePackinOneDataPack(const void *data, std::size_t size,
@@ -49,6 +51,7 @@ extern "C" bool TVPDecodePackinOneDataPack(const void *data, std::size_t size,
 // point both global objects are guaranteed to exist and the private package
 // can install its recovered methods without relying on registration order.
 static void ensurePackinOneCompat() {
+#ifdef AETHERKIRI_INTERNAL_KRKR2_PLUGIN
     static bool attempted = false;
     if(attempted)
         return;
@@ -60,6 +63,7 @@ static void ensurePackinOneCompat() {
     spdlog::info("AetherInternal PackinOne late anchor: calling SliceLayer");
     TVPRegisterSliceLayerCompat();
     spdlog::info("AetherInternal PackinOne late anchor: SliceLayer returned");
+#endif
 }
 
 #define NCB_MODULE_NAME TJS_W("ScriptsEx.dll")
@@ -1097,8 +1101,10 @@ static tjs_error loadDataPack(tTJSVariant *result,
                 TVPAddLog(
                     ttstr(TJS_W("Scripts.loadDataPack PackinOne image ok: ")) +
                     path);
+#ifdef AETHERKIRI_INTERNAL_KRKR2_PLUGIN
                 TVPPreparePackinOneVirtualResources(
                     path, result ? *result : binaryResult);
+#endif
                 return TJS_S_OK;
             }
         }
@@ -1116,8 +1122,10 @@ static tjs_error loadDataPack(tTJSVariant *result,
                          path.AsStdString());
             TVPAddLog(ttstr(TJS_W("Scripts.loadDataPack TJS/ns0 ok: ")) +
                       path);
+#ifdef AETHERKIRI_INTERNAL_KRKR2_PLUGIN
             TVPPreparePackinOneVirtualResources(
                 path, result ? *result : binaryResult);
+#endif
             return TJS_S_OK;
         }
         stream->Seek(0, TJS_BS_SEEK_SET);
@@ -1126,8 +1134,10 @@ static tjs_error loadDataPack(tTJSVariant *result,
             spdlog::info("Scripts.loadDataPack KBAD ok: {}",
                          path.AsStdString());
             TVPAddLog(ttstr(TJS_W("Scripts.loadDataPack KBAD ok: ")) + path);
+#ifdef AETHERKIRI_INTERNAL_KRKR2_PLUGIN
             TVPPreparePackinOneVirtualResources(
                 path, result ? *result : binaryResult);
+#endif
             return TJS_S_OK;
         }
         stream->Seek(0, TJS_BS_SEEK_SET);
@@ -1230,8 +1240,10 @@ NCB_ATTACH_FUNCTION(rehash, Scripts, TJSDoRehash);
 namespace {
 
 void registerScriptsCompat() {
+#ifdef AETHERKIRI_INTERNAL_KRKR2_PLUGIN
     TVPRegisterDataPackCompatPluginAnchor();
     TVPRegisterSliceLayerCompat();
+#endif
 }
 
 } // namespace

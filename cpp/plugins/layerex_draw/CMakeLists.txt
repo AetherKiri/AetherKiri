@@ -28,10 +28,20 @@ else()
         find_package(libgdiplus CONFIG REQUIRED)
         target_link_libraries(${PROJECT_NAME} PRIVATE libgdiplus::libgdiplus)
 
-        if(VCPKG_ROOT)
-            set(VCPKG_INSTALL_DIR "${VCPKG_ROOT}/installed/${VCPKG_TARGET_TRIPLET}")
+        # Prefer the toolchain's resolved install root.  VCPKG_ROOT is often
+        # exported only as an environment variable and is therefore not a
+        # CMake variable; using it directly used to point imported targets at
+        # a non-existent build-tree directory when a pre-populated vcpkg
+        # checkout was selected.
+        if(DEFINED VCPKG_INSTALLED_DIR)
+            set(VCPKG_INSTALL_DIR
+                "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
+        elseif(DEFINED ENV{VCPKG_ROOT})
+            set(VCPKG_INSTALL_DIR
+                "$ENV{VCPKG_ROOT}/installed/${VCPKG_TARGET_TRIPLET}")
         else()
-            set(VCPKG_INSTALL_DIR "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}")
+            set(VCPKG_INSTALL_DIR
+                "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}")
         endif()
 
         # glibconfig

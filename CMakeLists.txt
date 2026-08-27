@@ -148,6 +148,19 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(KRKR2CORE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cpp/core)
 set(KRKR2PLUGIN_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cpp/plugins)
 
+# Selected krkrz_dev business sources are consumed through Aether adapters.
+# The upstream checkout is a required, pinned submodule for the default
+# integration build; its standalone ABI and CMake registry are never linked.
+set(AETHER_KRKRZ_DEV_ROOT
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/krkrz_dev"
+    CACHE PATH "Pinned krkrz_dev checkout used for source-level reuse")
+option(AETHER_USE_KRKRZ_LEAF_PLUGINS
+       "Use pinned krkrz_dev sources for the low-risk leaf plugins" ON)
+option(AETHER_USE_KRKRZ_OPTIONAL_PLUGINS
+       "Validate experimental krkrz_dev plugin sources without linking them" OFF)
+option(AETHER_BUILD_KRKRZ_CORE_PARITY
+       "Build isolated krkrz_dev visual/sound SIMD parity executables" OFF)
+
 if(MSVC)
     add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/EHsc>" "/MP" "/utf-8")
     add_link_options(

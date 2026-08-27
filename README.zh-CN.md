@@ -76,6 +76,7 @@ Godot App Shell
 | `bridge/onscripter_runtime/` | OnscripterYuri 无窗口宿主、帧读取和输入桥接。 |
 | `cpp/core/` | KiriKiri2 运行时、视觉系统、音频、存储、VM 和插件支持。 |
 | `cpp/plugins/` | 内置 native 插件实现和兼容 stub。 |
+| `third_party/krkrz_dev/` | 固定 revision 的公开 krkrz_dev source submodule；仅通过 Aether adapter 复用。 |
 | `packages/AetherInternal/` | 可选的私有 E-mote package submodule；公开版本不依赖它也能构建。 |
 | `packages/OnscripterYuri/` | 公开的 OnscripterYuri git submodule。 |
 | `packages/tjs2Decompiler/` | 可选的 Rust TJS2 字节码反汇编/分析辅助工具；不链接进运行时构建。 |
@@ -151,9 +152,13 @@ iOS 和 Android 导出配置会引用 `apps/godot_app/assets/icons/` 下的生�
 
 ## 构建
 
-首次检出后先初始化公开的 ONS 运行时：
+krkrz_dev 的复用边界、插件清单、核心 SIMD/音频/DAP 策略和验证命令见
+[`doc/krkrz_integration.md`](doc/krkrz_integration.md)。
+
+首次检出后先初始化公开的 krkrz_dev 与 ONS 运行时：
 
 ```bash
+git submodule update --init --recursive third_party/krkrz_dev
 git submodule update --init packages/OnscripterYuri
 ```
 

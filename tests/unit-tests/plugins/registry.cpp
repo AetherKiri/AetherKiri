@@ -222,6 +222,28 @@ TEST_CASE("krkrsdl3 plugin inventory is available") {
     }
 }
 
+TEST_CASE("krkrz leaf adapters expose their declared modules") {
+    ensurePluginRegistryRuntime();
+
+    // These seven entries are compiled from the pinned krkrz_dev checkout
+    // through cpp/plugins/upstream_bridge. Keep the assertion at the public
+    // registry boundary so a source switch cannot silently drop a module.
+    const tjs_char *modules[] = {
+        TJS_W("layerExAreaAverage.dll"),
+        TJS_W("layerExRaster.dll"),
+        TJS_W("layerExLongExposure.dll"),
+        TJS_W("getSample.dll"),
+        TJS_W("layerExBTOA.dll"),
+        TJS_W("layerExImage.dll"),
+        TJS_W("shrinkCopy.dll"),
+    };
+
+    for(const auto *module : modules) {
+        INFO(ttstr(module).AsStdString());
+        CHECK(ncbAutoRegister::HasModule(module));
+    }
+}
+
 TEST_CASE("extNagano transition providers survive a module reload") {
     ensurePluginRegistryRuntime();
 

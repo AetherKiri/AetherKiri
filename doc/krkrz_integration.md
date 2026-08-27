@@ -1,0 +1,174 @@
+# AetherKiri × krkrz_dev integration
+
+This document is the implementation contract for reusing
+[`wamsoft/krkrz_dev`](https://github.com/wamsoft/krkrz_dev) in AetherKiri. The
+goal is source-level reuse where the upstream business logic is compatible,
+while AetherKiri remains the owner of the runtime ABI, plugin registration,
+platform lifecycle, and renderer/audio integration.
+
+## Pinned source and checkout
+
+The parent repository carries one public gitlink at
+`third_party/krkrz_dev`. At this revision the gitlink and the manifest both
+point to:
+
+```text
+repository: wamsoft/krkrz_dev
+revision:   83cc5cc4528bf431d16b5d4949cb11966331e392
+```
+
+After a fresh clone:
+
+```bash
+git submodule update --init --recursive third_party/krkrz_dev
+python3 tools/plugin_manifest_report.py --strict
+```
+
+The repository URL intentionally remains the SSH URL used by maintainers. A
+public CI job can override it for this command only:
+
+```bash
+git -c submodule.third_party/krkrz_dev.url=https://github.com/wamsoft/krkrz_dev.git \
+  submodule update --init --recursive --depth 1 third_party/krkrz_dev
+```
+
+Updating the source is a two-part change: move the parent gitlink, then update
+`upstream_revision` in
+[`runtime/kirikiri/manifests/plugins.toml`](../runtime/kirikiri/manifests/plugins.toml).
+The strict manifest check prevents a stale checkout from being mistaken for
+the reviewed revision.
+
+## Integration layers
+
+The upstream standalone CMake files are not included. Aether's
+[`cpp/plugins/CMakeLists.txt`](../cpp/plugins/CMakeLists.txt) selects source
+files, and the small translation units in
+[`cpp/plugins/upstream_bridge`](../cpp/plugins/upstream_bridge) establish the
+Aether ABI before including an upstream business translation unit.
+
+The adapters currently enabled by default are:
+
+| Module | Reuse mode | Boundary |
+| --- | --- | --- |
+| `layerExAreaAverage.dll` | upstream-adapted | upstream implementation plus Aether integer/pointer conversion |
+| `layerExRaster.dll` | upstream-adapted | upstream raster implementation and shared layer base |
+| `layerExLongExposure.dll` | upstream-adapted | upstream implementation under Aether TJS ABI |
+| `getSample.dll` | upstream-adapted | upstream sampler plus Aether `enableGetSample` compatibility callback |
+| `layerExBTOA.dll` | upstream-adapted | upstream implementation |
+| `layerExImage.dll` | upstream-adapted | upstream image implementation plus portable `RGBQUAD` definitions |
+| `shrinkCopy.dll` | upstream-adapted | upstream implementation |
+| `psdfile.dll` | hybrid | Aether TJS/Layer/Storage wrapper, upstream `psdparse` only |
+| `layerExSave.dll` | hybrid | Aether storage/threading bridge; upstream encoder is reference input |
+| `extNagano.dll` | hybrid | Aether provider and deterministic fallbacks; upstream effects are not claimed exact |
+| `KAGParserEx.dll` | hybrid | Aether's single parser implementation with upstream semantics as reference |
+| `AlphaMovie.dll` | hybrid | Aether FFmpeg/queue/Godot pipeline; upstream codec code is reference input |
+
+The remaining portable modules (`scriptsEx`, `json`, `csvParser`, `lineParser`,
+`saveStruct`, SQLite/VFS, `xp3filter`, `motionplayer`, and the Aether GPU/Live2D
+bridges) stay Aether-owned. The authoritative machine-readable status for all
+modules, including stubs and optional modules, is the manifest.
+
+## ABI and ownership rules
+
+1. Do not link upstream `tp_stub.cpp`, `ncbind.cpp`, `v2link.cpp`, standalone
+   plugin registries, or upstream `krkrz.cmake`. They define a second runtime
+   ABI and can create duplicate module/class symbols.
+2. Every adapted translation unit defines its `NCB_MODULE_NAME` explicitly and
+   includes `krkrz_aether_compat.hpp` first. ABI differences are isolated in
+   that adapter and never patched into the submodule checkout.
+3. Aether's `tTJSBinaryStream` is RAII-managed. Upstream code that expects
+   `iTJSBinaryStream::Destruct()` must be adapted; calling `Destruct()` on an
+   Aether stream is invalid.
+4. Keep one owner for each global class or module. In particular, do not link
+   upstream `KAGParser.cpp` beside Aether's `cpp/core/base/KAGParser.cpp`, and
+   do not import the complete upstream plugin registry.
+5. Private AetherInternal hooks are guarded by
+   `AETHERKIRI_INTERNAL_KRKR2_PLUGIN`; public builds must remain linkable with
+   the compatibility stubs and portable data-pack loaders.
+
+## Core: visual SIMD, sound DSP, and DAP
+
+The upstream core is useful, but it is not a drop-in replacement for Aether's
+core. The core contract in the manifest records the exact upstream files and
+parity tests.
+
+* **Visual SIMD:** Aether's Highway/function-pointer dispatch in
+  `cpp/core/visual/simd` remains linked. Upstream SSE2/AVX2/NEON files are
+  algorithm and parity-test inputs; importing them wholesale would duplicate
+  `tvpgl` symbols and CPU dispatch state.
+* **Sound DSP:** Aether's `cpp/core/sound` and `cpp/core/utils` own the public
+  sound ABI and default implementation. Upstream `MathAlgorithms`, `RealFFT`,
+  and phase-vocoder SIMD code may be adopted later only behind renamed or
+  namespaced symbols and the upstream relative/absolute-tolerance parity test.
+* **DAP debugger:** Upstream `tjsDebuggerCore`, hook/symbol files, and
+  `DAPServer` are recorded as `optional`. They require an adapter for Aether's
+  VM hooks, thread lifecycle, socket ownership, and host event loop before they
+  can be linked. The upstream `dap_smoke.py` remains a future acceptance test;
+  it is not evidence that Aether currently exposes DAP.
+
+This distinction is deliberate: “reusable algorithm” does not mean “safe to
+link as a second core.”
+
+## Optional plugins and stubs
+
+`AETHER_USE_KRKRZ_OPTIONAL_PLUGINS=ON` validates that the pinned source for
+`layerExVector`, `krkr_richtext`, `krkreffekseer`, and `krkrthreepp` is present;
+it does not link those SDK-heavy plugins. Each needs a dedicated adapter,
+dependency policy, and runtime test before its manifest status can change from
+`optional`.
+
+Compatibility-only registrations live under
+[`cpp/plugins/stubs`](../cpp/plugins/stubs). A stub preserves a module name or
+script shape but is not feature-complete native support. `sigcheck` is kept
+separate from the upstream implementation until its platform/security
+contract is reviewed.
+
+## Build and verification
+
+The default build consumes the seven leaf adapters and requires the submodule:
+
+```bash
+cmake -S . -B out/krkrz-debug \
+  -DAETHER_USE_KRKRZ_LEAF_PLUGINS=ON \
+  -DAETHERKIRI_ENABLE_INTERNAL=OFF \
+  -DENABLE_TESTS=ON
+cmake --build out/krkrz-debug --target krkr2plugin --parallel
+ctest --test-dir out/krkrz-debug --output-on-failure
+```
+
+Use `-DAETHER_USE_KRKRZ_LEAF_PLUGINS=OFF` to compile the historical Aether
+implementations while still retaining the submodule and manifest. Both public
+fallback and private AetherInternal configurations are supported; the latter
+extends targets instead of replacing them.
+
+The minimum pre-submit checks are:
+
+```bash
+python3 tools/plugin_manifest_report.py --strict
+python3 tools/plugin_gap_audit.py
+cmake --build <build-dir> --target krkr2plugin --parallel
+ctest --test-dir <build-dir> --output-on-failure
+```
+
+For a focused review of the upstream core algorithms, enable the isolated
+parity executables. They compile only the upstream visual/sound test sources
+and never link `krkr2core`:
+
+```bash
+cmake -S . -B out/krkrz-parity \
+  -DAETHER_BUILD_KRKRZ_CORE_PARITY=ON \
+  -DAETHERKIRI_ENABLE_INTERNAL=OFF \
+  -DENABLE_TESTS=ON
+cmake --build out/krkrz-parity \
+  --target aether_krkrz_visual_parity aether_krkrz_sound_parity --parallel
+ctest --test-dir out/krkrz-parity \
+  -R 'aether_krkrz_(visual|sound)_parity' --output-on-failure
+```
+
+These parity targets are the safe first consumer of upstream core code. A
+future production adapter must keep the same symbol isolation and add an
+engine-level behavior test before changing the core component status.
+
+The submodule's source and license notices remain in the submodule. Do not copy
+its source into `cpp/plugins` or publish private AetherInternal sources as part
+of this integration.

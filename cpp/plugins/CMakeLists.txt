@@ -1,7 +1,97 @@
 cmake_minimum_required(VERSION 3.19)
 project(krkr2plugin)
 
+include("${CMAKE_SOURCE_DIR}/cmake/AetherKrkrzIntegration.cmake")
+
+if(AETHER_USE_KRKRZ_LEAF_PLUGINS)
+    if(NOT EXISTS "${AETHER_KRKRZ_DEV_ROOT}/.git" AND
+       NOT EXISTS "${AETHER_KRKRZ_DEV_ROOT}/CMakeLists.txt")
+        message(FATAL_ERROR
+            "AETHER_USE_KRKRZ_LEAF_PLUGINS is enabled but krkrz_dev is not "
+            "initialized at ${AETHER_KRKRZ_DEV_ROOT}. Run: git submodule "
+            "update --init --recursive third_party/krkrz_dev")
+    endif()
+    aether_krkrz_require_source("layerExAreaAverage/main.cpp")
+    aether_krkrz_require_source("layerExRaster/main.cpp")
+    aether_krkrz_require_source("layerExRaster/layerExBase.hpp")
+    aether_krkrz_require_source("layerExImage/layerExBase.hpp")
+    aether_krkrz_require_source("layerExImage/LayerExImage.cpp")
+    aether_krkrz_require_source("layerExImage/Main.cpp")
+    aether_krkrz_require_source("layerExLongExposure/Main.cpp")
+    aether_krkrz_require_source("getSample/main.cpp")
+    aether_krkrz_require_source("layerExBTOA/Main.cpp")
+    aether_krkrz_require_source("shrinkCopy/main.cpp")
+    set(AETHER_LAYEREX_AREA_AVERAGE_SOURCE
+        upstream_bridge/layerExAreaAverage.cpp)
+    set(AETHER_LAYEREX_RASTER_SOURCE upstream_bridge/layerExRaster.cpp)
+    set(AETHER_LAYEREX_LONG_EXPOSURE_SOURCE
+        upstream_bridge/layerExLongExposure.cpp)
+    set(AETHER_GET_SAMPLE_SOURCE upstream_bridge/getSample.cpp)
+    set(AETHER_LAYEREX_BTOA_SOURCE upstream_bridge/layerExBTOA.cpp)
+    set(AETHER_LAYEREX_IMAGE_SOURCE upstream_bridge/layerExImage.cpp)
+    set(AETHER_SHRINK_COPY_SOURCE upstream_bridge/shrinkCopy.cpp)
+else()
+    set(AETHER_LAYEREX_AREA_AVERAGE_SOURCE layerExAreaAverage.cpp)
+    set(AETHER_LAYEREX_RASTER_SOURCE layerExRaster.cpp)
+    set(AETHER_LAYEREX_LONG_EXPOSURE_SOURCE layerExLongExposure.cpp)
+    set(AETHER_GET_SAMPLE_SOURCE getSample.cpp)
+    set(AETHER_LAYEREX_BTOA_SOURCE layerExBTOA.cpp)
+    set(AETHER_LAYEREX_IMAGE_SOURCE layerExImage.cpp)
+    set(AETHER_SHRINK_COPY_SOURCE shrinkCopy.cpp)
+endif()
+
+if(AETHER_USE_KRKRZ_OPTIONAL_PLUGINS)
+    if(NOT EXISTS "${AETHER_KRKRZ_DEV_ROOT}/.git" AND
+       NOT EXISTS "${AETHER_KRKRZ_DEV_ROOT}/CMakeLists.txt")
+        message(FATAL_ERROR
+            "AETHER_USE_KRKRZ_OPTIONAL_PLUGINS requires an initialized "
+            "krkrz_dev checkout at ${AETHER_KRKRZ_DEV_ROOT}")
+    endif()
+    # These plugins pull in platform/rendering SDKs and old registration
+    # contracts.  Validate that the pinned source is present, but do not put
+    # it on krkr2plugin until a dedicated Aether adapter and test exist.
+    foreach(_aether_krkrz_optional_source
+            "layerExVector/main.cpp"
+            "krkr_richtext/src/main.cpp"
+            "krkreffekseer/src/Effect.cpp"
+            "krkrthreepp/src/main.cpp")
+        aether_krkrz_require_source("${_aether_krkrz_optional_source}")
+    endforeach()
+    message(STATUS
+        "krkrz_dev optional plugin sources validated; ABI adapters remain disabled")
+endif()
+
 add_library(${PROJECT_NAME} STATIC)
+
+if(AETHER_USE_KRKRZ_LEAF_PLUGINS)
+    # Keep the include scanner honest when a selected upstream translation
+    # unit changes in place. The wrapper itself remains the only product
+    # source; the object dependency merely triggers a rebuild.
+    aether_krkrz_track_source(
+        "${CMAKE_CURRENT_SOURCE_DIR}/${AETHER_LAYEREX_AREA_AVERAGE_SOURCE}"
+        "layerExAreaAverage/main.cpp")
+    aether_krkrz_track_source(
+        "${CMAKE_CURRENT_SOURCE_DIR}/${AETHER_LAYEREX_RASTER_SOURCE}"
+        "layerExRaster/main.cpp")
+    aether_krkrz_track_source(
+        "${CMAKE_CURRENT_SOURCE_DIR}/${AETHER_LAYEREX_LONG_EXPOSURE_SOURCE}"
+        "layerExLongExposure/Main.cpp")
+    aether_krkrz_track_source(
+        "${CMAKE_CURRENT_SOURCE_DIR}/${AETHER_GET_SAMPLE_SOURCE}"
+        "getSample/main.cpp")
+    aether_krkrz_track_source(
+        "${CMAKE_CURRENT_SOURCE_DIR}/${AETHER_LAYEREX_BTOA_SOURCE}"
+        "layerExBTOA/Main.cpp")
+    aether_krkrz_track_source(
+        "${CMAKE_CURRENT_SOURCE_DIR}/${AETHER_LAYEREX_IMAGE_SOURCE}"
+        "layerExImage/Main.cpp")
+    aether_krkrz_track_source(
+        "${CMAKE_CURRENT_SOURCE_DIR}/${AETHER_LAYEREX_IMAGE_SOURCE}"
+        "layerExImage/LayerExImage.cpp")
+    aether_krkrz_track_source(
+        "${CMAKE_CURRENT_SOURCE_DIR}/${AETHER_SHRINK_COPY_SOURCE}"
+        "shrinkCopy/main.cpp")
+endif()
 
 target_sources(${PROJECT_NAME} PRIVATE
     scriptsEx.cpp
@@ -32,14 +122,14 @@ target_sources(${PROJECT_NAME} PRIVATE
     wutcwf.cpp
     windowEx.cpp
     menuExt.cpp
-    getSample.cpp
+    ${AETHER_GET_SAMPLE_SOURCE}
     kirikiroid2.cpp
     layerExPerspective.cpp
     fftgraph.cpp
     LayerExBase.cpp
     layerExSaveCompat.cpp
     xp3filter.cpp
-    shrinkCopy.cpp
+    ${AETHER_SHRINK_COPY_SOURCE}
     extrans.cpp
     extrans_precise/mosaic.cpp
     extrans_precise/ripple.cpp
@@ -51,11 +141,11 @@ target_sources(${PROJECT_NAME} PRIVATE
     extNagano.cpp
     multiimage.cpp
     alphamovie.cpp
-    layerExBTOA.cpp
-    layerExImage.cpp
-    layerExRaster.cpp
-    layerExAreaAverage.cpp
-    layerExLongExposure.cpp
+    ${AETHER_LAYEREX_BTOA_SOURCE}
+    ${AETHER_LAYEREX_IMAGE_SOURCE}
+    ${AETHER_LAYEREX_RASTER_SOURCE}
+    ${AETHER_LAYEREX_AREA_AVERAGE_SOURCE}
+    ${AETHER_LAYEREX_LONG_EXPOSURE_SOURCE}
     wfBasicEffectCompat.cpp
     wfTypicalDSPCompat.cpp
     packinone.cpp
@@ -63,7 +153,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     compatLegacyPlugins.cpp
     compatMediaLayerPlugins.cpp
     compatSystemPlugins.cpp
-    dummy_plugin_stubs.cpp
+    stubs/dummy_plugin_stubs.cpp
     pluginAnchors.cpp
     fstat/main.cpp
 )
@@ -128,6 +218,13 @@ else()
 endif()
 
 target_include_directories(${PROJECT_NAME} PUBLIC ${KRKR2PLUGIN_PATH} ${KRKR2PLUGIN_PATH}/simplebinder})
+if(AETHER_USE_KRKRZ_LEAF_PLUGINS)
+    # Wrappers include upstream translation units by plugin-relative path so
+    # an alternate checkout can be supplied with -DAETHER_KRKRZ_DEV_ROOT=...
+    # without editing source files.
+    target_include_directories(${PROJECT_NAME} PRIVATE
+        "${AETHER_KRKRZ_PLUGIN_ROOT}")
+endif()
 target_link_libraries(${PROJECT_NAME} PUBLIC krkr2core)
 
 add_subdirectory(psdfile)

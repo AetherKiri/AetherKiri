@@ -5,16 +5,26 @@
 // module that the game's startup script links, so use its guaranteed
 // pre-registration callback to install the recovered SliceLayer/ProxyStorage
 // bridge.  Data-pack callbacks are retried from ScriptsEx as well because the
-// Scripts global can be created lazily on some hosts.
+// Scripts global can be created lazily on some hosts.  Keep the declarations
+// private-build-only: the public PackinOne name/shape stub must not introduce
+// unresolved references to AetherInternal.
+#ifdef AETHERKIRI_INTERNAL_KRKR2_PLUGIN
 extern "C" void TVPRegisterSliceLayerCompat();
 extern "C" void TVPRegisterDataPackCompatPluginAnchor();
+#endif
 
 namespace {
 
 void registerPackinOneCompat() {
+#ifdef AETHERKIRI_INTERNAL_KRKR2_PLUGIN
     TVPAddLog(TJS_W("AetherInternal PackinOne public compat callback entered"));
+#else
+    TVPAddLog(TJS_W("PackinOne public compatibility callback entered"));
+#endif
+#ifdef AETHERKIRI_INTERNAL_KRKR2_PLUGIN
     TVPRegisterSliceLayerCompat();
     TVPRegisterDataPackCompatPluginAnchor();
+#endif
 }
 
 } // namespace

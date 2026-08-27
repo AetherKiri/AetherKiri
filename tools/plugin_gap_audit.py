@@ -70,7 +70,7 @@ def classify_module_block(block: str, path: Path) -> str:
         return "compat_stub"
     if "aetherkiri_compat_stub" in lower:
         return "compat_stub"
-    if path.name == "dummy_plugin_stubs.cpp":
+    if path.name == "dummy_plugin_stubs.cpp" and path.parent.name == "stubs":
         return "compat_stub"
 
     real_markers = (

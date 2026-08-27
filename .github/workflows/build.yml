@@ -88,6 +88,11 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
+      - name: Initialize public krkrz_dev source
+        run: |
+          git -c submodule.third_party/krkrz_dev.url=https://github.com/wamsoft/krkrz_dev.git \
+            submodule update --init --recursive --depth 1 third_party/krkrz_dev
+
       - name: Resolve private runtime dependency cache
         id: private-runtime-cache-key
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
@@ -111,8 +116,6 @@ jobs:
         if: env.AETHERKIRI_WITH_INTERNAL != 'true'
         run: |
           git submodule update --init --depth 1 packages/OnscripterYuri
-          git -c submodule.packages/psdfile.url=https://github.com/AetherKiri/psdfile.git \
-            submodule update --init --recursive --depth 1 packages/psdfile
 
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''
@@ -359,6 +362,11 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
+      - name: Initialize public krkrz_dev source
+        run: |
+          git -c submodule.third_party/krkrz_dev.url=https://github.com/wamsoft/krkrz_dev.git \
+            submodule update --init --recursive --depth 1 third_party/krkrz_dev
+
       - name: Resolve private runtime dependency cache
         id: private-runtime-cache-key
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
@@ -382,8 +390,6 @@ jobs:
         if: env.AETHERKIRI_WITH_INTERNAL != 'true'
         run: |
           git submodule update --init --depth 1 packages/OnscripterYuri
-          git -c submodule.packages/psdfile.url=https://github.com/AetherKiri/psdfile.git \
-            submodule update --init --recursive --depth 1 packages/psdfile
 
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''
@@ -642,6 +648,11 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
+      - name: Initialize public krkrz_dev source
+        run: |
+          git -c submodule.third_party/krkrz_dev.url=https://github.com/wamsoft/krkrz_dev.git \
+            submodule update --init --recursive --depth 1 third_party/krkrz_dev
+
       - name: Resolve private runtime dependency cache
         id: private-runtime-cache-key
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
@@ -665,8 +676,6 @@ jobs:
         if: env.AETHERKIRI_WITH_INTERNAL != 'true'
         run: |
           git submodule update --init --depth 1 packages/OnscripterYuri
-          git -c submodule.packages/psdfile.url=https://github.com/AetherKiri/psdfile.git \
-            submodule update --init --recursive --depth 1 packages/psdfile
 
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''
@@ -934,12 +943,15 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
+      - name: Initialize public krkrz_dev source
+        run: |
+          git -c submodule.third_party/krkrz_dev.url=https://github.com/wamsoft/krkrz_dev.git \
+            submodule update --init --recursive --depth 1 third_party/krkrz_dev
+
       - name: Initialize public runtime packages
         if: env.AETHERKIRI_WITH_INTERNAL != 'true'
         run: |
           git submodule update --init --depth 1 packages/OnscripterYuri
-          git -c submodule.packages/psdfile.url=https://github.com/AetherKiri/psdfile.git \
-            submodule update --init --recursive --depth 1 packages/psdfile
 
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''

@@ -1,0 +1,285 @@
+# AetherKiri KiriKiri plugin capability contract.
+#
+# This file describes the implementation boundary for every integration that
+# is intentionally touched by the krkrz_dev migration.  It is metadata, not a
+# second source tree: executable code stays in cpp/plugins or in the pinned
+# third_party/krkrz_dev submodule.
+
+schema_version = 1
+upstream_repository = "wamsoft/krkrz_dev"
+upstream_revision = "83cc5cc4528bf431d16b5d4949cb11966331e392"
+source_policy = "pinned-submodule-with-aether-adapters"
+
+# Core policy is intentionally separate from plugin status.  Aether owns the
+# linked core ABI and its platform/rendering lifecycle; these upstream files
+# are consumed as algorithm references and parity-test inputs until a
+# namespaced adapter proves that direct reuse is safe.
+core_policy = "aether-owned-with-upstream-parity"
+
+[[core_components]]
+name = "visual-simd"
+status = "aether"
+upstream_path = [
+  "src/core/common/visual/gl/ResampleImageAVX2.cpp",
+  "src/core/common/visual/gl/ResampleImageSSE2.cpp",
+  "src/core/common/visual/gl/blend_function_sse2.cpp",
+  "src/core/common/visual/gl/blend_function_avx2.cpp",
+  "src/core/common/visual/gl/adjust_color_sse2.cpp",
+  "src/core/common/visual/gl/boxblur_sse2.cpp",
+  "src/core/common/visual/gl/colormap_sse2.cpp",
+  "src/core/common/visual/gl/colorfill_sse2.cpp",
+  "src/core/common/visual/gl/pixelformat_sse2.cpp",
+  "src/core/common/visual/gl/blend_function_neon.cpp",
+  "src/core/common/visual/gl/adjust_color_neon.cpp",
+  "src/core/common/visual/gl/colormap_neon.cpp",
+  "src/core/common/visual/gl/colorfill_neon.cpp",
+  "src/core/common/visual/gl/pixelformat_neon.cpp",
+]
+adapter = "cpp/core/visual/simd"
+parity_test = "src/core/tests/simd_parity_test.cpp"
+notes = "Aether's Highway/function-pointer dispatch remains the linked implementation; upstream SIMD is reference/parity input, not a second symbol set."
+
+[[core_components]]
+name = "sound-dsp"
+status = "aether"
+upstream_path = [
+  "src/core/common/sound/MathAlgorithms.cpp",
+  "src/core/common/sound/MathAlgorithms_SSE.cpp",
+  "src/core/common/sound/MathAlgorithms_NEON.cpp",
+  "src/core/common/sound/RealFFT.cpp",
+  "src/core/common/sound/RealFFT_SSE.cpp",
+  "src/core/common/sound/RealFFT_NEON.cpp",
+  "src/core/common/sound/PhaseVocoderDSP.cpp",
+  "src/core/common/sound/PhaseVocoderFilter.cpp",
+  "src/core/common/sound/WaveLoopManager.cpp",
+  "src/core/common/sound/WaveSegmentQueue.cpp",
+]
+adapter = "cpp/core/sound"
+parity_test = "src/core/tests/sound_parity_test.cpp"
+notes = "Aether's sound module owns the public ABI and default/SIMD dispatch; upstream DSP is adopted only through parity-checked, symbol-separated changes."
+
+[[core_components]]
+name = "tjs-dap"
+status = "optional"
+upstream_path = [
+  "src/core/common/tjs2/tjsDebuggerCore.cpp",
+  "src/core/common/tjs2/tjsDebuggerHook.cpp",
+  "src/core/common/tjs2/tjsDebuggerSymbols.cpp",
+  "src/core/common/utils/DAPServer.cpp",
+]
+adapter = "cpp/core/utils/Debugger.h"
+parity_test = "src/core/tests/dap_smoke.py"
+notes = "The upstream DAP implementation is a future opt-in boundary; it is not linked until its VM hook, thread, socket, and host lifecycle contracts are adapted to Aether."
+
+# status values:
+#   upstream-adapted  — upstream business source compiled through an Aether ABI shim
+#   hybrid            — upstream algorithms plus an Aether-owned runtime/renderer bridge
+#   aether            — Aether owns the implementation; upstream is reference-only
+#   stub              — name/shape compatibility only, not feature-complete
+#   optional          — available behind an explicit future integration switch
+
+[[plugins]]
+name = "layerExAreaAverage.dll"
+status = "upstream-adapted"
+implementation = "upstream"
+upstream_path = "src/plugins/layerExAreaAverage/main.cpp"
+adapter = "cpp/plugins/upstream_bridge/layerExAreaAverage.cpp"
+
+[[plugins]]
+name = "layerExRaster.dll"
+status = "upstream-adapted"
+implementation = "upstream"
+upstream_path = [
+  "src/plugins/layerExRaster/main.cpp",
+  "src/plugins/layerExRaster/layerExBase.hpp",
+  "src/plugins/layerExImage/layerExBase.hpp",
+]
+adapter = "cpp/plugins/upstream_bridge/layerExRaster.cpp"
+
+[[plugins]]
+name = "layerExLongExposure.dll"
+status = "upstream-adapted"
+implementation = "upstream"
+upstream_path = "src/plugins/layerExLongExposure/Main.cpp"
+adapter = "cpp/plugins/upstream_bridge/layerExLongExposure.cpp"
+
+[[plugins]]
+name = "getSample.dll"
+status = "upstream-adapted"
+implementation = "upstream-plus-aether-extension"
+upstream_path = "src/plugins/getSample/main.cpp"
+adapter = "cpp/plugins/upstream_bridge/getSample.cpp"
+notes = "Aether keeps the enableGetSample compatibility callback absent upstream."
+
+[[plugins]]
+name = "psdfile.dll"
+status = "hybrid"
+implementation = "aether-wrapper-with-upstream-psdparse"
+upstream_path = "src/plugins/psdfile/external/psdparse"
+adapter = "cpp/plugins/psdfile"
+notes = "The Aether Layer/Storage wrapper is retained; only portable parser code comes from krkrz_dev."
+
+[[plugins]]
+name = "layerExSave.dll"
+status = "hybrid"
+implementation = "aether-wrapper"
+upstream_path = "src/plugins/layerExSave"
+adapter = "cpp/plugins/layerExSaveCompat.cpp"
+notes = "Upstream encoders are tracked for a subsequent adapter; Aether threading and Storage callbacks remain authoritative."
+
+[[plugins]]
+name = "extNagano.dll"
+status = "hybrid"
+implementation = "aether-provider-with-upstream-reference"
+upstream_path = "src/plugins/extNagano"
+adapter = "cpp/plugins/extNagano.cpp"
+notes = "The current provider keeps deterministic Aether fallbacks; reconstructed upstream effects are not silently presented as exact."
+
+[[plugins]]
+name = "KAGParserEx.dll"
+status = "hybrid"
+implementation = "aether-parser-with-upstream-semantics"
+upstream_path = "src/plugins/KAGParserEx"
+adapter = "cpp/plugins/kagparserex/kagparserex_plugin.cpp"
+notes = "Aether's single KAGParser implementation avoids duplicate native symbols."
+
+[[plugins]]
+name = "AlphaMovie.dll"
+status = "hybrid"
+implementation = "aether-pipeline-with-upstream-codec-reference"
+upstream_path = "src/plugins/AlphaMovie"
+adapter = "cpp/plugins/alphamovie.cpp"
+notes = "FFmpeg, worker queues, texture upload, audio routing, and Godot presentation stay Aether-owned."
+
+[[plugins]]
+name = "layerExBTOA.dll"
+status = "upstream-adapted"
+implementation = "upstream"
+upstream_path = "src/plugins/layerExBTOA"
+adapter = "cpp/plugins/upstream_bridge/layerExBTOA.cpp"
+
+[[plugins]]
+name = "layerExImage.dll"
+status = "upstream-adapted"
+implementation = "upstream"
+upstream_path = "src/plugins/layerExImage"
+adapter = "cpp/plugins/upstream_bridge/layerExImage.cpp"
+
+[[plugins]]
+name = "extrans.dll"
+status = "aether"
+implementation = "aether-maintained-precise"
+upstream_path = "src/plugins/extrans"
+adapter = "cpp/plugins/extrans.cpp"
+notes = "Aether's precise transition sources and static registration lifecycle remain authoritative."
+
+[[plugins]]
+name = "shrinkCopy.dll"
+status = "upstream-adapted"
+implementation = "upstream"
+upstream_path = "src/plugins/shrinkCopy"
+adapter = "cpp/plugins/upstream_bridge/shrinkCopy.cpp"
+
+[[plugins]]
+name = "json.dll"
+status = "aether"
+implementation = "aether-maintained"
+upstream_path = "src/plugins/json"
+adapter = "cpp/plugins/json/jsonPlugin.cpp"
+
+[[plugins]]
+name = "saveStruct.dll"
+status = "aether"
+implementation = "aether-maintained"
+upstream_path = "src/plugins/saveStruct"
+adapter = "cpp/plugins/saveStruct.cpp"
+
+[[plugins]]
+name = "csvParser.dll"
+status = "aether"
+implementation = "aether-maintained"
+upstream_path = "src/plugins/csvParser"
+adapter = "cpp/plugins/csvParser.cpp"
+
+[[plugins]]
+name = "lineParser.dll"
+status = "aether"
+implementation = "aether-maintained"
+upstream_path = "src/plugins/lineParser"
+adapter = "cpp/plugins/lineParser.cpp"
+
+[[plugins]]
+name = "scriptsEx.dll"
+status = "aether"
+implementation = "aether-maintained"
+adapter = "cpp/plugins/scriptsEx.cpp"
+notes = "Includes Aether PSB/DataPack and multi-runtime compatibility extensions."
+
+[[plugins]]
+name = "sqlite3.dll"
+status = "aether"
+implementation = "aether-maintained"
+adapter = "cpp/plugins/sqlitePlugin.cpp"
+
+[[plugins]]
+name = "sqlite3_xp3_vfs.dll"
+status = "aether"
+implementation = "aether-maintained"
+adapter = "cpp/plugins/sqliteXp3Vfs.cpp"
+
+[[plugins]]
+name = "xp3filter.dll"
+status = "aether"
+implementation = "aether-maintained"
+adapter = "cpp/plugins/xp3filter.cpp"
+
+[[plugins]]
+name = "motionplayer.dll"
+status = "aether"
+implementation = "aether-internal-capable"
+adapter = "cpp/plugins/motionplayer"
+
+[[plugins]]
+name = "layerExVector.dll"
+status = "optional"
+implementation = "upstream-pending-adapter"
+upstream_path = "src/plugins/layerExVector"
+notes = "Enable only after the vector backend and ABI contract are explicitly validated."
+
+[[plugins]]
+name = "krkr_richtext.dll"
+status = "optional"
+implementation = "upstream-pending-adapter"
+upstream_path = "src/plugins/krkr_richtext"
+
+[[plugins]]
+name = "krkreffekseer.dll"
+status = "optional"
+implementation = "upstream-pending-adapter"
+upstream_path = "src/plugins/krkreffekseer"
+
+[[plugins]]
+name = "krkrthreepp.dll"
+status = "optional"
+implementation = "upstream-pending-adapter"
+upstream_path = "src/plugins/krkrthreepp"
+
+[[plugins]]
+name = "sigcheck.dll"
+status = "stub"
+implementation = "aether-compatibility-stub"
+adapter = "cpp/plugins/compatSystemPlugins.cpp"
+upstream_path = "src/plugins/sigcheck"
+notes = "The real upstream implementation is intentionally not linked until its platform/security contract is reviewed."
+
+[[plugins]]
+name = "krkrsteam.dll"
+status = "stub"
+implementation = "aether-compatibility-stub"
+adapter = "cpp/plugins/stubs/dummy_plugin_stubs.cpp"
+
+[[plugins]]
+name = "win32ole.dll"
+status = "stub"
+implementation = "aether-compatibility-stub"
+adapter = "cpp/plugins/stubs/dummy_plugin_stubs.cpp"
