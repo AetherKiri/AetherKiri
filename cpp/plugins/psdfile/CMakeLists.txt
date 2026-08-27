@@ -1,16 +1,20 @@
 cmake_minimum_required(VERSION 3.19)
 project(psdfile)
 
+# The psdfile TJS wrapper in this directory is Aether-owned: it contains the
+# stream lifetime, metadata and editing compatibility required by the host.
+# Reuse only the portable psdparse dependency from the pinned krkrz_dev
+# submodule so the repository does not carry a second psdfile checkout.
 set(AETHERKIRI_PSDFILE_PACKAGE_ROOT
-    "${CMAKE_SOURCE_DIR}/packages/psdfile")
+    "${CMAKE_SOURCE_DIR}/third_party/krkrz_dev/src/plugins/psdfile")
 set(AETHERKIRI_PSDPARSE_ROOT
     "${AETHERKIRI_PSDFILE_PACKAGE_ROOT}/external/psdparse")
 
 if(NOT EXISTS "${AETHERKIRI_PSDFILE_PACKAGE_ROOT}/psdclass.cpp" OR
    NOT EXISTS "${AETHERKIRI_PSDPARSE_ROOT}/CMakeLists.txt")
     message(FATAL_ERROR
-        "packages/psdfile is incomplete; run: "
-        "git submodule update --init --recursive packages/psdfile")
+        "krkrz_dev psdfile/psdparse submodules are incomplete; run: "
+        "git submodule update --init --recursive third_party/krkrz_dev")
 endif()
 
 set(PSDPARSE_BUILD_PYTHON OFF CACHE BOOL "" FORCE)
