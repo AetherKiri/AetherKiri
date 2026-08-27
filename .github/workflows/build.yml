@@ -243,6 +243,7 @@ jobs:
             mkdir -p .devtools
             git clone https://github.com/microsoft/vcpkg.git .devtools/vcpkg
           fi
+          mkdir -p .devtools/vcpkg/downloads
           if [[ ! -x ".devtools/vcpkg/vcpkg" ]]; then
             (cd .devtools/vcpkg && ./bootstrap-vcpkg.sh -disableMetrics)
           fi
@@ -1150,7 +1151,9 @@ jobs:
       - name: Bootstrap vcpkg
         shell: pwsh
         run: |
+          if ((Test-Path .devtools\vcpkg) -and !(Test-Path .devtools\vcpkg\.git)) { Remove-Item .devtools\vcpkg -Recurse -Force }
           if (!(Test-Path .devtools\vcpkg\.git)) { git clone https://github.com/microsoft/vcpkg.git .devtools\vcpkg }
+          New-Item -ItemType Directory -Force .devtools\vcpkg\downloads | Out-Null
           if (!(Test-Path .devtools\vcpkg\vcpkg.exe)) { & .devtools\vcpkg\bootstrap-vcpkg.bat -disableMetrics }
           "VCPKG_ROOT=$pwd\.devtools\vcpkg" | Out-File $env:GITHUB_ENV -Append
 

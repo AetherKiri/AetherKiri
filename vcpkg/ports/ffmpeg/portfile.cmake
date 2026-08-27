@@ -16,7 +16,7 @@ if (VCPKG_TARGET_ARCHITECTURE STREQUAL "x86" OR VCPKG_TARGET_ARCHITECTURE STREQU
     vcpkg_add_to_path("${NASM_EXE_PATH}")
 endif()
 
-set(OPTIONS "--enable-pic --disable-doc --enable-debug=3 --enable-runtime-cpudetect --disable-autodetect --enable-iconv")
+set(OPTIONS "--enable-pic --disable-doc --enable-runtime-cpudetect --disable-autodetect --enable-iconv")
 
 if(VCPKG_TARGET_IS_MINGW)
     if(VCPKG_TARGET_ARCHITECTURE STREQUAL "x86")
@@ -57,6 +57,10 @@ if(VCPKG_DETECTED_MSVC)
     string(REGEX REPLACE "(^| )-RTC1( |$)" " " VCPKG_COMBINED_C_FLAGS_DEBUG "${VCPKG_COMBINED_C_FLAGS_DEBUG}")
     string(REGEX REPLACE "(^| )-Od( |$)" " " VCPKG_COMBINED_C_FLAGS_DEBUG "${VCPKG_COMBINED_C_FLAGS_DEBUG}")
     string(REGEX REPLACE "(^| )-Ob0( |$)" " " VCPKG_COMBINED_C_FLAGS_DEBUG "${VCPKG_COMBINED_C_FLAGS_DEBUG}")
+    string(REGEX REPLACE "(^| )-g[0-9]*( |$)" " " VCPKG_COMBINED_C_FLAGS_DEBUG "${VCPKG_COMBINED_C_FLAGS_DEBUG}")
+    string(REGEX REPLACE "(^| )-f(no-)?(asm|PIC|PIE)( |$)" " " VCPKG_COMBINED_C_FLAGS_DEBUG "${VCPKG_COMBINED_C_FLAGS_DEBUG}")
+else()
+    string(APPEND OPTIONS " --enable-debug=3")
 endif()
 
 string(APPEND VCPKG_COMBINED_C_FLAGS_DEBUG " -I \"${CURRENT_INSTALLED_DIR}/include\"")
@@ -287,6 +291,11 @@ endif ()
 
 set(OPTIONS_DEBUG "--disable-optimizations --disable-stripping")
 set(OPTIONS_RELEASE "--enable-optimizations --enable-stripping")
+if(VCPKG_DETECTED_MSVC)
+    # FFmpeg's configure otherwise invokes the Unix strip utility, which is
+    # unavailable on the native MSVC runner.
+    set(OPTIONS_RELEASE "--enable-optimizations --disable-stripping")
+endif()
 
 set(OPTIONS "${OPTIONS} ${OPTIONS_CROSS}")
 
