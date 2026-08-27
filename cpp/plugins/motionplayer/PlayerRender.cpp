@@ -1443,7 +1443,7 @@ namespace {
         return true;
     }
 
-    bool hasDuplicatedNumberedTitleScale(
+    bool hasDuplicatedNestedCompositeScale(
         const motion::detail::MotionSnapshot &snapshot,
         const motion::detail::PlayerRuntime::PreparedRenderItem &entry) {
         float sourceWidth = 0.0f;
@@ -1518,7 +1518,8 @@ namespace {
     void translatePreparedRenderItem(
         motion::detail::PlayerRuntime::PreparedRenderItem &entry,
         float dx,
-        float dy) {
+        float dy,
+        bool transformInheritedViewport = true) {
         auto translatePointArray = [dx, dy](auto &points) {
             for(size_t i = 0; i + 1 < points.size(); i += 2) {
                 points[i] += dx;
@@ -1533,7 +1534,8 @@ namespace {
             entry.paintBox[2] += dx;
             entry.paintBox[3] += dy;
         }
-        if(entry.hasViewport && validRenderPaintBox(entry.viewport)) {
+        if(transformInheritedViewport && entry.hasViewport &&
+           validRenderPaintBox(entry.viewport)) {
             entry.viewport[0] += dx;
             entry.viewport[1] += dy;
             entry.viewport[2] += dx;
@@ -1545,7 +1547,8 @@ namespace {
         motion::detail::PlayerRuntime::PreparedRenderItem &entry,
         float originX,
         float originY,
-        float scale) {
+        float scale,
+        bool transformInheritedViewport = true) {
         auto scalePointArray = [originX, originY, scale](auto &points) {
             for(size_t i = 0; i + 1 < points.size(); i += 2) {
                 points[i] = originX + (points[i] - originX) * scale;
@@ -1560,7 +1563,8 @@ namespace {
             entry.paintBox[2] = originX + (entry.paintBox[2] - originX) * scale;
             entry.paintBox[3] = originY + (entry.paintBox[3] - originY) * scale;
         }
-        if(entry.hasViewport && validRenderPaintBox(entry.viewport)) {
+        if(transformInheritedViewport && entry.hasViewport &&
+           validRenderPaintBox(entry.viewport)) {
             entry.viewport[0] = originX + (entry.viewport[0] - originX) * scale;
             entry.viewport[1] = originY + (entry.viewport[1] - originY) * scale;
             entry.viewport[2] = originX + (entry.viewport[2] - originX) * scale;
@@ -2208,13 +2212,13 @@ namespace {
             }
         }
 
-        // Some numbered Yuzu title cards author their character under two
-        // nested 150% groups. Collapse that duplicated 225% transform only
-        // when the prepared quad is actually 2.25x its PSB source. Matching
-        // by title filename alone also catches 1:1 cards and shrinks them to
-        // 4/9 of their intended size.
-        if(runtime.activeMotion &&
-           isYuzuNumberedTitleCharacterMotion(motionPath)) {
+        // A flattened child under an off-screen composite can retain the
+        // composite's transform in addition to its authored nested 150%
+        // groups. Collapse that duplicated 225% transform only when the
+        // prepared quad is actually 2.25x its PSB source. The provenance
+        // marker comes from the generic type-12 composite path, so this does
+        // not depend on a game's filename or layer naming convention.
+        if(runtime.activeMotion) {
             const float canvasCenterX =
                 static_cast<float>(canvasWidth) * 0.5f;
             const float canvasCenterY =
@@ -2222,8 +2226,9 @@ namespace {
             for(auto &entry : runtime.preparedRenderItems) {
                 if(!entry.drawFlag || entry.skipFlag0 || entry.skipFlag1 ||
                    entry.opacity <= 0 ||
-                   !hasDuplicatedNumberedTitleScale(
-                       *runtime.activeMotion, entry)) {
+                   !entry.viewportInheritedFromComposite ||
+                   !hasDuplicatedNestedCompositeScale(
+                        *runtime.activeMotion, entry)) {
                     continue;
                 }
                 auto bounds = boundsFromRenderCorners(entry.corners);
@@ -2242,10 +2247,12 @@ namespace {
                 const float designCenterY = canvasCenterY +
                     (currentCenterY - canvasCenterY) / 1.5f;
                 scalePreparedRenderItem(entry, currentCenterX,
-                                        currentCenterY, 4.0f / 9.0f);
+                                        currentCenterY, 4.0f / 9.0f,
+                                        !entry.viewportInheritedFromComposite);
                 translatePreparedRenderItem(entry,
                                             designCenterX - currentCenterX,
-                                            designCenterY - currentCenterY);
+                                            designCenterY - currentCenterY,
+                                            !entry.viewportInheritedFromComposite);
             }
         }
 
