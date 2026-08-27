@@ -51,7 +51,7 @@ const RUNTIME_DEFAULT_FONT_FILE := "default.otf"
 const RUNTIME_SYMBOL_FONT_FILE := "symbols.ttf"
 const ProbeConfig = preload("res://scripts/probe_config.gd")
 const GameInputMapping = preload("res://scripts/game_input_mapping.gd")
-const OnsVirtualControls = preload("res://scripts/ons_virtual_controls.gd")
+const GameVirtualControls = preload("res://scripts/game_virtual_controls.gd")
 const DiagnosticSession = preload("res://scripts/diagnostic_session.gd")
 const DiagnosticLocalization = preload("res://scripts/diagnostic_localization.gd")
 const DebugConsole = preload("res://scripts/debug_console.gd")
@@ -1520,7 +1520,7 @@ var settings_view: ScrollContainer
 var detail_view: Control
 var detail_scroll: ScrollContainer
 var game_view: Control
-var ons_virtual_controls
+var game_virtual_controls
 var modal_layer: Control
 var active_modal_scrim: ColorRect
 var active_modal_dialog: Control
@@ -1891,7 +1891,7 @@ const TOUCH_BUSY_SUPPRESS_MS := 0
 const VIRTUAL_KEYBOARD_REOPEN_DELAY_MS := 750
 const TOUCH_POINTER_ID_OFFSET := 100000
 const TOUCH_SECONDARY_POINTER_ID := 0
-const ONS_VIRTUAL_POINTER_ID := TOUCH_POINTER_ID_OFFSET + 65535
+const VIRTUAL_CONTROLS_POINTER_ID := TOUCH_POINTER_ID_OFFSET + 65535
 const TOUCH_SECONDARY_TAP_WINDOW_MS := 180
 const TOUCH_SECONDARY_QUARANTINE_MS := 320
 const TOUCH_SINGLE_TAP_DELAY_MS := 90
@@ -2208,26 +2208,26 @@ func _build_ui() -> void:
     game_view.visible = false
     add_child(game_view)
 
-    ons_virtual_controls = OnsVirtualControls.new()
-    add_child(ons_virtual_controls)
-    ons_virtual_controls.setup(ui_tokens)
-    ons_virtual_controls.key_event_requested.connect(
-        _on_ons_virtual_key_event
+    game_virtual_controls = GameVirtualControls.new()
+    add_child(game_virtual_controls)
+    game_virtual_controls.setup(ui_tokens)
+    game_virtual_controls.key_event_requested.connect(
+        _on_game_virtual_key_event
     )
-    ons_virtual_controls.pointer_move_requested.connect(
-        _on_ons_virtual_pointer_move
+    game_virtual_controls.pointer_move_requested.connect(
+        _on_game_virtual_pointer_move
     )
-    ons_virtual_controls.pointer_button_requested.connect(
-        _on_ons_virtual_pointer_button
+    game_virtual_controls.pointer_button_requested.connect(
+        _on_game_virtual_pointer_button
     )
-    ons_virtual_controls.pointer_scroll_requested.connect(
-        _on_ons_virtual_pointer_scroll
+    game_virtual_controls.pointer_scroll_requested.connect(
+        _on_game_virtual_pointer_scroll
     )
-    ons_virtual_controls.keyboard_requested.connect(
-        _on_ons_virtual_keyboard_requested
+    game_virtual_controls.keyboard_requested.connect(
+        _on_game_virtual_keyboard_requested
     )
-    ons_virtual_controls.virtual_controls_requested.connect(
-        _on_ons_virtual_controls_requested
+    game_virtual_controls.virtual_controls_requested.connect(
+        _on_game_virtual_controls_requested
     )
 
     _build_video_view()
@@ -3781,8 +3781,8 @@ func _fit_full_rects() -> void:
     _layout_modal_safe_area(safe_rect)
     _layout_video_safe_area(window_size, safe_rect)
     _layout_game_viewport(window_size)
-    if ons_virtual_controls != null:
-        ons_virtual_controls.layout(window_size, safe_rect)
+    if game_virtual_controls != null:
+        game_virtual_controls.layout(window_size, safe_rect)
     _layout_shell(safe_rect.size)
     _layout_shell_safe_area_fills(window_size, safe_rect)
     var compact_shell := AetherDisplayScale.use_compact_shell(safe_rect.size)
@@ -11972,7 +11972,7 @@ func _process(delta: float) -> void:
     _poll_native_launch_file_picker()
     _poll_native_cover_file_picker()
     _fit_full_rects()
-    _sync_ons_virtual_controls()
+    _sync_game_virtual_controls()
     _process_iap(delta)
     _update_advanced_tool_timeouts()
     _flush_log_view_if_needed(delta)
@@ -11997,7 +11997,7 @@ func _process(delta: float) -> void:
             startup_poll_accum = 0.0
             cached_startup_state = player.get_startup_state()
             startup_state = cached_startup_state
-            _sync_ons_virtual_controls()
+            _sync_game_virtual_controls()
         if startup_state == STARTUP_SUCCEEDED:
             restart_notice.text = ""
             if loading_panel != null and loading_panel.visible:
@@ -12057,7 +12057,7 @@ func _process(delta: float) -> void:
                     perf_log_file.store_line(tick_error_line)
                     perf_log_file.flush()
                 game_running = false
-                _sync_ons_virtual_controls()
+                _sync_game_virtual_controls()
                 _deactivate_game_text_input()
                 _sync_debug_console_state()
                 if diagnostic_session != null:
@@ -12106,7 +12106,7 @@ func _process(delta: float) -> void:
             viewport.visible = false
             game_view.visible = false
             game_running = false
-            _sync_ons_virtual_controls()
+            _sync_game_virtual_controls()
             _deactivate_game_text_input()
             _sync_debug_console_state()
             if diagnostic_session != null:
@@ -13060,8 +13060,8 @@ func _capture_main_view(frame_stats: Dictionary) -> void:
         get_tree().quit(0 if visible > 0 else 2)
 
 func _clear_game_input_capture() -> void:
-    if ons_virtual_controls != null:
-        ons_virtual_controls.set_enabled(false)
+    if game_virtual_controls != null:
+        game_virtual_controls.set_enabled(false)
     _deactivate_game_text_input()
     active_touch_points.clear()
     active_mouse_buttons.clear()
@@ -13805,7 +13805,10 @@ func _input(event: InputEvent) -> void:
         return
     if diagnostic_session != null and diagnostic_session.routes_pointer_to_marker(event):
         return
-    if ons_virtual_controls != null and ons_virtual_controls.routes_pointer(event):
+    if (
+        game_virtual_controls != null
+        and game_virtual_controls.routes_pointer(event)
+    ):
         return
     # Platform dialogs are real Godot Controls, matching CDialog's host-owned
     # modal. Leave their events unhandled so LineEdit/Button GUI dispatch owns
@@ -13994,22 +13997,31 @@ func _can_forward_game_input() -> bool:
         modal_layer == null or not modal_layer.visible
     )
 
-func _sync_ons_virtual_controls() -> void:
-    if ons_virtual_controls == null:
+func _sync_game_virtual_controls() -> void:
+    if game_virtual_controls == null:
         return
-    ons_virtual_controls.set_enabled(
-        _is_touch_platform()
-        and active_runtime_kind == RUNTIME_ONSCRIPTER
-        and _can_forward_game_input()
-        and not app_lifecycle_paused
+    game_virtual_controls.set_enabled(
+        _should_enable_game_virtual_controls(
+            _is_touch_platform(),
+            _can_forward_game_input(),
+            app_lifecycle_paused
+        )
     )
 
-func _on_ons_virtual_key_event(
+func _should_enable_game_virtual_controls(
+    touch_platform: bool,
+    input_ready: bool,
+    lifecycle_paused: bool
+) -> bool:
+    # Every runtime uses the same EngineApi key and pointer input contract.
+    return touch_platform and input_ready and not lifecycle_paused
+
+func _on_game_virtual_key_event(
     pressed: bool,
     key_code: int,
     modifiers: int
 ) -> void:
-    if player == null or active_runtime_kind != RUNTIME_ONSCRIPTER:
+    if player == null:
         return
     if pressed and not _can_forward_game_input():
         return
@@ -14021,7 +14033,7 @@ func _on_ons_virtual_key_event(
         input_trace_send_failed += 1
     if input_trace_enabled:
         _write_probe_marker(
-            "ons_virtual_key pressed=%s key=0x%02X modifiers=0x%02X result=%d" % [
+            "game_virtual_key pressed=%s key=0x%02X modifiers=0x%02X result=%d" % [
                 str(pressed),
                 key_code,
                 modifiers,
@@ -14029,17 +14041,17 @@ func _on_ons_virtual_key_event(
             ]
         )
 
-func _on_ons_virtual_pointer_move(
+func _on_game_virtual_pointer_move(
     screen_position: Vector2,
     screen_delta: Vector2
 ) -> void:
-    if player == null or not _can_forward_ons_virtual_input():
+    if player == null or not _can_forward_virtual_controls_input():
         return
     var mapped := _map_viewport_point(screen_position, true)
     var mapped_delta := _map_viewport_delta(screen_delta)
     _send_game_pointer_event(
         POINTER_MOVE,
-        ONS_VIRTUAL_POINTER_ID,
+        VIRTUAL_CONTROLS_POINTER_ID,
         mapped.x,
         mapped.y,
         mapped_delta.x,
@@ -14047,22 +14059,22 @@ func _on_ons_virtual_pointer_move(
         0
     )
 
-func _on_ons_virtual_pointer_button(
+func _on_game_virtual_pointer_button(
     pressed: bool,
     button: int,
     modifiers: int,
     screen_position: Vector2
 ) -> void:
-    if player == null or active_runtime_kind != RUNTIME_ONSCRIPTER:
+    if player == null:
         return
-    if pressed and not _can_forward_ons_virtual_input():
+    if pressed and not _can_forward_virtual_controls_input():
         return
     if not pressed and not game_running:
         return
     var mapped := _map_viewport_point(screen_position, true)
     _send_game_pointer_event(
         POINTER_DOWN if pressed else POINTER_UP,
-        ONS_VIRTUAL_POINTER_ID,
+        VIRTUAL_CONTROLS_POINTER_ID,
         mapped.x,
         mapped.y,
         0.0,
@@ -14075,16 +14087,16 @@ func _on_ons_virtual_pointer_button(
     else:
         _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
 
-func _on_ons_virtual_pointer_scroll(
+func _on_game_virtual_pointer_scroll(
     delta_y: float,
     screen_position: Vector2
 ) -> void:
-    if player == null or not _can_forward_ons_virtual_input():
+    if player == null or not _can_forward_virtual_controls_input():
         return
     var mapped := _map_viewport_point(screen_position, true)
     _send_game_pointer_event(
         POINTER_SCROLL,
-        ONS_VIRTUAL_POINTER_ID,
+        VIRTUAL_CONTROLS_POINTER_ID,
         mapped.x,
         mapped.y,
         0.0,
@@ -14092,8 +14104,8 @@ func _on_ons_virtual_pointer_scroll(
         0
     )
 
-func _on_ons_virtual_keyboard_requested() -> void:
-    if not _can_forward_ons_virtual_input():
+func _on_game_virtual_keyboard_requested() -> void:
+    if not _can_forward_virtual_controls_input():
         return
     if (
         _is_touch_platform()
@@ -14109,14 +14121,13 @@ func _on_ons_virtual_keyboard_requested() -> void:
         DisplayServer.window_set_ime_active(true)
         game_text_input_active = true
 
-func _on_ons_virtual_controls_requested() -> void:
+func _on_game_virtual_controls_requested() -> void:
     if game_text_input_active or game_text_input_forced:
         _deactivate_game_text_input()
 
-func _can_forward_ons_virtual_input() -> bool:
+func _can_forward_virtual_controls_input() -> bool:
     return (
-        active_runtime_kind == RUNTIME_ONSCRIPTER
-        and _can_forward_game_input()
+        _can_forward_game_input()
         and not app_lifecycle_paused
     )
 

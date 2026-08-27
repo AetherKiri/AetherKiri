@@ -2,8 +2,49 @@ extends SceneTree
 
 const MAIN_SCRIPT := preload("res://scripts/main.gd")
 
+class MockRuntimePlayer:
+    extends Node
+
+    var key_events: Array[Dictionary] = []
+
+    func send_key_event(
+        pressed: bool,
+        key_code: int,
+        modifiers: int,
+        unicode_codepoint: int
+    ) -> int:
+        key_events.append({
+            "pressed": pressed,
+            "key_code": key_code,
+            "modifiers": modifiers,
+            "unicode": unicode_codepoint,
+        })
+        return 0
+
 func _initialize() -> void:
     var app = MAIN_SCRIPT.new()
+
+    for runtime_kind in [app.RUNTIME_KIRIKIRI, app.RUNTIME_ONSCRIPTER]:
+        app.active_runtime_kind = runtime_kind
+        assert(app._should_enable_game_virtual_controls(true, true, false))
+    assert(not app._should_enable_game_virtual_controls(false, true, false))
+    assert(not app._should_enable_game_virtual_controls(true, false, false))
+    assert(not app._should_enable_game_virtual_controls(true, true, true))
+
+    var runtime_player := MockRuntimePlayer.new()
+    var game_viewport := TextureRect.new()
+    game_viewport.visible = true
+    app.add_child(runtime_player)
+    app.add_child(game_viewport)
+    app.player = runtime_player
+    app.viewport = game_viewport
+    app.game_running = true
+    app.cached_startup_state = app.STARTUP_SUCCEEDED
+    for runtime_kind in [app.RUNTIME_KIRIKIRI, app.RUNTIME_ONSCRIPTER]:
+        app.active_runtime_kind = runtime_kind
+        app._on_game_virtual_key_event(true, 0x1b, 0)
+        app._on_game_virtual_key_event(false, 0x1b, 0)
+    assert(runtime_player.key_events.size() == 4)
 
     var portrait := app._scaled_display_safe_rect(
         Vector2(430, 932),

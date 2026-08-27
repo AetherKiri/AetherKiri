@@ -1,6 +1,6 @@
 extends SceneTree
 
-const OnsVirtualControls = preload("res://scripts/ons_virtual_controls.gd")
+const GameVirtualControls = preload("res://scripts/game_virtual_controls.gd")
 const AetherDesignTokens = preload("res://scripts/ui/aether_design_tokens.gd")
 
 var _key_events: Array[Dictionary] = []
@@ -14,7 +14,7 @@ func _initialize() -> void:
     call_deferred("_run")
 
 func _run() -> void:
-    var controls = OnsVirtualControls.new()
+    var controls = GameVirtualControls.new()
     root.add_child(controls)
     controls.setup(AetherDesignTokens.new())
     controls.key_event_requested.connect(func(
@@ -310,9 +310,9 @@ func _run() -> void:
         _fail("hidden controls still captured input")
         return
 
-    print("ons_virtual_controls_test: PASS")
+    print("game_virtual_controls_test: PASS")
     quit(0)
 
 func _fail(message: String) -> void:
-    push_error("ons_virtual_controls_test: %s" % message)
+    push_error("game_virtual_controls_test: %s" % message)
     quit(1)

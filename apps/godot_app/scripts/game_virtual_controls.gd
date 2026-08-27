@@ -81,7 +81,7 @@ var _menu_y_ratio := 0.0
 func setup(tokens) -> void:
     if _root != null:
         return
-    name = "OnsVirtualControls"
+    name = "GameVirtualControls"
     layer = OVERLAY_LAYER
     _tokens = tokens
 
