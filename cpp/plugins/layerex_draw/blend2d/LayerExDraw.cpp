@@ -91,8 +91,21 @@ BLImage loadImage(const tjs_char *name) // 以后应该要让krkr内核进行图
  * @param fontFileName フォントファイル名
  */
 void GdiPlus::addPrivateFont(const tjs_char *fontFileName) {
-    ttstr filename = TVPGetPlacedPath(fontFileName);
+    ttstr filename;
+    try {
+        filename = TVPGetPlacedPath(fontFileName);
+    } catch(...) {
+    }
+    if(filename.IsEmpty() && fontFileName)
+        filename = fontFileName;
     if(filename.length()) {
+        // Blend2D keeps its own face vector for fast text rendering, while
+        // Aether's registry remains the authority for aliases and FreeType
+        // path rendering.  Register both views from the same input stream.
+        try {
+            TVPEnumFontsProc(filename);
+        } catch(...) {
+        }
         tTJSBinaryStream *in =
             TVPCreateBinaryStreamForRead(filename, TJS_W(""));
         if(in) {
@@ -249,14 +262,17 @@ void FontInfo::setFamilyName(const tjs_char *familyName) {
         if(familyName)
             this->familyName = familyName;
         if(!this->familyName.IsEmpty()) {
+            tjs_int faceIndex = 0;
             const std::unique_ptr<tTJSBinaryStream> stream{ TVPCreateFontStream(
-                this->familyName) };
+                this->familyName, &faceIndex) };
             if(stream) {
                 const auto bufferSize = static_cast<FT_Long>(stream->GetSize());
+                if(bufferSize <= 0)
+                    return;
                 buffer = std::make_unique<FT_Byte[]>(bufferSize);
                 stream->ReadBuffer(buffer.get(), bufferSize);
                 if(FT_New_Memory_Face(TVPGetFontLibrary(), buffer.get(),
-                                      bufferSize, 0, &ftFace) == 0) {
+                                      bufferSize, faceIndex, &ftFace) == 0) {
                     updateFtPixelSize(ftFace, emSize);
                 } else {
                     buffer.reset();
@@ -278,15 +294,19 @@ void FontInfo::setFamilyName(const tjs_char *familyName) {
 
     gdiPlusUnsupportedFont = !hasBLFontFace(this->familyName);
 
+    tjs_int faceIndex = 0;
     const std::unique_ptr<tTJSBinaryStream> stream{ TVPCreateFontStream(
-        this->familyName) };
+        this->familyName, &faceIndex) };
     if(!stream)
         return;
 
     const auto bufferSize = static_cast<FT_Long>(stream->GetSize());
+    if(bufferSize <= 0)
+        return;
     buffer = std::make_unique<FT_Byte[]>(bufferSize);
     stream->ReadBuffer(buffer.get(), bufferSize);
-    if(FT_New_Memory_Face(TVPGetFontLibrary(), buffer.get(), bufferSize, 0,
+    if(FT_New_Memory_Face(TVPGetFontLibrary(), buffer.get(), bufferSize,
+                          faceIndex,
                           &ftFace) != 0) {
         buffer.reset();
         ftFace = nullptr;
@@ -3491,6 +3511,9 @@ NCB_REGISTER_SUBCLASS(FontInfo) {
     NCB_PROPERTY_RO(ascentLeading, getAscentLeading);
     NCB_PROPERTY_RO(descentLeading, getDescentLeading);
     NCB_PROPERTY_RO(lineSpacing, getLineSpacing);
+    // Private metric channel used by the krkrz vector compatibility layer
+    // when it overlays the upstream line-spacing scale property.
+    NCB_PROPERTY_RO(aetherNativeLineSpacing, getLineSpacing);
 };
 
 NCB_REGISTER_SUBCLASS(Appearance) {

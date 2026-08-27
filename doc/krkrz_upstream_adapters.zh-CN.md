@@ -36,10 +36,11 @@ Aether-owned 方案。
 `layerExVector.dll` 是一个不复制 ThorVG 的 hybrid 适配：
 `cpp/plugins/krkrzLayerExVectorCompat.cpp` 先加载 Aether 的 `layerExDraw`，再在
 同一个 TJS 类上补齐 `GdiPlus.loadFont`（包括桌面原生字体路径）、字体别名、
-`fontFamily`/`fontSize`/`italic`/`letterSpacing` 和 `drawStringArea`。
-`lineSpacing` 继续使用 Aether 的原生字体度量语义，不伪装成 ThorVG 的比例
-属性。因此 vector 游戏与原有 LayerExDraw 游戏共享一套 renderer 和字体流；
-`unloadFont` 按进程生命周期保留已注册字体，避免仍在使用的 Font 对象悬空。
+`fontFamily`/`fontSize`/`italic`/`letterSpacing`/`lineSpacing` 和
+`drawStringArea`。vector 侧的 `lineSpacing` setter 遵循 krkrz 可写的非负比例；
+适配层通过私有的 sibling 属性读取 Aether 原生像素行高，再应用该比例。因此
+vector 游戏与原有 LayerExDraw 游戏共享一套 renderer 和支持 face index 的字体
+注册表；`unloadFont` 按进程生命周期保留已注册字体，避免仍在使用的 Font 对象悬空。
 
 这是实现层的兼容规则，不是运行时开关：Aether 只有一个插件 registry；无论 upstream
 操作是否接受输入，游戏看到的模块/provider 名称都保持不变。

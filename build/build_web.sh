@@ -137,13 +137,17 @@ cmake_config_args=(
     -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$EMSCRIPTEN_TOOLCHAIN"
     -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM"
     -D "AETHERKIRI_ENABLE_INTERNAL=${AETHERKIRI_ENABLE_INTERNAL:-ON}"
-    "${AETHERKIRI_CMAKE_FEATURE_ARGS[@]}"
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON
     -DCMAKE_C_FLAGS="$WEB_C_FLAGS"
     -DCMAKE_CXX_FLAGS="$WEB_CXX_FLAGS"
     -DCMAKE_EXE_LINKER_FLAGS="$WEB_LINK_FLAGS"
     -DCMAKE_SHARED_LINKER_FLAGS="$WEB_LINK_FLAGS"
 )
+# Bash 3.2 expands an empty array as an unset variable with `set -u`; keep
+# feature forwarding optional when no CI/local override was supplied.
+if ((${#AETHERKIRI_CMAKE_FEATURE_ARGS[@]} > 0)); then
+    cmake_config_args+=("${AETHERKIRI_CMAKE_FEATURE_ARGS[@]}")
+fi
 if [[ "${SKIP_VCPKG_INSTALL:-}" == "1" ]]; then
     if [[ ! -d "$VCPKG_ROOT/installed/wasm32-emscripten" ]]; then
         echo "Error: SKIP_VCPKG_INSTALL=1 but prebuilt vcpkg triplet is missing: $VCPKG_ROOT/installed/wasm32-emscripten" >&2

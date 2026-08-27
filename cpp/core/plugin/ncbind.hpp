@@ -2049,7 +2049,22 @@ struct ncbAttachTJS2Class : public ncbRegistNativeClassBase {
 
 	void RegistVariant(NameT name, const TJS::tTJSVariant &val, FlagsT flg) override {
 		if (!_tjs2ClassObj) return;
-		tjs_error hr = _tjs2ClassObj->PropSet(TJS_MEMBERENSURE | flg, name, nullptr, &val, ((flg & TJS_STATICMEMBER) ? _global : _tjs2ClassObj));
+		// An attach is an explicit extension/override of an existing TJS class.
+		// PropSet normally invokes an existing property's setter; that makes it
+		// impossible to replace a read-only upstream property (for example
+		// layerExDraw's lineSpacing) with the writable krkrz-compatible one.
+		// Keep the raw dispatch so UnregistItem can restore the original member,
+		// then bypass property invocation while installing the adapter member.
+		if (!_previousMembers.count(name)) {
+			tTJSVariant previous;
+			if (TJS_SUCCEEDED(_tjs2ClassObj->PropGet(
+				TJS_IGNOREPROP, name, nullptr, &previous, _tjs2ClassObj))) {
+				_previousMembers.emplace(name, previous);
+			}
+		}
+		tjs_error hr = _tjs2ClassObj->PropSet(
+			TJS_MEMBERENSURE | TJS_IGNOREPROP | flg, name, nullptr, &val,
+			((flg & TJS_STATICMEMBER) ? _global : _tjs2ClassObj));
 		if(TJS_FAILED(hr)) {
 			spdlog::warn("NCB_ATTACH: PropSet '{}' on '{}' failed (hr={})", ttstr(name).AsStdString(), ttstr(_tjs2ClassName).AsStdString(), (int)hr);
 		}
@@ -2086,7 +2101,15 @@ struct ncbAttachTJS2Class : public ncbRegistNativeClassBase {
 	}
 	void UnregistItem(NameT name) override {
 		if (_tjs2ClassObj) {
-			_tjs2ClassObj->DeleteMember(0, name, nullptr, _tjs2ClassObj);
+			auto previous = _previousMembers.find(name);
+			if (previous != _previousMembers.end()) {
+				_tjs2ClassObj->PropSet(
+					TJS_MEMBERENSURE | TJS_IGNOREPROP, name, nullptr,
+					&previous->second, _tjs2ClassObj);
+				_previousMembers.erase(previous);
+			} else {
+				_tjs2ClassObj->DeleteMember(0, name, nullptr, _tjs2ClassObj);
+			}
 		}
 	}
 	void UnregistEnd() override {
@@ -2097,11 +2120,35 @@ protected:
 	NameT const    _tjs2ClassName;
 	iTJSDispatch2* _tjs2ClassObj{};	//< クラスオブジェクト
 	iTJSDispatch2* _global{};
+	std::map<ttstr, tTJSVariant> _previousMembers;
 
 	// クラスオブジェクトを取得
 	static iTJSDispatch2* GetGlobalObject(NameT name, iTJSDispatch2 *global) {
 		tTJSVariant val;
-		if (global) global->PropGet(0, name, nullptr, &val, global);
+		if (global) {
+			// Attach targets are usually global names ("Layer"), but a
+			// compatibility adapter may target a nested class such as
+			// "GdiPlus.Font".  A direct PropGet treats the dotted path as one
+			// literal member and silently leaves the adapter detached.  Follow
+			// the same expression path used by NCB_ATTACH_FUNCTION so inherited
+			// properties are actually installed on the nested class.
+			bool nested = false;
+			for (const tjs_char *p = name; p && *p; ++p) {
+				if (*p == TJS_W('.')) {
+					nested = true;
+					break;
+				}
+			}
+			if (nested) {
+				try {
+					TVPExecuteExpression(ttstr(name), &val);
+				} catch (...) {
+					val.Clear();
+				}
+			} else {
+				global->PropGet(0, name, nullptr, &val, global);
+			}
+		}
 		else {
 			NCB_WARN_W("No Global Dispatch.");
 			TVPExecuteExpression(name, &val);

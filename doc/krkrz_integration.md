@@ -142,12 +142,13 @@ link as a second core.”
 [`cpp/plugins/krkrzLayerExVectorCompat.cpp`](../cpp/plugins/krkrzLayerExVectorCompat.cpp):
 it loads Aether's single `layerExDraw` renderer and adapts `GdiPlus.loadFont`,
 font aliases (including desktop native font paths), the
-`fontFamily`/`fontSize`/`italic`/`letterSpacing` properties, and `drawStringArea`
-without linking ThorVG or a second global class registry.
-`lineSpacing` keeps Aether's native metric semantics instead of being presented
-as ThorVG's scale value. The other three SDK-heavy plugins remain
-source-validated only until each has its own adapter, dependency policy, and
-runtime test.
+`fontFamily`/`fontSize`/`italic`/`letterSpacing`/`lineSpacing` properties, and
+`drawStringArea` without linking ThorVG or a second global class registry.
+`lineSpacing` follows krkrz's writable non-negative scale semantics in the
+vector compatibility path; the Aether renderer's native pixel metric remains
+available through a private channel for layout calculations. The other three
+SDK-heavy plugins remain source-validated only until each has its own adapter,
+dependency policy, and runtime test.
 
 Compatibility-only registrations live under
 [`cpp/plugins/stubs`](../cpp/plugins/stubs); their policy is documented in

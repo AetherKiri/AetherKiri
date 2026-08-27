@@ -15,13 +15,27 @@ int TVPEnumFontsProc(const ttstr &FontPath,
 const ttstr &TVPGetDefaultFontName();
 bool TVPSetDefaultFontName(const ttstr &fontName);
 void TVPGetAllFontList(std::vector<ttstr> &list);
-tTJSBinaryStream *TVPCreateFontStream(const ttstr &fontname);
+tTJSBinaryStream *TVPCreateFontStream(const ttstr &fontname,
+                                      tjs_int *faceIndex = nullptr);
 struct TVPFontNamePathInfo {
     ttstr Path;
     std::function<tTJSBinaryStream *(TVPFontNamePathInfo *)> Getter;
     int Index{};
+    // Canonical family name reported by the selected face.  The hash-table
+    // key may be a localized name or a script alias; keeping this value lets
+    // native collections (for example Windows GDI+) resolve the same face
+    // without maintaining a second alias table.
+    ttstr FamilyName;
 };
 TVPFontNamePathInfo *TVPFindFont(const ttstr &name);
+
+// Resolve a requested family to the shared Aether font table.  If the exact
+// name is not registered, the configured default face is returned and
+// resolvedName receives the face that will actually be used.  Keeping this
+// fallback in the core prevents each compatibility adapter from maintaining a
+// separate font lookup policy.
+TVPFontNamePathInfo *TVPResolveFont(const ttstr &name,
+                                    ttstr *resolvedName = nullptr);
 
 // Register a script-visible alias for an already enumerated font family.
 //

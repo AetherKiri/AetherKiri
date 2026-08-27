@@ -109,8 +109,11 @@ tGenericFreeTypeFace::tGenericFreeTypeFace(const ttstr &fontname,
             File = nullptr;
         }
 
-        // ファイルを開く
-        File = TVPCreateFontStream(fontname);
+        // ファイルを開く。共有フォント登録表は TTC/OTC の face index も
+        // 保持しているため、ここで受け取る。通常の Aether フォントと
+        // krkrz layerExVector の別名フォントを同じポリシーで解決する。
+        tjs_int registeredFaceIndex = 0;
+        File = TVPCreateFontStream(fontname, &registeredFaceIndex);
         if(File == nullptr) {
             TVPThrowExceptionMessage(TVPCannotOpenFontFile, fontname);
         }
@@ -147,9 +150,21 @@ tGenericFreeTypeFace::tGenericFreeTypeFace(const ttstr &fontname,
 
         // FreeType エンジンでファイルを開こうとしてみる
         tjs_uint index = TVP_GET_FACE_INDEX_FROM_OPTIONS(options);
+        // A non-zero option is an explicit legacy face selection.  When the
+        // caller only supplied a family name (the normal path), prefer the
+        // face selected by the shared registry.  Face 0 remains the
+        // backward-compatible default for ordinary single-face files.
+        if(index == 0 && registeredFaceIndex > 0)
+            index = static_cast<tjs_uint>(registeredFaceIndex);
         if(!OpenFaceByIndex(index, Face)) {
-            // フォントを開けなかった
-            TVPThrowExceptionMessage(TVPFontCannotBeUsed, fontname);
+            // A stale registry entry must not make an otherwise valid font
+            // unusable.  Retry face 0 before reporting the original error.
+            if(index != 0 && OpenFaceByIndex(0, Face)) {
+                index = 0;
+            } else {
+                // フォントを開けなかった
+                TVPThrowExceptionMessage(TVPFontCannotBeUsed, fontname);
+            }
         }
     } catch(...) {
         throw;

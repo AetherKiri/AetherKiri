@@ -572,8 +572,13 @@ function(extract_version_from_component out)
     set("${out}" "${major_version}.${minor_version}.${micro_version}" PARENT_SCOPE)
 endfunction()
 
+if (NOT DEFINED VCPKG_BUILD_TYPE OR VCPKG_BUILD_TYPE STREQUAL "release")
+    set(FFMPEG_VERSION_BUILD_SUFFIX rel)
+else()
+    set(FFMPEG_VERSION_BUILD_SUFFIX dbg)
+endif()
 extract_regex_from_file(FFMPEG_VERSION
-    FILE_WITHOUT_EXTENSION "${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-rel/libavutil/ffversion"
+    FILE_WITHOUT_EXTENSION "${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-${FFMPEG_VERSION_BUILD_SUFFIX}/libavutil/ffversion"
     REGEX "#define FFMPEG_VERSION[ ]+\"(.+)\""
 )
 
@@ -593,7 +598,12 @@ extract_version_from_component(LIBSWSCALE_VERSION
     COMPONENT libswscale)
 
 # Handle copyright
-file(STRINGS "${CURRENT_BUILDTREES_DIR}/build-${TARGET_TRIPLET}-rel-out.log" LICENSE_STRING REGEX "License: .*" LIMIT_COUNT 1)
+if (EXISTS "${CURRENT_BUILDTREES_DIR}/build-${TARGET_TRIPLET}-rel-out.log")
+    set(FFMPEG_LICENSE_LOG "${CURRENT_BUILDTREES_DIR}/build-${TARGET_TRIPLET}-rel-out.log")
+else()
+    set(FFMPEG_LICENSE_LOG "${CURRENT_BUILDTREES_DIR}/build-${TARGET_TRIPLET}-dbg-out.log")
+endif()
+file(STRINGS "${FFMPEG_LICENSE_LOG}" LICENSE_STRING REGEX "License: .*" LIMIT_COUNT 1)
 if(LICENSE_STRING STREQUAL "License: LGPL version 2.1 or later")
     set(LICENSE_FILE "COPYING.LGPLv2.1")
 elseif(LICENSE_STRING STREQUAL "License: LGPL version 3 or later")

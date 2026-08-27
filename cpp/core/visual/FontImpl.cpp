@@ -18,6 +18,7 @@
 #endif
 
 #include <fstream>
+#include <string>
 #include <vector>
 #include <algorithm>
 #include <cctype>
@@ -35,6 +36,8 @@
 #include <CoreText/CoreText.h>
 #endif
 #endif
+
+extern bool TVPEncodeUTF8ToUTF16(ttstr &output, const std::string &source);
 
 tTJSHashTable<ttstr, TVPFontNamePathInfo, tTVPttstrHash> TVPFontNames;
 static ttstr TVPDefaultFontName;
@@ -96,10 +99,21 @@ static int TVPInternalEnumFonts(
     int nFaceNum = fontface->num_faces;
     for(int i = 0; i < nFaceNum; ++i) {
         if(i > 0) {
+            // FT_New_Memory_Face writes a new handle; release the previous
+            // face first so enumerating a large TTC does not leak face
+            // objects.
+            if(fontface)
+                FT_Done_Face(fontface);
+            fontface = nullptr;
             if(FT_New_Memory_Face(TVPGetFontLibrary(), pBuf, buflen, i,
                                   &fontface)) {
                 continue;
             }
+        }
+        ttstr canonicalName;
+        if(fontface->family_name) {
+            TVPEncodeUTF8ToUTF16(canonicalName,
+                                 std::string(fontface->family_name));
         }
         if(FT_IS_SCALABLE(fontface)) {
             FT_UInt namecount = FT_Get_Sfnt_Name_Count(fontface);
@@ -145,6 +159,7 @@ static int TVPInternalEnumFonts(
                 info.Path = FontPath;
                 info.Index = i;
                 info.Getter = getter;
+                info.FamilyName = canonicalName;
                 TVPFontNames.Add(fontname, info);
                 if(fontNames &&
                    std::find(fontNames->begin(), fontNames->end(), fontname) ==
@@ -154,22 +169,30 @@ static int TVPInternalEnumFonts(
                 addCount = 1;
             }
             /*if (!addCount)*/ {
-                ttstr fontname((tjs_nchar *)fontface->family_name);
-                TVPFontNamePathInfo info;
-                info.Path = FontPath;
-                info.Index = i;
-                info.Getter = getter;
-                TVPFontNames.Add(fontname, info);
-                if(fontNames &&
-                   std::find(fontNames->begin(), fontNames->end(), fontname) ==
-                       fontNames->end()) {
-                    fontNames->emplace_back(fontname);
+                ttstr fontname = canonicalName;
+                if(fontname.IsEmpty() && fontface->family_name)
+                    fontname = ttstr((tjs_nchar *)fontface->family_name);
+                if(!fontname.IsEmpty()) {
+                    TVPFontNamePathInfo info;
+                    info.Path = FontPath;
+                    info.Index = i;
+                    info.Getter = getter;
+                    info.FamilyName = canonicalName.IsEmpty() ? fontname
+                                                              : canonicalName;
+                    TVPFontNames.Add(fontname, info);
+                    if(fontNames &&
+                       std::find(fontNames->begin(), fontNames->end(), fontname) ==
+                           fontNames->end()) {
+                        fontNames->emplace_back(fontname);
+                    }
                 }
             }
             ++faceCount;
         }
 
-        FT_Done_Face(fontface);
+        if(fontface)
+            FT_Done_Face(fontface);
+        fontface = nullptr;
     }
     return faceCount;
 }
@@ -256,13 +279,16 @@ int TVPEnumFontsProc(const ttstr &FontPath,
         fontNames);
 }
 
-tTJSBinaryStream *TVPCreateFontStream(const ttstr &fontname) {
-    TVPFontNamePathInfo *info = TVPFindFont(fontname);
-    if(!info) {
-        info = TVPFontNames.Find(TVPDefaultFontName);
-        if(!info)
-            return nullptr;
-    }
+tTJSBinaryStream *TVPCreateFontStream(const ttstr &fontname,
+                                      tjs_int *faceIndex) {
+    if(faceIndex)
+        *faceIndex = 0;
+
+    TVPFontNamePathInfo *info = TVPResolveFont(fontname);
+    if(!info)
+        return nullptr;
+    if(faceIndex)
+        *faceIndex = std::max<tjs_int>(0, info->Index);
     if(info->Getter) {
         return info->Getter(info);
     }
@@ -630,6 +656,28 @@ TVPFontNamePathInfo *TVPFindFont(const ttstr &fontname) {
         info = TVPFontNames.Find(fontname);
     }
     return info;
+}
+
+TVPFontNamePathInfo *TVPResolveFont(const ttstr &fontname,
+                                    ttstr *resolvedName) {
+    if(resolvedName)
+        resolvedName->Clear();
+
+    if(TVPFontNamePathInfo *info = TVPFindFont(fontname)) {
+        if(resolvedName)
+            *resolvedName = info->FamilyName.IsEmpty() ? fontname
+                                                       : info->FamilyName;
+        return info;
+    }
+
+    if(TVPDefaultFontName.IsEmpty())
+        return nullptr;
+    TVPFontNamePathInfo *fallback = TVPFindFont(TVPDefaultFontName);
+    if(fallback && resolvedName)
+        *resolvedName = fallback->FamilyName.IsEmpty()
+                            ? TVPDefaultFontName
+                            : fallback->FamilyName;
+    return fallback;
 }
 
 bool TVPRegisterFontAlias(const ttstr &alias, const ttstr &fontName) {

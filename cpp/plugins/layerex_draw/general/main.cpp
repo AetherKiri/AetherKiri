@@ -612,6 +612,9 @@ NCB_REGISTER_SUBCLASS(FontInfo) {
     NCB_PROPERTY_RO(ascentLeading, getAscentLeading);
     NCB_PROPERTY_RO(descentLeading, getDescentLeading);
     NCB_PROPERTY_RO(lineSpacing, getLineSpacing);
+    // Private metric channel used by the krkrz vector compatibility layer
+    // when it overlays the upstream line-spacing scale property.
+    NCB_PROPERTY_RO(aetherNativeLineSpacing, getLineSpacing);
 }
 
 NCB_REGISTER_SUBCLASS(Appearance) {

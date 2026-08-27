@@ -132,8 +132,13 @@ echo "==> Building native engine and Godot extension"
 cmake_config_args=(
     -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM"
     -D "AETHERKIRI_ENABLE_INTERNAL=${AETHERKIRI_ENABLE_INTERNAL:-ON}"
-    "${AETHERKIRI_CMAKE_FEATURE_ARGS[@]}"
 )
+# Bash 3.2 (the system shell on older macOS runners) treats an empty array
+# expansion as an unset variable under `set -u`. Append optional feature
+# switches only when the shared helper actually produced any.
+if ((${#AETHERKIRI_CMAKE_FEATURE_ARGS[@]} > 0)); then
+    cmake_config_args+=("${AETHERKIRI_CMAKE_FEATURE_ARGS[@]}")
+fi
 if [[ "${SKIP_VCPKG_INSTALL:-}" == "1" ]]; then
     if [[ ! -d "$VCPKG_ROOT/installed/$VCPKG_TRIPLET" ]]; then
         echo "Error: SKIP_VCPKG_INSTALL=1 but prebuilt vcpkg triplet is missing: $VCPKG_ROOT/installed/$VCPKG_TRIPLET" >&2

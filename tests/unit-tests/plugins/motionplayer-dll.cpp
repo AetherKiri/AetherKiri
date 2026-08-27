@@ -84,6 +84,25 @@ namespace motion {
 
 #if defined(AETHERKIRI_EXPECT_INTERNAL_EMOTE)
 namespace {
+    // Other plugin-contract cases intentionally install a lightweight global
+    // TJS host and keep it for the remainder of the test process. Isolate the
+    // no-host motion path so its result does not depend on Catch2 ordering.
+    class ScopedScriptEngineAbsence {
+    public:
+        ScopedScriptEngineAbsence() : saved_(TVPScriptEngine) {
+            TVPScriptEngine = nullptr;
+        }
+
+        ~ScopedScriptEngineAbsence() { TVPScriptEngine = saved_; }
+
+        ScopedScriptEngineAbsence(const ScopedScriptEngineAbsence &) = delete;
+        ScopedScriptEngineAbsence &operator=(
+            const ScopedScriptEngineAbsence &) = delete;
+
+    private:
+        tTJS *saved_;
+    };
+
     const bool kPrivateMotionRuntimeRegistered = [] {
         TVPRegisterMotionPlayerPluginAnchor();
         return true;
@@ -102,6 +121,7 @@ TEST_CASE("PSB media policy does not initialize a legacy host data path") {
 }
 
 TEST_CASE("motionplayer provides native randomness without a script host") {
+    ScopedScriptEngineAbsence noScriptHost;
     REQUIRE(TVPGetScriptEngine() == nullptr);
     motion::Player player;
     bool sawNonZero = false;

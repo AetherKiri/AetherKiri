@@ -363,13 +363,31 @@ tjs_real getCanonicalLineHeight(const tTJSVariant &font) {
     if(font.Type() != tvtObject)
         return 0;
     tjs_real lineHeight = 0;
-    if(!getRealMember(font.AsObjectNoAddRef(), TJS_W("lineSpacing"),
+    // The canonical Aether FontInfo exposes a read-only pixel metric.  The
+    // vector API uses the same property name for a writable scale (1.0 is
+    // normal), so the native metric is published through a private sibling
+    // property by each renderer backend.
+    if(!getRealMember(font.AsObjectNoAddRef(),
+                      TJS_W("aetherNativeLineSpacing"), lineHeight) &&
+       !getRealMember(font.AsObjectNoAddRef(), TJS_W("lineSpacing"),
                       lineHeight)) {
         return 0;
     }
     return std::isfinite(static_cast<double>(lineHeight)) && lineHeight > 0
                ? lineHeight
                : 0;
+}
+
+tjs_real getLineSpacingScale(const tTJSVariant &font) {
+    if(font.Type() != tvtObject)
+        return 1.0;
+    tjs_real scale = 1.0;
+    if(!getRealMember(font.AsObjectNoAddRef(),
+                      TJS_W("aetherKrkrzLineSpacing"), scale) ||
+       !std::isfinite(static_cast<double>(scale)) || scale < 0) {
+        return 1.0;
+    }
+    return scale;
 }
 
 std::vector<ttstr> wrapLine(iTJSDispatch2 *layer, const tTJSVariant &font,
@@ -457,7 +475,7 @@ std::vector<ttstr> wrapLine(iTJSDispatch2 *layer, const tTJSVariant &font,
 
 bool measureTextWithSpacing(iTJSDispatch2 *layer, const tTJSVariant &font,
                             const ttstr &text, tjs_real letterSpacing,
-                            RectInfo &rect) {
+                            tjs_real lineSpacingScale, RectInfo &rect) {
     rect = RectInfo();
     const auto lines = splitLines(text);
     tjs_real lineHeight = 0;
@@ -494,10 +512,10 @@ bool measureTextWithSpacing(iTJSDispatch2 *layer, const tTJSVariant &font,
             getRealMember(font.AsObjectNoAddRef(), TJS_W("emSize"), fontSize);
         lineHeight = fontSize > 0 ? fontSize : 1;
     }
-    // Keep Aether's native line metrics.  ThorVG's lineSpacing property has
-    // backend-specific semantics; changing it here would make the shared
-    // LayerExDraw renderer disagree with its existing games.
-    rect.height = lineHeight * lines.size();
+    // Aether supplies the native pixel metric; krkrz expresses lineSpacing as
+    // a scale.  Apply the scale only in the compatibility path so ordinary
+    // LayerExDraw users retain their established metrics.
+    rect.height = lineHeight * lineSpacingScale * lines.size();
     rect.valid = true;
     return true;
 }
@@ -505,7 +523,7 @@ bool measureTextWithSpacing(iTJSDispatch2 *layer, const tTJSVariant &font,
 bool drawTextWithSpacing(iTJSDispatch2 *layer, const tTJSVariant &font,
                          const tTJSVariant &appearance, tjs_real x, tjs_real y,
                          const ttstr &text, tjs_real letterSpacing,
-                         RectInfo &rect) {
+                         tjs_real lineSpacingScale, RectInfo &rect) {
     rect = RectInfo();
     const auto lines = splitLines(text);
     tjs_real lineHeight = getCanonicalLineHeight(font);
@@ -521,6 +539,7 @@ bool drawTextWithSpacing(iTJSDispatch2 *layer, const tTJSVariant &font,
             getRealMember(font.AsObjectNoAddRef(), TJS_W("emSize"), fontSize);
         lineHeight = fontSize > 0 ? fontSize : 1;
     }
+    lineHeight *= lineSpacingScale;
     for(size_t lineIndex = 0; lineIndex < lines.size(); ++lineIndex) {
         tjs_real cursorX = x;
         for(const auto &unit : splitTextUnits(lines[lineIndex])) {
@@ -714,9 +733,41 @@ tjs_error fontSpacingSet(tTJSVariant *, tjs_int numparams,
                : TJS_E_FAIL;
 }
 
-bool approximatelyDefaultSpacing(const tTJSVariant &font) {
+tjs_error fontLineSpacingGet(tTJSVariant *result, tjs_int, tTJSVariant **,
+                              iTJSDispatch2 *object) {
+    if(result)
+        result->Clear();
+    tTJSVariant value;
+    if(getMember(object, TJS_W("aetherKrkrzLineSpacing"), value)) {
+        if(result)
+            *result = value;
+        return TJS_S_OK;
+    }
+    if(result)
+        *result = static_cast<tjs_real>(1.0);
+    return TJS_S_OK;
+}
+
+tjs_error fontLineSpacingSet(tTJSVariant *, tjs_int numparams,
+                             tTJSVariant **param, iTJSDispatch2 *object) {
+    if(numparams < 1 || !param || !param[0] || !isNumber(param[0]))
+        return TJS_E_BADPARAMCOUNT;
+    const tjs_real spacing = static_cast<tjs_real>(*param[0]);
+    // ThorVG treats lineSpacing as a non-negative scale.  Keep zero valid
+    // (it intentionally overlaps lines) but reject NaN/negative values that
+    // would otherwise make layout unbounded.
+    if(!std::isfinite(static_cast<double>(spacing)) || spacing < 0)
+        return TJS_E_INVALIDPARAM;
+    return setMember(object, TJS_W("aetherKrkrzLineSpacing"), *param[0])
+               ? TJS_S_OK
+               : TJS_E_FAIL;
+}
+
+bool approximatelyDefaultLayout(const tTJSVariant &font) {
     return std::abs(getLetterSpacing(font) - static_cast<tjs_real>(1.0)) <
-           static_cast<tjs_real>(1e-6);
+               static_cast<tjs_real>(1e-6) &&
+           std::abs(getLineSpacingScale(font) - static_cast<tjs_real>(1.0)) <
+               static_cast<tjs_real>(1e-6);
 }
 
 tjs_error measureStringCompat(tTJSVariant *result, tjs_int numparams,
@@ -732,7 +783,7 @@ tjs_error measureStringCompat(tTJSVariant *result, tjs_int numparams,
     const ttstr text = param[1]->GetString();
     tTJSVariant forwardedResult;
     tTJSVariant &callResult = result ? *result : forwardedResult;
-    if(approximatelyDefaultSpacing(font) || text.IsEmpty()) {
+    if(approximatelyDefaultLayout(font) || text.IsEmpty()) {
         tTJSVariant *forwarded[] = { const_cast<tTJSVariant *>(&font),
                                      param[1] };
         return callDispatch(canonicalMeasureString, object, callResult, 2,
@@ -743,7 +794,7 @@ tjs_error measureStringCompat(tTJSVariant *result, tjs_int numparams,
 
     RectInfo measured;
     if(!measureTextWithSpacing(object, font, text, getLetterSpacing(font),
-                               measured)) {
+                               getLineSpacingScale(font), measured)) {
         // A backend may not expose the canonical measure method on a custom
         // Layer object.  Preserve the original error/fallback in that case.
         tTJSVariant *forwarded[] = { const_cast<tTJSVariant *>(&font),
@@ -778,7 +829,7 @@ tjs_error drawStringCompat(tTJSVariant *result, tjs_int numparams,
     const ttstr text = param[4]->GetString();
     tTJSVariant forwardedResult;
     tTJSVariant &callResult = result ? *result : forwardedResult;
-    if(approximatelyDefaultSpacing(font) || text.IsEmpty()) {
+    if(approximatelyDefaultLayout(font) || text.IsEmpty()) {
         return callDispatch(canonicalDrawString, object, callResult, numparams,
                             param)
                    ? TJS_S_OK
@@ -789,9 +840,9 @@ tjs_error drawStringCompat(tTJSVariant *result, tjs_int numparams,
     const tjs_real x = static_cast<tjs_real>(*param[2]);
     const tjs_real y = static_cast<tjs_real>(*param[3]);
     RectInfo drawn;
-    if(!drawTextWithSpacing(object, font, appearance, x, y,
-                            text, getLetterSpacing(font),
-                            drawn)) {
+    if(!drawTextWithSpacing(object, font, appearance, x, y, text,
+                            getLetterSpacing(font),
+                            getLineSpacingScale(font), drawn)) {
         return callDispatch(canonicalDrawString, object, callResult, numparams,
                             param)
                    ? TJS_S_OK
@@ -861,6 +912,8 @@ tjs_error drawStringAreaCompat(tTJSVariant *result, tjs_int numparams,
         lineHeight = fontSize > 0 ? fontSize : 1;
     }
 
+    lineHeight *= getLineSpacingScale(font);
+
     const tjs_real totalHeight = lineHeight * lines.size();
     const tjs_real originY = y + std::max<tjs_real>(0, height - totalHeight) * alignY;
     RectInfo total;
@@ -920,4 +973,7 @@ NCB_ATTACH_CLASS(LayerExVectorFontCompat, GdiPlus.Font) {
     RawCallback(TJS_W("letterSpacing"),
                 static_cast<Callback>(&fontSpacingGet),
                 static_cast<Callback>(&fontSpacingSet), 0);
+    RawCallback(TJS_W("lineSpacing"),
+                static_cast<Callback>(&fontLineSpacingGet),
+                static_cast<Callback>(&fontLineSpacingSet), 0);
 }

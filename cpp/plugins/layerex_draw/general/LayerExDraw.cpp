@@ -522,10 +522,26 @@ RectFClass *getBounds(ImageClass *image) {
 void GdiPlus::addPrivateFont(const tjs_char *fontFileName) {
     spdlog::get("plugin")->info("tjs2 script want load: {}",
                                 ttstr{ fontFileName }.AsNarrowStdString());
-    // HOOK Font File
-
-    //    addFontFile("NotoSansCJK"); // 中日韩字体
-    //    addFontFile("Roboto"); // 英文字体
+    // libgdiplus has no portable private-font collection.  Register the
+    // stream in Aether's shared table instead; the same table is consumed by
+    // FreeType path drawing and by the krkrz layerExVector bridge.
+    if(!fontFileName)
+        return;
+    ttstr filename;
+    try {
+        filename = TVPGetPlacedPath(fontFileName);
+    } catch(...) {
+    }
+    if(filename.IsEmpty())
+        filename = fontFileName;
+    if(!filename.IsEmpty()) {
+        try {
+            TVPEnumFontsProc(filename);
+        } catch(...) {
+            // Preserve the old void-returning API: an unavailable optional
+            // font is handled by the caller's normal fallback path.
+        }
+    }
 }
 
 /**
@@ -645,10 +661,12 @@ void layerex::FontInfo::setFamilyName(const tjs_char *fName) {
     // render with the wrong glyphs or dereference a null stream when no
     // default font had been selected yet.  Fall back to the default only for
     // legacy/system names that are not present in the shared font table.
+    tjs_int faceIndex = 0;
     std::unique_ptr<tTJSBinaryStream> stream{
-        TVPCreateFontStream(this->familyName) };
+        TVPCreateFontStream(this->familyName, &faceIndex) };
     if(!stream && !TVPGetDefaultFontName().IsEmpty()) {
-        stream.reset(TVPCreateFontStream(TVPGetDefaultFontName()));
+        faceIndex = 0;
+        stream.reset(TVPCreateFontStream(TVPGetDefaultFontName(), &faceIndex));
     }
     if(!stream) {
         return;
@@ -661,7 +679,8 @@ void layerex::FontInfo::setFamilyName(const tjs_char *fName) {
     buffer = std::make_unique<FT_Byte[]>(bufferSize);
     stream->ReadBuffer(buffer.get(), bufferSize);
 
-    if(FT_New_Memory_Face(TVPGetFontLibrary(), buffer.get(), bufferSize, 0,
+    if(FT_New_Memory_Face(TVPGetFontLibrary(), buffer.get(), bufferSize,
+                          faceIndex,
                           &this->ftFace) != 0) {
         buffer.reset();
         return;

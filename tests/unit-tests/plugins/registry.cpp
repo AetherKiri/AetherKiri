@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 
 #include "PluginImpl.h"
 #include "ScriptMgnIntf.h"
@@ -317,6 +318,28 @@ TEST_CASE("krkrz layerExVector reuses the Aether LayerExDraw surface") {
         0, TJS_W("italic"), nullptr, &italicReadback, fontObject)));
     CHECK(static_cast<tjs_real>(italicReadback) > 0);
 
+    // krkrz exposes lineSpacing as a writable scale.  The adapter keeps the
+    // Aether pixel metric in a private sibling property and applies this
+    // scale only to vector layout, so the legacy LayerExDraw contract stays
+    // unchanged.
+    tTJSVariant lineSpacing;
+    REQUIRE(TJS_SUCCEEDED(fontObject->PropGet(
+        0, TJS_W("lineSpacing"), nullptr, &lineSpacing, fontObject)));
+    REQUIRE((lineSpacing.Type() == tvtReal ||
+             lineSpacing.Type() == tvtInteger));
+    CHECK(static_cast<tjs_real>(lineSpacing) == Catch::Approx(1.0));
+    const tTJSVariant lineScale(static_cast<tjs_real>(1.5));
+    REQUIRE(TJS_SUCCEEDED(fontObject->PropSet(
+        TJS_MEMBERENSURE, TJS_W("lineSpacing"), nullptr, &lineScale,
+        fontObject)));
+    tTJSVariant lineSpacingReadback;
+    REQUIRE(TJS_SUCCEEDED(fontObject->PropGet(
+        0, TJS_W("lineSpacing"), nullptr, &lineSpacingReadback,
+        fontObject)));
+    REQUIRE((lineSpacingReadback.Type() == tvtReal ||
+             lineSpacingReadback.Type() == tvtInteger));
+    CHECK(static_cast<tjs_real>(lineSpacingReadback) == Catch::Approx(1.5));
+
     fontObject->Release();
 
     const tTJSVariant layerClass = getGlobalProp(TJS_W("Layer"));
@@ -388,9 +411,15 @@ TEST_CASE("krkrz layerExVector aliases loaded fonts in the core registry") {
     REQUIRE(loadResult.Type() == tvtInteger);
     REQUIRE(static_cast<tjs_int>(loadResult) != 0);
 
-    std::unique_ptr<tTJSBinaryStream> stream(TVPCreateFontStream(alias));
+    tjs_int faceIndex = -1;
+    std::unique_ptr<tTJSBinaryStream> stream(
+        TVPCreateFontStream(alias, &faceIndex));
     REQUIRE(stream != nullptr);
     CHECK(stream->GetSize() > 0);
+    CHECK(faceIndex >= 0);
+    TVPFontNamePathInfo *registered = TVPFindFont(alias);
+    REQUIRE(registered != nullptr);
+    CHECK(!registered->FamilyName.IsEmpty());
 }
 
 TEST_CASE("extNagano transition providers survive a module reload") {

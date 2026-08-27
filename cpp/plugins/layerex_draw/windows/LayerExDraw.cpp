@@ -5,6 +5,7 @@
 
 #include "ncbind.hpp"
 #include "LayerExDraw.hpp"
+#include "FontImpl.h"
 
 #pragma comment(lib, "gdiplus.lib")
 
@@ -15,6 +16,19 @@ static ULONG_PTR gdiplusToken;
 /// プライベートフォント情報
 static PrivateFontCollection *privateFontCollection = NULL;
 static vector<void *> fontDatas;
+
+// GDI+ private collections identify a font by its internal family name, not
+// by an Aether/krkrz script alias.  Resolve aliases through the shared core
+// registry before constructing a FontFamily so custom fonts loaded by
+// layerExVector work on Windows as well as on the FreeType backends.
+static ttstr fontCollectionName(const ttstr &requested) {
+    ttstr resolved;
+    if(TVPFindFont(requested) && TVPResolveFont(requested, &resolved) &&
+       !resolved.IsEmpty()) {
+        return resolved;
+    }
+    return requested;
+}
 
 inline static float ToFloat(FIXED &pfx) {
     LONG l = *(LONG *)&pfx;
@@ -152,8 +166,21 @@ void GdiPlus::addPrivateFont(const tjs_char *fontFileName) {
     if(!privateFontCollection) {
         privateFontCollection = new PrivateFontCollection();
     }
-    ttstr filename = TVPGetPlacedPath(fontFileName);
+    ttstr filename;
+    try {
+        filename = TVPGetPlacedPath(fontFileName);
+    } catch(...) {
+    }
+    if(filename.IsEmpty() && fontFileName)
+        filename = fontFileName;
     if(filename.length()) {
+        // Keep the process-wide Aether registry in sync with the native
+        // collection.  Failure is intentionally ignored here; GDI+ retains
+        // its historical exception/availability behavior below.
+        try {
+            TVPEnumFontsProc(filename);
+        } catch(...) {
+        }
         if(!wcschr(filename.toWString().c_str(), '>')) {
             // 実ファイルが存在
             TVPGetLocalName(filename);
@@ -286,24 +313,39 @@ void FontInfo::setFamilyName(const tjs_char *familyName) {
     }
 
     if(familyName) {
+        const ttstr requestedName(familyName);
+        const ttstr lookupName = fontCollectionName(requestedName);
         clear();
-        if(privateFontCollection) {
-            fontFamily = new FontFamily(ttstr{ familyName }.toWString().c_str(),
-                                        privateFontCollection);
-            if(fontFamily->IsAvailable()) {
-                this->familyName = familyName;
-                return;
+
+        auto tryCollection = [this](const ttstr &name,
+                                    PrivateFontCollection *collection) {
+            const std::wstring wideName = name.toWString();
+            FontFamily *candidate = collection
+                                        ? new FontFamily(wideName.c_str(), collection)
+                                        : new FontFamily(wideName.c_str());
+            if(candidate->IsAvailable()) {
+                fontFamily = candidate;
+                return true;
             }
-            clear();
+            delete candidate;
+            return false;
+        };
+
+        if(privateFontCollection &&
+           (tryCollection(lookupName, privateFontCollection) ||
+            (lookupName != requestedName &&
+             tryCollection(requestedName, privateFontCollection)))) {
+            this->familyName = requestedName;
+            return;
         }
-        fontFamily = new FontFamily(ttstr{ familyName }.toWString().c_str());
-        if(fontFamily->IsAvailable()) {
-            this->familyName = familyName;
+        if(tryCollection(lookupName, nullptr) ||
+           (lookupName != requestedName && tryCollection(requestedName, nullptr))) {
+            this->familyName = requestedName;
             return;
         }
         clear();
         gdiPlusUnsupportedFont = true;
-        this->familyName = familyName;
+        this->familyName = requestedName;
     }
 }
 
@@ -330,7 +372,8 @@ OUTLINETEXTMETRIC *FontInfo::createFontMetric(void) const {
     font.lfUnderline = style & 4;
     font.lfStrikeOut = style & 8;
     font.lfCharSet = DEFAULT_CHARSET;
-    wcscpy_s(font.lfFaceName, ttstr{ familyName }.toWString().c_str());
+    wcscpy_s(font.lfFaceName,
+             fontCollectionName(familyName).toWString().c_str());
     HFONT hFont = CreateFontIndirect(&font);
     if(hFont == NULL) {
         DeleteObject(dc);

@@ -42,6 +42,22 @@ merge_binaries() {
     shift
     shift
 
+    # A one-architecture macOS triplet does not need lipo.  Besides being
+    # faster, moving the staged files directly avoids creating a second copy
+    # of every static archive (which can exceed the available disk space on
+    # constrained CI runners).
+    if [ "$#" -eq 1 ]; then
+        ARCH=$1
+        [ ! -d "$SOURCE/$ARCH" ] && return 0
+        mkdir -p "$TARGET"
+        (cd "$SOURCE/$ARCH" && find . -type f -print) | while IFS= read -r BINARY; do
+            DIRNAME=$(dirname "$BINARY")
+            mkdir -p "$TARGET/$DIRNAME"
+            mv "$SOURCE/$ARCH/$BINARY" "$TARGET/$BINARY"
+        done
+        return 0
+    fi
+
     pushd $SOURCE/$1
     BINARIES=$(find . -type f)
     popd
