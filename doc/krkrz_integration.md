@@ -62,8 +62,8 @@ The adapters currently enabled by default are:
 | `layerExImage.dll` | upstream-adapted | upstream image implementation plus portable `RGBQUAD` definitions |
 | `shrinkCopy.dll` | upstream-adapted | upstream implementation |
 | `psdfile.dll` | hybrid | Aether TJS/Layer/Storage wrapper, upstream `psdparse` only |
-| `layerExSave.dll` | hybrid | Aether storage/threading bridge; upstream encoder is reference input |
-| `extNagano.dll` | hybrid | Aether provider and deterministic fallbacks; upstream effects are not claimed exact |
+| `layerExSave.dll` | hybrid | Aether Layer/Storage/threading wrapper with namespaced upstream LodePNG and TLG5 codec methods; BMP and TJS/octet boundaries remain Aether-owned |
+| `extNagano.dll` | hybrid | Aether provider registry wrapping ten selected upstream transition algorithms; incompatible algorithms/options automatically use the Aether fallback |
 | `KAGParserEx.dll` | hybrid | Aether's single parser implementation with upstream semantics as reference |
 | `AlphaMovie.dll` | hybrid | Aether FFmpeg/queue/Godot pipeline; upstream codec code is reference input |
 
@@ -84,9 +84,10 @@ upstream scripts without vendoring a second copy into the runtime.
 The product demo remains a deliberate fixture: it contains translated text
 and Aether-specific polyfills, so it is not silently replaced by the upstream
 KAG3 tree. `Krkr2Compat` and `KAG3_Ham` are reference/fixture inputs rather
-than default runtime injection. A future script-stage target may consume the
-submodule directly after its generated archive and compatibility tests are
-locked down.
+than default runtime injection. The TJS2 corpus, issue-226 regressions, and
+the KAG entrypoint chain are now executed by Aether's CTest harness directly
+from the submodule; this validates script compatibility without copying or
+injecting the upstream KAG runtime into the product.
 
 ## ABI and ownership rules
 
@@ -114,12 +115,16 @@ parity tests.
 
 * **Visual SIMD:** Aether's Highway/function-pointer dispatch in
   `cpp/core/visual/simd` remains linked. Upstream SSE2/AVX2/NEON files are
-  algorithm and parity-test inputs; importing them wholesale would duplicate
-  `tvpgl` symbols and CPU dispatch state.
+  compiled by the isolated parity target and serve as method-level reference;
+  importing them wholesale would duplicate `tvpgl` symbols and CPU dispatch
+  state. A future individual kernel can be adopted only after namespacing and
+  an engine-level image test.
 * **Sound DSP:** Aether's `cpp/core/sound` and `cpp/core/utils` own the public
   sound ABI and default implementation. Upstream `MathAlgorithms`, `RealFFT`,
-  and phase-vocoder SIMD code may be adopted later only behind renamed or
-  namespaced symbols and the upstream relative/absolute-tolerance parity test.
+  and phase-vocoder SIMD code are currently parity/reference inputs. Individual
+  methods may be adopted later behind renamed or namespaced symbols and the
+  upstream relative/absolute-tolerance parity test; the complete upstream
+  sound core is not linked as a second implementation.
 * **DAP debugger:** Upstream `tjsDebuggerCore`, hook/symbol files, and
   `DAPServer` are recorded as `optional`. They require an adapter for Aether's
   VM hooks, thread lifecycle, socket ownership, and host event loop before they
@@ -146,7 +151,8 @@ contract is reviewed.
 
 ## Build and verification
 
-The default build consumes the seven leaf adapters and requires the submodule:
+The default build consumes the seven leaf adapters, the layerExSave codec
+bridge, and the selected extNagano algorithms; it requires the submodule:
 
 ```bash
 cmake -S . -B out/krkrz-debug \
@@ -157,10 +163,14 @@ cmake --build out/krkrz-debug --target krkr2plugin --parallel
 ctest --test-dir out/krkrz-debug --output-on-failure
 ```
 
-Use `-DAETHER_USE_KRKRZ_LEAF_PLUGINS=OFF` to compile the historical Aether
-implementations while still retaining the submodule and manifest. Both public
-fallback and private AetherInternal configurations are supported; the latter
-extends targets instead of replacing them.
+`AETHER_USE_KRKRZ_LEAF_PLUGINS=OFF` is a developer build-time source-selection
+option for comparing the seven leaf adapters with the historical Aether
+implementations. It is not a runtime/game switch: the product has one plugin
+registry, and hybrid providers select their Aether fallback automatically when
+an upstream operation cannot be used. The layerExSave codec bridge remains
+available in the normal integration target. Both public fallback and private
+AetherInternal configurations are supported; the latter extends targets
+instead of replacing them.
 
 The minimum pre-submit checks are:
 
@@ -186,9 +196,11 @@ ctest --test-dir out/krkrz-parity \
   -R 'aether_krkrz_(visual|sound)_parity' --output-on-failure
 ```
 
-These parity targets are the safe first consumer of upstream core code. A
-future production adapter must keep the same symbol isolation and add an
-engine-level behavior test before changing the core component status.
+These parity targets are the safe first consumer of upstream core code. They
+make it possible to reuse or port one well-understood method without claiming
+that the whole upstream core can replace Aether. A future production adapter
+must keep the same symbol isolation and add an engine-level behavior test before
+changing a core component's status.
 
 The submodule's source and license notices remain in the submodule. Do not copy
 its source into `cpp/plugins` or publish private AetherInternal sources as part

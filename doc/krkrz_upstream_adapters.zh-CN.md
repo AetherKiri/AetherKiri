@@ -5,7 +5,9 @@
 `cpp/plugins/upstream_bridge` 中的翻译单元是选定 `krkrz_dev` 插件源码进入
 Aether 构建的唯一入口。每个适配器先建立 Aether 的 `ncbind`/TJS ABI，明确
 模块名称，然后再包含固定版本 `third_party/krkrz_dev` checkout 中的业务翻译
-单元。
+单元。少量可移植 upstream 实现文件（layerExSave codec 和选定的 extNagano
+算法）也会直接编译，但它们始终通过 Aether 自有 wrapper 或 detached provider
+使用；不会导入 upstream registry 或生命周期。
 
 新增适配器时请遵守以下规则：
 
@@ -19,7 +21,15 @@ Aether 构建的唯一入口。每个适配器先建立 Aether 的 `ncbind`/TJS 
   `runtime/kirikiri/manifests/plugins.toml`，并保证 manifest revision 与父仓 gitlink
   一致。
 
-当前适配器有意限制在低风险的叶子插件：
+当前直接叶子适配器是低风险插件：
 `layerExAreaAverage`、`layerExRaster`、`layerExLongExposure`、`getSample`、
-`layerExBTOA`、`layerExImage` 和 `shrinkCopy`。更复杂的插件在运行时契约得到
-验证前，继续采用 hybrid 或 Aether-owned 方案。
+`layerExBTOA`、`layerExImage` 和 `shrinkCopy`。Hybrid 源码复用还包括
+`layerExSave` 使用的 namespace 隔离 LodePNG/TLG5 方法，以及
+`blurfade`、`book`、`flutter`、`honeyturn`、`morphing`、`multiripple`、`rgbfade`、
+`scanline`、`spin`、`zoomfade` 十个转场算法。由于 texture-provider ABI 不匹配，
+extNagano 的 `3duniversal` 和 `imagewipe` 保留 Aether fallback；选项转换失败时
+也会自动 fallback。更复杂的插件在运行时契约得到验证前，继续采用 hybrid 或
+Aether-owned 方案。
+
+这是实现层的兼容规则，不是运行时开关：Aether 只有一个插件 registry；无论 upstream
+操作是否接受输入，游戏看到的模块/provider 名称都保持不变。

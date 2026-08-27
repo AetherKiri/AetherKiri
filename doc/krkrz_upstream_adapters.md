@@ -6,7 +6,10 @@ The translation units in `cpp/plugins/upstream_bridge` are the only place
 where selected `krkrz_dev` plugin sources enter the Aether build. Each adapter
 establishes the Aether `ncbind`/TJS ABI, names the module explicitly, and then
 includes the business translation unit from the pinned
-`third_party/krkrz_dev` checkout.
+`third_party/krkrz_dev` checkout. A few portable upstream implementation files
+(the layerExSave codecs and selected extNagano algorithms) are also compiled
+directly, but they are always reached through an Aether-owned wrapper or
+detached provider; the upstream registry and lifecycle are never imported.
 
 Keep these rules when adding an adapter:
 
@@ -21,7 +24,17 @@ Keep these rules when adding an adapter:
   `runtime/kirikiri/manifests/plugins.toml` and keep the manifest revision
   equal to the parent gitlink.
 
-The current adapters are intentionally limited to the low-risk leaf plugins:
+The current direct leaf adapters are the low-risk plugins:
 `layerExAreaAverage`, `layerExRaster`, `layerExLongExposure`, `getSample`,
-`layerExBTOA`, `layerExImage`, and `shrinkCopy`. More invasive plugins remain
-hybrid or Aether-owned until their runtime contract is proven.
+`layerExBTOA`, `layerExImage`, and `shrinkCopy`. Hybrid source reuse additionally
+includes the namespaced LodePNG/TLG5 methods used by `layerExSave`, plus the
+`blurfade`, `book`, `flutter`, `honeyturn`, `morphing`, `multiripple`, `rgbfade`,
+`scanline`, `spin`, and `zoomfade` transition algorithms. The extNagano
+`3duniversal` and `imagewipe` providers remain Aether fallbacks because their
+texture-provider ABI does not match; option conversion failures also fall back
+automatically. More invasive plugins remain hybrid or Aether-owned until their
+runtime contract is proven.
+
+This is an implementation-level compatibility rule, not a runtime switch:
+there is one Aether plugin registry, and a game sees the same module/provider
+names regardless of whether an upstream operation accepts its inputs.

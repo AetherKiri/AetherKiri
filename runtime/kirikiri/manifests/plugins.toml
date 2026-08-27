@@ -56,7 +56,7 @@ status = "fixture"
 upstream_path = "script/test"
 entrypoint = "script/test/tjs2/test.tjs"
 revision = "041cb861117142ae715dda2b36757d4426b429e5"
-notes = "Upstream TJS2 regression corpus; run through an Aether host-specific harness before product claims."
+notes = "Upstream TJS2 regression corpus; the Aether unit-test host executes the corpus directly from this submodule checkout."
 
 [[core_components]]
 name = "visual-simd"
@@ -164,18 +164,18 @@ notes = "The Aether Layer/Storage wrapper is retained; only portable parser code
 [[plugins]]
 name = "layerExSave.dll"
 status = "hybrid"
-implementation = "aether-wrapper"
+implementation = "aether-wrapper-with-upstream-codecs"
 upstream_path = "src/plugins/layerExSave"
 adapter = "cpp/plugins/layerExSaveCompat.cpp"
-notes = "Upstream encoders are tracked for a subsequent adapter; Aether threading and Storage callbacks remain authoritative."
+notes = "The Aether Layer/Storage and threading boundary remains authoritative while namespaced upstream LodePNG and TLG5 SlideCompressor code is compiled through cpp/plugins/upstream_bridge/layerExSaveCodecs.cpp. Legacy BMP, crop/diff operations, and TJS/octet ownership stay Aether-owned."
 
 [[plugins]]
 name = "extNagano.dll"
 status = "hybrid"
-implementation = "aether-provider-with-upstream-reference"
+implementation = "aether-provider-with-selected-upstream-algorithms"
 upstream_path = "src/plugins/extNagano"
 adapter = "cpp/plugins/extNagano.cpp"
-notes = "The current provider keeps deterministic Aether fallbacks; reconstructed upstream effects are not silently presented as exact."
+notes = "Ten self-contained upstream transition algorithms are detached behind Aether providers (including both spin and legacy spinfade names). 3duniversal/imagewipe and incompatible option shapes fall back automatically to Aether providers; no second global registry is exposed and bit-exact parity is not asserted."
 
 [[plugins]]
 name = "KAGParserEx.dll"

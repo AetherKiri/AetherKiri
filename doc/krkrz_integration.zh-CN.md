@@ -57,8 +57,8 @@ git -c submodule.third_party/krkrz_dev.url=https://github.com/wamsoft/krkrz_dev.
 | `layerExImage.dll` | upstream-adapted | upstream 图像实现，加可移植 `RGBQUAD` 定义 |
 | `shrinkCopy.dll` | upstream-adapted | upstream 实现 |
 | `psdfile.dll` | hybrid | Aether TJS/Layer/Storage wrapper，仅复用 upstream `psdparse` |
-| `layerExSave.dll` | hybrid | Aether 存储/线程桥接；upstream encoder 作为参考输入 |
-| `extNagano.dll` | hybrid | Aether provider 与确定性 fallback；不宣称 upstream 效果完全一致 |
+| `layerExSave.dll` | hybrid | Aether Layer/Storage/线程 wrapper，直接编译 namespace 隔离的 upstream LodePNG 与 TLG5 codec 方法；BMP 和 TJS/octet 边界仍由 Aether 负责 |
+| `extNagano.dll` | hybrid | Aether provider registry 包装十个选定的 upstream 转场算法；算法或选项不兼容时自动使用 Aether fallback |
 | `KAGParserEx.dll` | hybrid | Aether 单一 parser 实现，upstream 语义作为参考 |
 | `AlphaMovie.dll` | hybrid | Aether FFmpeg/队列/Godot pipeline；upstream codec 作为参考输入 |
 
@@ -76,8 +76,9 @@ revision 和入口点记录在 manifest 的 `[[script_components]]` 中，并由
 
 产品 Demo 是有意保留的独立 fixture：它包含翻译文本和 Aether 专用 polyfill，
 因此不会被 upstream KAG3 树静默替换。`Krkr2Compat` 和 `KAG3_Ham` 是参考/测试
-输入，不会默认注入运行时。未来如果生成 archive 和兼容性测试契约固定，可以让
-脚本 stage target 直接消费 submodule。
+输入，不会默认注入运行时。TJS2 测试集、issue-226 回归以及 KAG 入口链现在由
+Aether 的 CTest harness 直接从 submodule 执行；这验证了脚本兼容性，但不会复制或
+把 upstream KAG runtime 注入产品。
 
 ## ABI 与所有权规则
 
@@ -100,12 +101,14 @@ upstream core 有复用价值，但不是 Aether core 的直接替代品。manif
 契约记录了精确的 upstream 文件和 parity 测试。
 
 * **Visual SIMD：** `cpp/core/visual/simd` 中 Aether 的 Highway/函数指针分发仍是
-  生产实现。upstream SSE2/AVX2/NEON 文件只作为算法和 parity 输入；整包导入会
-  重复 `tvpgl` 符号和 CPU dispatch 状态。
+  生产实现。upstream SSE2/AVX2/NEON 文件由隔离 parity target 编译，作为算法和
+  方法级参考；整包导入会重复 `tvpgl` 符号和 CPU dispatch 状态。以后若采用单个
+  kernel，必须先做 namespace 隔离并增加 engine-level 图像测试。
 * **Sound DSP：** `cpp/core/sound` 与 `cpp/core/utils` 负责公开 sound ABI 和默认
-  实现。upstream `MathAlgorithms`、`RealFFT` 与 phase-vocoder SIMD 代码只有在
-  重命名或 namespace 隔离，并通过 upstream 相对/绝对误差 parity 测试后，才能
-  进一步采用。
+  实现。upstream `MathAlgorithms`、`RealFFT` 与 phase-vocoder SIMD 代码目前是
+  parity/参考输入。以后可以在重命名或 namespace 隔离后，按单个方法并通过 upstream
+  相对/绝对误差 parity 测试来采用；不会把整套 upstream sound core 作为第二套实现
+  链接。
 * **DAP debugger：** upstream `tjsDebuggerCore`、hook/symbol 文件及 `DAPServer`
   标记为 `optional`。它们需要先适配 Aether 的 VM hook、线程生命周期、socket
   所有权和 host event loop 才能链接。upstream `dap_smoke.py` 只是未来验收测试，
@@ -127,7 +130,8 @@ upstream 实现分离。
 
 ## 构建与验证
 
-默认构建会使用七个叶子适配器，并要求 submodule 已初始化：
+默认构建会使用七个叶子适配器、layerExSave codec bridge 以及选定的 extNagano
+算法，并要求 submodule 已初始化：
 
 ```bash
 cmake -S . -B out/krkrz-debug \
@@ -138,9 +142,11 @@ cmake --build out/krkrz-debug --target krkr2plugin --parallel
 ctest --test-dir out/krkrz-debug --output-on-failure
 ```
 
-使用 `-DAETHER_USE_KRKRZ_LEAF_PLUGINS=OFF` 可以编译历史 Aether 实现，同时仍保留
-submodule 和 manifest。公开 fallback 与私有 AetherInternal 配置都受支持；后者是
-扩展目标，不会替换其余实现。
+`AETHER_USE_KRKRZ_LEAF_PLUGINS=OFF` 只是开发/构建时用于对比七个叶子适配器和历史
+Aether 实现的源码选择项，不是运行时或面向游戏的开关：产品只有一个插件 registry，
+hybrid provider 在 upstream 操作不能使用时会自动选择 Aether fallback。正常集成目标
+仍提供 layerExSave codec bridge。公开 fallback 与私有 AetherInternal 配置都受支持；
+后者是扩展目标，不会替换其余实现。
 
 提交前至少执行：
 
@@ -165,8 +171,9 @@ ctest --test-dir out/krkrz-parity \
   -R 'aether_krkrz_(visual|sound)_parity' --output-on-failure
 ```
 
-这些 parity target 是消费 upstream core 的安全第一步。未来的生产 adapter 必须
-保持同样的符号隔离，并增加 engine-level 行为测试，之后才能改变 core component
+这些 parity target 是消费 upstream core 的安全第一步：它们支持复用或移植一个已经
+理解清楚的方法，但不意味着整套 upstream core 可以替换 Aether。未来的生产 adapter
+必须保持同样的符号隔离，并增加 engine-level 行为测试，之后才能改变 core component
 状态。
 
 submodule 的源码和 license notice 继续保留在 submodule 内。不要把源码复制到
