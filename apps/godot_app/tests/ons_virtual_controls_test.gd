@@ -67,6 +67,51 @@ func _run() -> void:
     ):
         _fail("Menu is not flush with the safe-area edge")
         return
+    if not is_equal_approx(
+        controls.menu_button.get_global_rect().position.y,
+        safe_rect.position.y
+    ):
+        _fail("Menu does not start at the top edge")
+        return
+    if (
+        not controls.menu_button.text.is_empty()
+        or controls.menu_button.get_node_or_null("MenuIcon") == null
+    ):
+        _fail("edge Menu must render as an icon without a text label")
+        return
+
+    var menu_x: float = controls.menu_button.position.x
+    var menu_drag_down := InputEventScreenTouch.new()
+    menu_drag_down.index = 3
+    menu_drag_down.pressed = true
+    menu_drag_down.position = controls.menu_button.get_global_rect().get_center()
+    if not controls.routes_pointer(menu_drag_down):
+        _fail("Menu drag press was not captured")
+        return
+    var menu_drag := InputEventScreenDrag.new()
+    menu_drag.index = 3
+    menu_drag.position = menu_drag_down.position + Vector2(-120, 86)
+    if not controls.routes_pointer(menu_drag):
+        _fail("Menu drag motion was not captured")
+        return
+    var menu_drag_up := InputEventScreenTouch.new()
+    menu_drag_up.index = 3
+    menu_drag_up.pressed = false
+    menu_drag_up.position = menu_drag.position
+    if not controls.routes_pointer(menu_drag_up):
+        _fail("Menu drag release was not captured")
+        return
+    controls.menu_button.emit_signal("pressed")
+    if controls.is_menu_open():
+        _fail("dragging Menu unexpectedly activated it")
+        return
+    await process_frame
+    if (
+        not is_equal_approx(controls.menu_button.position.x, menu_x)
+        or controls.menu_button.position.y <= safe_rect.position.y
+    ):
+        _fail("Menu drag must change only its Y position")
+        return
     controls.menu_button.emit_signal("pressed")
     if (
         not controls.is_menu_open()
@@ -74,6 +119,14 @@ func _run() -> void:
         or not controls.virtual_controls_button.visible
     ):
         _fail("Menu did not expose keyboard and virtual-control choices")
+        return
+    if (
+        not safe_rect.encloses(controls.keyboard_button.get_global_rect())
+        or not safe_rect.encloses(
+            controls.virtual_controls_button.get_global_rect()
+        )
+    ):
+        _fail("Menu options escaped the mobile safe area after dragging")
         return
     controls.keyboard_button.emit_signal("pressed")
     if _keyboard_requests != 1 or controls.is_menu_open():

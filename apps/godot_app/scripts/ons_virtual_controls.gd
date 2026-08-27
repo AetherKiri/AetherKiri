@@ -30,6 +30,7 @@ const OVERLAY_LAYER := 120
 const BUTTON_MIN_SIZE := 44.0
 const BUTTON_MAX_SIZE := 68.0
 const CURSOR_SIZE := 32.0
+const MENU_DRAG_THRESHOLD := 6.0
 
 const REFERENCE_FILL := Color(0.30, 0.31, 0.33, 0.58)
 const REFERENCE_FILL_HOVER := Color(0.36, 0.37, 0.39, 0.72)
@@ -70,6 +71,12 @@ var _panel_controls: Array[Control] = []
 var _interactive_controls: Array[Control] = []
 var _cursor_touch_index := -1
 var _cursor_mouse_dragging := false
+var _menu_touch_index := -1
+var _menu_mouse_dragging := false
+var _menu_drag_start_pointer_y := 0.0
+var _menu_drag_grab_offset_y := 0.0
+var _menu_drag_moved := false
+var _menu_y_ratio := 0.0
 
 func setup(tokens) -> void:
     if _root != null:
@@ -97,6 +104,7 @@ func setup(tokens) -> void:
     _root.add_child(virtual_controls_button)
 
     _apply_edge_menu_style(menu_button)
+    _attach_edge_menu_icon(menu_button)
     _apply_menu_option_style(keyboard_button)
     _apply_menu_option_style(virtual_controls_button)
 
@@ -189,6 +197,9 @@ func set_enabled(enabled: bool) -> void:
         _menu_open = false
         _cursor_touch_index = -1
         _cursor_mouse_dragging = false
+        _menu_touch_index = -1
+        _menu_mouse_dragging = false
+        _menu_drag_moved = false
     visible = enabled
     _sync_visibility()
 
@@ -228,22 +239,15 @@ func layout(_window_size: Vector2, safe_rect: Rect2) -> void:
     var key_size := Vector2(diameter, diameter)
 
     var menu_size := Vector2(maxf(46.0, diameter), maxf(42.0, diameter * 0.92))
+    var menu_y_range := maxf(0.0, safe_rect.size.y - menu_size.y)
     menu_button.position = Vector2(
         safe_end.x - menu_size.x,
-        safe_rect.position.y + (safe_rect.size.y - menu_size.y) * 0.5
+        safe_rect.position.y + menu_y_range * _menu_y_ratio
     )
     menu_button.size = menu_size
+    _layout_edge_menu_icon()
 
-    var option_size := Vector2(maxf(108.0, diameter * 2.15), menu_size.y)
-    var option_x := menu_button.position.x - option_size.x - gap
-    var options_top := menu_button.position.y - option_size.y - gap * 0.5
-    keyboard_button.position = Vector2(option_x, options_top)
-    keyboard_button.size = option_size
-    virtual_controls_button.position = Vector2(
-        option_x,
-        options_top + option_size.y + gap
-    )
-    virtual_controls_button.size = option_size
+    _layout_menu_options(diameter, gap)
 
     escape_button.position = safe_rect.position + Vector2(margin, margin)
     escape_button.size = key_size
@@ -337,6 +341,15 @@ func routes_pointer(event: InputEvent) -> bool:
 
     if event is InputEventScreenTouch:
         var touch := event as InputEventScreenTouch
+        if touch.pressed and menu_button.get_global_rect().has_point(touch.position):
+            _begin_menu_drag(touch.position.y)
+            _menu_touch_index = touch.index
+            return true
+        if touch.index == _menu_touch_index:
+            if not touch.pressed:
+                _menu_touch_index = -1
+                _finish_menu_drag()
+            return true
         if (
             touch.pressed
             and _panel_open
@@ -350,12 +363,27 @@ func routes_pointer(event: InputEvent) -> bool:
             return true
     elif event is InputEventScreenDrag:
         var drag := event as InputEventScreenDrag
+        if drag.index == _menu_touch_index:
+            _drag_menu_to(drag.position.y)
+            return true
         if drag.index == _cursor_touch_index:
             _move_cursor_to(drag.position)
             return true
     elif event is InputEventMouseButton:
         var mouse_button := event as InputEventMouseButton
         if mouse_button.button_index == MOUSE_BUTTON_LEFT:
+            if (
+                mouse_button.pressed
+                and menu_button.get_global_rect().has_point(mouse_button.position)
+            ):
+                _begin_menu_drag(mouse_button.position.y)
+                _menu_mouse_dragging = true
+                return true
+            if _menu_mouse_dragging:
+                if not mouse_button.pressed:
+                    _menu_mouse_dragging = false
+                    _finish_menu_drag()
+                return true
             if (
                 mouse_button.pressed
                 and _panel_open
@@ -369,9 +397,14 @@ func routes_pointer(event: InputEvent) -> bool:
                 if not mouse_button.pressed:
                     _cursor_mouse_dragging = false
                 return true
-    elif event is InputEventMouseMotion and _cursor_mouse_dragging:
-        _move_cursor_to((event as InputEventMouseMotion).position)
-        return true
+    elif event is InputEventMouseMotion:
+        var motion := event as InputEventMouseMotion
+        if _menu_mouse_dragging:
+            _drag_menu_to(motion.position.y)
+            return true
+        if _cursor_mouse_dragging:
+            _move_cursor_to(motion.position)
+            return true
 
     if not _held_keys.is_empty() or not _held_mouse_buttons.is_empty():
         return event is InputEventScreenTouch \
@@ -506,18 +539,92 @@ func _apply_wheel_button_style(button: Button) -> void:
     button.add_theme_font_size_override("font_size", 16)
 
 func _apply_edge_menu_style(button: Button) -> void:
-    button.text = "••\nMenu"
-    button.add_theme_font_size_override("font_size", 12)
-    for state in ["normal", "hover", "pressed"]:
-        var fill := Color(0.08, 0.08, 0.09, 0.76)
-        if state == "hover":
-            fill = Color(0.14, 0.14, 0.15, 0.86)
-        elif state == "pressed":
-            fill = Color(_tokens.accent.r, _tokens.accent.g, _tokens.accent.b, 0.88)
-        var style := _button_style(fill, REFERENCE_BORDER, false, 2)
-        style.corner_radius_top_right = 0
-        style.corner_radius_bottom_right = 0
-        button.add_theme_stylebox_override(state, style)
+    button.text = ""
+    button.tooltip_text = "Menu"
+    button.add_theme_stylebox_override("normal", StyleBoxEmpty.new())
+    button.add_theme_stylebox_override("hover", StyleBoxEmpty.new())
+    button.add_theme_stylebox_override(
+        "pressed",
+        _button_style(
+            Color(_tokens.accent.r, _tokens.accent.g, _tokens.accent.b, 0.28),
+            Color.TRANSPARENT,
+            true,
+            0
+        )
+    )
+
+func _attach_edge_menu_icon(button: Button) -> void:
+    var icon := Control.new()
+    icon.name = "MenuIcon"
+    icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    button.add_child(icon)
+
+    for row in range(2):
+        var track := Panel.new()
+        track.name = "Track%d" % row
+        track.mouse_filter = Control.MOUSE_FILTER_IGNORE
+        var track_style := StyleBoxFlat.new()
+        track_style.bg_color = Color(0.10, 0.10, 0.11, 0.72)
+        track_style.border_color = Color(0.92, 0.93, 0.95, 0.94)
+        track_style.set_border_width_all(2)
+        track_style.set_corner_radius_all(999)
+        track.add_theme_stylebox_override("panel", track_style)
+        icon.add_child(track)
+
+        var knob := Panel.new()
+        knob.name = "Knob%d" % row
+        knob.mouse_filter = Control.MOUSE_FILTER_IGNORE
+        knob.add_theme_stylebox_override(
+            "panel",
+            _button_style(
+                Color(0.92, 0.93, 0.95, 1.0),
+                Color(0.10, 0.10, 0.11, 0.92),
+                true,
+                1
+            )
+        )
+        icon.add_child(knob)
+
+func _layout_edge_menu_icon() -> void:
+    var icon := menu_button.get_node_or_null("MenuIcon") as Control
+    if icon == null:
+        return
+    var icon_size := Vector2(
+        minf(28.0, menu_button.size.x * 0.56),
+        minf(30.0, menu_button.size.y * 0.62)
+    )
+    icon.position = (menu_button.size - icon_size) * 0.5
+    icon.size = icon_size
+    var track_height := maxf(8.0, icon_size.y * 0.28)
+    var knob_size := track_height - 2.0
+    for row in range(2):
+        var track := icon.get_node("Track%d" % row) as Panel
+        var knob := icon.get_node("Knob%d" % row) as Panel
+        var row_y := 1.0 if row == 0 else icon_size.y - track_height - 1.0
+        track.position = Vector2(0.0, row_y)
+        track.size = Vector2(icon_size.x, track_height)
+        knob.position = Vector2(
+            icon_size.x - knob_size - 1.0 if row == 0 else 1.0,
+            row_y + 1.0
+        )
+        knob.size = Vector2.ONE * knob_size
+
+func _layout_menu_options(diameter: float, gap: float) -> void:
+    var option_size := Vector2(maxf(108.0, diameter * 2.15), menu_button.size.y)
+    var option_x := menu_button.position.x - option_size.x - gap
+    var options_height := option_size.y * 2.0 + gap
+    var options_top := clampf(
+        menu_button.position.y,
+        _safe_rect.position.y,
+        _safe_rect.end.y - options_height
+    )
+    keyboard_button.position = Vector2(option_x, options_top)
+    keyboard_button.size = option_size
+    virtual_controls_button.position = Vector2(
+        option_x,
+        options_top + option_size.y + gap
+    )
+    virtual_controls_button.size = option_size
 
 func _apply_menu_option_style(button: Button) -> void:
     for state in ["normal", "hover", "pressed"]:
@@ -663,8 +770,53 @@ func _button_style(
     style.set_corner_radius_all(999 if circular else 12)
     return style
 
+func _begin_menu_drag(pointer_y: float) -> void:
+    _menu_drag_start_pointer_y = pointer_y
+    _menu_drag_grab_offset_y = pointer_y - menu_button.position.y
+    _menu_drag_moved = false
+
+func _drag_menu_to(pointer_y: float) -> void:
+    if not _menu_drag_moved:
+        _menu_drag_moved = absf(
+            pointer_y - _menu_drag_start_pointer_y
+        ) >= MENU_DRAG_THRESHOLD
+    if not _menu_drag_moved:
+        return
+    var min_y := _safe_rect.position.y
+    var max_y := _safe_rect.end.y - menu_button.size.y
+    menu_button.position.y = clampf(
+        pointer_y - _menu_drag_grab_offset_y,
+        min_y,
+        max_y
+    )
+    menu_button.position.x = _safe_rect.end.x - menu_button.size.x
+    var menu_y_range := maxf(0.0, max_y - min_y)
+    _menu_y_ratio = (
+        (menu_button.position.y - min_y) / menu_y_range
+        if menu_y_range > 0.0
+        else 0.0
+    )
+    var diameter := clampf(
+        minf(_safe_rect.size.x, _safe_rect.size.y) * 0.13,
+        BUTTON_MIN_SIZE,
+        BUTTON_MAX_SIZE
+    )
+    var gap := clampf(diameter * 0.13, 6.0, 9.0)
+    _layout_menu_options(diameter, gap)
+
+func _finish_menu_drag() -> void:
+    if _menu_drag_moved:
+        call_deferred("_clear_menu_drag_flag")
+
+func _clear_menu_drag_flag() -> void:
+    if _menu_touch_index == -1 and not _menu_mouse_dragging:
+        _menu_drag_moved = false
+
 func _toggle_menu() -> void:
     if not _enabled:
+        return
+    if _menu_drag_moved:
+        _menu_drag_moved = false
         return
     if _panel_open:
         release_all()
