@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=../tools/cmake_feature_options.sh
+source "$PROJECT_ROOT/tools/cmake_feature_options.sh"
 
 BUILD_TYPE="debug"
 SIMULATOR=false
@@ -586,6 +588,7 @@ echo "==> Building native engine and Godot extension"
 cmake_config_args=(
     -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM"
     -D "AETHERKIRI_ENABLE_INTERNAL=${AETHERKIRI_ENABLE_INTERNAL:-ON}"
+    "${AETHERKIRI_CMAKE_FEATURE_ARGS[@]}"
     -D "AETHERKIRI_ENABLE_CODE_OBFUSCATION=${AETHERKIRI_ENABLE_CODE_OBFUSCATION:-OFF}"
     -D "AETHERKIRI_OBFUSCATOR_PLUGIN=${AETHERKIRI_OBFUSCATOR_PLUGIN:-}"
     -D "AETHERKIRI_OBFUSCATION_BUILD_ID=${AETHERKIRI_OBFUSCATION_BUILD_ID:-local}"

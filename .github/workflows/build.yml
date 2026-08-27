@@ -53,6 +53,17 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # The CI compatibility profile is deliberately explicit. Platform build
+  # scripts forward these values to every fresh CMake configure, so the
+  # checked-in krkrz adapters, optional-source validation, and native parity
+  # tests cannot silently disappear because a preset chose a local default.
+  AETHERKIRI_ENABLE_ONSCRIPTER: 'ON'
+  AETHER_USE_KRKRZ_OPTIONAL_PLUGINS: 'ON'
+  AETHER_BUILD_KRKRZ_CORE_PARITY: 'ON'
+  # krkrz_dev currently uses master as its release/development head. The
+  # helper verifies that the reviewed gitlink is exactly this latest revision.
+  AETHERKIRI_KRKRZ_REPOSITORY: wamsoft/krkrz_dev
+  AETHERKIRI_KRKRZ_REF: master
   # GitHub does not expose repository secrets to fork or Dependabot pull
   # requests. Trusted runs build the complete internal product; untrusted
   # pull requests retain the public fallback without exposing the SSH key.
@@ -88,10 +99,8 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
-      - name: Initialize public krkrz_dev source
-        run: |
-          git -c submodule.third_party/krkrz_dev.url=https://github.com/wamsoft/krkrz_dev.git \
-            submodule update --init --recursive --depth 1 third_party/krkrz_dev
+      - name: Initialize and verify latest krkrz_dev source
+        run: bash .github/scripts/prepare-krkrz-source.sh
 
       - name: Resolve private runtime dependency cache
         id: private-runtime-cache-key
@@ -362,10 +371,8 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
-      - name: Initialize public krkrz_dev source
-        run: |
-          git -c submodule.third_party/krkrz_dev.url=https://github.com/wamsoft/krkrz_dev.git \
-            submodule update --init --recursive --depth 1 third_party/krkrz_dev
+      - name: Initialize and verify latest krkrz_dev source
+        run: bash .github/scripts/prepare-krkrz-source.sh
 
       - name: Resolve private runtime dependency cache
         id: private-runtime-cache-key
@@ -648,10 +655,8 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
-      - name: Initialize public krkrz_dev source
-        run: |
-          git -c submodule.third_party/krkrz_dev.url=https://github.com/wamsoft/krkrz_dev.git \
-            submodule update --init --recursive --depth 1 third_party/krkrz_dev
+      - name: Initialize and verify latest krkrz_dev source
+        run: bash .github/scripts/prepare-krkrz-source.sh
 
       - name: Resolve private runtime dependency cache
         id: private-runtime-cache-key
@@ -834,6 +839,9 @@ jobs:
             -D BUILD_GODOT_EXTENSION=OFF \
             -D VCPKG_MANIFEST_INSTALL=OFF \
             -D VCPKG_INSTALLED_DIR="${GITHUB_WORKSPACE}/out/macos-x64/debug/vcpkg_installed" \
+            -D AETHERKIRI_ENABLE_ONSCRIPTER=ON \
+            -D AETHER_USE_KRKRZ_OPTIONAL_PLUGINS=ON \
+            -D AETHER_BUILD_KRKRZ_CORE_PARITY=ON \
             -D CMAKE_C_COMPILER_LAUNCHER=ccache \
             -D CMAKE_CXX_COMPILER_LAUNCHER=ccache \
             2>&1 | tee "$configure_log"
@@ -843,6 +851,10 @@ jobs:
           else
             grep -F "AetherInternal package: unavailable; using public fallbacks" "$configure_log"
           fi
+          grep -F "krkrz_dev optional plugin sources validated" "$configure_log"
+          grep -F "AETHERKIRI_ENABLE_ONSCRIPTER:BOOL=ON" "$test_build_dir/CMakeCache.txt"
+          grep -F "AETHER_USE_KRKRZ_OPTIONAL_PLUGINS:BOOL=ON" "$test_build_dir/CMakeCache.txt"
+          grep -F "AETHER_BUILD_KRKRZ_CORE_PARITY:BOOL=ON" "$test_build_dir/CMakeCache.txt"
 
           cmake --build "$test_build_dir" --parallel 4
           ctest --test-dir "$test_build_dir" --output-on-failure --parallel 4
@@ -943,10 +955,8 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
-      - name: Initialize public krkrz_dev source
-        run: |
-          git -c submodule.third_party/krkrz_dev.url=https://github.com/wamsoft/krkrz_dev.git \
-            submodule update --init --recursive --depth 1 third_party/krkrz_dev
+      - name: Initialize and verify latest krkrz_dev source
+        run: bash .github/scripts/prepare-krkrz-source.sh
 
       - name: Initialize public runtime packages
         if: env.AETHERKIRI_WITH_INTERNAL != 'true'

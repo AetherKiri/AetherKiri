@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=../tools/cmake_feature_options.sh
+source "$PROJECT_ROOT/tools/cmake_feature_options.sh"
 
 BUILD_TYPE="${1:-debug}"
 BUILD_TYPE_LOWER="$(echo "$BUILD_TYPE" | tr '[:upper:]' '[:lower:]')"
@@ -130,6 +132,7 @@ echo "==> Building native engine and Godot extension"
 cmake_config_args=(
     -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM"
     -D "AETHERKIRI_ENABLE_INTERNAL=${AETHERKIRI_ENABLE_INTERNAL:-ON}"
+    "${AETHERKIRI_CMAKE_FEATURE_ARGS[@]}"
 )
 if [[ "${SKIP_VCPKG_INSTALL:-}" == "1" ]]; then
     if [[ ! -d "$VCPKG_ROOT/installed/$VCPKG_TRIPLET" ]]; then

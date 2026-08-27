@@ -151,6 +151,22 @@ contract is reviewed.
 
 ## Build and verification
 
+The GitHub Actions `Build` workflow uses the complete compatibility profile by
+default. It forwards `AETHERKIRI_ENABLE_ONSCRIPTER=ON`,
+`AETHER_USE_KRKRZ_OPTIONAL_PLUGINS=ON`, and
+`AETHER_BUILD_KRKRZ_CORE_PARITY=ON` to every platform configure. The optional
+plugin setting validates all selected upstream source trees; the parity setting
+adds the isolated visual/sound tests to the native CI test configure. It does
+not link an upstream registry or replace an Aether implementation. Trusted
+pushes and release builds also initialize `AetherInternal`; fork and Dependabot
+pull requests cannot receive the private SSH key and therefore remain public
+fallback builds.
+
+Before any build, CI resolves `wamsoft/krkrz_dev` `master` over HTTPS and checks
+that the parent gitlink and `runtime/kirikiri/manifests/plugins.toml` still
+refer to that exact latest reviewed commit. A stale pin fails with an explicit
+update instruction instead of silently compiling an older or unreviewed tree.
+
 The complete product build consumes the seven leaf adapters, the layerExSave
 codec bridge, and the selected extNagano algorithms, then extends the same
 targets with AetherInternal compatibility providers. For a macOS Debug build:

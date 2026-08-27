@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=../tools/cmake_feature_options.sh
+source "$PROJECT_ROOT/tools/cmake_feature_options.sh"
 
 BUILD_TYPE="${1:-debug}"
 BUILD_TYPE_LOWER="$(echo "$BUILD_TYPE" | tr '[:upper:]' '[:lower:]')"
@@ -135,6 +137,7 @@ cmake_config_args=(
     -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$EMSCRIPTEN_TOOLCHAIN"
     -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM"
     -D "AETHERKIRI_ENABLE_INTERNAL=${AETHERKIRI_ENABLE_INTERNAL:-ON}"
+    "${AETHERKIRI_CMAKE_FEATURE_ARGS[@]}"
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON
     -DCMAKE_C_FLAGS="$WEB_C_FLAGS"
     -DCMAKE_CXX_FLAGS="$WEB_CXX_FLAGS"

@@ -130,6 +130,20 @@ upstream 实现分离。
 
 ## 构建与验证
 
+GitHub Actions 的 `Build` workflow 默认使用完整兼容配置：所有平台的全新
+CMake configure 都会收到 `AETHERKIRI_ENABLE_ONSCRIPTER=ON`、
+`AETHER_USE_KRKRZ_OPTIONAL_PLUGINS=ON` 和
+`AETHER_BUILD_KRKRZ_CORE_PARITY=ON`。其中 optional plugin 选项会校验所有选定的
+upstream 源码树，parity 选项会在原生 CI 测试配置中加入隔离的图像/声音测试；它们
+不会链接 upstream registry，也不会替换 Aether 的实现。可信 push 和 release 构建
+还会初始化 `AetherInternal`；fork 或 Dependabot PR 无法取得私有 SSH key，因此仍然
+使用公开 fallback，这是凭据边界而不是功能开关。
+
+每次构建前，CI 会通过 HTTPS 解析 `wamsoft/krkrz_dev` 的 `master`，并检查父仓库
+gitlink 与 `runtime/kirikiri/manifests/plugins.toml` 是否仍指向同一个“最新且已审核”
+提交。如果 pin 过期，CI 会给出明确的同步提示并停止，不会静默编译旧源码或未经审核的
+upstream 树。
+
 完整产品构建会使用七个叶子适配器、layerExSave codec bridge 以及选定的
 extNagano 算法，并在相同 target 上扩展 AetherInternal 兼容 provider。macOS Debug
 构建方式如下：

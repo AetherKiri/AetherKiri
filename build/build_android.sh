@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=../tools/cmake_feature_options.sh
+source "$PROJECT_ROOT/tools/cmake_feature_options.sh"
 
 BUILD_TYPE="debug"
 ABIS="arm64-v8a"
@@ -205,6 +207,7 @@ build_abi() {
     local cmake_config_args=(
         -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM"
         -D "AETHERKIRI_ENABLE_INTERNAL=${AETHERKIRI_ENABLE_INTERNAL:-ON}"
+        "${AETHERKIRI_CMAKE_FEATURE_ARGS[@]}"
     )
 
     case "$abi" in

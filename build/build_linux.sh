@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=../tools/cmake_feature_options.sh
+source "$PROJECT_ROOT/tools/cmake_feature_options.sh"
 # shellcheck source=tools/linux_env.sh
 source "$PROJECT_ROOT/tools/linux_env.sh"
 
@@ -137,9 +139,12 @@ stage_release_extension_for_editor_scan() {
 }
 
 echo "==> Building Linux engine and Godot extension"
-cmake --preset "$CMAKE_CONFIG_PRESET" \
-    -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM" \
+cmake_config_args=(
+    -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM"
     -D "AETHERKIRI_ENABLE_INTERNAL=${AETHERKIRI_ENABLE_INTERNAL:-ON}"
+    "${AETHERKIRI_CMAKE_FEATURE_ARGS[@]}"
+)
+cmake --preset "$CMAKE_CONFIG_PRESET" "${cmake_config_args[@]}"
 cmake --build --preset "$CMAKE_BUILD_PRESET" -- -j"$PARALLEL_JOBS"
 
 mkdir -p "$GODOT_BIN_DIR"
