@@ -87,7 +87,7 @@ CPU 上传只能作为 debug fallback。性能优化应优先落到 Godot Native
 | `cpp/core/plugin/PluginImpl.cpp` | 内部 KiriKiri 插件模块注册和加载路径。 |
 | `cpp/plugins/CMakeLists.txt` | 插件构建接线。添加或启用插件时通常需要修改这里。 |
 | `tests/profiles/kr37s.json` | 通用 probe profile，`game_path` 故意为空。本地路径通过环境变量传入。 |
-| `doc/krkr2_plugins.md` | KiriKiri2 插件名和来源位置参考表。 |
+| `doc/krkr2_plugins.zh-CN.md` | KiriKiri2 插件名和来源位置参考表。 |
 
 ## 构建前置条件
 

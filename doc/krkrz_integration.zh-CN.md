@@ -43,7 +43,7 @@ git -c submodule.third_party/krkrz_dev.url=https://github.com/wamsoft/krkrz_dev.
 [`cpp/plugins/CMakeLists.txt`](../cpp/plugins/CMakeLists.txt) 选择源码，
 [`cpp/plugins/upstream_bridge`](../cpp/plugins/upstream_bridge) 中的小型翻译单元
 先建立 Aether ABI，再包含 upstream 业务翻译单元。适配器规则见
-[`krkrz_upstream_adapters.md`](krkrz_upstream_adapters.md)。
+[`krkrz_upstream_adapters.zh-CN.md`](krkrz_upstream_adapters.zh-CN.md)。
 
 当前默认启用的适配器如下：
 
@@ -124,7 +124,7 @@ upstream core 有复用价值，但不是 Aether core 的直接替代品。manif
 把 manifest 状态从 `optional` 改掉。
 
 兼容性注册位于 [`cpp/plugins/stubs`](../cpp/plugins/stubs)，规则见
-[`krkrz_plugin_stubs.md`](krkrz_plugin_stubs.md)。Stub 可以保留模块名或脚本形状，
+[`krkrz_plugin_stubs.zh-CN.md`](krkrz_plugin_stubs.zh-CN.md)。Stub 可以保留模块名或脚本形状，
 但不是功能完整的 native 支持。`sigcheck` 在平台/安全契约审核完成前，继续与
 upstream 实现分离。
 

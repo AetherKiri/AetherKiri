@@ -153,7 +153,7 @@ iOS 和 Android 导出配置会引用 `apps/godot_app/assets/icons/` 下的生�
 ## 构建
 
 krkrz_dev 的复用边界、插件清单、核心 SIMD/音频/DAP 策略和验证命令见
-[`doc/krkrz_integration.md`](doc/krkrz_integration.md)。
+[`doc/krkrz_integration.zh-CN.md`](doc/krkrz_integration.zh-CN.md)。
 
 首次检出后先初始化公开的 krkrz_dev 与 ONS 运行时：
 
@@ -509,7 +509,7 @@ Godot Native 或 GPU Bridge 达到性能目标。Debug CPU 只作为诊断 fallb
 ## 文档
 
 - 开发文档：`doc/development.zh-CN.md`
-- 插件说明：`doc/krkr2_plugins.md`
+- 插件说明：`doc/krkr2_plugins.zh-CN.md`
 - 工具说明：`tools/README.md`
 
 ## 许可证
