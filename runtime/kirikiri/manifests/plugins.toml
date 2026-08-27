@@ -16,6 +16,48 @@ source_policy = "pinned-submodule-with-aether-adapters"
 # namespaced adapter proves that direct reuse is safe.
 core_policy = "aether-owned-with-upstream-parity"
 
+# KAG/TJS assets stay in the nested public submodules.  They are references or
+# test fixtures only; no second copy is staged into the Aether runtime source.
+[[script_components]]
+name = "KAG3"
+status = "reference"
+upstream_path = "script/KAG3"
+entrypoint = "script/KAG3/data/startup.tjs"
+revision = "1f3ab309106d210e3169bbbe0fb4e066ae463b42"
+notes = "Reference KAG3 startup/system chain for compatibility review; the translated demo remains an explicit product fixture."
+
+[[script_components]]
+name = "KAG3_Ham"
+status = "fixture"
+upstream_path = "script/KAG3_Ham"
+entrypoint = "script/KAG3_Ham/data/startup.tjs"
+revision = "78906d60b61ca9dd5793920b134e22f8c15917b5"
+notes = "Non-standard KAG3 fixture used to exercise startup compatibility."
+
+[[script_components]]
+name = "Krkr2Compat"
+status = "reference"
+upstream_path = "script/Krkr2Compat"
+entrypoint = "script/Krkr2Compat/data/startup.tjs"
+revision = "e0981111f319317bc29e5270673f7b05c6dd4f29"
+notes = "KZ-to-K2 behavior reference; not injected by default because Aether is KiriKiri2-based."
+
+[[script_components]]
+name = "Sample"
+status = "fixture"
+upstream_path = "script/Sample"
+entrypoint = "script/Sample/tooltip/startup.tjs"
+revision = "13fdfcd541159fb29ce1745cc167717985251950"
+notes = "Upstream script/rendering sample for manual and future automated probes."
+
+[[script_components]]
+name = "test"
+status = "fixture"
+upstream_path = "script/test"
+entrypoint = "script/test/tjs2/test.tjs"
+revision = "041cb861117142ae715dda2b36757d4426b429e5"
+notes = "Upstream TJS2 regression corpus; run through an Aether host-specific harness before product claims."
+
 [[core_components]]
 name = "visual-simd"
 status = "aether"

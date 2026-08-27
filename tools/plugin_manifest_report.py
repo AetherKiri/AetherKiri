@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +29,7 @@ VALID_STATUSES = {
     "optional",
 }
 VALID_CORE_STATUSES = {"upstream-adapted", "hybrid", "aether", "optional"}
+VALID_SCRIPT_STATUSES = {"reference", "fixture"}
 
 
 def load_manifest(path: Path) -> dict[str, Any]:
@@ -102,6 +102,39 @@ def validate(data: dict[str, Any], repo_root: Path) -> list[str]:
                 errors.append(f"{name}: invalid upstream_path")
             elif not (repo_root / "third_party" / "krkrz_dev" / source).exists():
                 errors.append(f"{name}: upstream path does not exist: {source}")
+
+    scripts = data.get("script_components", [])
+    if not isinstance(scripts, list):
+        errors.append("script_components must be a list when present")
+    else:
+        script_seen: set[str] = set()
+        for index, script in enumerate(scripts):
+            if not isinstance(script, dict):
+                errors.append(f"script_components[{index}] is not a table")
+                continue
+            name = script.get("name")
+            if not isinstance(name, str) or not name:
+                errors.append(f"script_components[{index}] has no name")
+                name = f"script_components[{index}]"
+            if name.lower() in script_seen:
+                errors.append(f"duplicate script component name: {name}")
+            script_seen.add(name.lower())
+
+            status = script.get("status")
+            if status not in VALID_SCRIPT_STATUSES:
+                errors.append(f"{name}: invalid script status {status!r}")
+
+            revision = script.get("revision")
+            if not isinstance(revision, str) or len(revision) < 7:
+                errors.append(f"{name}: revision must be a pinned commit SHA")
+
+            for field in ("upstream_path", "entrypoint"):
+                value = script.get(field)
+                if not isinstance(value, str) or not value:
+                    errors.append(f"{name}: {field} must be a non-empty path")
+                    continue
+                if not (repo_root / "third_party" / "krkrz_dev" / value).exists():
+                    errors.append(f"{name}: {field} does not exist: {value}")
 
     components = data.get("core_components")
     if not isinstance(components, list) or not components:
@@ -189,6 +222,17 @@ def main() -> int:
             )
             core_counts[status] = core_counts.get(status, 0) + 1
 
+    script_components = data.get("script_components", [])
+    script_counts: dict[str, int] = {}
+    if isinstance(script_components, list):
+        for component in script_components:
+            status = (
+                component.get("status", "invalid")
+                if isinstance(component, dict)
+                else "invalid"
+            )
+            script_counts[status] = script_counts.get(status, 0) + 1
+
     report = {
         "manifest": str(manifest),
         "schema_version": data.get("schema_version"),
@@ -202,6 +246,10 @@ def main() -> int:
         if isinstance(core_components, list)
         else 0,
         "core_status_counts": core_counts,
+        "script_component_count": len(script_components)
+        if isinstance(script_components, list)
+        else 0,
+        "script_status_counts": script_counts,
         "errors": errors,
     }
     if args.json:
@@ -218,6 +266,13 @@ def main() -> int:
                 "core status: "
                 + ", ".join(
                     f"{key}={core_counts[key]}" for key in sorted(core_counts)
+                )
+            )
+        if script_counts:
+            print(
+                "script status: "
+                + ", ".join(
+                    f"{key}={script_counts[key]}" for key in sorted(script_counts)
                 )
             )
         if errors:

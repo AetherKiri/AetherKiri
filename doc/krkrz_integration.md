@@ -68,6 +68,22 @@ The remaining portable modules (`scriptsEx`, `json`, `csvParser`, `lineParser`,
 bridges) stay Aether-owned. The authoritative machine-readable status for all
 modules, including stubs and optional modules, is the manifest.
 
+## KAG/TJS script boundary
+
+KAG3, KAG3_Ham, Krkr2Compat, Sample, and the upstream TJS2 test corpus are
+already recursive submodules below `third_party/krkrz_dev/script`. Their
+paths, nested gitlink revisions, and entrypoints are recorded as
+`[[script_components]]` in the manifest and checked by
+`plugin_manifest_report.py --strict`. This keeps one source of truth for
+upstream scripts without vendoring a second copy into the runtime.
+
+The product demo remains a deliberate fixture: it contains translated text
+and Aether-specific polyfills, so it is not silently replaced by the upstream
+KAG3 tree. `Krkr2Compat` and `KAG3_Ham` are reference/fixture inputs rather
+than default runtime injection. A future script-stage target may consume the
+submodule directly after its generated archive and compatibility tests are
+locked down.
+
 ## ABI and ownership rules
 
 1. Do not link upstream `tp_stub.cpp`, `ncbind.cpp`, `v2link.cpp`, standalone
