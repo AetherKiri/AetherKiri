@@ -17,7 +17,12 @@ if [[ ! -x "$vcpkg_exe" ]]; then
   echo "vcpkg executable not found: $vcpkg_exe" >&2
   exit 1
 fi
-if ! command -v mono >/dev/null 2>&1; then
+mono_bin="${MONO_BIN:-$(command -v mono || command -v mono.exe || true)}"
+if command -v cygpath >/dev/null 2>&1 &&
+   [[ "$mono_bin" == [A-Za-z]:\\* || "$mono_bin" == [A-Za-z]:/* ]]; then
+  mono_bin="$(cygpath -u "$mono_bin")"
+fi
+if [[ -z "$mono_bin" || ( ! -f "$mono_bin" && ! -x "$mono_bin" ) ]]; then
   echo "mono is required by the vcpkg NuGet binary provider" >&2
   exit 1
 fi
@@ -40,10 +45,10 @@ fi
 
 # NuGet keeps credentials in the runner's temporary user profile. GitHub masks
 # the token in logs, and the profile is discarded with the hosted runner.
-mono "$nuget_exe" sources remove \
+"$mono_bin" "$nuget_exe" sources remove \
   -Name "$source_name" \
   -NonInteractive >/dev/null 2>&1 || true
-mono "$nuget_exe" sources add \
+"$mono_bin" "$nuget_exe" sources add \
   -Source "$feed_url" \
   -StorePasswordInClearText \
   -Name "$source_name" \
@@ -54,7 +59,7 @@ mono "$nuget_exe" sources add \
 cache_mode="read"
 if [[ "${AETHERKIRI_VCPKG_CACHE_WRITE:-false}" == "true" ]]; then
   cache_mode="readwrite"
-  mono "$nuget_exe" setapikey "$VCPKG_PACKAGES_TOKEN" \
+  "$mono_bin" "$nuget_exe" setapikey "$VCPKG_PACKAGES_TOKEN" \
     -Source "$feed_url" \
     -NonInteractive
 fi

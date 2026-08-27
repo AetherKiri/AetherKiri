@@ -922,6 +922,7 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
       CCACHE_DIR: ${{ github.workspace }}/.ccache
+      VCPKG_DOWNLOADS: ${{ github.workspace }}/.devtools/vcpkg/downloads
       GODOT_RELEASE: 4.7-stable
       GODOT_TEMPLATE_VERSION: 4.7.stable
 
@@ -949,7 +950,7 @@ jobs:
       - name: Install Build Systems
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build pkg-config autoconf autoconf-archive automake libtool gettext bison flex curl unzip zip zstd ccache jq mono-complete
+          sudo apt-get install -y cmake ninja-build pkg-config autoconf autoconf-archive automake libtool gettext bison flex curl unzip zip zstd ccache jq mono-complete nasm
 
       - name: Install Godot export tools
         run: |
@@ -1081,6 +1082,7 @@ jobs:
     runs-on: windows-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+      VCPKG_DOWNLOADS: ${{ github.workspace }}/.devtools/vcpkg/downloads
       GODOT_RELEASE: 4.7-stable
       GODOT_TEMPLATE_VERSION: 4.7.stable
 
@@ -1109,7 +1111,23 @@ jobs:
 
       - name: Install Build Systems
         shell: pwsh
-        run: choco install ninja mono -y --no-progress
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install ninja mono nasm -y --no-progress
+          $monoCandidates = @(
+            "$env:ProgramFiles\Mono\bin",
+            "${env:ProgramFiles(x86)}\Mono\bin",
+            "${env:ChocolateyToolsLocation}\mono\bin",
+            "$env:ChocolateyInstall\bin"
+          )
+          $monoDir = $monoCandidates | Where-Object {
+            Test-Path (Join-Path $_ 'mono.exe')
+          } | Select-Object -First 1
+          if (-not $monoDir) {
+            throw 'Mono executable was not found after installation.'
+          }
+          $monoDir | Out-File $env:GITHUB_PATH -Append
+          "MONO_BIN=$(Join-Path $monoDir 'mono.exe')" | Out-File $env:GITHUB_ENV -Append
 
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
