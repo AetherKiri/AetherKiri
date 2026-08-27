@@ -12,12 +12,29 @@
 #ifndef GraphicsLoaderIntfH
 #define GraphicsLoaderIntfH
 
+// Name of the graphic currently being handed to a format handler.  This is
+// primarily useful to format-specific diagnostics (for example TLG virtual
+// storage adapters); callers must treat the returned value as a snapshot.
+extern ttstr TVPGetCurrentGraphicLoadName();
+
 #include "drawable.h"
 
+class iTVPBaseBitmap;
 class tTVPBaseBitmap;
 namespace TJS {
     class tTJSBinaryStream;
 }
+
+// Optional provider for images which are authored as logical resources and
+// materialized by a plug-in at runtime (for example PackinOne/ProxyStorage UI
+// atlases).  The public renderer only owns the registration boundary; the
+// provider remains responsible for recognizing and producing its format.
+using tTVPVirtualGraphicProvider = bool (*)(const ttstr &requested,
+                                             iTVPBaseBitmap *destination);
+void TVPRegisterVirtualGraphicProvider(tTVPVirtualGraphicProvider provider);
+void TVPUnregisterVirtualGraphicProvider(tTVPVirtualGraphicProvider provider);
+bool TVPProvideVirtualGraphic(const ttstr &requested,
+                              iTVPBaseBitmap *destination);
 
 enum tTVPGraphicPixelFormat { gpfLuminance, gpfPalette, gpfRGB, gpfRGBA };
 

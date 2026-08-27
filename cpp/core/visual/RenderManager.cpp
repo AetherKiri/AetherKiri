@@ -4594,7 +4594,7 @@ public:
             if(dv01y == 0.0) {
                 sxstep = (tjs_int)((refrect.right - refrect.left) / dv01x);
                 systep = 0;
-            } else if(dv01y == 0.0) {
+            } else if(dv02y == 0.0) {
                 sxstep = 0;
                 systep = (tjs_int)((refrect.bottom - refrect.top) / dv02x);
             } else {

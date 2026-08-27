@@ -513,6 +513,11 @@ namespace motion::detail {
             std::array<float, 4> paintBox{0.f, 0.f, 0.f, 0.f};
             std::array<float, 4> viewport{1.f, 1.f, -1.f, -1.f};
             bool hasViewport = false;
+            // A flattened child may inherit a viewport from an enclosing
+            // off-screen composite. That rectangle is already in the
+            // containing player's world coordinates and must not be scaled
+            // or translated with the child's authored geometry.
+            bool viewportInheritedFromComposite = false;
             int opacity = 255;
             int updateCount = 0;
             int visibleAncestorIndex = -1;

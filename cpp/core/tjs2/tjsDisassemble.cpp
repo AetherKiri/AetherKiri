@@ -605,8 +605,8 @@ namespace TJS // following is in the namespace
                                ttstr{ msg }.AsNarrowStdString()) };
 
         if(comment[0]) {
-            buf = TJS_W("\t// ");
-            buf = comment;
+            buf += TJS_W("\t// ");
+            buf += comment;
         }
 
         try {

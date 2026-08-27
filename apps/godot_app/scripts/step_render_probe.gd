@@ -8,13 +8,21 @@ const POINTER_DOWN := 1
 const POINTER_MOVE := 2
 const POINTER_UP := 3
 const POINTER_SCROLL := 4
+const POINTER_MOD_CANCEL := 1 << 30
+const TOUCH_POINTER_ID_OFFSET := 100000
+const TOUCH_SECONDARY_POINTER_ID := 0
 
 var player
 var rect: TextureRect
 var test_config := {}
+var output_dir := "/tmp"
 
 func _initialize() -> void:
     test_config = ProbeConfig.load()
+    var configured_output_dir := OS.get_environment("AETHERKIRI_PROBE_OUTPUT_DIR").strip_edges()
+    if not configured_output_dir.is_empty():
+        output_dir = configured_output_dir
+        DirAccess.make_dir_recursive_absolute(output_dir)
     root.size = ProbeConfig.window_size(test_config, Vector2i(
         _env_int("AETHERKIRI_PROBE_WINDOW_W", 1600),
         _env_int("AETHERKIRI_PROBE_WINDOW_H", 900)
@@ -129,7 +137,7 @@ func _save_step(index: int, label: String) -> void:
     await process_frame
     await process_frame
     var image := _capture_frame_image()
-    var path := "/tmp/aetherkiri-step-%02d-%s.png" % [index, label]
+    var path := output_dir.path_join("aetherkiri-step-%02d-%s.png" % [index, label])
     image.save_png(path)
     var runtime_debug := ""
     if bool(test_config.get("runtime_debug", true)):
@@ -146,10 +154,11 @@ func _save_step(index: int, label: String) -> void:
         print("step %02d runtime_debug=%s" % [index, runtime_debug])
 
 func _capture_frame_image() -> Image:
+    var prefer_engine_frame := OS.get_environment("AETHERKIRI_PROBE_PREFER_ENGINE_FRAME") == "1"
     # A GPU-direct frame is newer than the renderer's CPU compatibility
     # snapshot. Read the exact TextureRect source first so screenshots catch
     # transient crop/placement defects that are visible on screen.
-    if rect.texture != null:
+    if not prefer_engine_frame and rect.texture != null:
         var direct_image := rect.texture.get_image()
         if direct_image != null and direct_image.get_width() > 0 and direct_image.get_height() > 0:
             if int(_image_stats(direct_image).get("visible", 0)) > 0:
@@ -220,6 +229,25 @@ func _run_actions(step: int) -> int:
             _send_window_click(pos, 1)
             if label.is_empty() or label == "right_click":
                 label = "right_click_%d_%d" % [int(pos.x), int(pos.y)]
+        elif kind == "touch_click":
+            var pos := ProbeConfig.click_position(action)
+            await _send_window_touch_click(
+                pos,
+                int(action.get("touch_index", 0)),
+                max(0, int(action.get("release_delay_ms", 0)))
+            )
+            if label.is_empty() or label == "touch_click":
+                label = "touch_click_%d_%d" % [int(pos.x), int(pos.y)]
+        elif kind == "two_finger_tap":
+            var pos := ProbeConfig.click_position(action)
+            if not await _send_window_two_finger_tap(
+                pos,
+                max(0, int(action.get("first_finger_lead_ms", 0))),
+                bool(action.get("forward_first_finger", false))
+            ):
+                continue
+            if label.is_empty() or label == "two_finger_tap":
+                label = "two_finger_tap_%d_%d" % [int(pos.x), int(pos.y)]
         elif kind == "move":
             var pos := ProbeConfig.click_position(action)
             _send_window_move(pos)
@@ -469,11 +497,11 @@ func _run_click_stream(step: int, label: String, action: Dictionary) -> int:
 
         if capture_every > 0 and (frame_index % capture_every) == 0:
             var image := _capture_frame_image()
-            var capture_path := "/tmp/aetherkiri-step-%02d-%s_f%03d.png" % [
+            var capture_path := output_dir.path_join("aetherkiri-step-%02d-%s_f%03d.png" % [
                 step,
                 label,
                 frame_index,
-            ]
+            ])
             image.save_png(capture_path)
             print("step %02d label=%s frame=%d texture_backend=%s renderer=\"%s\" screenshot=%s stats=%s" % [
                 step,
@@ -506,11 +534,11 @@ func _run_click_stream(step: int, label: String, action: Dictionary) -> int:
     for deferred_capture in deferred_captures:
         var deferred_frame := int(deferred_capture["frame"])
         var deferred_image: Image = deferred_capture["image"]
-        var deferred_path := "/tmp/aetherkiri-step-%02d-%s_deferred_f%03d.png" % [
+        var deferred_path := output_dir.path_join("aetherkiri-step-%02d-%s_deferred_f%03d.png" % [
             step,
             label,
             deferred_frame,
-        ]
+        ])
         deferred_image.save_png(deferred_path)
         print("step %02d label=%s deferred_frame=%d screenshot=%s stats=%s" % [
             step,
@@ -566,6 +594,56 @@ func _send_window_click(window_pos: Vector2, button: int = 0) -> void:
     player.send_pointer_event(POINTER_DOWN, 0, mapped.x, mapped.y, 0.0, 0.0, button)
     player.tick(1.0 / 60.0)
     player.send_pointer_event(POINTER_UP, 0, mapped.x, mapped.y, 0.0, 0.0, button)
+
+func _send_window_touch_click(
+    window_pos: Vector2,
+    touch_index: int = 0,
+    release_delay_ms: int = 0
+) -> void:
+    var mapped := _map_window_point(window_pos)
+    if mapped.x < 0.0 or mapped.y < 0.0:
+        print("skip touch click outside texture window=%s mapped=%s" % [window_pos, mapped])
+        return
+    var pointer_id := TOUCH_POINTER_ID_OFFSET + touch_index
+    player.send_pointer_event(POINTER_MOVE, pointer_id, mapped.x, mapped.y, 0.0, 0.0, 0)
+    player.send_pointer_event(POINTER_DOWN, pointer_id, mapped.x, mapped.y, 0.0, 0.0, 0)
+    if release_delay_ms > 0:
+        await _advance_for_ms(release_delay_ms)
+    player.send_pointer_event(POINTER_UP, pointer_id, mapped.x, mapped.y, 0.0, 0.0, 0)
+
+func _send_window_two_finger_tap(
+    window_pos: Vector2,
+    first_finger_lead_ms: int = 0,
+    forward_first_finger: bool = false
+) -> bool:
+    var mapped := _map_window_point(window_pos)
+    if mapped.x < 0.0 or mapped.y < 0.0:
+        print("skip two-finger tap outside texture window=%s mapped=%s" % [window_pos, mapped])
+        return false
+    # iOS keeps the first touch in the gesture arbiter until the second touch
+    # arrives, so a qualifying two-finger gesture forwards only the synthetic
+    # secondary click. The opt-in primary path is useful for desktop probes.
+    var first_mapped := mapped - Vector2(12.0, 0.0)
+    if forward_first_finger:
+        player.send_pointer_event(POINTER_MOVE, TOUCH_POINTER_ID_OFFSET, first_mapped.x, first_mapped.y, 0.0, 0.0, 0)
+        player.send_pointer_event(POINTER_DOWN, TOUCH_POINTER_ID_OFFSET, first_mapped.x, first_mapped.y, 0.0, 0.0, 0)
+    if first_finger_lead_ms > 0:
+        await _advance_for_ms(first_finger_lead_ms)
+    player.send_pointer_event(POINTER_MOVE, TOUCH_SECONDARY_POINTER_ID, mapped.x, mapped.y, 0.0, 0.0, 0)
+    player.send_pointer_event(POINTER_DOWN, TOUCH_SECONDARY_POINTER_ID, mapped.x, mapped.y, 0.0, 0.0, 1)
+    player.send_pointer_event(POINTER_UP, TOUCH_SECONDARY_POINTER_ID, mapped.x, mapped.y, 0.0, 0.0, 1)
+    if forward_first_finger:
+        player.send_pointer_event(
+            POINTER_UP,
+            TOUCH_POINTER_ID_OFFSET,
+            first_mapped.x,
+            first_mapped.y,
+            0.0,
+            0.0,
+            0,
+            POINTER_MOD_CANCEL
+        )
+    return true
 
 func _advance_for_ms(duration_ms: int) -> void:
     if duration_ms <= 0:

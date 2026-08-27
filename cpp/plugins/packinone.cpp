@@ -1,6 +1,24 @@
 #include "ncbind.hpp"
 #include <spdlog/spdlog.h>
 
+// Private AetherInternal compatibility hooks.  PackinOne is the first
+// module that the game's startup script links, so use its guaranteed
+// pre-registration callback to install the recovered SliceLayer/ProxyStorage
+// bridge.  Data-pack callbacks are retried from ScriptsEx as well because the
+// Scripts global can be created lazily on some hosts.
+extern "C" void TVPRegisterSliceLayerCompat();
+extern "C" void TVPRegisterDataPackCompatPluginAnchor();
+
+namespace {
+
+void registerPackinOneCompat() {
+    TVPAddLog(TJS_W("AetherInternal PackinOne public compat callback entered"));
+    TVPRegisterSliceLayerCompat();
+    TVPRegisterDataPackCompatPluginAnchor();
+}
+
+} // namespace
+
 // The actual features of PackinOne.dll (fstat, dirlist, addFont, saveStruct, getMD5HashString)
 // are already completely implemented in C++ across fstat/main.cpp, addFont.cpp, saveStruct.cpp, etc.
 // They are registered globally at engine startup via TVPLoadInternalPlugins().
@@ -54,3 +72,5 @@ NCB_REGISTER_CLASS(CompoundStorageMedia) {
                             &CompoundStorageMedia::emptyString, 0);
     NCB_PROPERTY_RO(archiveUniqueKey, getArchiveUniqueKey);
 }
+
+NCB_PRE_REGIST_CALLBACK(registerPackinOneCompat);

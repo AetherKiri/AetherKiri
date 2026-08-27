@@ -1431,6 +1431,7 @@ const BUTTON_POSITION_MEMORY_PATH := "user://aetherkiri-button-positions.json"
 const POINTER_MOD_LEFT := 0x08
 const POINTER_MOD_RIGHT := 0x10
 const POINTER_MOD_MIDDLE := 0x20
+const POINTER_MOD_CANCEL := 1 << 30
 const RUNTIME_KIRIKIRI := "kirikiri"
 const RUNTIME_ONSCRIPTER := "onscripter"
 const RUNTIME_PLAYER_CLASS := "AetherRuntimePlayer"
@@ -1573,9 +1574,12 @@ var home_search_queries := {"game": "", "video": ""}
 var home_search_syncing := false
 var home_filtered_game_count := 0
 var home_filtered_video_count := 0
-var show_perf_monitor := true
+# Keep the runtime viewport unobstructed by default.  Diagnostics continue to
+# collect according to the debug profile, while the floating performance
+# panel remains an explicit opt-in from Settings (or a legacy config value).
+var show_perf_monitor := false
 var diagnostic_profile := "baseline" if OS.is_debug_build() else "off"
-var debug_overlay_mode := "summary" if OS.is_debug_build() else "off"
+var debug_overlay_mode := "off"
 var lock_landscape := false
 var game_runtime_shell_orientation := DisplayServer.SCREEN_SENSOR
 var game_runtime_shell_screen_size := Vector2i.ZERO
@@ -1765,12 +1769,15 @@ var input_trace_move_suppressed := 0
 var tick_trace_serial := 0
 var tick_trace_active_serial := 0
 var tick_trace_until_msec := 0
+var artemis_input_trace_sequence := 0
+var artemis_input_trace_samples: Array[Dictionary] = []
 var black_frame_guard_until_msec := 0
 var black_frame_next_sample_msec := 0
 var black_frame_consecutive := 0
 var black_frame_last_log_msec := 0
 var black_frame_guard_enabled := false
 var cli_probe_script := ""
+var cli_probe_runtime_debug := false
 var verbose_render_log := false
 var diagnostics_enabled := false
 var ui_log_enabled := false
@@ -1794,10 +1801,12 @@ var dragging_touch_points := {}
 var pending_touch_index := -1
 var pending_touch_mapped := Vector2.ZERO
 var pending_touch_down_msec := 0
-var delayed_ons_touch_releases := {}
+var pending_touch_quarantined := false
+var delayed_touch_releases := {}
 var last_forwarded_touch_down_msec := 0
 var last_forwarded_touch_up_msec := 0
 var last_forwarded_touch_move_msec_by_id := {}
+var touch_secondary_quarantine_until_msec := 0
 var touch_input_busy_until_msec := 0
 var game_text_input_active := false
 var game_text_input_forced := false
@@ -1884,8 +1893,10 @@ const TOUCH_POINTER_ID_OFFSET := 100000
 const TOUCH_SECONDARY_POINTER_ID := 0
 const ONS_VIRTUAL_POINTER_ID := TOUCH_POINTER_ID_OFFSET + 65535
 const TOUCH_SECONDARY_TAP_WINDOW_MS := 180
+const TOUCH_SECONDARY_QUARANTINE_MS := 320
 const TOUCH_SINGLE_TAP_DELAY_MS := 90
-const ONS_TOUCH_CLICK_HOLD_MS := 48
+const TOUCH_CLICK_HOLD_MS := 48
+const ARTEMIS_INPUT_TRACE_DELAYS_MS := [0, 80, 240, 800]
 const INPUT_DEVICE_ID_EMULATION := -1
 const BLACK_FRAME_GUARD_MS := 3200
 const BLACK_FRAME_SAMPLE_INTERVAL_MS := 120
@@ -3086,7 +3097,7 @@ func _load_shell_settings() -> void:
     var legacy_perf_overlay := bool(cfg.get_value("rendering", "perf_overlay", show_perf_monitor))
     debug_overlay_mode = String(cfg.get_value("diagnostics", "overlay_mode", "summary" if legacy_perf_overlay else "off"))
     if not debug_overlay_mode in DEBUG_OVERLAY_MODES:
-        debug_overlay_mode = "summary" if OS.is_debug_build() else "off"
+        debug_overlay_mode = "off"
     show_perf_monitor = debug_overlay_mode != "off"
     diagnostic_profile = String(cfg.get_value("diagnostics", "profile", diagnostic_profile))
     if not diagnostic_profile in DIAGNOSTIC_PROFILES:
@@ -3356,7 +3367,7 @@ func _apply_settings_snapshot(snapshot: Dictionary) -> void:
         diagnostic_profile = "baseline" if OS.is_debug_build() else "off"
     debug_overlay_mode = String(snapshot.get("debug_overlay_mode", debug_overlay_mode))
     if not debug_overlay_mode in DEBUG_OVERLAY_MODES:
-        debug_overlay_mode = "summary" if OS.is_debug_build() else "off"
+        debug_overlay_mode = "off"
     show_perf_monitor = debug_overlay_mode != "off"
     _set_perf_visible(game_running and show_perf_monitor)
     frame_limit_enabled = bool(snapshot.get("fps_limit_enabled", frame_limit_enabled))
@@ -6915,9 +6926,14 @@ func _detail_identity(game: Dictionary, compact: bool) -> VBoxContainer:
     return identity
 
 func _detail_launch_button() -> Button:
-    var start := _icon_action_button(ICON_PLAY, _t("detail.launch"), _start_selected_game, true, false, 52.0)
-    _reveal_icon_action_label_on_hover(start, _t("detail.launch"))
+    # Use the explicit content row here instead of Button.icon + Button.text.
+    # FlowContainer sizes a native Button from its text first, which can clip
+    # the icon when the action is laid out at its shrink-to-fit width.
+    var start := _pill_button(_t("detail.launch"), ICON_PLAY)
+    # Keep enough room for the longest localized label as well as the icon.
+    start.custom_minimum_size = Vector2(220, 52)
     start.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+    start.pressed.connect(_start_selected_game)
     start.button_down.connect(func(): _android_input_debug_log("detail launch button_down"))
     start.button_up.connect(func(): _android_input_debug_log("detail launch button_up"))
     start.pressed.connect(func(): _android_input_debug_log("detail launch pressed"))
@@ -9955,7 +9971,11 @@ func _ready() -> void:
     frame_probe_enabled = _runtime_flag("AETHERKIRI_FRAME_PROBE")
     frame_probe_interval = maxf(0.05, _runtime_float("AETHERKIRI_FRAME_PROBE_INTERVAL", 1.0))
     black_frame_guard_enabled = _runtime_flag("AETHERKIRI_BLACK_FRAME_GUARD")
-    input_trace_enabled = _runtime_flag("AETHERKIRI_INPUT_TRACE") or ios_diagnostics_enabled
+    input_trace_enabled = (
+        _runtime_flag("AETHERKIRI_INPUT_TRACE")
+        or ios_diagnostics_enabled
+        or not cli_probe_script.is_empty()
+    )
     device_probe_enabled = device_probe_enabled or frame_probe_enabled
     device_probe_enabled = device_probe_enabled or input_trace_enabled
     var native_auto_start_enabled := _native_auto_start_enabled()
@@ -11031,6 +11051,8 @@ func _probe_wait_startup(config: Dictionary, fallback_frames: int = 900) -> bool
     return false
 
 func _probe_tick_and_update() -> bool:
+    _flush_delayed_touch_releases()
+    _flush_pending_touch_press_if_ready()
     var result: int = int(player.tick(1.0 / 60.0))
     if result != ENGINE_RESULT_OK:
         _write_probe_marker("probe_tick failed error=%s" % player.get_last_error())
@@ -11116,6 +11138,7 @@ func _run_cli_smoke_probe(config: Dictionary, target_game_path: String) -> void:
     await _probe_cleanup_and_quit(0)
 
 func _run_cli_step_probe(config: Dictionary, target_game_path: String) -> void:
+    cli_probe_runtime_debug = bool(config.get("runtime_debug", false))
     if not _probe_open_game(config, target_game_path, "AETHERKIRI_PROBE_BACKEND"):
         await _probe_cleanup_and_quit(1)
         return
@@ -11212,6 +11235,21 @@ func _probe_run_actions(config: Dictionary, step: int) -> int:
             _probe_send_mapped_click(pos, config, 1)
             if label.is_empty() or label == "right_click":
                 label = "right_click_%d_%d" % [int(pos.x), int(pos.y)]
+        elif kind == "touch_click":
+            var pos := ProbeConfig.click_position(action)
+            _probe_send_mapped_touch_click(pos, config, int(action.get("touch_index", 0)))
+            if label.is_empty() or label == "touch_click":
+                label = "touch_click_%d_%d" % [int(pos.x), int(pos.y)]
+        elif kind == "two_finger_tap":
+            var pos := ProbeConfig.click_position(action)
+            if not await _probe_send_mapped_two_finger_tap(
+                pos,
+                config,
+                max(0, int(action.get("first_finger_lead_ms", 0)))
+            ):
+                return -1
+            if label.is_empty() or label == "two_finger_tap":
+                label = "two_finger_tap_%d_%d" % [int(pos.x), int(pos.y)]
         elif kind == "move":
             var pos := ProbeConfig.click_position(action)
             _probe_send_mapped_move(pos, config)
@@ -11475,6 +11513,44 @@ func _probe_save_step(index: int, label: String, wait_frames: int = 2) -> void:
     ]
     print(line)
     _write_probe_marker(line)
+    if cli_probe_runtime_debug:
+        var runtime_debug := String(player.get_plugin_debug_info())
+        print("step %02d runtime_debug=%s" % [index, runtime_debug])
+        var parsed = JSON.parse_string(runtime_debug)
+        if parsed is Dictionary:
+            var runtime_state := {}
+            for key in [
+                "scriptState",
+                "scriptWaitReason",
+                "waitFlag",
+                "delayFlag",
+                "textClickFlag",
+                "clickFlag",
+                "exclickFlag",
+                "transitionFlag",
+                "keycodeFlag",
+                "buttonName",
+                "buttonClick",
+                "buttonEntry",
+                "buttonStop",
+                "lastInputDebug",
+                "localInput2",
+                "externalWaitReason",
+                "queuedCommands",
+                "eventResumeStates",
+                "scriptStack",
+            ]:
+                if parsed.has(key):
+                    runtime_state[key] = parsed[key]
+            if parsed.has("commandTrace") and parsed["commandTrace"] is Array:
+                var command_trace: Array = parsed["commandTrace"]
+                runtime_state["commandTraceTail"] = command_trace.slice(
+                    maxi(0, command_trace.size() - 8)
+                )
+            _write_probe_marker("step %02d runtime_state=%s" % [
+                index,
+                JSON.stringify(runtime_state),
+            ])
 
 func _probe_send_mapped_click(window_pos: Vector2, config: Dictionary, button: int = 0) -> void:
     var mapped := _probe_map_window_point(window_pos, config)
@@ -11488,6 +11564,63 @@ func _probe_send_mapped_click(window_pos: Vector2, config: Dictionary, button: i
     player.tick(1.0 / 60.0)
     player.send_pointer_event(POINTER_UP, 0, mapped.x, mapped.y, 0.0, 0.0, button)
     _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
+
+func _probe_send_mapped_touch_click(window_pos: Vector2, config: Dictionary, touch_index: int = 0) -> void:
+    var mapped := _probe_map_window_point(window_pos, config)
+    if mapped.x < 0.0 or mapped.y < 0.0:
+        print("skip touch click outside texture window=%s mapped=%s" % [window_pos, mapped])
+        return
+    # The CLI probe captures a step before its next tick, so flush any
+    # release whose hold interval elapsed while the previous screenshot was
+    # being written. The real app performs this from _process every frame.
+    _flush_delayed_touch_releases()
+    _set_pending_touch(touch_index, mapped)
+    _send_pending_touch_click(touch_index, mapped)
+
+func _probe_send_mapped_two_finger_tap(
+    window_pos: Vector2,
+    config: Dictionary,
+    first_finger_lead_ms: int = 0
+) -> bool:
+    var mapped := _probe_map_window_point(window_pos, config)
+    if mapped.x < 0.0 or mapped.y < 0.0:
+        print("skip two-finger tap outside texture window=%s mapped=%s" % [window_pos, mapped])
+        return false
+    var first_id := 0
+    var second_id := 1
+    var separation := Vector2(12.0, 0.0)
+    _set_pending_touch(first_id, mapped - separation)
+    if first_finger_lead_ms > 0:
+        # Match the real mobile path where the first finger outlives the
+        # single-tap disambiguation delay before the second finger lands.
+        # This produces primary DOWN, then primary UP + secondary DOWN/UP.
+        if not _flush_pending_touch_press(true):
+            return false
+        if not await _probe_advance_for_ms(first_finger_lead_ms):
+            return false
+    _handle_secondary_touch_press(second_id, mapped + separation)
+    for pointer_id in [first_id, second_id]:
+        suppressed_touch_points.erase(pointer_id)
+        active_touch_points.erase(pointer_id)
+        touch_down_points.erase(pointer_id)
+        dragging_touch_points.erase(pointer_id)
+        last_forwarded_touch_move_msec_by_id.erase(pointer_id)
+        _clear_pending_touch_if_matches(pointer_id)
+    return true
+
+func _probe_advance_for_ms(duration_ms: int) -> bool:
+    if duration_ms <= 0:
+        return true
+    var deadline_usec := Time.get_ticks_usec() + duration_ms * 1000
+    var next_tick_usec := Time.get_ticks_usec()
+    while Time.get_ticks_usec() < deadline_usec:
+        var now_usec := Time.get_ticks_usec()
+        if now_usec >= next_tick_usec:
+            if not _probe_tick_and_update():
+                return false
+            next_tick_usec = now_usec + 16667
+        await get_tree().process_frame
+    return true
 
 func _probe_send_mapped_move(window_pos: Vector2, config: Dictionary) -> void:
     var mapped := _probe_map_window_point(window_pos, config)
@@ -11682,10 +11815,11 @@ func _probe_send_direct_click(pos: Vector2) -> void:
     player.send_pointer_event(POINTER_UP, 0, pos.x, pos.y, 0.0, 0.0, 0)
 
 func _probe_capture_image() -> Image:
+    var prefer_engine_frame := OS.get_environment("AETHERKIRI_PROBE_PREFER_ENGINE_FRAME") == "1"
     # In GPU-direct mode this is the texture the user actually sees. The CPU
     # compatibility frame can legitimately lag behind it, so consulting
     # read_frame_rgba() first would hide one-frame crop and layer corruption.
-    if viewport.texture != null:
+    if not prefer_engine_frame and viewport.texture != null:
         var direct_image := viewport.texture.get_image()
         if direct_image != null and direct_image.get_width() > 0 and direct_image.get_height() > 0:
             if int(_image_stats(direct_image).get("visible", 0)) > 0:
@@ -11872,7 +12006,7 @@ func _process(delta: float) -> void:
                 )
             else:
                 _set_perf_visible(show_perf_monitor)
-            _flush_delayed_ons_touch_releases()
+            _flush_delayed_touch_releases()
             _flush_pending_touch_press_if_ready()
             tick_trace_serial += 1
             tick_trace_active_serial = tick_trace_serial
@@ -11945,6 +12079,7 @@ func _process(delta: float) -> void:
                 _update_frame()
                 var update_ms := float(Time.get_ticks_usec() - update_start) / 1000.0
                 last_update_ms = update_ms
+                _flush_artemis_input_trace_samples()
                 _update_touch_busy_gate(maxf(delta * 1000.0, tick_ms + update_ms))
                 if diagnostic_session != null:
                     diagnostic_session.sample_frame(
@@ -12142,6 +12277,144 @@ func _log_tick_trace(line: String) -> void:
     if perf_log_file != null:
         perf_log_file.store_line(line)
         perf_log_file.flush()
+
+func _log_input_diagnostic_line(line: String) -> void:
+    if not input_trace_enabled:
+        return
+    print(line)
+    _write_probe_marker(line)
+    if perf_log_file != null:
+        perf_log_file.store_line(line)
+        perf_log_file.flush()
+
+func _trace_touch_route(
+    action: String,
+    pointer_id: int,
+    mapped: Vector2,
+    detail: String = ""
+) -> void:
+    if not input_trace_enabled:
+        return
+    _log_input_diagnostic_line(
+        "touch_route action=%s pid=%d mapped=%.1f,%.1f pending=%d active=%s suppressed=%s delayed=%s detail=%s" % [
+            action,
+            pointer_id,
+            mapped.x,
+            mapped.y,
+            pending_touch_index,
+            JSON.stringify(active_touch_points.keys()),
+            JSON.stringify(suppressed_touch_points.keys()),
+            JSON.stringify(delayed_touch_releases.keys()),
+            detail,
+        ]
+    )
+
+func _queue_artemis_input_state_trace(label: String) -> void:
+    if not input_trace_enabled or active_runtime_kind != RUNTIME_KIRIKIRI:
+        return
+    artemis_input_trace_sequence += 1
+    var now := Time.get_ticks_msec()
+    for delay_variant in ARTEMIS_INPUT_TRACE_DELAYS_MS:
+        var delay_ms := int(delay_variant)
+        artemis_input_trace_samples.append({
+            "sequence": artemis_input_trace_sequence,
+            "label": label,
+            "delay_ms": delay_ms,
+            "due_msec": now + delay_ms,
+        })
+    _flush_artemis_input_trace_samples()
+
+func _renderer_trace_stat(renderer: String, name: String) -> String:
+    var marker := "%s=" % name
+    var start := renderer.find(marker)
+    if start < 0:
+        return ""
+    start += marker.length()
+    var end := renderer.find(" ", start)
+    if end < 0:
+        end = renderer.length()
+    return renderer.substr(start, end - start)
+
+func _flush_artemis_input_trace_samples() -> void:
+    if artemis_input_trace_samples.is_empty() or player == null:
+        return
+    if not game_running or active_runtime_kind != RUNTIME_KIRIKIRI:
+        artemis_input_trace_samples.clear()
+        return
+    var now := Time.get_ticks_msec()
+    var remaining: Array[Dictionary] = []
+    for sample in artemis_input_trace_samples:
+        if now < int(sample.get("due_msec", now)):
+            remaining.append(sample)
+            continue
+        var runtime_debug := String(player.get_plugin_debug_info())
+        var parsed = JSON.parse_string(runtime_debug)
+        if not parsed is Dictionary:
+            _log_input_diagnostic_line(
+                "artemis_input_state sequence=%d label=%s after_ms=%d parse_failed=1" % [
+                    int(sample.get("sequence", 0)),
+                    String(sample.get("label", "")),
+                    int(sample.get("delay_ms", 0)),
+                ]
+            )
+            continue
+        var debug: Dictionary = parsed
+        var state := {
+            "runtime": debug.get("runtime", ""),
+            "scriptState": debug.get("scriptState", ""),
+            "scriptWaitReason": debug.get("scriptWaitReason", ""),
+            "waitFlag": debug.get("waitFlag", ""),
+            "delayFlag": debug.get("delayFlag", ""),
+            "textClickFlag": debug.get("textClickFlag", ""),
+            "clickFlag": debug.get("clickFlag", ""),
+            "exclickFlag": debug.get("exclickFlag", ""),
+            "transitionFlag": debug.get("transitionFlag", ""),
+            "keycodeFlag": debug.get("keycodeFlag", ""),
+            "buttonName": debug.get("buttonName", ""),
+            "buttonClick": debug.get("buttonClick", ""),
+            "buttonEntry": debug.get("buttonEntry", ""),
+            "buttonStop": debug.get("buttonStop", ""),
+            "localInput2": debug.get("localInput2", ""),
+            "externalWaitReason": debug.get("externalWaitReason", ""),
+            "queuedCommands": debug.get("queuedCommands", 0),
+            "eventResumeStates": debug.get("eventResumeStates", 0),
+            "lastInputDebug": debug.get("lastInputDebug", ""),
+            "inputDispatchDebug": debug.get("inputDispatchDebug", ""),
+            "overrideDebug": debug.get("overrideDebug", ""),
+            "frameSerial": debug.get("frameSerial", ""),
+            "uiEvents": debug.get("uiEvents", ""),
+            "scriptStack": debug.get("scriptStack", []),
+            "touchPending": pending_touch_index,
+            "touchPendingQuarantined": pending_touch_quarantined,
+            "touchActive": active_touch_points.keys(),
+            "touchSuppressed": suppressed_touch_points.keys(),
+            "touchDelayed": delayed_touch_releases.keys(),
+            "touchSecondaryQuarantineRemainingMs": maxi(
+                0,
+                touch_secondary_quarantine_until_msec - Time.get_ticks_msec()
+            ),
+        }
+        if debug.has("commandTrace") and debug["commandTrace"] is Array:
+            var command_trace: Array = debug["commandTrace"]
+            state["commandTraceTail"] = command_trace.slice(
+                maxi(0, command_trace.size() - 6)
+            )
+        var renderer := String(player.get_renderer_info())
+        state["bridgeInputs"] = _renderer_trace_stat(renderer, "inputs")
+        state["bridgeCoalescedInputs"] = _renderer_trace_stat(
+            renderer,
+            "coalesced_inputs"
+        )
+        _log_input_diagnostic_line(
+            "artemis_input_state sequence=%d label=%s after_ms=%d tick=%d state=%s" % [
+                int(sample.get("sequence", 0)),
+                String(sample.get("label", "")),
+                int(sample.get("delay_ms", 0)),
+                tick_trace_serial,
+                JSON.stringify(state),
+            ]
+        )
+    artemis_input_trace_samples = remaining
 
 func _log_frame_probe(delta: float) -> void:
     if not frame_probe_enabled:
@@ -12798,15 +13071,18 @@ func _clear_game_input_capture() -> void:
     pending_touch_index = -1
     pending_touch_mapped = Vector2.ZERO
     pending_touch_down_msec = 0
-    delayed_ons_touch_releases.clear()
+    pending_touch_quarantined = false
+    delayed_touch_releases.clear()
     last_forwarded_touch_move_msec_by_id.clear()
     last_forwarded_touch_down_msec = 0
     last_forwarded_touch_up_msec = 0
+    touch_secondary_quarantine_until_msec = 0
     suppress_mouse_until_msec = 0
     present_hold_frames = 0
     last_present_hold_msec = 0
     tick_trace_until_msec = 0
     tick_trace_active_serial = 0
+    artemis_input_trace_samples.clear()
     input_trace_accum = 0.0
     input_trace_received = 0
     input_trace_forwarded = 0
@@ -13948,6 +14224,21 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
                 return false
             if _handle_secondary_touch_press(pointer_id, mapped):
                 return true
+            var quarantine_remaining := touch_secondary_quarantine_until_msec - Time.get_ticks_msec()
+            if quarantine_remaining > 0:
+                # Keep the first finger pending so a second finger can still
+                # form the next two-finger gesture during the quarantine. If
+                # no second finger arrives, the pending tap is discarded on
+                # release (or when the quarantine expires) and never reaches
+                # the engine.
+                _set_pending_touch(pointer_id, mapped, true)
+                _trace_touch_route(
+                    "secondary_quarantine_pending",
+                    pointer_id,
+                    mapped,
+                    "remaining_ms=%d" % quarantine_remaining
+                )
+                return true
             if not active_touch_points.is_empty():
                 _suppress_touch_pointer(pointer_id)
                 _trace_input_throttled()
@@ -13970,6 +14261,14 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             var pending_up_mapped := _map_viewport_point(touch.position, true)
             if pending_up_mapped.x < 0.0 or pending_up_mapped.y < 0.0:
                 pending_up_mapped = pending_touch_mapped
+            if pending_touch_quarantined:
+                _clear_pending_touch()
+                _trace_touch_route(
+                    "secondary_quarantine_release",
+                    pointer_id,
+                    pending_up_mapped
+                )
+                return true
             _send_pending_touch_click(pointer_id, pending_up_mapped)
             return true
         var captured := active_touch_points.has(pointer_id)
@@ -13984,7 +14283,7 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             mapped = GameInputMapping.stable_tap_point(
                 down_mapped,
                 mapped,
-                TOUCH_DRAG_DISTANCE_THRESHOLD
+                _touch_drag_distance_threshold()
             )
         active_touch_points.erase(pointer_id)
         touch_down_points.erase(pointer_id)
@@ -14000,12 +14299,7 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
         var drag := event as InputEventScreenDrag
         suppress_mouse_until_msec = Time.get_ticks_msec() + TOUCH_MOUSE_SUPPRESS_MS
         var pointer_id := drag.index
-        var drag_distance_threshold := TOUCH_DRAG_DISTANCE_THRESHOLD
-        if _is_touch_platform() and active_runtime_kind == RUNTIME_ONSCRIPTER:
-            # ONS menus are controlled by moving a cursor and activating the
-            # item on release. The generic 18 px drag slop makes that cursor
-            # feel stationary on a touch screen, especially for small menus.
-            drag_distance_threshold = ONS_TOUCH_CURSOR_DISTANCE_THRESHOLD
+        var drag_distance_threshold := _touch_drag_distance_threshold()
         if suppressed_touch_points.has(pointer_id):
             _trace_input_throttled()
             return true
@@ -14064,7 +14358,7 @@ func _suppress_touch_pointer(pointer_id: int) -> void:
     last_forwarded_touch_move_msec_by_id.erase(pointer_id)
     _clear_pending_touch_if_matches(pointer_id)
 
-func _set_pending_touch(pointer_id: int, mapped: Vector2) -> void:
+func _set_pending_touch(pointer_id: int, mapped: Vector2, quarantined: bool = false) -> void:
     suppressed_touch_points.erase(pointer_id)
     active_touch_points.erase(pointer_id)
     touch_down_points.erase(pointer_id)
@@ -14073,11 +14367,14 @@ func _set_pending_touch(pointer_id: int, mapped: Vector2) -> void:
     pending_touch_index = pointer_id
     pending_touch_mapped = mapped
     pending_touch_down_msec = Time.get_ticks_msec()
+    pending_touch_quarantined = quarantined
+    _trace_touch_route("pending_primary", pointer_id, mapped)
 
 func _clear_pending_touch() -> void:
     pending_touch_index = -1
     pending_touch_mapped = Vector2.ZERO
     pending_touch_down_msec = 0
+    pending_touch_quarantined = false
 
 func _clear_pending_touch_if_matches(pointer_id: int) -> void:
     if pending_touch_index == pointer_id:
@@ -14087,6 +14384,15 @@ func _handle_secondary_touch_press(pointer_id: int, mapped: Vector2) -> bool:
     var now := Time.get_ticks_msec()
     if pending_touch_index >= 0 and pending_touch_index != pointer_id:
         if now - pending_touch_down_msec <= TOUCH_SECONDARY_TAP_WINDOW_MS:
+            _trace_touch_route(
+                "secondary_matches_pending",
+                pointer_id,
+                mapped,
+                "first_pid=%d age_ms=%d" % [
+                    pending_touch_index,
+                    now - pending_touch_down_msec,
+                ]
+            )
             _send_touch_secondary_click(pointer_id, mapped)
             return true
         _flush_pending_touch_press(true)
@@ -14094,6 +14400,12 @@ func _handle_secondary_touch_press(pointer_id: int, mapped: Vector2) -> bool:
 
     if active_touch_points.size() == 1 and last_forwarded_touch_down_msec > 0:
         if now - last_forwarded_touch_down_msec <= TOUCH_SECONDARY_TAP_WINDOW_MS:
+            _trace_touch_route(
+                "secondary_matches_active",
+                pointer_id,
+                mapped,
+                "age_ms=%d" % (now - last_forwarded_touch_down_msec)
+            )
             _send_touch_secondary_click(pointer_id, mapped)
             return true
     return false
@@ -14105,6 +14417,18 @@ func _flush_pending_touch_press(force: bool = false) -> bool:
     if pending_touch_index < 0:
         return false
     var now := Time.get_ticks_msec()
+    if pending_touch_quarantined:
+        if not force and now < touch_secondary_quarantine_until_msec:
+            return false
+        var quarantined_pointer_id := pending_touch_index
+        var quarantined_mapped := pending_touch_mapped
+        _clear_pending_touch()
+        _trace_touch_route(
+            "secondary_quarantine_expire",
+            quarantined_pointer_id,
+            quarantined_mapped
+        )
+        return false
     if not force and now - pending_touch_down_msec < TOUCH_SINGLE_TAP_DELAY_MS:
         return false
 
@@ -14119,6 +14443,8 @@ func _flush_pending_touch_press(force: bool = false) -> bool:
     _remember_button_position(mapped)
     _send_game_pointer_event(POINTER_MOVE, _touch_engine_pointer_id(pointer_id), mapped.x, mapped.y, 0.0, 0.0, 0)
     _send_game_pointer_event(POINTER_DOWN, _touch_engine_pointer_id(pointer_id), mapped.x, mapped.y, 0.0, 0.0, 0)
+    _trace_touch_route("primary_hold_down", pointer_id, mapped)
+    _queue_artemis_input_state_trace("primary_hold_down")
     _arm_tick_trace()
     _arm_black_frame_guard()
     _hold_next_present_after_input()
@@ -14129,7 +14455,7 @@ func _send_pending_touch_click(pointer_id: int, up_mapped: Vector2) -> void:
     var click_mapped := GameInputMapping.stable_tap_point(
         down_mapped,
         up_mapped,
-        TOUCH_DRAG_DISTANCE_THRESHOLD
+        _touch_drag_distance_threshold()
     )
     _clear_pending_touch()
     suppressed_touch_points.erase(pointer_id)
@@ -14142,34 +14468,37 @@ func _send_pending_touch_click(pointer_id: int, up_mapped: Vector2) -> void:
     _remember_button_position(click_mapped)
     _send_game_pointer_event(POINTER_MOVE, _touch_engine_pointer_id(pointer_id), click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
     _send_game_pointer_event(POINTER_DOWN, _touch_engine_pointer_id(pointer_id), click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
-    if _is_touch_platform() and active_runtime_kind == RUNTIME_ONSCRIPTER:
+    if _is_touch_platform():
         # A short tap can be released before the 90 ms gesture-disambiguation
         # window expires. Sending DOWN and UP from this callback puts both SDL
-        # events in the same frame, which ONS can miss while a timed wait is
-        # changing state. Keep one small, deterministic press pulse instead.
-        delayed_ons_touch_releases[pointer_id] = {
-            "due_msec": Time.get_ticks_msec() + ONS_TOUCH_CLICK_HOLD_MS,
+        # events in the same frame; Artemis can consume that pulse while a
+        # timed transition is changing state. Keep one small, deterministic
+        # press pulse for every mobile runtime.
+        delayed_touch_releases[pointer_id] = {
+            "due_msec": Time.get_ticks_msec() + TOUCH_CLICK_HOLD_MS,
             "mapped": click_mapped,
         }
     else:
         _send_game_pointer_event(POINTER_UP, _touch_engine_pointer_id(pointer_id), click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
         last_forwarded_touch_up_msec = Time.get_ticks_msec()
         _apply_touch_action_cooldown()
+    _trace_touch_route("primary_tap_down", pointer_id, click_mapped)
+    _queue_artemis_input_state_trace("primary_tap")
     _arm_tick_trace()
     _arm_black_frame_guard()
     _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
 
-func _flush_delayed_ons_touch_releases() -> void:
-    if delayed_ons_touch_releases.is_empty():
+func _flush_delayed_touch_releases() -> void:
+    if delayed_touch_releases.is_empty():
         return
     var now := Time.get_ticks_msec()
-    for pointer_id_variant in delayed_ons_touch_releases.keys():
+    for pointer_id_variant in delayed_touch_releases.keys():
         var pointer_id := int(pointer_id_variant)
-        var release: Dictionary = delayed_ons_touch_releases.get(pointer_id, {})
+        var release: Dictionary = delayed_touch_releases.get(pointer_id, {})
         if now < int(release.get("due_msec", now)):
             continue
-        delayed_ons_touch_releases.erase(pointer_id)
-        if not game_running or active_runtime_kind != RUNTIME_ONSCRIPTER:
+        delayed_touch_releases.erase(pointer_id)
+        if player == null:
             continue
         var mapped: Vector2 = release.get("mapped", Vector2.ZERO)
         _send_game_pointer_event(
@@ -14182,6 +14511,7 @@ func _flush_delayed_ons_touch_releases() -> void:
             0
         )
         last_forwarded_touch_up_msec = now
+        _trace_touch_route("primary_delayed_up", pointer_id, mapped)
         _apply_touch_action_cooldown()
         _arm_black_frame_guard()
         _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
@@ -14200,7 +14530,19 @@ func _send_touch_secondary_click(pointer_id: int, mapped: Vector2) -> void:
         var first_id := int(active_touch_points.keys()[0])
         var first_mapped: Vector2 = active_touch_points.get(first_id, mapped)
         click_mapped = (first_mapped + mapped) * 0.5
-        _send_game_pointer_event(POINTER_UP, _touch_engine_pointer_id(first_id), first_mapped.x, first_mapped.y, 0.0, 0.0, 0)
+        # The first finger may already have crossed the single-touch delay.
+        # Reclassifying it as a two-finger gesture must cancel that press; a
+        # normal UP would also dispatch Artemis setonpush/adv_click.
+        _send_game_pointer_event(
+            POINTER_UP,
+            _touch_engine_pointer_id(first_id),
+            first_mapped.x,
+            first_mapped.y,
+            0.0,
+            0.0,
+            0,
+            POINTER_MOD_CANCEL
+        )
         active_touch_points.erase(first_id)
         touch_down_points.erase(first_id)
         dragging_touch_points.erase(first_id)
@@ -14215,6 +14557,23 @@ func _send_touch_secondary_click(pointer_id: int, mapped: Vector2) -> void:
     _send_game_pointer_event(POINTER_DOWN, TOUCH_SECONDARY_POINTER_ID, click_mapped.x, click_mapped.y, 0.0, 0.0, 1)
     _send_game_pointer_event(POINTER_UP, TOUCH_SECONDARY_POINTER_ID, click_mapped.x, click_mapped.y, 0.0, 0.0, 1)
     last_forwarded_touch_up_msec = Time.get_ticks_msec()
+    touch_secondary_quarantine_until_msec = maxi(
+        touch_secondary_quarantine_until_msec,
+        last_forwarded_touch_up_msec + TOUCH_SECONDARY_QUARANTINE_MS
+    )
+    _trace_touch_route(
+        "secondary_click",
+        pointer_id,
+        click_mapped,
+        "button=1"
+    )
+    _trace_touch_route(
+        "secondary_quarantine_arm",
+        pointer_id,
+        click_mapped,
+        "duration_ms=%d" % TOUCH_SECONDARY_QUARANTINE_MS
+    )
+    _queue_artemis_input_state_trace("secondary_click")
     _apply_touch_action_cooldown()
     _arm_tick_trace()
     _arm_black_frame_guard()
@@ -14378,6 +14737,15 @@ func _hold_next_present_after_input(frames: int = POST_INPUT_PRESENT_HOLD_FRAMES
 func _is_touch_platform() -> bool:
     var platform := OS.get_name()
     return platform == "iOS" or platform == "Android"
+
+func _touch_drag_distance_threshold() -> float:
+    if not _is_touch_platform():
+        return TOUCH_DRAG_DISTANCE_THRESHOLD
+    if active_runtime_kind == RUNTIME_ONSCRIPTER:
+        # ONS menus are controlled by moving a cursor and activating the
+        # item on release. Small touch movement should not move that cursor.
+        return ONS_TOUCH_CURSOR_DISTANCE_THRESHOLD
+    return TOUCH_DRAG_DISTANCE_THRESHOLD
 
 func _deactivate_game_text_input() -> void:
     if game_text_input_active:

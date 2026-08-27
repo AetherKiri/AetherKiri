@@ -21,4 +21,12 @@ namespace PSB {
     void registerRootResources(const ttstr &container, const PSBFile &file);
     void registerRootResources(const std::vector<ttstr> &containers,
                                const PSBFile &file);
+
+    // Lazy motion loading already registers the generic PSB object/resource
+    // tree in PSBMedia.  This narrow hook adds only the authored slice-set
+    // mapping, avoiding a second full registration pass.
+    void registerMotionSliceResources(const ttstr &container,
+                                      const PSBFile &file);
+    void registerMotionSliceResources(const std::vector<ttstr> &containers,
+                                      const PSBFile &file);
 } // namespace PSB
