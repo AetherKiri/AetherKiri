@@ -44,7 +44,9 @@ The upstream standalone CMake files are not included. Aether's
 [`cpp/plugins/CMakeLists.txt`](../cpp/plugins/CMakeLists.txt) selects source
 files, and the small translation units in
 [`cpp/plugins/upstream_bridge`](../cpp/plugins/upstream_bridge) establish the
-Aether ABI before including an upstream business translation unit.
+Aether ABI before including an upstream business translation unit. The adapter
+rules are kept in [`krkrz_upstream_adapters.md`](krkrz_upstream_adapters.md),
+alongside the rest of the integration documentation.
 
 The adapters currently enabled by default are:
 
@@ -134,9 +136,10 @@ dependency policy, and runtime test before its manifest status can change from
 `optional`.
 
 Compatibility-only registrations live under
-[`cpp/plugins/stubs`](../cpp/plugins/stubs). A stub preserves a module name or
-script shape but is not feature-complete native support. `sigcheck` is kept
-separate from the upstream implementation until its platform/security
+[`cpp/plugins/stubs`](../cpp/plugins/stubs); their policy is documented in
+[`krkrz_plugin_stubs.md`](krkrz_plugin_stubs.md). A stub preserves a module
+name or script shape but is not feature-complete native support. `sigcheck` is
+kept separate from the upstream implementation until its platform/security
 contract is reviewed.
 
 ## Build and verification

@@ -1,15 +1,16 @@
 # krkrz source adapters
 
-The translation units in this directory are the only place where selected
-`krkrz_dev` plugin sources enter the Aether build. Each adapter establishes the
-Aether `ncbind`/TJS ABI, names the module explicitly, and then includes the
-business translation unit from the pinned `third_party/krkrz_dev` checkout.
+The translation units in `cpp/plugins/upstream_bridge` are the only place
+where selected `krkrz_dev` plugin sources enter the Aether build. Each adapter
+establishes the Aether `ncbind`/TJS ABI, names the module explicitly, and then
+includes the business translation unit from the pinned
+`third_party/krkrz_dev` checkout.
 
 Keep these rules when adding an adapter:
 
 * Do not include upstream `tp_stub.cpp`, `ncbind.cpp`, `v2link.cpp`, plugin
   registries, or upstream CMake files. Aether owns those runtime facilities.
-* Resolve an ABI difference in this small adapter, with a comment and a test;
+* Resolve an ABI difference in the small adapter, with a comment and a test;
   do not patch the submodule working tree.
 * Preserve Aether's ownership and threading rules. In particular,
   `tTJSBinaryStream` is RAII-managed and must not receive an upstream
