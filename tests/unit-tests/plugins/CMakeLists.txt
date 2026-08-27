@@ -17,6 +17,7 @@ add_executable(motionplayer-dll
     krkrgles-aliases.cpp
     kag-load-contract.cpp
     render-simd.cpp
+    layerex-save-codecs.cpp
     script-compatibility.cpp
     project-storage.cpp
 )
@@ -34,6 +35,7 @@ target_link_libraries(motionplayer-dll
 target_include_directories(motionplayer-dll PRIVATE
     "${TEST_CONFIG_DIR}"
     "${CMAKE_SOURCE_DIR}/cpp/plugins"
+    "${AETHER_KRKRZ_PLUGIN_ROOT}/layerExSave"
 )
 
 if(AETHERKIRI_INTERNAL_ENABLED)

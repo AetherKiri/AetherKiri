@@ -1,9 +1,13 @@
 #include "PluginStub.h"
 #include "GraphicsLoaderIntf.h"
 #include "ncbind.hpp"
+#include "upstream_bridge/layerExSaveCodecs.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdlib>
+#include <cstdint>
+#include <limits>
 #include <memory>
 #include <vector>
 #include <spdlog/spdlog.h>
@@ -75,22 +79,56 @@ void writeI32(tTJSBinaryStream *stream, tjs_int32 value, const ttstr &name) {
     writeU32(stream, static_cast<tjs_uint32>(value), name);
 }
 
+bool validImageBuffer(tjs_int width, tjs_int height, tjs_int pitch,
+                      const tjs_uint8 *buffer) {
+    if(width <= 0 || height <= 0 || pitch == 0 || !buffer)
+        return false;
+
+    const auto width64 = static_cast<std::int64_t>(width);
+    const auto height64 = static_cast<std::int64_t>(height);
+    const auto pitch64 = static_cast<std::int64_t>(pitch);
+    const auto rowBytes = width64 * 4;
+    const auto absolutePitch = pitch64 < 0 ? -pitch64 : pitch64;
+    if(rowBytes > absolutePitch)
+        return false;
+
+    const auto rowSpan = (height64 - 1) * absolutePitch;
+    const auto minOffset = pitch64 < 0 ? -rowSpan : 0;
+    const auto maxOffset = pitch64 < 0 ? rowBytes : rowSpan + rowBytes;
+    return minOffset >= static_cast<std::int64_t>(
+                           std::numeric_limits<std::ptrdiff_t>::min()) &&
+           maxOffset <= static_cast<std::int64_t>(
+                            std::numeric_limits<std::ptrdiff_t>::max());
+}
+
+const tjs_uint8 *imageRow(const tjs_uint8 *buffer, tjs_int pitch,
+                          tjs_int y) {
+    const auto offset = static_cast<std::int64_t>(y) *
+                        static_cast<std::int64_t>(pitch);
+    return buffer + static_cast<std::ptrdiff_t>(offset);
+}
+
 void saveAsBmp(const ttstr &name, tjs_int width, tjs_int height,
                const tjs_uint8 *buffer, tjs_int bufferPitch) {
-    if(width <= 0 || height <= 0 || !buffer)
+    if(!validImageBuffer(width, height, bufferPitch, buffer))
         TVPThrowExceptionMessage(TJS_W("invalid layer image"));
 
     TVPClearGraphicCache();
 
-    const tjs_uint rowBytes = static_cast<tjs_uint>(width) * 4;
-    const tjs_uint srcPitch =
-        static_cast<tjs_uint>(bufferPitch < 0 ? -bufferPitch : bufferPitch);
-    if(srcPitch < rowBytes)
-        TVPThrowExceptionMessage(TJS_W("invalid layer image pitch"));
+    const auto rowBytes64 = static_cast<std::uint64_t>(width) * 4u;
+    const auto pixelBytes64 = rowBytes64 * static_cast<std::uint64_t>(height);
+    const auto offBits64 = std::uint64_t(14) + std::uint64_t(40);
+    const auto fileSize64 = offBits64 + pixelBytes64;
+    if(rowBytes64 > std::numeric_limits<tjs_uint>::max() ||
+       pixelBytes64 > std::numeric_limits<tjs_uint32>::max() ||
+       fileSize64 > std::numeric_limits<tjs_uint32>::max())
+        TVPThrowExceptionMessage(TJS_W("layer image is too large for BMP"));
+
+    const auto rowBytes = static_cast<tjs_uint>(rowBytes64);
+    const auto pixelBytes = static_cast<tjs_uint32>(pixelBytes64);
 
     const tjs_uint32 fileHeaderSize = 14;
     const tjs_uint32 infoHeaderSize = 40;
-    const tjs_uint32 pixelBytes = rowBytes * static_cast<tjs_uint32>(height);
     const tjs_uint32 offBits = fileHeaderSize + infoHeaderSize;
     const tjs_uint32 fileSize = offBits + pixelBytes;
 
@@ -118,13 +156,40 @@ void saveAsBmp(const ttstr &name, tjs_int width, tjs_int height,
     writeU32(output.get(), 0, name);
     writeU32(output.get(), 0, name);
 
-    const tjs_uint8 *row = buffer + bufferPitch * (height - 1);
     std::vector<tjs_uint8> copy(rowBytes);
-    for(tjs_int y = 0; y < height; ++y) {
+    // BMP stores rows bottom-up.  `buffer` remains the first logical row,
+    // even when the source pitch is negative.
+    for(tjs_int y = height; y-- > 0;) {
+        const tjs_uint8 *row = imageRow(buffer, bufferPitch, y);
         std::copy(row, row + rowBytes, copy.begin());
         writeBytes(output.get(), copy.data(), rowBytes, name);
-        row -= bufferPitch;
     }
+}
+
+void saveAsEncoded(const ttstr &name, tjs_int width, tjs_int height,
+                   const tjs_uint8 *buffer, tjs_int bufferPitch, bool tlg5) {
+    if(width <= 0 || height <= 0 || !buffer)
+        TVPThrowExceptionMessage(TJS_W("invalid layer image"));
+
+    std::vector<std::uint8_t> encoded;
+    const bool ok = tlg5
+                        ? aether::krkrz::layer_save::encodeTlg5(
+                              buffer, width, height, bufferPitch, encoded)
+                        : aether::krkrz::layer_save::encodePng(
+                              buffer, width, height, bufferPitch, encoded);
+    if(!ok || encoded.empty())
+        TVPThrowExceptionMessage(TJS_W("cannot encode layer image"));
+
+    TVPClearGraphicCache();
+    std::unique_ptr<tTJSBinaryStream> output(
+        TVPCreateStream(name, TJS_BS_WRITE));
+    if(!output)
+        TVPThrowExceptionMessage((ttstr(TJS_W("cannot open : ")) + name)
+                                     .c_str());
+    if(encoded.size() > std::numeric_limits<tjs_uint>::max())
+        TVPThrowExceptionMessage(TJS_W("encoded layer image is too large"));
+    writeBytes(output.get(), encoded.data(),
+               static_cast<tjs_uint>(encoded.size()), name);
 }
 
 class SaveLayerImageFunction : public tTJSDispatch {
@@ -154,7 +219,8 @@ public:
             layer, TJS_W("mainImageBufferPitch"),
             TJS_W("invoking of Layer.mainImageBufferPitch failed.")));
 
-        const ttstr format = param[2]->AsStringNoAddRef();
+        ttstr format = param[2]->AsStringNoAddRef();
+        format.ToLowerCase();
         const ttstr filename = param[1]->AsStringNoAddRef();
         if(saveTraceEnabled()) {
             spdlog::info("SaveTrace saveLayerImage file={} format={} size={}x{} pitch={}",
@@ -163,6 +229,10 @@ public:
         }
         if(format == TJS_W("bmp")) {
             saveAsBmp(filename, width, height, buffer, pitch);
+        } else if(format == TJS_W("png")) {
+            saveAsEncoded(filename, width, height, buffer, pitch, false);
+        } else if(format == TJS_W("tlg") || format == TJS_W("tlg5")) {
+            saveAsEncoded(filename, width, height, buffer, pitch, true);
         } else {
             TVPThrowExceptionMessage(TJS_W("Not supported format."));
         }

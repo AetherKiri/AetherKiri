@@ -107,6 +107,10 @@ TJS_EXP_FUNC_DEF(void, TVPAddTransHandlerProvider,
 TJS_EXP_FUNC_DEF(void, TVPRemoveTransHandlerProvider,
                  (iTVPTransHandlerProvider * pro));
 iTVPTransHandlerProvider *TVPFindTransHandlerProvider(const ttstr &name);
+// Look up a transition provider without the compatibility crossfade fallback.
+// A plugin that wants to preserve an existing owner must distinguish a
+// missing name from the normal TVPFind fallback result.
+iTVPTransHandlerProvider *TVPFindTransHandlerProviderExact(const ttstr &name);
 //---------------------------------------------------------------------------
 
 /*[*/

@@ -1,8 +1,12 @@
 #include "PluginStub.h"
 #include "ncbind.hpp"
+#include "upstream_bridge/layerExSaveCodecs.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <vector>
 
 #ifndef TJS_INTF_METHOD
 #define TJS_INTF_METHOD
@@ -37,6 +41,17 @@ tjs_int getIntProp(iTJSDispatch2 *layer, const tjs_char *name) {
     return static_cast<tjs_int>(value.AsInteger());
 }
 
+tjs_intptr_t getPointerProp(iTJSDispatch2 *layer, const tjs_char *name) {
+    tTJSVariant value;
+    if(TJS_FAILED(layer->PropGet(0, name, nullptr, &value, layer)))
+        TVPThrowExceptionMessage((ttstr(TJS_W("cannot get Layer.")) + name)
+                                     .c_str());
+    // Layer.mainImageBuffer is declared as tjs_intptr_t.  Do not route it
+    // through tjs_int (32-bit), otherwise a 64-bit host truncates the address
+    // before the upstream codec or the crop helpers can use it.
+    return static_cast<tjs_intptr_t>(value.AsInteger());
+}
+
 LayerImage getLayerImage(iTJSDispatch2 *layer, bool writable) {
     if(!layer ||
        TJS_FAILED(layer->IsInstanceOf(0, nullptr, nullptr, TJS_W("Layer"),
@@ -54,7 +69,7 @@ LayerImage getLayerImage(iTJSDispatch2 *layer, bool writable) {
     const tjs_char *bufferName =
         writable ? TJS_W("mainImageBufferForWrite") : TJS_W("mainImageBuffer");
     auto *buffer = reinterpret_cast<tjs_uint8 *>(
-        static_cast<tjs_intptr_t>(getIntProp(layer, bufferName)));
+        getPointerProp(layer, bufferName));
     if(!buffer)
         TVPThrowExceptionMessage(TJS_W("Invalid layer image."));
     image.read = buffer;
@@ -63,11 +78,13 @@ LayerImage getLayerImage(iTJSDispatch2 *layer, bool writable) {
 }
 
 ReadPtr pixelAt(const LayerImage &image, tjs_int x, tjs_int y) {
-    return image.read + y * image.pitch + x * 4;
+    return image.read + static_cast<std::ptrdiff_t>(y) * image.pitch +
+           static_cast<std::ptrdiff_t>(x) * 4;
 }
 
 WritePtr writablePixelAt(const LayerImage &image, tjs_int x, tjs_int y) {
-    return image.write + y * image.pitch + x * 4;
+    return image.write + static_cast<std::ptrdiff_t>(y) * image.pitch +
+           static_cast<std::ptrdiff_t>(x) * 4;
 }
 
 bool nonTransparent(ReadPtr p) { return p[3] != 0; }
@@ -167,13 +184,26 @@ static tjs_error TJS_INTF_METHOD saveLayerImageTlg5(tTJSVariant *, tjs_int num,
     return TJS_S_OK;
 }
 
-static tjs_error TJS_INTF_METHOD saveLayerImagePngOctet(tTJSVariant *,
+static tjs_error TJS_INTF_METHOD saveLayerImagePngOctet(tTJSVariant *result,
                                                         tjs_int,
                                                         tTJSVariant **,
-                                                        iTJSDispatch2 *) {
-    TVPThrowExceptionMessage(
-        TJS_W("saveLayerImagePngOctet is not supported by this compatibility layer"));
-    return TJS_E_FAIL;
+                                                        iTJSDispatch2 *layer) {
+    if(!result)
+        return TJS_S_OK;
+    const LayerImage image = getLayerImage(layer, false);
+    std::vector<std::uint8_t> encoded;
+    if(!aether::krkrz::layer_save::encodePng(
+           image.read, image.width, image.height, image.pitch, encoded) ||
+       encoded.empty() || encoded.size() > std::numeric_limits<tjs_uint>::max()) {
+        TVPThrowExceptionMessage(TJS_W("cannot encode layer image"));
+    }
+    auto *octet = TJSAllocVariantOctet(
+        encoded.data(), static_cast<tjs_uint>(encoded.size()));
+    if(!octet)
+        TVPThrowExceptionMessage(TJS_W("cannot allocate PNG octet"));
+    *result = octet;
+    octet->Release();
+    return TJS_S_OK;
 }
 
 static tjs_error TJS_INTF_METHOD getCropRect(tTJSVariant *result, tjs_int,

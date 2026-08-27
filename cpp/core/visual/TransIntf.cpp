@@ -340,6 +340,22 @@ iTVPTransHandlerProvider *TVPFindTransHandlerProvider(const ttstr &name) {
     return pro;
 }
 //---------------------------------------------------------------------------
+iTVPTransHandlerProvider *TVPFindTransHandlerProviderExact(const ttstr &name) {
+    if(TVPTransHandlerProviderInit) {
+        TVPRegisterDefaultTransHandlerProvider();
+        TVPTransHandlerProviderInit = false;
+    }
+
+    tTVPTransHandlerProviderHolder *holder =
+        TVPTransHandlerProviders.Find(name);
+    if(!holder)
+        return nullptr;
+
+    iTVPTransHandlerProvider *pro = holder->GetObjectNoAddRef();
+    pro->AddRef();
+    return pro;
+}
+//---------------------------------------------------------------------------
 static void TVPClearTransHandlerProvider() {
     // called at system shutdown
     TVPTransHandlerProviders.Clear();

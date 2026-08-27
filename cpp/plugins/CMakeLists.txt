@@ -3,6 +3,14 @@ project(krkr2plugin)
 
 include("${CMAKE_SOURCE_DIR}/cmake/AetherKrkrzIntegration.cmake")
 
+# layerExSave keeps Aether's Layer/TJS wrapper and storage boundary, but its
+# portable PNG and TLG5 codecs are compiled directly from the pinned upstream
+# sources.  Do not copy these files into the parent repository.
+aether_krkrz_require_source("layerExSave/LodePNG/lodepng.cpp")
+aether_krkrz_require_source("layerExSave/LodePNG/lodepng.h")
+aether_krkrz_require_source("layerExSave/tlg5/slide.cpp")
+aether_krkrz_require_source("layerExSave/tlg5/slide.h")
+
 if(AETHER_USE_KRKRZ_LEAF_PLUGINS)
     if(NOT EXISTS "${AETHER_KRKRZ_DEV_ROOT}/.git" AND
        NOT EXISTS "${AETHER_KRKRZ_DEV_ROOT}/CMakeLists.txt")
@@ -21,6 +29,31 @@ if(AETHER_USE_KRKRZ_LEAF_PLUGINS)
     aether_krkrz_require_source("getSample/main.cpp")
     aether_krkrz_require_source("layerExBTOA/Main.cpp")
     aether_krkrz_require_source("shrinkCopy/main.cpp")
+    # The extNagano sources are self-contained transition algorithms.  The
+    # two rule-provider variants (3duniversal/imagewipe) require texture
+    # methods that are not present in Aether's scan-line ABI, so they remain
+    # on the Aether fallback provider; the other algorithms are detached and
+    # wrapped by upstream_bridge/extNaganoProviders.cpp.
+    set(AETHER_EXTNAGANO_UPSTREAM_SOURCES
+        "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/blurfade.cpp"
+        "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/book.cpp"
+        "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/flutter.cpp"
+        "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/honeyturn.cpp"
+        "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/morphing.cpp"
+        "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/multiripple.cpp"
+        "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/rgbfade.cpp"
+        "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/scanline.cpp"
+        "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/spin.cpp"
+        "${AETHER_KRKRZ_PLUGIN_ROOT}/extNagano/zoomfade.cpp")
+    foreach(_aether_extnagano_source IN LISTS AETHER_EXTNAGANO_UPSTREAM_SOURCES)
+        if(NOT EXISTS "${_aether_extnagano_source}")
+            message(FATAL_ERROR
+                "Selected extNagano upstream source is missing: "
+                "${_aether_extnagano_source}")
+        endif()
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+            "${_aether_extnagano_source}")
+    endforeach()
     set(AETHER_LAYEREX_AREA_AVERAGE_SOURCE
         upstream_bridge/layerExAreaAverage.cpp)
     set(AETHER_LAYEREX_RASTER_SOURCE upstream_bridge/layerExRaster.cpp)
@@ -128,6 +161,9 @@ target_sources(${PROJECT_NAME} PRIVATE
     fftgraph.cpp
     LayerExBase.cpp
     layerExSaveCompat.cpp
+    upstream_bridge/layerExSaveCodecs.cpp
+    "${AETHER_KRKRZ_PLUGIN_ROOT}/layerExSave/LodePNG/lodepng.cpp"
+    "${AETHER_KRKRZ_PLUGIN_ROOT}/layerExSave/tlg5/slide.cpp"
     xp3filter.cpp
     ${AETHER_SHRINK_COPY_SOURCE}
     extrans.cpp
@@ -157,6 +193,19 @@ target_sources(${PROJECT_NAME} PRIVATE
     pluginAnchors.cpp
     fstat/main.cpp
 )
+
+if(AETHER_USE_KRKRZ_LEAF_PLUGINS)
+    target_sources(${PROJECT_NAME} PRIVATE
+        upstream_bridge/extNaganoProviders.cpp
+        ${AETHER_EXTNAGANO_UPSTREAM_SOURCES})
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+        AETHER_KRKRZ_EXTNAGANO_UPSTREAM=1)
+    # Aether's local tp_stub intentionally omits the generated calling-convention
+    # macro.  The upstream files expect it to expand to an empty token on
+    # non-Windows hosts; apply that definition only to these selected sources.
+    set_source_files_properties(${AETHER_EXTNAGANO_UPSTREAM_SOURCES}
+        PROPERTIES COMPILE_DEFINITIONS "TJS_INTF_METHOD=")
+endif()
 
 if(BUILD_GPU_BRIDGE)
     target_sources(${PROJECT_NAME} PRIVATE krkrgles.cpp)
@@ -217,7 +266,9 @@ else()
     )
 endif()
 
-target_include_directories(${PROJECT_NAME} PUBLIC ${KRKR2PLUGIN_PATH} ${KRKR2PLUGIN_PATH}/simplebinder})
+target_include_directories(${PROJECT_NAME} PUBLIC ${KRKR2PLUGIN_PATH} ${KRKR2PLUGIN_PATH}/simplebinder)
+target_include_directories(${PROJECT_NAME} PRIVATE
+    "${AETHER_KRKRZ_PLUGIN_ROOT}/layerExSave")
 if(AETHER_USE_KRKRZ_LEAF_PLUGINS)
     # Wrappers include upstream translation units by plugin-relative path so
     # an alternate checkout can be supplied with -DAETHER_KRKRZ_DEV_ROOT=...

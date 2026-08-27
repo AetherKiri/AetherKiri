@@ -154,6 +154,11 @@ set(KRKR2PLUGIN_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cpp/plugins)
 set(AETHER_KRKRZ_DEV_ROOT
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/krkrz_dev"
     CACHE PATH "Pinned krkrz_dev checkout used for source-level reuse")
+# Keep the plugin-root path in the parent scope so unit-test and adapter
+# subdirectories can refer to the same checked-out headers.  The integration
+# helper repeats this assignment in its local scope for standalone consumers.
+set(AETHER_KRKRZ_PLUGIN_ROOT
+    "${AETHER_KRKRZ_DEV_ROOT}/src/plugins")
 option(AETHER_USE_KRKRZ_LEAF_PLUGINS
        "Use pinned krkrz_dev sources for the low-risk leaf plugins" ON)
 option(AETHER_USE_KRKRZ_OPTIONAL_PLUGINS

@@ -249,8 +249,86 @@ TEST_CASE("extNagano transition providers survive a module reload") {
 
     REQUIRE(ncbAutoRegister::LoadModule(TJS_W("extnagano.dll")));
     REQUIRE(ncbAutoRegister::UnloadModule(TJS_W("extnagano.dll")));
-    REQUIRE_NOTHROW(
-        ncbAutoRegister::LoadModule(TJS_W("extnagano.dll")));
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("extnagano.dll")));
+    REQUIRE(ncbAutoRegister::UnloadModule(TJS_W("extnagano.dll")));
+}
+
+TEST_CASE("extNagano uses upstream algorithms with automatic Aether fallback") {
+    ensurePluginRegistryRuntime();
+    ncbAutoRegister::UnloadModule(TJS_W("extnagano.dll"));
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("extnagano.dll")));
+
+    iTVPTransHandlerProvider *provider =
+        TVPFindTransHandlerProvider(TJS_W("rgbfade"));
+    REQUIRE(provider != nullptr);
+
+    const tjs_char *providerName = nullptr;
+    REQUIRE(TJS_SUCCEEDED(provider->GetName(&providerName)));
+    CHECK(ttstr(providerName) == TJS_W("rgbfade"));
+
+    // The selected krkrz provider advertises tutDivisible.  This is
+    // intentionally observable here: the Aether crossfade fallback reports
+    // tutDivisibleFade, so the test proves that the detached upstream handler
+    // is actually used for a compatible option set.
+    iTJSDispatch2 *optionsObject = TJSCreateDictionaryObject();
+    REQUIRE(optionsObject != nullptr);
+    const tTJSVariant timeValue(static_cast<tTVInteger>(100));
+    setProp(optionsObject, TJS_W("time"), timeValue);
+    tTVPSimpleOptionProvider options(
+        tTJSVariantClosure(optionsObject, optionsObject));
+    optionsObject->Release();
+
+    tTVPTransType type = ttSimple;
+    tTVPTransUpdateType updateType = tutDivisibleFade;
+    iTVPBaseTransHandler *handler = nullptr;
+    REQUIRE(provider->StartTransition(&options, &TVPSimpleImageProvider,
+                                      ltOpaque, 16, 16, 16, 16, &type,
+                                      &updateType, &handler) == TJS_S_OK);
+    REQUIRE(handler != nullptr);
+    CHECK(type == ttExchange);
+    CHECK(updateType == tutDivisible);
+    handler->Release();
+
+    for(const auto *spinName : {TJS_W("spin"), TJS_W("spinfade")}) {
+        iTVPTransHandlerProvider *spin =
+            TVPFindTransHandlerProvider(spinName);
+        REQUIRE(spin != nullptr);
+        tTVPTransUpdateType spinUpdate = tutDivisibleFade;
+        iTVPBaseTransHandler *spinHandler = nullptr;
+        REQUIRE(spin->StartTransition(
+                    &options, &TVPSimpleImageProvider, ltOpaque, 16, 16, 16,
+                    16, &type, &spinUpdate, &spinHandler) == TJS_S_OK);
+        REQUIRE(spinHandler != nullptr);
+        CHECK(spinUpdate == tutDivisible);
+        spinHandler->Release();
+        spin->Release();
+    }
+
+    // Missing upstream-required options must remain compatible with legacy
+    // games: an invalid optional value makes the upstream conversion throw,
+    // and the wrapper delegates to Aether's canonical crossfade provider.
+    iTJSDispatch2 *fallbackOptionsObject = TJSCreateDictionaryObject();
+    REQUIRE(fallbackOptionsObject != nullptr);
+    setProp(fallbackOptionsObject, TJS_W("time"), timeValue);
+    iTJSDispatch2 *invalidDelay = TJSCreateArrayObject();
+    REQUIRE(invalidDelay != nullptr);
+    const tTJSVariant invalidDelayValue(invalidDelay, invalidDelay);
+    setProp(fallbackOptionsObject, TJS_W("delayR"), invalidDelayValue);
+    invalidDelay->Release();
+    tTVPSimpleOptionProvider fallbackOptions(
+        tTJSVariantClosure(fallbackOptionsObject, fallbackOptionsObject));
+    fallbackOptionsObject->Release();
+    tTVPTransUpdateType fallbackUpdate = tutDivisible;
+    handler = nullptr;
+    REQUIRE(provider->StartTransition(&fallbackOptions, &TVPSimpleImageProvider,
+                                      ltOpaque, 16, 16, 16, 16, &type,
+                                      &fallbackUpdate, &handler) == TJS_S_OK);
+    REQUIRE(handler != nullptr);
+    CHECK(fallbackUpdate == tutDivisibleFade);
+    handler->Release();
+
+    provider->Release();
+    REQUIRE(ncbAutoRegister::UnloadModule(TJS_W("extnagano.dll")));
 }
 
 TEST_CASE("win32dialog exposes portable dialog template styles") {
