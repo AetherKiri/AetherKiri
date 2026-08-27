@@ -505,6 +505,8 @@ namespace TJS {
                 // fragment halfway and made exported bytecode scripts
                 // unreadable on platforms where tjs_char is two bytes.
                 _stream->Write(msg, TJS_strlen(msg) * sizeof(tjs_char));
+                static constexpr tjs_char newline[] = TJS_W("\n");
+                _stream->Write(newline, sizeof(tjs_char));
             }
         } output{ stream };
         auto i = InterCodeContextList.begin();

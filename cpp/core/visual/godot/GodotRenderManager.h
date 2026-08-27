@@ -67,6 +67,10 @@ public:
     void SetSize(unsigned int w, unsigned int h) override;
     bool IsStatic() override { return false; }
     bool IsOpaque() override { return opacity_known_ && opaque_; }
+    bool IsCpuCompositeTarget() const override { return cpu_composite_target_; }
+    void SetCpuCompositeTarget(bool value) override {
+        cpu_composite_target_ = value;
+    }
     bool HasKnownTransparency() const { return opacity_known_ && !opaque_; }
     krkr::Texture2D *GetAdapterTexture(krkr::Texture2D *origTex) override {
         return origTex;
@@ -146,6 +150,7 @@ private:
     bool cpu_dirty_ = false;
     bool opacity_known_ = false;
     bool opaque_ = false;
+    bool cpu_composite_target_ = false;
     bool retain_cpu_shadow_ = false;
     bool discard_unwritten_on_partial_update_ = false;
 };

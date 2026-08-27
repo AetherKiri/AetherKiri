@@ -510,7 +510,12 @@ static tTJSVariant ImageClone(GdipWrapper<ImageClass> *obj) {
 }
 
 static tTJSVariant ImageBounds(GdipWrapper<ImageClass> *obj) {
-    typedef ncbInstanceAdaptor<RectF> AdaptorT;
+    // The cross-platform backend registers GdiPlus.RectF with RectFClass,
+    // not libgdiplus' raw RectF.  Using the raw type here cannot find the
+    // registered class object, so GetBounds silently returns void and TJS
+    // coerces width/height to zero.  Vector affine sources then collapse to
+    // a point instead of being drawn.
+    typedef ncbInstanceAdaptor<RectFClass> AdaptorT;
     tTJSVariant ret;
     ImageClass *src = obj->getGdipObject();
     if(src) {

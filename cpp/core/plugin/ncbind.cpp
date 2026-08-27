@@ -2,6 +2,7 @@
 #include "PluginCallTracer.hpp"
 #include <set>
 #include <spdlog/spdlog.h>
+#include <cstdlib>
 
 // static変数の実体
 
@@ -80,6 +81,22 @@ bool ncbAutoRegister::LoadModule(const ttstr &_name)
     }
 	auto it = _internal_plugins.find(name);
 	if (it != _internal_plugins.end()) {
+        if (std::getenv("AETHERKIRI_PLUGIN_REG_TRACE")) {
+            TVPAddLog(ttstr(TJS_W("ncbAutoRegister module entries: ")) + name +
+                      TJS_W(" count=") +
+                      ttstr(static_cast<tjs_int>(
+                          it->second.lists[PreRegist].size() +
+                          it->second.lists[ClassRegist].size() +
+                          it->second.lists[PostRegist].size())));
+            for (int line = 0; line < LINE_COUNT; ++line) {
+                for (auto entry : it->second.lists[line]) {
+                    if (entry && entry->modulename)
+                        TVPAddLog(ttstr(TJS_W("  entry line=")) +
+                                  ttstr(line) + TJS_W(" name=") +
+                                  ttstr(entry->modulename));
+                }
+            }
+        }
         PluginCallTracer::Instance().LogModuleStart(name.AsStdString());
         spdlog::trace("ncbAutoRegister::LoadModule('{}'): found internal module",
                       name.AsStdString());

@@ -78,6 +78,7 @@ Godot App Shell
 | `cpp/plugins/` | 内置 native 插件实现和兼容 stub。 |
 | `packages/AetherInternal/` | 可选的私有 E-mote package submodule；公开版本不依赖它也能构建。 |
 | `packages/OnscripterYuri/` | 公开的 OnscripterYuri git submodule。 |
+| `packages/tjs2Decompiler/` | 可选的 Rust TJS2 字节码反汇编/分析辅助工具；不链接进运行时构建。 |
 | `demos/aetherkiri-kag3/` | AetherKiri 内置 KAG3 Demo 的完整源码。 |
 | `tests/profiles/` | 单游戏 probe profile。提交到仓库的 profile 不能包含机器本地路径。 |
 | `tools/` | 不参与 iOS/Android 目标构建的开发和兼容工具。 |
@@ -155,6 +156,15 @@ iOS 和 Android 导出配置会引用 `apps/godot_app/assets/icons/` 下的生�
 ```bash
 git submodule update --init packages/OnscripterYuri
 ```
+
+需要分析编译后 TJS2 的插件兼容开发，可再初始化可选辅助工具：
+
+```bash
+git submodule update --init packages/tjs2Decompiler
+```
+
+构建方式和证据校验流程见
+[`doc/development.zh-CN.md`](doc/development.zh-CN.md#编译后-tjs2-分析)。
 
 公开仓库在没有私有 package 权限时也可以正常构建并运行 CI。有权限的维护者可在构建前初始化完整 E-mote 实现：
 

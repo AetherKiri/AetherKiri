@@ -486,6 +486,31 @@ xcrun devicectl device process launch \
 或 crash log 收集。`--console` 会等待进程运行结束，只在需要收集日志时使用，
 避免长时间占用终端。
 
+### 编译后 TJS2 分析
+
+`packages/tjs2Decompiler` 是可选的开发期 Rust 辅助工具，以 git submodule
+接入，明确不参与应用或 native runtime target。初始化和构建命令：
+
+```bash
+git submodule update --init packages/tjs2Decompiler
+cargo build --release --manifest-path packages/tjs2Decompiler/Cargo.toml
+```
+
+生成的 `packages/tjs2Decompiler/target/release/tjs2dec` 可读取结构化
+`TJS2100` 字节码。常用分析视图：
+
+```bash
+packages/tjs2Decompiler/target/release/tjs2dec disasm /path/to/script.tjs
+packages/tjs2Decompiler/target/release/tjs2dec ssa /path/to/script.tjs
+packages/tjs2Decompiler/target/release/tjs2dec ssa --hlir /path/to/script.tjs
+packages/tjs2Decompiler/target/release/tjs2dec tjs /path/to/script.tjs
+packages/tjs2Decompiler/target/release/tjs2dec emit-tjs /path/to/script.tjs
+```
+
+反编译输出只作为分析证据，不能当成权威源码。实现兼容插件前，要把类/对象数量、
+调用流、常量和 native 方法边界与引擎自身的字节码 dump、原插件 native 反汇编
+交叉核对。不要提交游戏脚本、提取出的字节码、DLL 或本机路径。
+
 ## 代码修改原则
 
 - Godot app 是当前正式产品 shell。

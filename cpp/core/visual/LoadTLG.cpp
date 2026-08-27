@@ -11,6 +11,7 @@
 #include "tjsCommHead.h"
 
 #include "GraphicsLoaderIntf.h"
+#include "StorageIntf.h"
 #include "MsgIntf.h"
 #include "tjsUtils.h"
 #include "tvpgl.h"
@@ -18,11 +19,28 @@
 #include "TVPDecodeArena.h"
 
 #include <stdlib.h>
+#include <algorithm>
+#include <array>
+#include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
+#include <fstream>
+#include <limits>
+#include <string>
+#include <vector>
 #include <spdlog/spdlog.h>
+#include <lz4.h>
 
 namespace {
+bool TVPTLGFormatTraceEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_TLG_HEADER_TRACE");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+
 bool TLGDecodeTraceEnabled() {
     static const bool enabled = [] {
         const char *image_trace = std::getenv("AETHERKIRI_IMAGE_LOAD_TRACE");
@@ -32,6 +50,1011 @@ bool TLGDecodeTraceEnabled() {
                (motion_trace && *motion_trace && *motion_trace != '0');
     }();
     return enabled;
+}
+
+void TVPTraceTLGFormatStream(const char *stage, tTJSBinaryStream *src) {
+    if(!TVPTLGFormatTraceEnabled() || !src)
+        return;
+    const tjs_uint64 position = src->GetPosition();
+    const tjs_uint64 size = src->GetSize();
+    unsigned char bytes[32] = {};
+    const tjs_uint read = src->Read(bytes, sizeof(bytes));
+    src->SetPosition(position);
+    char hex[sizeof(bytes) * 2 + 1] = {};
+    size_t out = 0;
+    for(tjs_uint i = 0; i < read && out + 2 < sizeof(hex); ++i) {
+        const int written = std::snprintf(hex + out, sizeof(hex) - out,
+                                          "%02x", bytes[i]);
+        if(written <= 0)
+            break;
+        out += static_cast<size_t>(written);
+    }
+    spdlog::info("TLGFormatTrace stage={} name={} size={} pos={} head={}",
+                 stage ? stage : "?", TVPGetCurrentGraphicLoadName().AsStdString(),
+                 static_cast<unsigned long long>(size),
+                 static_cast<unsigned long long>(position), hex);
+}
+
+// Temporary, opt-in evidence collector for the proprietary TLGmux container.
+// It is intentionally disabled unless explicitly requested and is removed
+// once the decoder is implemented; keeping the stream position unchanged is
+// important because this helper runs on the live image-load path.
+void TVPDumpTLGMuxStream(tTJSBinaryStream *src) {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_TLGMUX_DUMP");
+        return value && *value && *value != '0';
+    }();
+    if(!enabled || !src)
+        return;
+    static std::atomic<int> sequence{0};
+    const int index = sequence.fetch_add(1, std::memory_order_relaxed);
+    if(index >= 12)
+        return;
+    const tjs_uint64 position = src->GetPosition();
+    const tjs_uint64 size = src->GetSize();
+    if(size == 0 || size > 128ULL * 1024ULL * 1024ULL)
+        return;
+    std::ofstream out("/tmp/aetherkiri-tlgmux-" + std::to_string(index) +
+                          ".bin", std::ios::binary);
+    if(!out)
+        return;
+    std::array<tjs_uint8, 64 * 1024> buffer{};
+    src->SetPosition(0);
+    tjs_uint64 remaining = size;
+    while(remaining) {
+        const tjs_uint want = static_cast<tjs_uint>(
+            std::min<tjs_uint64>(remaining, buffer.size()));
+        const tjs_uint got = src->Read(buffer.data(), want);
+        if(got == 0)
+            break;
+        out.write(reinterpret_cast<const char *>(buffer.data()), got);
+        remaining -= got;
+    }
+    src->SetPosition(position);
+    spdlog::info("TLGmuxDump path=/tmp/aetherkiri-tlgmux-{}.bin size={} name={}",
+                 index, static_cast<unsigned long long>(size),
+                 TVPGetCurrentGraphicLoadName().AsStdString());
+}
+
+struct TVPTLGMuxSlice {
+    tjs_uint32 Left = 0;
+    tjs_uint32 Top = 0;
+    tjs_uint32 Width = 0;
+    tjs_uint32 Height = 0;
+    tjs_uint64 Offset = 0;
+};
+
+struct TVPTLGMuxFile {
+    tjs_uint8 Colors = 0;
+    tjs_uint32 Width = 0;
+    tjs_uint32 Height = 0;
+    tjs_uint64 DataBase = 0;
+    std::vector<TVPTLGMuxSlice> Slices;
+    std::vector<tjs_uint8> Bytes;
+};
+
+static tjs_uint32 TVPReadTLGUInt32LE(const tjs_uint8 *p) {
+    return static_cast<tjs_uint32>(p[0]) |
+           (static_cast<tjs_uint32>(p[1]) << 8) |
+           (static_cast<tjs_uint32>(p[2]) << 16) |
+           (static_cast<tjs_uint32>(p[3]) << 24);
+}
+
+static tjs_uint64 TVPReadTLGUInt64LE(const tjs_uint8 *p) {
+    tjs_uint64 value = 0;
+    for(int i = 0; i < 8; ++i)
+        value |= static_cast<tjs_uint64>(p[i]) << (i * 8);
+    return value;
+}
+
+static bool TVPHasTLGBytes(const std::vector<tjs_uint8> &bytes,
+                           tjs_uint64 offset, tjs_uint64 count) {
+    return offset <= bytes.size() && count <= bytes.size() - offset;
+}
+
+static bool TVPIsTLGQOIHeader(const std::vector<tjs_uint8> &bytes,
+                              tjs_uint64 offset) {
+    static constexpr char kHeader[] = "TLGqoi\0raw\x1a";
+    return TVPHasTLGBytes(bytes, offset, sizeof(kHeader) - 1) &&
+           std::memcmp(bytes.data() + offset, kHeader,
+                       sizeof(kHeader) - 1) == 0;
+}
+
+static bool TVPParseTLGMux(const std::vector<tjs_uint8> &bytes,
+                           TVPTLGMuxFile &mux, std::string &error) {
+    static constexpr char kHeader[] = "TLGmux\0idx\x1a";
+    if(!TVPHasTLGBytes(bytes, 0, 20) ||
+       std::memcmp(bytes.data(), kHeader, sizeof(kHeader) - 1) != 0) {
+        error = "invalid TLGmux header";
+        return false;
+    }
+
+    mux.Bytes = bytes;
+    mux.Colors = bytes[11];
+    mux.Width = TVPReadTLGUInt32LE(bytes.data() + 12);
+    mux.Height = TVPReadTLGUInt32LE(bytes.data() + 16);
+    if((mux.Colors != 3 && mux.Colors != 4) || mux.Width == 0 ||
+       mux.Height == 0) {
+        error = "unsupported TLGmux canvas header";
+        return false;
+    }
+
+    tjs_uint64 position = 20;
+    bool sawMuxChunk = false;
+    tjs_uint64 dataCandidate = position;
+    while(TVPHasTLGBytes(bytes, position, 8)) {
+        const tjs_uint8 *chunk = bytes.data() + position;
+        const tjs_uint32 chunkSize = TVPReadTLGUInt32LE(chunk + 4);
+        const tjs_uint64 payload = position + 8;
+        if(!TVPHasTLGBytes(bytes, payload, chunkSize)) {
+            error = "truncated TLGmux chunk";
+            return false;
+        }
+
+        if(std::memcmp(chunk, "CMUX", 4) == 0) {
+            sawMuxChunk = true;
+            if(chunkSize < 4) {
+                error = "invalid TLGmux CMUX chunk";
+                return false;
+            }
+            const tjs_uint8 *payloadBytes = bytes.data() + payload;
+            const tjs_uint32 count = TVPReadTLGUInt32LE(payloadBytes);
+            const tjs_uint64 expected = 4ULL + 24ULL * count;
+            if(expected > chunkSize) {
+                error = "truncated TLGmux CMUX index";
+                return false;
+            }
+            if(count > 0 && mux.Slices.size() >
+                                std::numeric_limits<size_t>::max() - count) {
+                error = "TLGmux index is too large";
+                return false;
+            }
+            mux.Slices.reserve(mux.Slices.size() + count);
+            for(tjs_uint32 i = 0; i < count; ++i) {
+                const tjs_uint8 *entry = payloadBytes + 4 + 24ULL * i;
+                TVPTLGMuxSlice slice;
+                slice.Left = TVPReadTLGUInt32LE(entry + 0);
+                slice.Top = TVPReadTLGUInt32LE(entry + 4);
+                slice.Width = TVPReadTLGUInt32LE(entry + 8);
+                slice.Height = TVPReadTLGUInt32LE(entry + 12);
+                slice.Offset = TVPReadTLGUInt64LE(entry + 16);
+                if(slice.Width == 0 || slice.Height == 0 ||
+                   slice.Left > mux.Width || slice.Top > mux.Height ||
+                   slice.Width > mux.Width - slice.Left ||
+                   slice.Height > mux.Height - slice.Top) {
+                    error = "TLGmux slice is outside the canvas";
+                    return false;
+                }
+                mux.Slices.push_back(slice);
+            }
+            position = payload + chunkSize;
+            dataCandidate = position;
+            continue;
+        }
+
+        // PackinOne terminates the CMUX index with one ordinary chunk header
+        // (usually a zero tag/zero length).  Its selected offsets are
+        // relative to the position after that header and payload.
+        position = payload + chunkSize;
+        dataCandidate = position;
+        break;
+    }
+
+    if(!sawMuxChunk || mux.Slices.empty()) {
+        error = "TLGmux has no CMUX index";
+        return false;
+    }
+
+    tjs_uint64 minimumOffset = mux.Slices.front().Offset;
+    for(const auto &slice : mux.Slices)
+        minimumOffset = std::min(minimumOffset, slice.Offset);
+
+    // The first encoded image is the anchor for the CMUX-relative offsets.
+    // Searching for the TLGqoi signature also tolerates mux writers that add
+    // a non-CMUX metadata chunk between the index and the payload.
+    tjs_uint64 firstImage = std::numeric_limits<tjs_uint64>::max();
+    for(tjs_uint64 p = dataCandidate; TVPHasTLGBytes(bytes, p, 11); ++p) {
+        if(TVPIsTLGQOIHeader(bytes, p)) {
+            firstImage = p;
+            break;
+        }
+    }
+    if(firstImage == std::numeric_limits<tjs_uint64>::max()) {
+        for(tjs_uint64 p = 20; TVPHasTLGBytes(bytes, p, 11); ++p) {
+            if(TVPIsTLGQOIHeader(bytes, p)) {
+                firstImage = p;
+                break;
+            }
+        }
+    }
+    if(firstImage == std::numeric_limits<tjs_uint64>::max() ||
+       firstImage < minimumOffset) {
+        error = "TLGmux has no TLGqoi payload";
+        return false;
+    }
+    mux.DataBase = firstImage - minimumOffset;
+
+    for(const auto &slice : mux.Slices) {
+        const tjs_uint64 imageOffset = mux.DataBase + slice.Offset;
+        if(imageOffset < mux.DataBase ||
+           !TVPIsTLGQOIHeader(bytes, imageOffset) ||
+           !TVPHasTLGBytes(bytes, imageOffset, 28)) {
+            error = "TLGmux slice points outside the payload";
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool TVPDecodeTLGQOI(const std::vector<tjs_uint8> &bytes,
+                            tjs_uint64 offset, tjs_uint64 limit,
+                            std::vector<tjs_uint8> &rgba, tjs_uint32 &width,
+                            tjs_uint32 &height, tjs_uint8 &colors,
+                            std::string &error) {
+    if(!TVPIsTLGQOIHeader(bytes, offset) ||
+       !TVPHasTLGBytes(bytes, offset, 28) || limit > bytes.size() ||
+       offset >= limit) {
+        error = "invalid TLGqoi payload";
+        return false;
+    }
+    colors = bytes[offset + 11];
+    width = TVPReadTLGUInt32LE(bytes.data() + offset + 12);
+    height = TVPReadTLGUInt32LE(bytes.data() + offset + 16);
+    if((colors != 3 && colors != 4) || width == 0 || height == 0) {
+        error = "unsupported TLGqoi header";
+        return false;
+    }
+    const tjs_uint64 pixelCount = static_cast<tjs_uint64>(width) * height;
+    if(pixelCount > std::numeric_limits<size_t>::max() / 4) {
+        error = "TLGqoi image is too large";
+        return false;
+    }
+    const tjs_uint64 payload = offset + 28;
+    if(payload > limit) {
+        error = "truncated TLGqoi payload";
+        return false;
+    }
+
+    struct Pixel {
+        tjs_uint8 R = 0;
+        tjs_uint8 G = 0;
+        tjs_uint8 B = 0;
+        tjs_uint8 A = 0;
+    };
+    std::array<Pixel, 64> index{};
+    Pixel pixel{0, 0, 0, 255};
+    rgba.resize(static_cast<size_t>(pixelCount) * 4);
+    tjs_uint64 produced = 0;
+    tjs_uint64 cursor = payload;
+
+    auto emit = [&](const Pixel &value) {
+        const size_t out = static_cast<size_t>(produced) * 4;
+        rgba[out + 0] = value.R;
+        rgba[out + 1] = value.G;
+        rgba[out + 2] = value.B;
+        rgba[out + 3] = value.A;
+        index[(value.R * 3 + value.G * 5 + value.B * 7 + value.A * 11) &
+              63] = value;
+        ++produced;
+    };
+
+    while(produced < pixelCount) {
+        if(cursor >= limit) {
+            error = "truncated TLGqoi pixel stream";
+            return false;
+        }
+        const tjs_uint8 tag = bytes[cursor++];
+        if(tag == 0xfe) {
+            if(!TVPHasTLGBytes(bytes, cursor, 3) || cursor + 3 > limit) {
+                error = "truncated TLGqoi RGB opcode";
+                return false;
+            }
+            pixel.R = bytes[cursor++];
+            pixel.G = bytes[cursor++];
+            pixel.B = bytes[cursor++];
+            emit(pixel);
+        } else if(tag == 0xff) {
+            if(!TVPHasTLGBytes(bytes, cursor, 4) || cursor + 4 > limit) {
+                error = "truncated TLGqoi RGBA opcode";
+                return false;
+            }
+            pixel.R = bytes[cursor++];
+            pixel.G = bytes[cursor++];
+            pixel.B = bytes[cursor++];
+            pixel.A = bytes[cursor++];
+            emit(pixel);
+        } else if((tag & 0xc0) == 0x00) {
+            pixel = index[tag & 0x3f];
+            emit(pixel);
+        } else if((tag & 0xc0) == 0x40) {
+            pixel.R = static_cast<tjs_uint8>(pixel.R +
+                                              ((tag >> 4 & 0x03) - 2));
+            pixel.G = static_cast<tjs_uint8>(pixel.G +
+                                              ((tag >> 2 & 0x03) - 2));
+            pixel.B = static_cast<tjs_uint8>(pixel.B + ((tag & 0x03) - 2));
+            emit(pixel);
+        } else if((tag & 0xc0) == 0x80) {
+            if(cursor >= limit) {
+                error = "truncated TLGqoi luma opcode";
+                return false;
+            }
+            const tjs_uint8 next = bytes[cursor++];
+            const int dg = static_cast<int>(tag & 0x3f) - 32;
+            const int dr = dg + static_cast<int>((next >> 4) & 0x0f) - 8;
+            const int db = dg + static_cast<int>(next & 0x0f) - 8;
+            pixel.R = static_cast<tjs_uint8>(pixel.R + dr);
+            pixel.G = static_cast<tjs_uint8>(pixel.G + dg);
+            pixel.B = static_cast<tjs_uint8>(pixel.B + db);
+            emit(pixel);
+        } else {
+            const tjs_uint64 run = (tag & 0x3f) + 1ULL;
+            if(run > pixelCount - produced) {
+                error = "TLGqoi run exceeds image size";
+                return false;
+            }
+            for(tjs_uint64 i = 0; i < run; ++i)
+                emit(pixel);
+        }
+    }
+    return true;
+}
+
+// Newer KiriKiri builds use two related TLG formats for event CGs.  A small
+// TLGref file points at a TLGqoi+QHDR container, while the container stores
+// several interleaved images in QOI/LZ4 bands.  Keep this implementation in
+// the generic TLG loader: the format is independent of PackinOne and is also
+// used by games which do not load that plug-in.
+struct TVPTLGRefInfo {
+    ttstr Container;
+    tjs_uint32 Index = 0;
+    tjs_uint32 Count = 0;
+};
+
+static bool TVPReadTLGLEB128(const std::vector<tjs_uint8> &bytes,
+                             tjs_uint64 &position, tjs_uint64 limit,
+                             tjs_uint64 &value) {
+    value = 0;
+    int shift = 0;
+    while(position < limit && shift < 64) {
+        const tjs_uint8 byte = bytes[static_cast<size_t>(position++)];
+        const tjs_uint64 part = static_cast<tjs_uint64>(byte & 0x7f);
+        if(shift >= 63 && part > (std::numeric_limits<tjs_uint64>::max() >> shift))
+            return false;
+        value |= part << shift;
+        if((byte & 0x80) == 0)
+            return true;
+        shift += 7;
+    }
+    return false;
+}
+
+static bool TVPParseTLGRef(const std::vector<tjs_uint8> &bytes,
+                           TVPTLGRefInfo &ref, std::string &error) {
+    static constexpr char kHeader[] = "TLGref\0raw\x1a";
+    if(!TVPHasTLGBytes(bytes, 0, 28) ||
+       std::memcmp(bytes.data(), kHeader, sizeof(kHeader) - 1) != 0) {
+        error = "invalid TLGref header";
+        return false;
+    }
+    if(std::memcmp(bytes.data() + 20, "QREF", 4) != 0) {
+        error = "TLGref has no QREF chunk";
+        return false;
+    }
+    const tjs_uint32 chunkSize = TVPReadTLGUInt32LE(bytes.data() + 24);
+    if(chunkSize < 16 || !TVPHasTLGBytes(bytes, 28, chunkSize)) {
+        error = "truncated TLGref QREF chunk";
+        return false;
+    }
+    const tjs_uint8 *chunk = bytes.data() + 28;
+    ref.Index = TVPReadTLGUInt32LE(chunk + 4);
+    ref.Count = TVPReadTLGUInt32LE(chunk + 8);
+    const tjs_uint32 nameBytes = TVPReadTLGUInt32LE(chunk + 12);
+    if((nameBytes & 1) != 0 || nameBytes > chunkSize - 16 || nameBytes < 2) {
+        error = "invalid TLGref container name";
+        return false;
+    }
+    // The game stores a BMP/UTF-16LE name and includes its terminating NUL
+    // in the byte count.  TVPStringFromBMPUnicode handles surrogate-free BMP
+    // names and keeps the storage API's native UTF-16 representation.
+    ref.Container = TVPStringFromBMPUnicode(
+        reinterpret_cast<const tjs_uint16 *>(chunk + 16),
+        static_cast<tjs_int>(nameBytes / 2));
+    if(ref.Container.IsEmpty()) {
+        error = "empty TLGref container name";
+        return false;
+    }
+    if(ref.Count == 0 || ref.Index >= ref.Count) {
+        error = "TLGref image index is outside the container";
+        return false;
+    }
+    return true;
+}
+
+static bool TVPReadTLGBytes(tTJSBinaryStream *src,
+                            std::vector<tjs_uint8> &bytes,
+                            std::string &error) {
+    if(!src) {
+        error = "null TLG stream";
+        return false;
+    }
+    const tjs_uint64 originalPosition = src->GetPosition();
+    const tjs_uint64 size = src->GetSize();
+    if(size == 0 || size > std::numeric_limits<size_t>::max()) {
+        error = "invalid TLG stream size";
+        return false;
+    }
+    bytes.resize(static_cast<size_t>(size));
+    src->SetPosition(0);
+    const tjs_uint read = src->Read(bytes.data(), static_cast<tjs_uint>(size));
+    src->SetPosition(originalPosition);
+    if(read != size) {
+        error = "short TLG stream read";
+        return false;
+    }
+    return true;
+}
+
+static bool TVPDecompressTLGLZ4(const std::vector<tjs_uint8> &bytes,
+                                tjs_uint64 &position, tjs_uint64 limit,
+                                std::vector<tjs_uint8> &output,
+                                std::string &error) {
+    output.clear();
+    std::vector<tjs_uint8> previous;
+    while(position < limit) {
+        if(!TVPHasTLGBytes(bytes, position, 4)) {
+            error = "truncated TLGqoi LZ4 block header";
+            return false;
+        }
+        const tjs_uint32 header = TVPReadTLGUInt32LE(bytes.data() + position);
+        position += 4;
+        const tjs_uint32 compressedSize = (header >> 16) & 0xffff;
+        const bool carryover = (header & 0x8000) != 0;
+        const tjs_uint32 decompressedSize = (header & 0x7fff) == 0
+                                                ? 32768
+                                                : (header & 0x7fff);
+        if(compressedSize == 0 || !TVPHasTLGBytes(bytes, position, compressedSize)) {
+            error = "truncated TLGqoi LZ4 block";
+            return false;
+        }
+        std::vector<tjs_uint8> block(decompressedSize);
+        const char *dictionary = nullptr;
+        int dictionarySize = 0;
+        if(carryover && !previous.empty()) {
+            const size_t keep = std::min<size_t>(previous.size(), 64 * 1024);
+            dictionary = reinterpret_cast<const char *>(previous.data() +
+                                                         previous.size() - keep);
+            dictionarySize = static_cast<int>(keep);
+        }
+        const int decoded = LZ4_decompress_safe_usingDict(
+            reinterpret_cast<const char *>(bytes.data() + position),
+            reinterpret_cast<char *>(block.data()),
+            static_cast<int>(compressedSize),
+            static_cast<int>(decompressedSize), dictionary, dictionarySize);
+        position += compressedSize;
+        if(decoded < 0 || decoded != static_cast<int>(decompressedSize)) {
+            error = "invalid TLGqoi LZ4 block";
+            return false;
+        }
+        output.insert(output.end(), block.begin(), block.end());
+        previous.swap(block);
+    }
+    return true;
+}
+
+struct TVPTLGQOIPixel {
+    tjs_uint8 R = 0;
+    tjs_uint8 G = 0;
+    tjs_uint8 B = 0;
+    tjs_uint8 A = 255;
+};
+
+static bool TVPDecodeTLGQOIContainer(const std::vector<tjs_uint8> &bytes,
+                                     tjs_uint32 selectedIndex,
+                                     std::vector<tjs_uint8> &rgba,
+                                     tjs_uint32 &width, tjs_uint32 &height,
+                                     tjs_uint8 &colors, std::string &error) {
+    if(!TVPIsTLGQOIHeader(bytes, 0) || !TVPHasTLGBytes(bytes, 0, 28) ||
+       std::memcmp(bytes.data() + 20, "QHDR", 4) != 0) {
+        error = "invalid TLGqoi+QHDR header";
+        return false;
+    }
+    colors = bytes[11];
+    width = TVPReadTLGUInt32LE(bytes.data() + 12);
+    height = TVPReadTLGUInt32LE(bytes.data() + 16);
+    const tjs_uint32 qhdrSize = TVPReadTLGUInt32LE(bytes.data() + 24);
+    if((colors != 3 && colors != 4) || width == 0 || height == 0 ||
+       qhdrSize < 48 || !TVPHasTLGBytes(bytes, 28, qhdrSize)) {
+        error = "unsupported TLGqoi+QHDR canvas";
+        return false;
+    }
+    const tjs_uint8 *qhdr = bytes.data() + 28;
+    const tjs_uint32 imageCount = TVPReadTLGUInt32LE(qhdr + 4);
+    const tjs_uint32 bandHeight = TVPReadTLGUInt32LE(qhdr + 8);
+    const tjs_uint32 bandCount = TVPReadTLGUInt32LE(qhdr + 12);
+    const tjs_uint64 totalQOIBytes = TVPReadTLGUInt64LE(qhdr + 24);
+    if(imageCount == 0 || bandHeight == 0 || bandCount == 0 ||
+       selectedIndex >= imageCount ||
+       !TVPHasTLGBytes(bytes, 28ULL + qhdrSize + 8, totalQOIBytes)) {
+        error = "invalid TLGqoi+QHDR band metadata";
+        return false;
+    }
+
+    const tjs_uint64 qoiStart = 28ULL + qhdrSize + 8;
+    const tjs_uint64 dtblOffset = qoiStart + totalQOIBytes;
+    if(!TVPHasTLGBytes(bytes, dtblOffset, 8) ||
+       std::memcmp(bytes.data() + dtblOffset, "DTBL", 4) != 0) {
+        error = "TLGqoi+QHDR has no DTBL chunk";
+        return false;
+    }
+    const tjs_uint32 dtblSize = TVPReadTLGUInt32LE(bytes.data() + dtblOffset + 4);
+    if(!TVPHasTLGBytes(bytes, dtblOffset + 8, dtblSize)) {
+        error = "truncated TLGqoi DTBL chunk";
+        return false;
+    }
+    // Parse the count and values to validate the chunk.  The values are only
+    // seek hints; decoding uses the exact qoiStart..DTBL range and resets the
+    // QOI state at each band as the original engine does.
+    tjs_uint64 tablePosition = dtblOffset + 8;
+    const tjs_uint64 tableLimit = tablePosition + dtblSize;
+    tjs_uint64 tableCount = 0;
+    if(!TVPReadTLGLEB128(bytes, tablePosition, tableLimit, tableCount) ||
+       tableCount > 2ULL * bandCount + 16) {
+        error = "invalid TLGqoi DTBL table";
+        return false;
+    }
+    for(tjs_uint64 i = 0; i < tableCount; ++i) {
+        tjs_uint64 ignored = 0;
+        if(!TVPReadTLGLEB128(bytes, tablePosition, tableLimit, ignored)) {
+            error = "truncated TLGqoi DTBL table";
+            return false;
+        }
+    }
+
+    const tjs_uint64 rtblOffset = dtblOffset + 8ULL + dtblSize;
+    if(!TVPHasTLGBytes(bytes, rtblOffset, 8) ||
+       std::memcmp(bytes.data() + rtblOffset, "RTBL", 4) != 0) {
+        error = "TLGqoi+QHDR has no RTBL chunk";
+        return false;
+    }
+    const tjs_uint32 rtblSize = TVPReadTLGUInt32LE(bytes.data() + rtblOffset + 4);
+    if(!TVPHasTLGBytes(bytes, rtblOffset + 8, rtblSize)) {
+        error = "truncated TLGqoi RTBL chunk";
+        return false;
+    }
+    tjs_uint64 rtablePosition = rtblOffset + 8;
+    const tjs_uint64 rtableLimit = rtablePosition + rtblSize;
+    tjs_uint64 rtableCount = 0;
+    if(!TVPReadTLGLEB128(bytes, rtablePosition, rtableLimit, rtableCount) ||
+       rtableCount < bandCount) {
+        error = "invalid TLGqoi RTBL table";
+        return false;
+    }
+    std::vector<tjs_uint64> bandDistSizes;
+    bandDistSizes.reserve(static_cast<size_t>(rtableCount));
+    for(tjs_uint64 i = 0; i < rtableCount; ++i) {
+        tjs_uint64 value = 0;
+        if(!TVPReadTLGLEB128(bytes, rtablePosition, rtableLimit, value)) {
+            error = "truncated TLGqoi RTBL table";
+            return false;
+        }
+        bandDistSizes.push_back(value);
+    }
+    const tjs_uint64 distStart = rtblOffset + 8ULL + rtblSize;
+    if(!TVPHasTLGBytes(bytes, distStart, 0)) {
+        error = "invalid TLGqoi distribution offset";
+        return false;
+    }
+
+    const tjs_uint64 pixelCount = static_cast<tjs_uint64>(width) * height;
+    if(pixelCount > std::numeric_limits<size_t>::max() / 4)
+        error = "TLGqoi image is too large";
+    if(!error.empty())
+        return false;
+    rgba.assign(static_cast<size_t>(pixelCount) * 4, 0);
+
+    tjs_uint64 qoiPosition = qoiStart;
+    tjs_uint64 distributionPosition = distStart;
+    for(tjs_uint32 band = 0; band < bandCount; ++band) {
+        const tjs_uint32 bandTop = band * bandHeight;
+        if(bandTop >= height)
+            break;
+        const tjs_uint32 currentBandHeight =
+            std::min(bandHeight, height - bandTop);
+        const tjs_uint64 interleavedPixels =
+            static_cast<tjs_uint64>(width) * imageCount * currentBandHeight;
+        if(band >= bandDistSizes.size() ||
+           bandDistSizes[band] > bytes.size() - distributionPosition) {
+            error = "TLGqoi distribution band is outside the file";
+            return false;
+        }
+        const tjs_uint64 distributionSize = bandDistSizes[band];
+        const tjs_uint64 distributionLimit = distributionPosition + distributionSize;
+        std::vector<tjs_uint8> distribution;
+        tjs_uint64 compressedPosition = distributionPosition;
+        if(!TVPDecompressTLGLZ4(bytes, compressedPosition, distributionLimit,
+                                distribution, error))
+            return false;
+        if(compressedPosition != distributionLimit) {
+            error = "TLGqoi distribution band has trailing data";
+            return false;
+        }
+        distributionPosition = distributionLimit;
+
+        std::array<TVPTLGQOIPixel, 64> index{};
+        TVPTLGQOIPixel pixel{0, 0, 0, 255};
+        auto decodeOne = [&](TVPTLGQOIPixel &decoded,
+                             tjs_uint64 &count) -> bool {
+            if(qoiPosition >= dtblOffset) {
+                error = "truncated TLGqoi pixel stream";
+                return false;
+            }
+            const tjs_uint8 tag = bytes[static_cast<size_t>(qoiPosition++)];
+            if(tag == 0xfe) {
+                if(!TVPHasTLGBytes(bytes, qoiPosition, 3) ||
+                   qoiPosition + 3 > dtblOffset) {
+                    error = "truncated TLGqoi RGB opcode";
+                    return false;
+                }
+                pixel.R = bytes[static_cast<size_t>(qoiPosition++)];
+                pixel.G = bytes[static_cast<size_t>(qoiPosition++)];
+                pixel.B = bytes[static_cast<size_t>(qoiPosition++)];
+                count = 1;
+            } else if(tag == 0xff) {
+                if(!TVPHasTLGBytes(bytes, qoiPosition, 4) ||
+                   qoiPosition + 4 > dtblOffset) {
+                    error = "truncated TLGqoi RGBA opcode";
+                    return false;
+                }
+                pixel.R = bytes[static_cast<size_t>(qoiPosition++)];
+                pixel.G = bytes[static_cast<size_t>(qoiPosition++)];
+                pixel.B = bytes[static_cast<size_t>(qoiPosition++)];
+                pixel.A = bytes[static_cast<size_t>(qoiPosition++)];
+                count = 1;
+            } else if((tag & 0xc0) == 0x00) {
+                pixel = index[tag & 0x3f];
+                count = 1;
+            } else if((tag & 0xc0) == 0x40) {
+                pixel.R = static_cast<tjs_uint8>(pixel.R +
+                                                   ((tag >> 4 & 0x03) - 2));
+                pixel.G = static_cast<tjs_uint8>(pixel.G +
+                                                   ((tag >> 2 & 0x03) - 2));
+                pixel.B = static_cast<tjs_uint8>(pixel.B +
+                                                   ((tag & 0x03) - 2));
+                count = 1;
+            } else if((tag & 0xc0) == 0x80) {
+                if(qoiPosition >= dtblOffset) {
+                    error = "truncated TLGqoi luma opcode";
+                    return false;
+                }
+                const tjs_uint8 next = bytes[static_cast<size_t>(qoiPosition++)];
+                const int dg = static_cast<int>(tag & 0x3f) - 32;
+                const int dr = dg + static_cast<int>((next >> 4) & 0x0f) - 8;
+                const int db = dg + static_cast<int>(next & 0x0f) - 8;
+                pixel.R = static_cast<tjs_uint8>(pixel.R + dr);
+                pixel.G = static_cast<tjs_uint8>(pixel.G + dg);
+                pixel.B = static_cast<tjs_uint8>(pixel.B + db);
+                count = 1;
+            } else {
+                count = (tag & 0x3f) + 1ULL;
+            }
+            index[(pixel.R * 3 + pixel.G * 5 + pixel.B * 7 + pixel.A * 11) &
+                  63] = pixel;
+            decoded = pixel;
+            return true;
+        };
+
+        TVPTLGQOIPixel ignoredPixel;
+        tjs_uint64 ignoredCount = 0;
+        if(!decodeOne(ignoredPixel, ignoredCount) ||
+           !decodeOne(ignoredPixel, ignoredCount))
+            return false;
+        tjs_uint64 distributionPositionInBand = 0;
+        tjs_uint64 ignoredDistribution = 0;
+        if(!TVPReadTLGLEB128(distribution, distributionPositionInBand,
+                             distribution.size(), ignoredDistribution)) {
+            error = "truncated TLGqoi distribution header";
+            return false;
+        }
+
+        tjs_uint64 produced = 0;
+        while(produced < interleavedPixels) {
+            TVPTLGQOIPixel value;
+            tjs_uint64 qoiCount = 0;
+            if(!decodeOne(value, qoiCount))
+                return false;
+            tjs_uint64 mask = 0;
+            if(!TVPReadTLGLEB128(distribution, distributionPositionInBand,
+                                 distribution.size(), mask)) {
+                error = "truncated TLGqoi distribution data";
+                return false;
+            }
+            if(mask > std::numeric_limits<tjs_uint64>::max() - qoiCount) {
+                error = "TLGqoi run length overflow";
+                return false;
+            }
+            const tjs_uint64 run = std::min(mask + qoiCount,
+                                            interleavedPixels - produced);
+            for(tjs_uint64 i = 0; i < run; ++i) {
+                const tjs_uint64 interleaved = produced + i;
+                if(interleaved % imageCount != selectedIndex)
+                    continue;
+                const tjs_uint64 flat = interleaved / imageCount;
+                const tjs_uint32 y = bandTop +
+                                     static_cast<tjs_uint32>(flat / width);
+                const tjs_uint32 x = static_cast<tjs_uint32>(flat % width);
+                tjs_uint8 *destination = rgba.data() +
+                    (static_cast<size_t>(y) * width + x) * 4;
+                destination[0] = value.R;
+                destination[1] = value.G;
+                destination[2] = value.B;
+                destination[3] = colors == 3 ? 0xff : value.A;
+            }
+            produced += run;
+        }
+    }
+    return true;
+}
+
+static bool TVPOpenTLGRefContainer(const TVPTLGRefInfo &ref,
+                                   tTJSBinaryStream *&stream,
+                                   std::string &error) {
+    stream = nullptr;
+    try {
+        stream = TVPCreateStream(ref.Container);
+        if(!stream) {
+            const ttstr current = TVPGetCurrentGraphicLoadName();
+            const ttstr path = TVPExtractStoragePath(current);
+            if(!path.IsEmpty())
+                stream = TVPCreateStream(path + ref.Container);
+        }
+    } catch(...) {
+        stream = nullptr;
+    }
+    if(!stream) {
+        error = "TLGref container is not available: " +
+                ref.Container.AsStdString();
+        return false;
+    }
+    return true;
+}
+
+static void TVPEmitTLGImage(void *callbackdata,
+                            tTVPGraphicSizeCallback sizecallback,
+                            tTVPGraphicScanLineCallback scanlinecallback,
+                            const std::vector<tjs_uint8> &rgba,
+                            tjs_uint32 width, tjs_uint32 height,
+                            tjs_uint8 colors) {
+    sizecallback(callbackdata, width, height,
+                 colors == 3 ? gpfRGB : gpfRGBA);
+    for(tjs_uint32 y = 0; y < height; ++y) {
+        void *line = scanlinecallback(callbackdata, y);
+        if(line)
+            std::memcpy(line, rgba.data() + static_cast<size_t>(y) * width * 4,
+                        static_cast<size_t>(width) * 4);
+        scanlinecallback(callbackdata, -1);
+    }
+}
+
+static bool TVPDecodeTLGSpecialStream(tTJSBinaryStream *src,
+                                      std::vector<tjs_uint8> &rgba,
+                                      tjs_uint32 &width, tjs_uint32 &height,
+                                      tjs_uint8 &colors, std::string &error) {
+    std::vector<tjs_uint8> bytes;
+    if(!TVPReadTLGBytes(src, bytes, error))
+        return false;
+    if(TVPIsTLGQOIHeader(bytes, 0)) {
+        if(TVPHasTLGBytes(bytes, 20, 4) &&
+           std::memcmp(bytes.data() + 20, "QHDR", 4) == 0)
+            return TVPDecodeTLGQOIContainer(bytes, 0, rgba, width, height,
+                                            colors, error);
+        return TVPDecodeTLGQOI(bytes, 0, bytes.size(), rgba, width, height,
+                               colors, error);
+    }
+    static constexpr char kRefHeader[] = "TLGref\0raw\x1a";
+    if(TVPHasTLGBytes(bytes, 0, sizeof(kRefHeader) - 1) &&
+       std::memcmp(bytes.data(), kRefHeader, sizeof(kRefHeader) - 1) == 0) {
+        TVPTLGRefInfo ref;
+        if(!TVPParseTLGRef(bytes, ref, error))
+            return false;
+        tTJSBinaryStream *container = nullptr;
+        if(!TVPOpenTLGRefContainer(ref, container, error))
+            return false;
+        std::vector<tjs_uint8> containerBytes;
+        const bool read = TVPReadTLGBytes(container, containerBytes, error);
+        delete container;
+        if(!read)
+            return false;
+        return TVPDecodeTLGQOIContainer(containerBytes, ref.Index, rgba, width,
+                                        height, colors, error);
+    }
+    error = "unsupported special TLG header";
+    return false;
+}
+
+static bool TVPReadTLGSpecialDimensions(tTJSBinaryStream *src,
+                                         tjs_uint32 &width,
+                                         tjs_uint32 &height,
+                                         tjs_uint8 &colors,
+                                         std::string &error) {
+    std::vector<tjs_uint8> bytes;
+    if(!TVPReadTLGBytes(src, bytes, error))
+        return false;
+    if(TVPIsTLGQOIHeader(bytes, 0)) {
+        if(!TVPHasTLGBytes(bytes, 0, 20)) {
+            error = "truncated TLGqoi header";
+            return false;
+        }
+        width = TVPReadTLGUInt32LE(bytes.data() + 12);
+        height = TVPReadTLGUInt32LE(bytes.data() + 16);
+        colors = bytes[11];
+        if((colors != 3 && colors != 4) || width == 0 || height == 0) {
+            error = "invalid TLGqoi dimensions";
+            return false;
+        }
+        if(TVPHasTLGBytes(bytes, 20, 4) &&
+           std::memcmp(bytes.data() + 20, "QHDR", 4) == 0) {
+            if(!TVPHasTLGBytes(bytes, 0, 28) ||
+               TVPReadTLGUInt32LE(bytes.data() + 24) < 48) {
+                error = "invalid TLGqoi+QHDR header";
+                return false;
+            }
+        }
+        return true;
+    }
+    static constexpr char kRefHeader[] = "TLGref\0raw\x1a";
+    if(!TVPHasTLGBytes(bytes, 0, sizeof(kRefHeader) - 1) ||
+       std::memcmp(bytes.data(), kRefHeader, sizeof(kRefHeader) - 1) != 0) {
+        error = "unsupported special TLG header";
+        return false;
+    }
+    TVPTLGRefInfo ref;
+    if(!TVPParseTLGRef(bytes, ref, error))
+        return false;
+    tTJSBinaryStream *container = nullptr;
+    if(!TVPOpenTLGRefContainer(ref, container, error))
+        return false;
+    std::vector<tjs_uint8> containerBytes;
+    const bool read = TVPReadTLGBytes(container, containerBytes, error);
+    delete container;
+    if(!read)
+        return false;
+    if(!TVPIsTLGQOIHeader(containerBytes, 0) ||
+       !TVPHasTLGBytes(containerBytes, 0, 20)) {
+        error = "TLGref target is not a TLGqoi container";
+        return false;
+    }
+    colors = containerBytes[11];
+    width = TVPReadTLGUInt32LE(containerBytes.data() + 12);
+    height = TVPReadTLGUInt32LE(containerBytes.data() + 16);
+    if((colors != 3 && colors != 4) || width == 0 || height == 0) {
+        error = "invalid TLGref target dimensions";
+        return false;
+    }
+    return true;
+}
+
+static bool TVPReadTLGMuxStream(tTJSBinaryStream *src,
+                                TVPTLGMuxFile &mux, std::string &error) {
+    if(!src) {
+        error = "null TLG stream";
+        return false;
+    }
+    const tjs_uint64 originalPosition = src->GetPosition();
+    const tjs_uint64 size = src->GetSize();
+    if(size == 0 || size > std::numeric_limits<size_t>::max()) {
+        error = "invalid TLG stream size";
+        return false;
+    }
+    std::vector<tjs_uint8> bytes(static_cast<size_t>(size));
+    src->SetPosition(0);
+    const tjs_uint read = src->Read(bytes.data(), static_cast<tjs_uint>(size));
+    src->SetPosition(originalPosition);
+    if(read != size) {
+        error = "short TLG stream read";
+        return false;
+    }
+    return TVPParseTLGMux(bytes, mux, error);
+}
+
+static void TVPThrowTLGMuxError(const std::string &error) {
+    const ttstr message(error.c_str());
+    TVPThrowExceptionMessage(TVPTLGLoadError, message.c_str());
+}
+
+static void TVPLoadTLGMux(void *callbackdata,
+                          tTVPGraphicSizeCallback sizecallback,
+                          tTVPGraphicScanLineCallback scanlinecallback,
+                          tTJSBinaryStream *src, tTVPGraphicLoadMode mode) {
+    if(mode != glmNormal)
+        TVPThrowTLGMuxError("TLGmux only supports full-color loading");
+
+    TVPTLGMuxFile mux;
+    std::string error;
+    if(!TVPReadTLGMuxStream(src, mux, error))
+        TVPThrowTLGMuxError(error);
+
+    const tjs_uint64 canvasPixels = static_cast<tjs_uint64>(mux.Width) *
+                                    mux.Height;
+    if(canvasPixels > std::numeric_limits<size_t>::max() / 4)
+        TVPThrowTLGMuxError("TLGmux canvas is too large");
+    std::vector<tjs_uint8> canvas(static_cast<size_t>(canvasPixels) * 4, 0);
+
+    for(size_t index = 0; index < mux.Slices.size(); ++index) {
+        const auto &slice = mux.Slices[index];
+        tjs_uint64 end = mux.Bytes.size();
+        for(const auto &candidate : mux.Slices) {
+            if(candidate.Offset > slice.Offset) {
+                end = std::min(end, mux.DataBase + candidate.Offset);
+            }
+        }
+        if(end <= mux.DataBase + slice.Offset || end > mux.Bytes.size())
+            TVPThrowTLGMuxError("invalid TLGmux slice bounds");
+
+        std::vector<tjs_uint8> rgba;
+        tjs_uint32 decodedWidth = 0;
+        tjs_uint32 decodedHeight = 0;
+        tjs_uint8 decodedColors = 0;
+        if(!TVPDecodeTLGQOI(mux.Bytes, mux.DataBase + slice.Offset, end,
+                            rgba, decodedWidth, decodedHeight, decodedColors,
+                            error))
+            TVPThrowTLGMuxError(error);
+
+        const tjs_uint32 copyWidth = std::min(slice.Width, decodedWidth);
+        const tjs_uint32 copyHeight = std::min(slice.Height, decodedHeight);
+        for(tjs_uint32 y = 0; y < copyHeight; ++y) {
+            const tjs_uint32 dstY = slice.Top + y;
+            if(dstY >= mux.Height)
+                break;
+            const tjs_uint32 dstX = slice.Left;
+            if(dstX >= mux.Width)
+                continue;
+            const tjs_uint32 visibleWidth =
+                std::min(copyWidth, mux.Width - dstX);
+            tjs_uint8 *dst = canvas.data() +
+                             (static_cast<size_t>(dstY) * mux.Width + dstX) *
+                                 4;
+            const tjs_uint8 *srcPixels =
+                rgba.data() + static_cast<size_t>(y) * decodedWidth * 4;
+            for(tjs_uint32 x = 0; x < visibleWidth; ++x) {
+                // PackinOne's TLGqoi payload is already in the RGBA byte
+                // order consumed by the Godot texture bridge.  The legacy
+                // TLG5/6 decoder writes TVP's historical BGRA scanlines, but
+                // applying that swap here would make the TLGmux-only assets
+                // (notably character layers and expressions) blue/yellow.
+                dst[x * 4 + 0] = srcPixels[x * 4 + 0];
+                dst[x * 4 + 1] = srcPixels[x * 4 + 1];
+                dst[x * 4 + 2] = srcPixels[x * 4 + 2];
+                dst[x * 4 + 3] = decodedColors == 3 ? 0xff : srcPixels[x * 4 + 3];
+            }
+        }
+    }
+
+    sizecallback(callbackdata, mux.Width, mux.Height,
+                 mux.Colors == 3 ? gpfRGB : gpfRGBA);
+    for(tjs_uint32 y = 0; y < mux.Height; ++y) {
+        void *line = scanlinecallback(callbackdata, y);
+        if(line)
+            std::memcpy(line, canvas.data() + static_cast<size_t>(y) * mux.Width * 4,
+                        static_cast<size_t>(mux.Width) * 4);
+        scanlinecallback(callbackdata, -1);
+    }
+}
+
+static bool TVPReadTLGMuxHeader(tTJSBinaryStream *src, tjs_int &width,
+                                tjs_int &height, tjs_int &colors) {
+    if(!src)
+        return false;
+    const tjs_uint64 position = src->GetPosition();
+    unsigned char header[20] = {};
+    const bool ok = src->Read(header, sizeof(header)) == sizeof(header) &&
+                    !std::memcmp(header, "TLGmux\0idx\x1a", 11);
+    src->SetPosition(position);
+    if(!ok)
+        return false;
+    colors = header[11];
+    width = static_cast<tjs_int>(TVPReadTLGUInt32LE(header + 12));
+    height = static_cast<tjs_int>(TVPReadTLGUInt32LE(header + 16));
+    return colors == 3 || colors == 4;
 }
 
 class TLGDecodeTrace {
@@ -538,9 +1561,47 @@ void TVPLoadTLG(void *formatdata, void *callbackdata,
                 tTVPMetaInfoPushCallback metainfopushcallback,
                 tTJSBinaryStream *src, tjs_int keyidx,
                 tTVPGraphicLoadMode mode) {
+    TVPTraceTLGFormatStream("load", src);
+    if(src) {
+        unsigned char muxMagic[6] = {};
+        const tjs_uint64 position = src->GetPosition();
+        if(src->Read(muxMagic, sizeof(muxMagic)) == sizeof(muxMagic) &&
+           !memcmp(muxMagic, "TLGmux", sizeof(muxMagic)))
+            TVPDumpTLGMuxStream(src);
+        src->SetPosition(position);
+    }
     // read header
     unsigned char mark[12];
     src->ReadBuffer(mark, 11);
+
+    if(!memcmp("TLGmux\0idx\x1a", mark, 11)) {
+        src->Seek(0, TJS_BS_SEEK_SET);
+        TVPLoadTLGMux(callbackdata, sizecallback, scanlinecallback, src, mode);
+        return;
+    }
+
+    // TLGqoi and TLGref are used by modern event/CG assets.  They are not
+    // TLG5/6 variants, so handle them before the legacy raw decoder sees the
+    // header and reports a misleading "invalid TLG" error.
+    if(!memcmp("TLGqoi\0raw\x1a", mark, 11) ||
+       !memcmp("TLGref\0raw\x1a", mark, 11)) {
+        if(mode != glmNormal)
+            TVPThrowTLGMuxError("TLGqoi/TLGref only supports full-color loading");
+        src->Seek(0, TJS_BS_SEEK_SET);
+        std::vector<tjs_uint8> rgba;
+        tjs_uint32 width = 0;
+        tjs_uint32 height = 0;
+        tjs_uint8 colors = 0;
+        std::string error;
+        if(!TVPDecodeTLGSpecialStream(src, rgba, width, height, colors, error)) {
+            spdlog::warn("TLG special decode failed name={} error={}",
+                         TVPGetCurrentGraphicLoadName().AsStdString(), error);
+            TVPThrowTLGMuxError(error);
+        }
+        TVPEmitTLGImage(callbackdata, sizecallback, scanlinecallback, rgba,
+                        width, height, colors);
+        return;
+    }
 
     // check for TLG0.0 sds
     if(!memcmp("TLG0.0\x00sds\x1a\x00", mark, 11)) {
@@ -668,6 +1729,16 @@ void TVPLoadHeaderTLG(void *formatdata, tTJSBinaryStream *src,
     if(dic == nullptr)
         return;
 
+    TVPTraceTLGFormatStream("header", src);
+    if(src) {
+        unsigned char muxMagic[6] = {};
+        const tjs_uint64 position = src->GetPosition();
+        if(src->Read(muxMagic, sizeof(muxMagic)) == sizeof(muxMagic) &&
+           !memcmp(muxMagic, "TLGmux", sizeof(muxMagic)))
+            TVPDumpTLGMuxStream(src);
+        src->SetPosition(position);
+    }
+
     // read header
     unsigned char mark[12];
     src->ReadBuffer(mark, 11);
@@ -675,6 +1746,30 @@ void TVPLoadHeaderTLG(void *formatdata, tTJSBinaryStream *src,
     tjs_int width = 0;
     tjs_int height = 0;
     tjs_int colors = 0;
+    if(!memcmp("TLGmux\0idx\x1a", mark, 11)) {
+        src->Seek(0, TJS_BS_SEEK_SET);
+        if(!TVPReadTLGMuxHeader(src, width, height, colors))
+            TVPThrowExceptionMessage(
+                TVPTLGLoadError,
+                (const tjs_char *)TVPInvalidTlgHeaderOrVersion);
+        goto header_done;
+    }
+    if(!memcmp("TLGqoi\0raw\x1a", mark, 11) ||
+       !memcmp("TLGref\0raw\x1a", mark, 11)) {
+        tjs_uint32 specialWidth = 0;
+        tjs_uint32 specialHeight = 0;
+        tjs_uint8 specialColors = 0;
+        std::string error;
+        src->Seek(0, TJS_BS_SEEK_SET);
+        if(!TVPReadTLGSpecialDimensions(src, specialWidth, specialHeight,
+                                        specialColors, error))
+            TVPThrowExceptionMessage(
+                TVPTLGLoadError, ttstr(error.c_str()).c_str());
+        width = static_cast<tjs_int>(specialWidth);
+        height = static_cast<tjs_int>(specialHeight);
+        colors = static_cast<tjs_int>(specialColors);
+        goto header_done;
+    }
     // check for TLG0.0 sds
     if(!memcmp("TLG0.0\x00sds\x1a\x00", mark, 11)) {
         // read raw data size
@@ -709,6 +1804,7 @@ void TVPLoadHeaderTLG(void *formatdata, tTJSBinaryStream *src,
         TVPThrowExceptionMessage(
             TVPTLGLoadError, (const tjs_char *)TVPInvalidTlgHeaderOrVersion);
     }
+header_done:
     tjs_int bpp = colors * 8;
     *dic = TJSCreateDictionaryObject();
     tTJSVariant val(width);

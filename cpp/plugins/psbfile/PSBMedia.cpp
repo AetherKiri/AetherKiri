@@ -3,16 +3,25 @@
 //
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
+#include <fstream>
+#include <mutex>
+#include <unordered_set>
+#include <vector>
 #include <spdlog/spdlog.h>
 
 #include "PSBMedia.h"
 
 #include "PSBFile.h"
+#include "PSBMediaRegistry.h"
 #include "resources/ImageMetadata.h"
 #include "MsgIntf.h"
 #include "Platform.h"
+#include "StorageIntf.h"
+#include "StorageImpl.h"
 #include "SysInitIntf.h"
 #include "UtilStreams.h"
 #include "GraphicsLoaderIntf.h"
@@ -20,6 +29,229 @@
 
 namespace PSB {
 #define LOGGER spdlog::get("plugin")
+
+    namespace {
+        std::string LowerAscii(std::string value) {
+            std::transform(value.begin(), value.end(), value.begin(),
+                           [](const unsigned char ch) {
+                               return static_cast<char>(std::tolower(ch));
+                           });
+            return value;
+        }
+
+        std::string Basename(std::string value) {
+            const auto slash = value.find_last_of("/\\");
+            if(slash != std::string::npos) {
+                value.erase(0, slash + 1);
+            }
+            return value;
+        }
+
+        std::string StripExtension(std::string value) {
+            const auto dot = value.find_last_of('.');
+            if(dot != std::string::npos) {
+                value.erase(dot);
+            }
+            return value;
+        }
+
+        bool IsBareMotionSliceRequest(const std::string &key) {
+            if(key.empty() || key.find('/') != std::string::npos ||
+               key.size() <= 4 ||
+               key.compare(key.size() - 4, 4, ".tlg") != 0) {
+                return false;
+            }
+            const auto stem = key.substr(0, key.size() - 4);
+            return stem.find('_') != std::string::npos;
+        }
+
+        bool SharesMotionStem(const std::string &request,
+                              const std::string &archive) {
+            const auto requestStem = StripExtension(Basename(request));
+            const auto archiveStem = StripExtension(Basename(archive));
+            if(requestStem.empty() || archiveStem.empty()) {
+                return false;
+            }
+
+            // A sliced resource is conventionally named
+            // <motion-family>_<role>.tlg while the PSB is
+            // <motion-family>_<motion>.mtn.  Compare the family token only;
+            // the role itself is intentionally opaque and is assigned in the
+            // authored PSB layer order below.
+            const auto requestSep = requestStem.find('_');
+            const auto archiveSep = archiveStem.find('_');
+            const auto requestFamily = requestStem.substr(
+                0, requestSep == std::string::npos ? requestStem.size()
+                                                     : requestSep);
+            const auto archiveFamily = archiveStem.substr(
+                0, archiveSep == std::string::npos ? archiveStem.size()
+                                                     : archiveSep);
+            if(requestFamily.empty() || archiveFamily.empty()) {
+                return false;
+            }
+            return requestFamily == archiveFamily ||
+                requestStem.rfind(archiveStem + '_', 0) == 0 ||
+                archiveStem.rfind(requestFamily + '_', 0) == 0;
+        }
+
+        bool HasMotionArchiveExtension(const std::string &value) {
+            const auto lower = LowerAscii(value);
+            for(const auto *extension : {".mtn", ".psb"}) {
+                if(lower.size() > std::strlen(extension) &&
+                   lower.compare(lower.size() - std::strlen(extension),
+                                 std::strlen(extension), extension) == 0) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        std::string ArchiveBoundaryKey(const std::string &key) {
+            // Resource keys normally look like `archive.mtn/path`.  When the
+            // archive itself lives in a subdirectory (for example
+            // `motion/mono_loop.mtn`), splitting at the first slash would
+            // incorrectly treat `motion` as the archive.  Keep the generic
+            // storage path intact by recognizing a PSB/motion extension first.
+            const auto lower = LowerAscii(key);
+            size_t boundary = std::string::npos;
+            for(const auto *extension : {".mtn/", ".psb/", ".pimg/"}) {
+                const auto position = lower.find(extension);
+                if(position == std::string::npos) {
+                    continue;
+                }
+                const auto candidate = position + std::strlen(extension) - 1;
+                if(boundary == std::string::npos || candidate < boundary) {
+                    boundary = candidate;
+                }
+            }
+            if(boundary != std::string::npos) {
+                return key.substr(0, boundary);
+            }
+            const auto slash = key.find('/');
+            return slash == std::string::npos ? key : key.substr(0, slash);
+        }
+
+        // Discover motion containers only when a sliced layer actually asks
+        // for a missing bare TLG.  This keeps startup cheap while still
+        // supporting games that keep the motion PSB inside an XP3 archive and
+        // never issue an ordinary `mono_loop.mtn` load before SliceLayer.
+        std::vector<std::string> DiscoverMotionArchives(
+            const std::string &request, std::mutex &discoveryMutex,
+            std::unordered_set<std::string> &scannedRoots,
+            std::vector<std::string> &knownArchives) {
+            std::lock_guard<std::mutex> discoveryLock(discoveryMutex);
+            std::vector<std::string> roots;
+            auto appendRoot = [&roots](const ttstr &root) {
+                const auto value = root.AsStdString();
+                if(value.empty() ||
+                   std::find(roots.begin(), roots.end(), value) != roots.end()) {
+                    return;
+                }
+                roots.push_back(value);
+            };
+            appendRoot(TVPProjectDir);
+            appendRoot(TVPDataPath);
+            appendRoot(TVPGetAppPath());
+
+            auto appendKnown = [&knownArchives](std::string candidate) {
+                std::replace(candidate.begin(), candidate.end(), '\\', '/');
+                while(candidate.rfind("./", 0) == 0) {
+                    candidate.erase(0, 2);
+                }
+                if(candidate.empty() || !HasMotionArchiveExtension(candidate)) {
+                    return;
+                }
+                candidate = LowerAscii(std::move(candidate));
+                if(std::find(knownArchives.begin(), knownArchives.end(),
+                             candidate) == knownArchives.end()) {
+                    knownArchives.push_back(std::move(candidate));
+                }
+            };
+
+            for(const auto &root : roots) {
+                if(!scannedRoots.insert(root).second) {
+                    continue;
+                }
+
+                ttstr localRoot(root.c_str());
+                try {
+                    TVPGetLocalName(localRoot);
+                } catch(...) {
+                    continue;
+                }
+
+                std::vector<std::string> entries;
+                TVPGetLocalFileListAt(
+                    localRoot,
+                    [&entries](const ttstr &file, tTVPLocalFileInfo *info) {
+                        if(info != nullptr && (info->Mode & S_IFREG)) {
+                            entries.push_back(file.AsStdString());
+                        }
+                    });
+
+                for(const auto &entry : entries) {
+                    if(HasMotionArchiveExtension(entry)) {
+                        appendKnown(entry);
+                        continue;
+                    }
+                    const auto lower = LowerAscii(entry);
+                    if(lower.size() <= 4 ||
+                       lower.compare(lower.size() - 4, 4, ".xp3") != 0) {
+                        continue;
+                    }
+
+                    ttstr archivePath =
+                        TVPGetPlacedPath(ttstr(entry.c_str()));
+                    if(archivePath.IsEmpty()) {
+                        archivePath = localRoot + ttstr(entry.c_str());
+                    }
+                    tTVPArchive *archive = nullptr;
+                    try {
+                        archive = TVPOpenArchive(archivePath, true);
+                    } catch(...) {
+                        archive = nullptr;
+                    }
+                    if(!archive) {
+                        continue;
+                    }
+                    try {
+                        for(tjs_uint index = 0; index < archive->GetCount();
+                            ++index) {
+                            const auto name = archive->GetName(index).AsStdString();
+                            if(HasMotionArchiveExtension(name)) {
+                                appendKnown(name);
+                            }
+                        }
+                    } catch(...) {
+                        // A damaged optional archive must not prevent the
+                        // current game from resolving other motion assets.
+                    }
+                    archive->Release();
+                }
+            }
+
+            std::vector<std::string> matches;
+            for(const auto &archive : knownArchives) {
+                if(SharesMotionStem(request, archive)) {
+                    matches.push_back(archive);
+                }
+            }
+            const char *debug = std::getenv("AETHERKIRI_PSB_DEBUG");
+            if(LOGGER && debug && *debug && *debug != '0') {
+                LOGGER->info("PSB motion discovery: request={} candidates={}",
+                             request, matches.empty() ? std::string("<none>")
+                                                      : matches.front());
+            }
+            return matches;
+        }
+    } // namespace
+
+    std::vector<std::string> PSBMedia::discoverMotionArchives(
+        const std::string &request) {
+        return DiscoverMotionArchives(request, _motionDiscoveryMutex,
+                                      _motionScannedRoots,
+                                      _motionKnownArchives);
+    }
 
     bool detail::IsSupportedImageHeader(const std::vector<uint8_t> &data) {
         if(data.size() >= 8 && data[0] == 0x89 && data[1] == 0x50 &&
@@ -308,6 +540,51 @@ namespace PSB {
                 }
             }
 
+            // Motion PSBs produced by the game sometimes omit the pixel
+            // format metadata. Keep bounded raw channel evidence in the
+            // existing debug log so the generic fallback can be validated
+            // against the authored data rather than the final screenshot.
+            if(LOGGER && IsDebugPSBKey(info.debugKey) && decodedAlign == 4 &&
+               src->size() >= 4) {
+                std::string first;
+                const size_t sampleBytes = std::min<size_t>(src->size(), 32);
+                for(size_t i = 0; i < sampleBytes; ++i) {
+                    if(i != 0) first += ',';
+                    first += std::to_string((*src)[i]);
+                }
+                size_t zero[4] = {0, 0, 0, 0};
+                size_t full[4] = {0, 0, 0, 0};
+                size_t partial[4] = {0, 0, 0, 0};
+                const size_t samples = std::min(pixelCount, size_t{4096});
+                for(size_t p = 0; p < samples; ++p) {
+                    const size_t base = p * 4;
+                    for(size_t channel = 0; channel < 4; ++channel) {
+                        const uint8_t value = (*src)[base + channel];
+                        if(value == 0) {
+                            ++zero[channel];
+                        } else if(value == 255) {
+                            ++full[channel];
+                        } else {
+                            ++partial[channel];
+                        }
+                    }
+                }
+                LOGGER->info(
+                    "psb raw4 key={} first=[{}] samples={} ch0(z/f/p)={}/{}/{} ch1={}/{}/{} ch2={}/{}/{} ch3={}/{}/{}",
+                    info.debugKey, first, samples, zero[0], full[0], partial[0],
+                    zero[1], full[1], partial[1], zero[2], full[2], partial[2],
+                    zero[3], full[3], partial[3]);
+                if(std::getenv("AETHERKIRI_PSB_DUMP_CHANNELS") &&
+                   info.debugKey.find("motion/mono_loop.mtn/") == 0) {
+                    std::string label = info.debugKey;
+                    std::replace(label.begin(), label.end(), '/', '_');
+                    std::ofstream rawFile("/tmp/aetherkiri-" + label + ".raw",
+                                          std::ios::binary);
+                    rawFile.write(reinterpret_cast<const char *>(src->data()),
+                                  static_cast<std::streamsize>(src->size()));
+                }
+            }
+
             PSBPixelFormat format =
                 Extension::toPSBPixelFormat(info.type.empty() ? "RGBA8" : info.type,
                                             info.spec);
@@ -366,6 +643,25 @@ namespace PSB {
                         static_cast<size_t>(info.height - 1 - y) * pitch;
                     for(int x = 0; x < info.width; ++x) {
                         pixelWriter(x, y, rowDst + static_cast<size_t>(x) * 4);
+                    }
+                }
+
+                // One-shot diagnostic for validating the decoded alpha map
+                // independently of the renderer.  This is intentionally
+                // opt-in and is removed/disabled by default in production.
+                if(const char *dump = std::getenv("AETHERKIRI_PSB_DUMP_RAW");
+                   dump && *dump && *dump != '0') {
+                    static std::mutex dumpMutex;
+                    static std::unordered_set<std::string> dumped;
+                    std::lock_guard<std::mutex> lock(dumpMutex);
+                    std::string label = info.debugKey;
+                    std::replace(label.begin(), label.end(), '/', '_');
+                    std::replace(label.begin(), label.end(), '\\', '_');
+                    if(dumped.insert(label).second) {
+                        std::ofstream file("/tmp/aetherkiri-psb-" + label + ".bmp",
+                                           std::ios::binary);
+                        file.write(reinterpret_cast<const char *>(out->data()),
+                                   static_cast<std::streamsize>(out->size()));
                     }
                 }
                 return out;
@@ -1321,11 +1617,9 @@ namespace PSB {
 
     bool PSBMedia::tryLazyLoadArchive(const std::string &key,
                                       bool reloadIfLoaded) {
-        const auto slashPos = key.find('/');
-        if(slashPos == std::string::npos || slashPos == 0)
+        const auto archiveKey = ArchiveBoundaryKey(key);
+        if(archiveKey.empty() || archiveKey == key)
             return false;
-
-        const std::string archiveKey = key.substr(0, slashPos);
         bool shouldAttemptLoad = false;
         {
             std::lock_guard<std::mutex> lock(_mutex);
@@ -1410,6 +1704,12 @@ namespace PSB {
                 LOGGER->debug("PSB lazy-load archive: {}", archiveKey);
             }
             RegisterPSBResourcesIntoMedia(*this, *psb, archiveKey);
+            // The generic registration above owns ordinary PSB resources.
+            // Add only the authored motion slice mapping here; repeating the
+            // full object/resource walk would replace cache entries and
+            // duplicate the archive's image metadata.  The registry remains
+            // data-driven and never knows a title's `truss`/`frame` names.
+            registerMotionSliceResources(ttstr(archiveKey.c_str()), *psb);
             {
                 std::lock_guard<std::mutex> lock(_mutex);
                 _failedArchives.erase(archiveKey);
@@ -1591,20 +1891,51 @@ namespace PSB {
             archiveKey.pop_back();
             _loadedArchives.erase(archiveKey);
             _failedArchives.erase(archiveKey);
+
+            for(auto it = _motionSliceSets.begin();
+                it != _motionSliceSets.end();) {
+                if(it->archiveKey == archiveKey ||
+                   it->archiveKey.rfind(archiveKey + "/", 0) == 0) {
+                    for(auto alias = _motionSliceAliases.begin();
+                        alias != _motionSliceAliases.end();) {
+                        if(alias->second.rfind(archiveKey + "/", 0) == 0) {
+                            alias = _motionSliceAliases.erase(alias);
+                        } else {
+                            ++alias;
+                        }
+                    }
+                    it = _motionSliceSets.erase(it);
+                } else {
+                    ++it;
+                }
+            }
         }
     }
 
     void PSBMedia::clear() {
-        std::lock_guard<std::mutex> lock(_mutex);
-        _resources.clear();
-        _lru.clear();
-        _bytesInUse = 0;
-        _hitCount = 0;
-        _missCount = 0;
-        _loadedArchives.clear();
-        _failedArchives.clear();
-        _knownResourceKeys.clear();
-        _missingResourceKeys.clear();
+        {
+            std::lock_guard<std::mutex> lock(_mutex);
+            _resources.clear();
+            _lru.clear();
+            _bytesInUse = 0;
+            _hitCount = 0;
+            _missCount = 0;
+            _loadedArchives.clear();
+            _failedArchives.clear();
+            _knownResourceKeys.clear();
+            _missingResourceKeys.clear();
+            _motionSliceSets.clear();
+            _motionSliceAliases.clear();
+            _motionSliceGeneration = 0;
+        }
+        // Motion archive discovery is session-scoped.  AetherKiri can launch
+        // several games in one process, so never retain paths from the prior
+        // project after the PSB media registry is reset.
+        {
+            std::lock_guard<std::mutex> lock(_motionDiscoveryMutex);
+            _motionScannedRoots.clear();
+            _motionKnownArchives.clear();
+        }
     }
 
     bool PSBMedia::ensureArchiveLoaded(const std::string &archiveKey,
@@ -1649,6 +1980,150 @@ namespace PSB {
             result.push_back({key, entry.imageInfo});
         }
         return result;
+    }
+
+    void PSBMedia::addMotionSliceSet(std::string archiveKey,
+                                     std::vector<std::string> imageKeys,
+                                     int authoredWidth,
+                                     int authoredHeight) {
+        archiveKey = canonicalizeKey(archiveKey);
+        if(archiveKey.empty() || imageKeys.empty()) {
+            return;
+        }
+
+        std::vector<std::string> normalizedImages;
+        normalizedImages.reserve(imageKeys.size());
+        for(auto &imageKey : imageKeys) {
+            imageKey = canonicalizeKey(imageKey);
+            if(imageKey.empty() ||
+               std::find(normalizedImages.begin(), normalizedImages.end(),
+                         imageKey) != normalizedImages.end()) {
+                continue;
+            }
+            normalizedImages.push_back(std::move(imageKey));
+        }
+        if(normalizedImages.empty()) {
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock(_mutex);
+        for(auto it = _motionSliceSets.begin();
+            it != _motionSliceSets.end();) {
+            if(it->archiveKey != archiveKey) {
+                ++it;
+                continue;
+            }
+            for(auto alias = _motionSliceAliases.begin();
+                alias != _motionSliceAliases.end();) {
+                if(alias->second.rfind(archiveKey + "/", 0) == 0) {
+                    alias = _motionSliceAliases.erase(alias);
+                } else {
+                    ++alias;
+                }
+            }
+            it = _motionSliceSets.erase(it);
+        }
+
+        MotionSliceSet set;
+        set.archiveKey = std::move(archiveKey);
+        set.imageKeys = std::move(normalizedImages);
+        set.authoredWidth = std::max(0, authoredWidth);
+        set.authoredHeight = std::max(0, authoredHeight);
+        set.generation = ++_motionSliceGeneration;
+        _motionSliceSets.push_back(std::move(set));
+    }
+
+    bool PSBMedia::resolveMotionSliceStorage(const std::string &request,
+                                             std::string &resolved) {
+        const auto key = canonicalizeKey(request);
+        if(!IsBareMotionSliceRequest(key)) {
+            return false;
+        }
+
+        auto resolveRegistered = [&]() -> bool {
+            std::lock_guard<std::mutex> lock(_mutex);
+            if(const auto known = _motionSliceAliases.find(key);
+               known != _motionSliceAliases.end()) {
+                resolved = known->second;
+                return true;
+            }
+
+            MotionSliceSet *selected = nullptr;
+            for(auto &set : _motionSliceSets) {
+                if(set.imageKeys.empty() ||
+                   !SharesMotionStem(key, set.archiveKey)) {
+                    continue;
+                }
+                if(selected == nullptr ||
+                   set.generation > selected->generation) {
+                    selected = &set;
+                }
+            }
+            if(selected == nullptr ||
+               selected->nextImage >= selected->imageKeys.size()) {
+                return false;
+            }
+
+            const auto target = selected->imageKeys[selected->nextImage++];
+            selected->assignments.emplace(key, target);
+            _motionSliceAliases.emplace(key, target);
+            resolved = target;
+            if(LOGGER) {
+                LOGGER->debug("PSB motion slice alias: {} -> {}", key,
+                              resolved);
+            }
+            return true;
+        };
+
+        if(resolveRegistered()) {
+            return true;
+        }
+
+        // A sliced layer may be the first consumer of a motion archive.  In
+        // that case no PSB load has populated _motionSliceSets yet.  Discover
+        // matching .mtn/.psb entries from the mounted game roots and let the
+        // regular lazy loader parse/register them before trying the alias
+        // assignment again.
+        for(const auto &archive : discoverMotionArchives(key)) {
+            if(!ensureArchiveLoaded(archive, true)) {
+                continue;
+            }
+            if(resolveRegistered()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool PSBMedia::getMotionSliceCanvasSize(const std::string &storage,
+                                            int &width,
+                                            int &height) const {
+        std::string key = storage;
+        if(key.size() >= 6) {
+            std::string scheme = key.substr(0, 6);
+            std::transform(scheme.begin(), scheme.end(), scheme.begin(),
+                           [](const unsigned char ch) {
+                               return static_cast<char>(std::tolower(ch));
+                           });
+            if(scheme == "psb://") {
+                key.erase(0, 6);
+            }
+        }
+        key = canonicalizeKey(key);
+
+        std::lock_guard<std::mutex> lock(_mutex);
+        for(auto it = _motionSliceSets.rbegin();
+            it != _motionSliceSets.rend(); ++it) {
+            if(it->authoredWidth <= 0 || it->authoredHeight <= 0 ||
+               std::find(it->imageKeys.begin(), it->imageKeys.end(), key) ==
+                   it->imageKeys.end()) {
+                continue;
+            }
+            width = it->authoredWidth;
+            height = it->authoredHeight;
+            return true;
+        }
+        return false;
     }
 
     bool PSBMedia::getImageInfo(const std::string &key,

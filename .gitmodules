@@ -8,3 +8,6 @@
 [submodule "packages/psdfile"]
 	path = packages/psdfile
 	url = git@github.com:AetherKiri/psdfile.git
+[submodule "packages/tjs2Decompiler"]
+	path = packages/tjs2Decompiler
+	url = git@github.com:AetherKiri/tjs2Decompiler.git

@@ -140,6 +140,12 @@ public:
     virtual void SetPoint(int x, int y, uint32_t clr) = 0;
     virtual bool IsStatic() = 0; // aka. is readonly
     virtual bool IsOpaque() = 0;
+    // A layer-manager draw buffer is composed by the KAG software semantics
+    // and can be read back by the window presenter immediately afterwards.
+    // Backends may use this role to avoid asynchronous in-place operations
+    // whose source/destination aliasing is not defined by the GPU API.
+    virtual bool IsCpuCompositeTarget() const { return false; }
+    virtual void SetCpuCompositeTarget(bool) {}
     // virtual void RefreshBitmap() = 0;
     virtual krkr::Texture2D *
     GetAdapterTexture(krkr::Texture2D *origTex) = 0;

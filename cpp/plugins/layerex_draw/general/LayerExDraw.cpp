@@ -2,11 +2,18 @@
 #include <spdlog/spdlog.h>
 #include <cmath>
 #include <filesystem>
+#include <cstdint>
+#include <cctype>
+#include <cstdlib>
+#include <string>
+#include <string_view>
 
 #include "common/Defer.h"
 #include "ncbind.hpp"
 #include "LayerExDraw.hpp"
 #include "FontImpl.h"
+#include "WindowIntf.h"
+#include "impl/DrawDevice.h"
 #include <freetype/freetype.h>
 
 #include "FontImpl.h"
@@ -110,6 +117,240 @@ void initGdiPlus() {
 // GDI+ 終了
 void deInitGdiPlus() { GdiplusShutdown(gdiplusToken); }
 
+// KAG's vector affine source uses a small virtual-image protocol for solid
+// fills (for example ``solid_black.emf`` and ``solid_white.emf``).  These
+// names are intentionally not files in the game's archive: on Windows the
+// original GDI+ backend can resolve the corresponding metafile through its
+// storage layer, while libgdiplus has no such storage-backed metafile
+// resolver.  Keep the protocol generic and materialise a one-pixel ARGB
+// source; drawImageAffine stretches that pixel to the requested quadrilateral
+// and therefore preserves the source's colour and alpha without baking any
+// scene-specific layer names into the renderer.
+static bool parseVirtualSolidImageName(const tjs_char *name,
+                                       std::uint32_t &argb) {
+    if(!name) {
+        return false;
+    }
+
+    std::string value = ttstr(name).AsStdString();
+    const auto slash = value.find_last_of("/\\");
+    std::string base = slash == std::string::npos ? value :
+                       value.substr(slash + 1);
+    const auto dot = base.find_last_of('.');
+    if(dot == std::string::npos) {
+        return false;
+    }
+    std::string ext = base.substr(dot);
+    for(char &ch : ext) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    if(ext != ".emf" && ext != ".wmf") {
+        return false;
+    }
+    base.resize(dot);
+    for(char &ch : base) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    constexpr std::string_view prefix = "solid_";
+    if(base.rfind(prefix, 0) != 0 || base.size() == prefix.size()) {
+        return false;
+    }
+
+    const std::string token = base.substr(prefix.size());
+    if(token == "black") {
+        argb = 0xff000000u;
+        return true;
+    }
+    if(token == "white") {
+        argb = 0xffffffffu;
+        return true;
+    }
+    if(token == "transparent") {
+        argb = 0x00000000u;
+        return true;
+    }
+
+    // Accept solid_RRGGBB, solid_AARRGGBB and the same forms with a leading
+    // '#'/"0x".  This covers the colour-name convention used by KAG tools
+    // while remaining useful for other games that emit virtual solid images.
+    std::string digits = token;
+    if(!digits.empty() && digits.front() == '#') {
+        digits.erase(digits.begin());
+    } else if(digits.size() > 2 && digits[0] == '0' && digits[1] == 'x') {
+        digits.erase(0, 2);
+    }
+    if(digits.size() != 6 && digits.size() != 8) {
+        return false;
+    }
+    std::uint32_t value32 = 0;
+    for(char ch : digits) {
+        if(!std::isxdigit(static_cast<unsigned char>(ch))) {
+            return false;
+        }
+        value32 <<= 4;
+        if(ch >= '0' && ch <= '9') {
+            value32 |= static_cast<std::uint32_t>(ch - '0');
+        } else if(ch >= 'a' && ch <= 'f') {
+            value32 |= static_cast<std::uint32_t>(ch - 'a' + 10);
+        } else {
+            value32 |= static_cast<std::uint32_t>(ch - 'A' + 10);
+        }
+    }
+    argb = digits.size() == 6 ? (0xff000000u | value32) : value32;
+    return true;
+}
+
+static ImageClass *createVirtualSolidImage(std::uint32_t argb) {
+    GpBitmap *bitmap = nullptr;
+    if(GdipCreateBitmapFromScan0(1, 1, 0, PixelFormat32bppARGB, nullptr,
+                                 &bitmap) != Ok || !bitmap) {
+        return nullptr;
+    }
+
+    GpGraphics *graphics = nullptr;
+    if(GdipGetImageGraphicsContext(reinterpret_cast<GpImage *>(bitmap),
+                                   &graphics) != Ok || !graphics) {
+        GdipDisposeImage(reinterpret_cast<GpImage *>(bitmap));
+        return nullptr;
+    }
+    GdipSetCompositingMode(graphics, CompositingModeSourceCopy);
+    const GpStatus status = GdipGraphicsClear(graphics, argb);
+    GdipDeleteGraphics(graphics);
+    if(status != Ok) {
+        GdipDisposeImage(reinterpret_cast<GpImage *>(bitmap));
+        return nullptr;
+    }
+    return new ImageClass{ reinterpret_cast<GpImage *>(bitmap), 0.0f, 0.0f,
+                           true, argb };
+}
+
+static bool layerExTraceEnabled() {
+    const char *value = std::getenv("AETHERKIRI_LAYEREX_TRACE");
+    return value && *value && *value != '0';
+}
+
+// AffineSourceVector loads its alpha mask immediately before the synthetic
+// solid_<colour>.emf source.  Keep the most recent raster canvas as the
+// logical bounds for that source.  The physical sample remains 1x1; only the
+// vector geometry uses this size.  Reset when the primary width changes so a
+// later game/session cannot inherit the previous game's canvas.
+static REAL g_virtualCanvasWidth = 0.0f;
+static REAL g_virtualCanvasHeight = 0.0f;
+static REAL g_virtualCanvasPrimaryWidth = 0.0f;
+
+// The alpha stencil used by AffineSourceVector is loaded by Layer.loadImages,
+// not by this plugin's Image loader.  Consequently a load-time cache in this
+// translation unit cannot see it.  At the point GetBounds is requested the
+// stencil is already attached as a child of the primary layer, so inspect the
+// live layer tree and recover the authored canvas dimensions from the largest
+// image that has the primary width but is shorter than the (oversized) backing
+// layer.  This keeps the bridge resolution-independent while avoiding a
+// game-specific `cut_one` filename check.
+static bool findVirtualCanvasInLayerTree(tTJSNI_BaseLayer *layer,
+                                         REAL primaryWidth,
+                                         REAL primaryHeight,
+                                         REAL preferredHeight,
+                                         REAL &candidateWidth,
+                                         REAL &candidateHeight,
+                                         REAL &candidateDistance) {
+    if(!layer) {
+        return false;
+    }
+    if(auto *image = layer->GetMainImage()) {
+        const REAL width = static_cast<REAL>(image->GetWidth());
+        const REAL height = static_cast<REAL>(image->GetHeight());
+        if(width == primaryWidth && height > 1.0f &&
+           height <= primaryHeight) {
+            const REAL distance = std::fabs(height - preferredHeight);
+            if(candidateHeight <= 0.0f || distance < candidateDistance ||
+               (distance == candidateDistance && height > candidateHeight)) {
+                candidateWidth = width;
+                candidateHeight = height;
+                candidateDistance = distance;
+            }
+        }
+    }
+    const tjs_int count = static_cast<tjs_int>(layer->GetCount());
+    for(tjs_int index = 0; index < count; ++index) {
+        findVirtualCanvasInLayerTree(
+            layer->GetChildren(index), primaryWidth, primaryHeight,
+            preferredHeight, candidateWidth, candidateHeight,
+            candidateDistance);
+    }
+    return candidateWidth > 0.0f && candidateHeight > 0.0f;
+}
+
+static void rememberVirtualCanvasCandidate(const ImageClass *image) {
+    if(!image || image->IsVirtualSolid()) {
+        return;
+    }
+    const REAL width = static_cast<REAL>(image->GetWidth());
+    const REAL height = static_cast<REAL>(image->GetHeight());
+    if(width <= 1.0f || height <= 1.0f) {
+        return;
+    }
+
+    REAL primaryWidth = 0.0f;
+    if(TVPMainWindow && TVPMainWindow->GetDrawDevice()) {
+        if(auto *primary = TVPMainWindow->GetDrawDevice()->GetPrimaryLayer()) {
+            primaryWidth = static_cast<REAL>(primary->GetClipWidth());
+        }
+    }
+    if(primaryWidth > 0.0f &&
+       (g_virtualCanvasPrimaryWidth <= 0.0f ||
+        g_virtualCanvasPrimaryWidth != primaryWidth)) {
+        g_virtualCanvasPrimaryWidth = primaryWidth;
+        g_virtualCanvasWidth = 0.0f;
+        g_virtualCanvasHeight = 0.0f;
+    }
+
+    // A mask canvas has the primary width and is no taller than the primary
+    // clip.  Prefer the smallest matching candidate: full-size scene images
+    // may be loaded later, while the vector mask is the shorter viewport.
+    if(primaryWidth <= 0.0f || width == primaryWidth) {
+        if(g_virtualCanvasWidth <= 0.0f ||
+           (width == g_virtualCanvasWidth && height < g_virtualCanvasHeight) ||
+           (g_virtualCanvasWidth <= 0.0f)) {
+            g_virtualCanvasWidth = width;
+            g_virtualCanvasHeight = height;
+        }
+    }
+}
+
+static void traceLayerEx(const char *event, const ImageClass *image,
+                         const char *extra = nullptr) {
+    if(!layerExTraceEnabled()) {
+        return;
+    }
+    static int count = 0;
+    if(count++ >= 256) {
+        return;
+    }
+    if(image) {
+        spdlog::info("LayerExTrace {} image={} virtual={} size={}x{} {}", event,
+                     static_cast<const void *>(image), image->IsVirtualSolid(),
+                     image->GetWidth(), image->GetHeight(),
+                     extra ? extra : "");
+    } else {
+        spdlog::info("LayerExTrace {} image=null {}", event,
+                     extra ? extra : "");
+    }
+}
+
+// KAG's vector/metafile sources are authored around the layer origin, with
+// their logical canvas centered on that origin.  The raster fallback for a
+// solid_*.emf/.wmf source is only a one-pixel colour sample, so its bounds
+// must preserve the authored canvas *and* its centered origin.  Returning a
+// top-left origin here shifts every affine quad by half a canvas and produces
+// the characteristic right/bottom black block seen on the compatibility
+// backend.
+static RectFClass *virtualSolidBounds(REAL width, REAL height) {
+    if(width <= 0.0f || height <= 0.0f) {
+        width = height = 1.0f;
+    }
+    return new RectFClass{ -width * 0.5f, -height * 0.5f, width, height };
+}
+
 /**
  * 画像読み込み処理
  * @param name ファイル名
@@ -130,10 +371,102 @@ ImageClass *loadImage(const tjs_char *name) {
         delete image;
         image = nullptr;
     }
+
+    // Capture a raster canvas before the following synthetic solid source is
+    // requested by AffineSourceVector.  This is deliberately based on the
+    // runtime image dimensions rather than a game-specific filename.
+    rememberVirtualCanvasCandidate(image);
+
+    if(!image) {
+        std::uint32_t argb = 0;
+        if(parseVirtualSolidImageName(name, argb)) {
+            image = createVirtualSolidImage(argb);
+            if(image && layerExTraceEnabled()) {
+                spdlog::info("layerExDraw: materialized virtual solid image '{}' as 0x{:08x}",
+                             ttstr(name).AsStdString(), argb);
+            }
+        }
+    }
+    traceLayerEx("loadImage", image, name ? ttstr(name).AsStdString().c_str() : "");
     return image;
 }
 
 RectFClass *getBounds(ImageClass *image) {
+    // libgdiplus reports an empty world-unit bound for the synthetic bitmap
+    // used by KAG's solid_*.emf/.wmf protocol on some platforms.  The vector
+    // source asks GetBounds before it calculates its affine destination, so
+    // an empty bound collapses all three destination points to the centre of
+    // the layer.  The bitmap is a one-pixel colour sample by definition, but
+    // its logical vector canvas is KAG's design canvas.  AffineSourceVector
+    // uses these bounds to calculate the destination quad, then samples the
+    // one-pixel bitmap across that quad.
+    if(image && image->IsVirtualSolid()) {
+        // The vector source is asked for its bounds while a KAG primary layer
+        // already exists.  Prefer the authored raster canvas attached to the
+        // live layer tree.  The backing stage layer can be taller than the
+        // actual design canvas (for example 2560x1920 backing a 2560x1440
+        // scene), and using that backing height shifts the affine quad down.
+        if(TVPMainWindow && TVPMainWindow->GetDrawDevice()) {
+            if(auto *primary = TVPMainWindow->GetDrawDevice()->GetPrimaryLayer()) {
+                const REAL primaryWidth =
+                    static_cast<REAL>(primary->GetWidth());
+                const REAL primaryHeight =
+                    static_cast<REAL>(primary->GetHeight());
+                tjs_int sourceWidth = 0;
+                tjs_int sourceHeight = 0;
+                TVPMainWindow->GetDrawDevice()->GetSrcSize(sourceWidth,
+                                                            sourceHeight);
+                const REAL preferredHeight =
+                    sourceWidth > 0 && sourceHeight > 0
+                        ? primaryWidth * static_cast<REAL>(sourceHeight) /
+                              static_cast<REAL>(sourceWidth)
+                        : primaryHeight;
+                REAL treeWidth = 0.0f;
+                REAL treeHeight = 0.0f;
+                REAL treeDistance = 0.0f;
+                if(primaryWidth > 0.0f && primaryHeight > 0.0f &&
+                   findVirtualCanvasInLayerTree(primary, primaryWidth,
+                                                primaryHeight, preferredHeight,
+                                                treeWidth, treeHeight,
+                                                treeDistance)) {
+                    if(layerExTraceEnabled()) {
+                        spdlog::info(
+                            "LayerExTrace virtual bounds from layer canvas={}x{} primary={}x{} preferredHeight={}",
+                            treeWidth, treeHeight, primaryWidth, primaryHeight,
+                            preferredHeight);
+                    }
+                    return virtualSolidBounds(treeWidth, treeHeight);
+                }
+            }
+        }
+
+        // Fall back to the most recent raster canvas observed by this plugin,
+        // then to the primary clip.  These paths cover engines which detach
+        // the stencil before querying the virtual source.
+        if(g_virtualCanvasWidth > 0.0f && g_virtualCanvasHeight > 0.0f) {
+            if(layerExTraceEnabled()) {
+                spdlog::info("LayerExTrace virtual bounds from raster canvas={}x{}",
+                             g_virtualCanvasWidth, g_virtualCanvasHeight);
+            }
+            return virtualSolidBounds(g_virtualCanvasWidth,
+                                      g_virtualCanvasHeight);
+        }
+        if(TVPMainWindow && TVPMainWindow->GetDrawDevice()) {
+            if(auto *primary = TVPMainWindow->GetDrawDevice()->GetPrimaryLayer()) {
+                const auto width = static_cast<REAL>(primary->GetClipWidth());
+                const auto height = static_cast<REAL>(primary->GetClipHeight());
+                if(width > 0.0f && height > 0.0f) {
+                    if(layerExTraceEnabled()) {
+                        spdlog::info("LayerExTrace virtual bounds from primary clip={}x{}",
+                                     width, height);
+                    }
+                    return virtualSolidBounds(width, height);
+                }
+            }
+        }
+        return virtualSolidBounds(1.0f, 1.0f);
+    }
+
     RectFClass srcRect;
     Unit srcUnit;
     image->GetBounds(&srcRect, &srcUnit);
@@ -2049,6 +2382,11 @@ RectFClass LayerExDraw::drawImageAffine(ImageClass *src, REAL sleft, REAL stop,
                                         REAL F) {
     RectFClass rect;
     if(src) {
+        traceLayerEx("drawImageAffine", src,
+                     fmt::format("target={}x{} affine={} srcRect=({},{} {}x{}) args=({},{}; {},{}; {},{})",
+                                 width, height, affine ? 1 : 0, sleft, stop,
+                                 swidth, sheight, A, B, C, D, E, F)
+                         .c_str());
         if(swidth == 0 || sheight == 0) {
             return rect;
         }
@@ -2057,16 +2395,24 @@ RectFClass LayerExDraw::drawImageAffine(ImageClass *src, REAL sleft, REAL stop,
         const REAL srcTop = bounds->Y;
         const REAL srcRight = bounds->X + bounds->Width;
         const REAL srcBottom = bounds->Y + bounds->Height;
+        const bool virtualSolid = src->IsVirtualSolid();
         delete bounds;
 
         const REAL reqLeft = sleft;
         const REAL reqTop = stop;
         const REAL reqRight = sleft + swidth;
         const REAL reqBottom = stop + sheight;
-        const REAL clipLeft = reqLeft < srcLeft ? srcLeft : reqLeft;
-        const REAL clipTop = reqTop < srcTop ? srcTop : reqTop;
-        const REAL clipRight = reqRight > srcRight ? srcRight : reqRight;
-        const REAL clipBottom = reqBottom > srcBottom ? srcBottom : reqBottom;
+        // A virtual solid is represented by a one-pixel bitmap.  Its source
+        // rectangle is a colour sample, not a finite image extent: clipping
+        // it to 1x1 would reduce a full-screen affine fill to a single pixel.
+        const REAL clipLeft = virtualSolid ? reqLeft :
+            (reqLeft < srcLeft ? srcLeft : reqLeft);
+        const REAL clipTop = virtualSolid ? reqTop :
+            (reqTop < srcTop ? srcTop : reqTop);
+        const REAL clipRight = virtualSolid ? reqRight :
+            (reqRight > srcRight ? srcRight : reqRight);
+        const REAL clipBottom = virtualSolid ? reqBottom :
+            (reqBottom > srcBottom ? srcBottom : reqBottom);
         if(clipRight <= clipLeft || clipBottom <= clipTop) {
             return rect;
         }
@@ -2115,12 +2461,36 @@ RectFClass LayerExDraw::drawImageAffine(ImageClass *src, REAL sleft, REAL stop,
         points[2].Y = points[0].Y + vy * clipHeight;
         points[3].X = points[1].X + vx * clipHeight;
         points[3].Y = points[1].Y + vy * clipHeight;
-        const REAL bitmapSourceLeft = clipLeft - srcLeft;
-        const REAL bitmapSourceTop = clipTop - srcTop;
-        GdipDrawImagePointsRect(this->graphics, static_cast<GpImage *>(*src),
-                                points, 3, bitmapSourceLeft, bitmapSourceTop,
-                                clipWidth, clipHeight, UnitPixel, nullptr,
-                                nullptr, nullptr);
+        const REAL bitmapSourceLeft = virtualSolid ? 0.0f :
+            (clipLeft - srcLeft);
+        const REAL bitmapSourceTop = virtualSolid ? 0.0f :
+            (clipTop - srcTop);
+        const REAL bitmapSourceWidth = virtualSolid ? 1.0f : clipWidth;
+        const REAL bitmapSourceHeight = virtualSolid ? 1.0f : clipHeight;
+        if(virtualSolid) {
+            // A 1x1 bitmap passed through GdipDrawImagePointsRect is not
+            // equivalent to a uniform vector fill on libgdiplus: the Cairo
+            // backend may split the destination quad into triangles and
+            // interpolate transparent samples at the diagonal.  The Windows
+            // metafile source is semantically a solid brush, so fill the
+            // affine quadrilateral directly and preserve its ARGB value.
+            GpSolidFill *solidFill = nullptr;
+            if(GdipCreateSolidFill(src->GetVirtualSolidColor(), &solidFill) ==
+                   Ok &&
+               solidFill) {
+                GpBrush *solidBrush = reinterpret_cast<GpBrush *>(solidFill);
+                const GpPointF polygon[4] = {
+                    points[0], points[1], points[3], points[2] };
+                GdipFillPolygon(this->graphics, solidBrush, polygon, 4,
+                                FillModeAlternate);
+                GdipDeleteBrush(solidBrush);
+            }
+        } else {
+            GdipDrawImagePointsRect(
+                this->graphics, static_cast<GpImage *>(*src), points, 3,
+                bitmapSourceLeft, bitmapSourceTop, bitmapSourceWidth,
+                bitmapSourceHeight, UnitPixel, nullptr, nullptr, nullptr);
+        }
         //        if (metaGraphics) {
         //
         //            GdipDrawImagePointsRect(this->metaGraphics,
@@ -2281,6 +2651,7 @@ ImageClass *LayerExDraw::getRecordImage() {
         ensureRecordSurface(width, height);
     }
     if(!recordBitmap) {
+        traceLayerEx("getRecordImage-empty", nullptr);
         return nullptr;
     }
     GpImage *cloned = nullptr;
@@ -2289,6 +2660,10 @@ ImageClass *LayerExDraw::getRecordImage() {
         return nullptr;
     }
     ImageClass *image = new ImageClass{ cloned, recordOriginX, recordOriginY };
+    traceLayerEx("getRecordImage", image,
+                 fmt::format("record={}x{} origin=({}, {})", recordWidth,
+                             recordHeight, recordOriginX, recordOriginY)
+                     .c_str());
     //    if (metafile) {
     // メタ情報を取得するには一度閉じる必要がある
     //        if (metaGraphics) {

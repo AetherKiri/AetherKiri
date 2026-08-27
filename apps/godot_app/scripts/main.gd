@@ -1572,9 +1572,12 @@ var home_search_queries := {"game": "", "video": ""}
 var home_search_syncing := false
 var home_filtered_game_count := 0
 var home_filtered_video_count := 0
-var show_perf_monitor := true
+# Keep the runtime viewport unobstructed by default.  Diagnostics continue to
+# collect according to the debug profile, while the floating performance
+# panel remains an explicit opt-in from Settings (or a legacy config value).
+var show_perf_monitor := false
 var diagnostic_profile := "baseline" if OS.is_debug_build() else "off"
-var debug_overlay_mode := "summary" if OS.is_debug_build() else "off"
+var debug_overlay_mode := "off"
 var lock_landscape := false
 var game_runtime_shell_orientation := DisplayServer.SCREEN_SENSOR
 var game_runtime_shell_screen_size := Vector2i.ZERO
@@ -3068,7 +3071,7 @@ func _load_shell_settings() -> void:
     var legacy_perf_overlay := bool(cfg.get_value("rendering", "perf_overlay", show_perf_monitor))
     debug_overlay_mode = String(cfg.get_value("diagnostics", "overlay_mode", "summary" if legacy_perf_overlay else "off"))
     if not debug_overlay_mode in DEBUG_OVERLAY_MODES:
-        debug_overlay_mode = "summary" if OS.is_debug_build() else "off"
+        debug_overlay_mode = "off"
     show_perf_monitor = debug_overlay_mode != "off"
     diagnostic_profile = String(cfg.get_value("diagnostics", "profile", diagnostic_profile))
     if not diagnostic_profile in DIAGNOSTIC_PROFILES:
@@ -3338,7 +3341,7 @@ func _apply_settings_snapshot(snapshot: Dictionary) -> void:
         diagnostic_profile = "baseline" if OS.is_debug_build() else "off"
     debug_overlay_mode = String(snapshot.get("debug_overlay_mode", debug_overlay_mode))
     if not debug_overlay_mode in DEBUG_OVERLAY_MODES:
-        debug_overlay_mode = "summary" if OS.is_debug_build() else "off"
+        debug_overlay_mode = "off"
     show_perf_monitor = debug_overlay_mode != "off"
     _set_perf_visible(game_running and show_perf_monitor)
     frame_limit_enabled = bool(snapshot.get("fps_limit_enabled", frame_limit_enabled))
@@ -6895,9 +6898,14 @@ func _detail_identity(game: Dictionary, compact: bool) -> VBoxContainer:
     return identity
 
 func _detail_launch_button() -> Button:
-    var start := _icon_action_button(ICON_PLAY, _t("detail.launch"), _start_selected_game, true, false, 52.0)
-    _reveal_icon_action_label_on_hover(start, _t("detail.launch"))
+    # Use the explicit content row here instead of Button.icon + Button.text.
+    # FlowContainer sizes a native Button from its text first, which can clip
+    # the icon when the action is laid out at its shrink-to-fit width.
+    var start := _pill_button(_t("detail.launch"), ICON_PLAY)
+    # Keep enough room for the longest localized label as well as the icon.
+    start.custom_minimum_size = Vector2(220, 52)
     start.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+    start.pressed.connect(_start_selected_game)
     start.button_down.connect(func(): _android_input_debug_log("detail launch button_down"))
     start.button_up.connect(func(): _android_input_debug_log("detail launch button_up"))
     start.pressed.connect(func(): _android_input_debug_log("detail launch pressed"))
@@ -11779,10 +11787,11 @@ func _probe_send_direct_click(pos: Vector2) -> void:
     player.send_pointer_event(POINTER_UP, 0, pos.x, pos.y, 0.0, 0.0, 0)
 
 func _probe_capture_image() -> Image:
+    var prefer_engine_frame := OS.get_environment("AETHERKIRI_PROBE_PREFER_ENGINE_FRAME") == "1"
     # In GPU-direct mode this is the texture the user actually sees. The CPU
     # compatibility frame can legitimately lag behind it, so consulting
     # read_frame_rgba() first would hide one-frame crop and layer corruption.
-    if viewport.texture != null:
+    if not prefer_engine_frame and viewport.texture != null:
         var direct_image := viewport.texture.get_image()
         if direct_image != null and direct_image.get_width() > 0 and direct_image.get_height() > 0:
             if int(_image_stats(direct_image).get("visible", 0)) > 0:

@@ -38,6 +38,7 @@
 #include "GraphicsLoadThread.h"
 #include <complex>
 #include <list>
+#include <vector>
 #include <chrono>
 #include <spdlog/spdlog.h>
 
@@ -45,6 +46,9 @@
 
 namespace {
 thread_local ttstr TVPCurrentGraphicLoadName;
+std::mutex TVPVirtualGraphicProviderMutex;
+std::vector<tTVPVirtualGraphicProvider> TVPVirtualGraphicProviders;
+thread_local unsigned int TVPVirtualGraphicProviderDepth = 0;
 
 class TVPScopedGraphicLoadName {
 public:
@@ -71,6 +75,41 @@ bool TVPSaveTraceEnabled() {
     return enabled;
 }
 
+// Opt-in diagnostics for virtual TLG resources.  The router is the first
+// point where the resolved storage name and the actual stream bytes are both
+// available, so this covers header probes as well as full decodes.
+bool TVPTLGHeaderTraceEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_TLG_HEADER_TRACE");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+
+void TVPTraceTLGHeader(const char *stage, const ttstr &name,
+                       tTJSBinaryStream *src) {
+    if(!TVPTLGHeaderTraceEnabled() || !src)
+        return;
+    const tjs_uint64 position = src->GetPosition();
+    const tjs_uint64 size = src->GetSize();
+    unsigned char bytes[32] = {};
+    const tjs_uint read = src->Read(bytes, sizeof(bytes));
+    src->SetPosition(position);
+    char hex[sizeof(bytes) * 2 + 1] = {};
+    size_t out = 0;
+    for(tjs_uint i = 0; i < read && out + 2 < sizeof(hex); ++i) {
+        const int written = std::snprintf(hex + out, sizeof(hex) - out,
+                                          "%02x", bytes[i]);
+        if(written <= 0)
+            break;
+        out += static_cast<size_t>(written);
+    }
+    spdlog::info("TLGHeaderTrace stage={} name={} size={} pos={} head={}",
+                 stage ? stage : "?", name.AsStdString(),
+                 static_cast<unsigned long long>(size),
+                 static_cast<unsigned long long>(position), hex);
+}
+
 bool TVPImageLoadTraceEnabled() {
     static const bool enabled = [] {
         const char *image_trace = std::getenv("AETHERKIRI_IMAGE_LOAD_TRACE");
@@ -82,6 +121,59 @@ bool TVPImageLoadTraceEnabled() {
     return enabled;
 }
 } // namespace
+
+ttstr TVPGetCurrentGraphicLoadName() { return TVPCurrentGraphicLoadName; }
+
+void TVPRegisterVirtualGraphicProvider(tTVPVirtualGraphicProvider provider) {
+    if(!provider)
+        return;
+    std::lock_guard<std::mutex> lock(TVPVirtualGraphicProviderMutex);
+    if(std::find(TVPVirtualGraphicProviders.begin(),
+                 TVPVirtualGraphicProviders.end(), provider) ==
+       TVPVirtualGraphicProviders.end())
+        TVPVirtualGraphicProviders.push_back(provider);
+}
+
+void TVPUnregisterVirtualGraphicProvider(tTVPVirtualGraphicProvider provider) {
+    if(!provider)
+        return;
+    std::lock_guard<std::mutex> lock(TVPVirtualGraphicProviderMutex);
+    TVPVirtualGraphicProviders.erase(
+        std::remove(TVPVirtualGraphicProviders.begin(),
+                    TVPVirtualGraphicProviders.end(), provider),
+        TVPVirtualGraphicProviders.end());
+}
+
+bool TVPProvideVirtualGraphic(const ttstr &requested,
+                              iTVPBaseBitmap *destination) {
+    if(requested.IsEmpty() || !destination ||
+       TVPVirtualGraphicProviderDepth != 0)
+        return false;
+
+    std::vector<tTVPVirtualGraphicProvider> providers;
+    {
+        std::lock_guard<std::mutex> lock(TVPVirtualGraphicProviderMutex);
+        providers = TVPVirtualGraphicProviders;
+    }
+
+    ++TVPVirtualGraphicProviderDepth;
+    for(const auto provider : providers) {
+        if(!provider)
+            continue;
+        bool handled = false;
+        try {
+            handled = provider(requested, destination);
+        } catch(...) {
+            handled = false;
+        }
+        if(handled) {
+            --TVPVirtualGraphicProviderDepth;
+            return true;
+        }
+    }
+    --TVPVirtualGraphicProviderDepth;
+    return false;
+}
 
 void TVPLoadPVRv3(void *formatdata, void *callbackdata,
                   tTVPGraphicSizeCallback sizecallback,
@@ -100,6 +192,7 @@ static void TVPLoadGraphicRouter(void *formatdata, void *callbackdata,
                                  tTVPMetaInfoPushCallback metainfopushcallback,
                                  tTJSBinaryStream *src, tjs_int keyidx,
                                  tTVPGraphicLoadMode mode) {
+    TVPTraceTLGHeader("router", TVPCurrentGraphicLoadName, src);
     uint8_t header[16] = {};
     tjs_uint64 origSrcPos = src->GetPosition();
     if(src->Read(header, sizeof(header)) == sizeof(header)) {
@@ -120,6 +213,7 @@ static void TVPLoadGraphicRouter(void *formatdata, void *callbackdata,
             return CALL_LOAD_FUNC(TVPLoadPNG);
         }
         if(!memcmp(header, "TLG", 3)) {
+            TVPTraceTLGHeader("load", TVPCurrentGraphicLoadName, src);
             return CALL_LOAD_FUNC(TVPLoadTLG);
         }
         if(!memcmp(header, "\xFF\xD8\xFF", 3) && header[3] >= 0xE0 &&
@@ -155,6 +249,7 @@ static void TVPLoadGraphicRouter(void *formatdata, void *callbackdata,
 
 static void TVPLoadHeaderRouter(void *formatdata, tTJSBinaryStream *src,
                                 iTJSDispatch2 **dic) {
+    TVPTraceTLGHeader("header-router", TVPCurrentGraphicLoadName, src);
     uint8_t header[16];
     tjs_uint64 origSrcPos = src->GetPosition();
     if(src->Read(header, sizeof(header)) == sizeof(header)) {
@@ -167,6 +262,7 @@ static void TVPLoadHeaderRouter(void *formatdata, tTJSBinaryStream *src,
             return CALL_LOAD_FUNC(TVPLoadHeaderPNG);
         }
         if(!memcmp(header, "TLG", 3)) {
+            TVPTraceTLGHeader("header", TVPCurrentGraphicLoadName, src);
             return CALL_LOAD_FUNC(TVPLoadHeaderTLG);
         }
         if(!memcmp(header, "\xFF\xD8\xFF", 3) && header[3] >= 0xE0 &&
@@ -420,6 +516,21 @@ void TVPLoadImageHeader(const ttstr &storagename, iTJSDispatch2 **dic) {
 //---------------------------------------------------------------------------
 void TVPGetImageSize(const ttstr &storagename, tjs_int &width,
                      tjs_int &height) {
+    // AffineSourceVector uses a virtual one-pixel colour source for
+    // solid_<colour>.emf/.wmf.  There is no archive header to probe, but the
+    // source is still a valid image for the KAG size/affine setup path.
+    // Returning its logical sample size keeps the caller's affine transform
+    // responsible for stretching it to the requested layer rectangle.
+    if(TVPIsVirtualSolidVectorStorage(storagename)) {
+        if(const char *trace = std::getenv("AETHERKIRI_VIRTUAL_SIZE_TRACE");
+           trace && *trace && *trace != '0') {
+            spdlog::info("VirtualSizeTrace virtual name={} -> 1x1",
+                         storagename.AsStdString());
+        }
+        width = 1;
+        height = 1;
+        return;
+    }
     iTJSDispatch2 *dic = nullptr;
     try {
         TVPLoadImageHeader(storagename, &dic);

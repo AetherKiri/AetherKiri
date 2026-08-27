@@ -336,9 +336,11 @@ namespace libgdiplus {
     class ImageClass {
     public:
         ImageClass(GpImage *gpImage, float boundsOffsetX = 0.0f,
-                   float boundsOffsetY = 0.0f) :
+                   float boundsOffsetY = 0.0f, bool virtualSolid = false,
+                   ARGB virtualSolidColor = 0) :
             _gpImage(gpImage), _boundsOffsetX(boundsOffsetX),
-            _boundsOffsetY(boundsOffsetY) {}
+            _boundsOffsetY(boundsOffsetY), _virtualSolid(virtualSolid),
+            _virtualSolidColor(virtualSolidColor) {}
 
         static ImageClass *FromFile(const WCHAR *filename,
                                     bool useEmbeddedColorManagement) {
@@ -411,10 +413,26 @@ namespace libgdiplus {
             return w;
         }
 
+        // KAG's layerex_draw bridge can synthesize a one-pixel solid source
+        // for virtual EMF/WMF names (for example solid_black.emf).  Such a
+        // source is intentionally sampled as a tile over the caller's
+        // requested source rectangle, rather than clipped to its 1x1 bounds.
+        [[nodiscard]] bool IsVirtualSolid() const { return _virtualSolid; }
+
+        // The synthetic source is a one-pixel image, but retaining its ARGB
+        // value lets the affine bridge fill a destination polygon directly.
+        // libgdiplus' image-points path can triangulate a 1x1 source
+        // inconsistently on macOS, producing the diagonal bars seen in KAG
+        // transition/dialogue overlays.
+        [[nodiscard]] ARGB GetVirtualSolidColor() const {
+            return _virtualSolidColor;
+        }
+
         [[nodiscard]] ImageClass *Clone() const {
             GpImage *image{ nullptr };
             this->_gpStatus = GdipCloneImage(this->_gpImage, &image);
-            return new ImageClass{ image, _boundsOffsetX, _boundsOffsetY };
+            return new ImageClass{ image, _boundsOffsetX, _boundsOffsetY,
+                                   _virtualSolid, _virtualSolidColor };
         }
 
         [[nodiscard]] explicit operator GpImage *() const {
@@ -433,6 +451,8 @@ namespace libgdiplus {
         GpImage *_gpImage{ nullptr };
         float _boundsOffsetX{ 0.0f };
         float _boundsOffsetY{ 0.0f };
+        bool _virtualSolid{ false };
+        ARGB _virtualSolidColor{ 0 };
         mutable GpStatus _gpStatus;
     };
 
