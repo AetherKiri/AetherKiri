@@ -61,6 +61,11 @@ public:
     // for internal
     void CopyFrom(const class iTVPBaseBitmap *src);
     virtual void SetLoading(bool load) { Loading = load; }
+    // Called by the async image loader after the decoded bitmap has been
+    // installed.  Native users that create a temporary bitmap can override
+    // this to publish the result without going through a script onLoaded
+    // callback.  The default keeps the existing Bitmap behavior unchanged.
+    virtual void OnAsyncImageLoaded(bool success) { (void)success; }
 };
 
 class tTJSNC_Bitmap : public tTJSNativeClass {

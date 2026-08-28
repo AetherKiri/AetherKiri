@@ -241,7 +241,9 @@ bool IsGpuRectFastPathEnabled(const char *name) {
                std::strcmp(name, "PsScreenBlend") == 0 ||
                std::strcmp(name, "PsMulBlend") == 0 ||
                std::strcmp(name, "PsSoftLightBlend") == 0 ||
-               std::strcmp(name, "BoxBlurAlpha") == 0;
+               std::strcmp(name, "BoxBlurAlpha") == 0 ||
+               std::strcmp(name, "AlphaToAdditiveAlpha") == 0 ||
+               std::strcmp(name, "AdditiveAlphaToAlpha") == 0;
     };
     static const std::string setting = []() {
         const char *value = std::getenv("AETHERKIRI_GODOT_GPU_RECT_FASTPATH");
@@ -1027,7 +1029,9 @@ bool GodotTexture2D::BlendGpuFrom(GodotTexture2D *src, const tTVPRect &dst_rc,
     if (src == this &&
         mode != TVP_GODOT_GPU_BLEND_REMOVE_CONST_OPACITY &&
         mode != TVP_GODOT_GPU_BLEND_FILL_MASK &&
-        mode != TVP_GODOT_GPU_BLEND_BOX_BLUR_ALPHA) {
+        mode != TVP_GODOT_GPU_BLEND_BOX_BLUR_ALPHA &&
+        mode != TVP_GODOT_GPU_BLEND_ALPHA_TO_ADDITIVE_ALPHA &&
+        mode != TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA_TO_ALPHA) {
         return false;
     }
     const auto *bridge = TVPGodotGpuBridgeGet();
@@ -1360,6 +1364,29 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
             godot_method != nullptr ? godot_method->AreaTop() : 0,
             godot_method != nullptr ? godot_method->AreaRight() : 0,
             godot_method != nullptr ? godot_method->AreaBottom() : 0);
+    }
+
+    // Alpha representation changes are self-operations.  The old delegate
+    // path reads the whole texture back to the CPU, converts every pixel,
+    // then uploads it again.  Conversion is per-pixel and alias-safe, so keep
+    // the texture on the ordered GPU queue instead.  GetTextureForRender()
+    // has already detached a copy-on-write target when the bitmap was shared;
+    // UploadCpuToGpu() only does work for the rare CPU-created fallback copy.
+    if ((method_name == "AlphaToAdditiveAlpha" ||
+         method_name == "AdditiveAlphaToAlpha") &&
+        textures.size() == 0 && dst != nullptr &&
+        IsGpuRectFastPathEnabled(method_name.c_str()) &&
+        RectBoundsInsideTexture(rctar, dst) &&
+        dst->EnsureGpuHandle() &&
+        dst->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
+        dst->BlendGpuFrom(
+            dst, rctar, rctar,
+            method_name == "AlphaToAdditiveAlpha"
+                ? TVP_GODOT_GPU_BLEND_ALPHA_TO_ADDITIVE_ALPHA
+                : TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA_TO_ALPHA,
+            255, 0)) {
+        CountGpuFastPath(method_name);
+        return;
     }
 
     // BoxBlurAlpha used to fall through to the software delegate. On a

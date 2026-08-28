@@ -1,0 +1,24 @@
+{
+  "name": "drciot_continue_60_click_probe_local",
+  "game_path": "/Users/liuyu/gal/drciot",
+  "backend": "Godot Native",
+  "surface_size": [2560, 1440],
+  "window_size": [1600, 900],
+  "coord_size": [1600, 900],
+  "startup_timeout_frames": 2400,
+  "warmup_frames": 30,
+  "after_click_frames": 60,
+  "measure_frames": 120,
+  "runtime_debug": true,
+  "actions": [
+    {"type": "click", "label": "accept_warning", "x": 800, "y": 450, "after_frames": 30},
+    {"type": "wait", "label": "title_logo_1", "after_frames": 90},
+    {"type": "wait", "label": "title_logo_2", "after_frames": 90},
+    {"type": "wait", "label": "title_logo_3", "after_frames": 90},
+    {"type": "wait", "label": "title_logo_4", "after_frames": 90},
+    {"type": "wait", "label": "title_menu", "after_frames": 600},
+    {"type": "click", "label": "continue_game", "x": 1200, "y": 480, "after_frames": 600},
+    {"type": "wait", "label": "continue_game_loaded", "after_frames": 180},
+    {"type": "click_stream", "label": "continue_game_60_clicks", "x": 900, "y": 750, "frames": 780, "click_every_frames": 12, "max_clicks": 60, "sample_interval_ms": 1000, "spike_ms": 20.0, "capture_final": true, "deferred_capture_every": 0}
+  ]
+}

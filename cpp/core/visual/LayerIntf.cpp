@@ -40,6 +40,7 @@
 #include "LayerBitmapIntf.h"
 #include "LayerTreeOwner.h"
 #include "GraphicsLoaderIntf.h"
+#include "Application.h"
 #include "StorageIntf.h"
 #include "ScriptMgnIntf.h"
 #include "tvpgl.h"
@@ -120,6 +121,83 @@ namespace {
             ? parsed
             : 5.0;
     }
+
+    // TLG backgrounds and character sheets in the affected flow are commonly
+    // 2560x1440 and take roughly 190 ms to decode on the main thread.  The
+    // existing async image loader already has a worker and cache integration,
+    // so defer only full-color TLGs with the normal color key. Other formats
+    // and keyed/province loads retain the synchronous semantics required by
+    // scripts. This remains opt-in because a few legacy scripts expect the
+    // image to be available synchronously during the same tag callback.
+    inline bool TVPAsyncLargeImageLoadEnabled() {
+        const char *value = std::getenv("AETHERKIRI_ASYNC_LARGE_IMAGE_LOAD");
+        return value && *value && *value != '0';
+    }
+
+    inline bool TVPShouldDeferLargeTLG(const ttstr &name, tjs_uint32 colorkey,
+                                       tjs_uint &width, tjs_uint &height) {
+        if(!TVPAsyncLargeImageLoadEnabled() || colorkey != TVP_clNone)
+            return false;
+
+        ttstr ext = TVPExtractStorageExt(name);
+        ext.ToLowerCase();
+        if(ext != TJS_W(".tlg"))
+            return false;
+
+        try {
+            tjs_int header_width = 0;
+            tjs_int header_height = 0;
+            TVPGetImageSize(name, header_width, header_height);
+            if(header_width <= 0 || header_height <= 0)
+                return false;
+            width = static_cast<tjs_uint>(header_width);
+            height = static_cast<tjs_uint>(header_height);
+            constexpr uint64_t kLargeImagePixels = 1920ULL * 1080ULL;
+            return static_cast<uint64_t>(width) * height >= kLargeImagePixels;
+        } catch(...) {
+            // Header probing is an optimization only. If a virtual/pack-backed
+            // source cannot expose a header, use the established loader.
+            return false;
+        }
+    }
+
+    class TVPLayerDeferredBitmap final : public tTJSNI_Bitmap {
+        using inherit = tTJSNI_Bitmap;
+
+        tTJSNI_BaseLayer *layer_ = nullptr;
+        std::weak_ptr<unsigned char> token_;
+        ttstr name_;
+        tjs_uint32 colorkey_ = TVP_clNone;
+        tjs_uint64 generation_ = 0;
+
+    public:
+        TVPLayerDeferredBitmap(
+            tTJSNI_BaseLayer *layer,
+            const std::shared_ptr<unsigned char> &token,
+            const ttstr &name, tjs_uint32 colorkey, tjs_uint64 generation)
+            : layer_(layer), token_(token), name_(name), colorkey_(colorkey),
+              generation_(generation) {
+            Construct(0, nullptr, nullptr);
+        }
+
+        void OnAsyncImageLoaded(bool success) override {
+            if(auto token = token_.lock()) {
+                (void)token;
+                layer_->CompleteDeferredImageLoad(
+                    name_, colorkey_, generation_, GetBitmap(), success);
+            }
+
+            // The async loader owns only a raw pointer. Delay destruction until
+            // the current event has unwound so its command can finish touching
+            // the bitmap on both cache-hit and worker-completion paths.
+            if(::Application) {
+                ::Application->PostUserMessage([this]() {
+                    Invalidate();
+                    Destruct();
+                });
+            }
+        }
+    };
 }
 
 //---------------------------------------------------------------------------
@@ -3373,6 +3451,7 @@ tTJSNI_BaseLayer::tTJSNI_BaseLayer() {
 
     // image buffer management
     MainImage = nullptr;
+    DeferredImageLoadToken = std::make_shared<unsigned char>(0);
     CanHaveImage = true;
     ProvinceImage = nullptr;
     ImageLeft = 0;
@@ -3431,6 +3510,7 @@ tTJSNI_BaseLayer::tTJSNI_BaseLayer() {
 
 //---------------------------------------------------------------------------
 tTJSNI_BaseLayer::~tTJSNI_BaseLayer() {
+    DeferredImageLoadToken.reset();
     TVPLayerInstanceCount.fetch_sub(1, std::memory_order_relaxed);
     tTVPTempBitmapHolder::Release();
 }
@@ -3538,6 +3618,9 @@ void tTJSNI_BaseLayer::Invalidate() {
                  static_cast<void *>(Manager), IsPrimary() ? "yes" : "no");
 #endif
     Shutdown = true;
+    ++DeferredImageLoadGeneration;
+    DeferredImageLoadName.Clear();
+    DeferredImageLoadToken.reset();
 
     // stop transition
     StopTransition();
@@ -6109,6 +6192,30 @@ void tTJSNI_BaseLayer::AssignMainImageWithUpdate(iTVPBaseBitmap *bmp) {
     TVPTraceStage2Lifecycle("assign-main-after", this);
 }
 
+void tTJSNI_BaseLayer::CompleteDeferredImageLoad(
+    const ttstr &name, tjs_uint32 colorkey, tjs_uint64 generation,
+    tTVPBaseBitmap *bitmap, bool success) {
+    if(Shutdown || generation != DeferredImageLoadGeneration ||
+       name != DeferredImageLoadName || colorkey != DeferredImageLoadColorKey) {
+        return;
+    }
+
+    DeferredImageLoadName.Clear();
+    if(!success || !bitmap || !MainImage)
+        return;
+
+    // The deferred path is restricted to clNone, so there is no color-key or
+    // province work to replay here. Normalize additive layers before copying
+    // into the display texture so the update is published only once.
+    if(!TVPDisableAutomaticAlphaNormalization() && DrawFace == dfAddAlpha)
+        bitmap->ConvertAlphaToAddAlpha();
+
+    DeallocateProvinceImage();
+    _evictedImageName = name;
+    _evictedColorKey = colorkey;
+    AssignMainImageWithUpdate(bitmap);
+}
+
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::AssignMainImage(iTVPBaseBitmap *bmp) {
     // assign single main bitmap image. the image size assigned must
@@ -6543,6 +6650,56 @@ iTJSDispatch2 *tTJSNI_BaseLayer::LoadImages(const ttstr &name,
                            &provincename, &metainfo);
         }
     };
+
+    tjs_uint deferred_width = 0;
+    tjs_uint deferred_height = 0;
+    if(Application &&
+       TVPShouldDeferLargeTLG(load_name, colorkey, deferred_width,
+                              deferred_height)) {
+        // A script can issue the same load more than once while a scene is
+        // settling. Keep one worker request for that name instead of queuing
+        // another full TLG decode.
+        if(load_name == DeferredImageLoadName &&
+           colorkey == DeferredImageLoadColorKey) {
+            return nullptr;
+        }
+
+        const tjs_uint64 generation = ++DeferredImageLoadGeneration;
+        DeferredImageLoadName = load_name;
+        DeferredImageLoadColorKey = colorkey;
+
+        // Preserve the authored image dimensions immediately. If the layer
+        // already contains a frame this keeps it visible; a newly-created
+        // layer receives a correctly-sized neutral canvas until decoding
+        // completes on the worker.
+        ChangeImageSize(deferred_width, deferred_height);
+        auto *async_bitmap = new TVPLayerDeferredBitmap(
+            this, DeferredImageLoadToken, load_name, colorkey, generation);
+        try {
+            Application->LoadImageRequest(nullptr, async_bitmap, load_name);
+            if(const char *trace =
+                   std::getenv("AETHERKIRI_ASYNC_LARGE_IMAGE_LOAD_TRACE");
+               trace && *trace && *trace != '0') {
+                spdlog::info(
+                    "Layer.loadImages deferred large TLG name={} layer={} "
+                    "size={}x{} generation={}",
+                    load_name.AsStdString(), GetName().AsStdString(),
+                    static_cast<unsigned>(deferred_width),
+                    static_cast<unsigned>(deferred_height), generation);
+            }
+            return nullptr;
+        } catch(...) {
+            // Async loading is an optimization only. Restore the pending
+            // state and use the original synchronous path if a storage or
+            // loader rejects the request.
+            if(generation == DeferredImageLoadGeneration) {
+                DeferredImageLoadName.Clear();
+                ++DeferredImageLoadGeneration;
+            }
+            async_bitmap->Invalidate();
+            async_bitmap->Destruct();
+        }
+    }
 
     try {
         load_graphic(load_name);
