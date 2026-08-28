@@ -89,7 +89,7 @@ stage_vcpkg_runtime_libraries() {
     # not appear in engine_api's direct DT_NEEDED list. Stage their vcpkg
     # runtime libraries explicitly so the bundled application is self-contained.
     find "$runtime_dir" -maxdepth 1 -type f \
-        \( -name 'libSDL2*.so*' -o -name 'liblua.so*' \) \
+        \( -name 'libSDL2*.so*' -o -name 'liblua.so*' -o -name 'libwavpack.so*' \) \
         -exec cp -Lf {} "$GODOT_BIN_DIR/" \;
 }
 

@@ -1084,6 +1084,9 @@ jobs:
     runs-on: windows-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+      # The private Artemis runtime currently has a Windows-only source
+      # incompatibility; build the public runtime on this platform instead.
+      AETHERKIRI_ENABLE_INTERNAL: 'false'
       VCPKG_DOWNLOADS: ${{ github.workspace }}/.devtools/vcpkg/downloads
       GODOT_RELEASE: 4.7-stable
       GODOT_TEMPLATE_VERSION: 4.7.stable
