@@ -38,6 +38,11 @@ elseif(IOS)
 else()
     target_compile_definitions(engine_api PRIVATE ENGINE_API_BUILD_SHARED)
 endif()
+
+if(WIN32)
+    find_package(LibLZMA CONFIG REQUIRED)
+    target_link_libraries(engine_api PRIVATE LibLZMA::LibLZMA)
+endif()
 target_include_directories(engine_api
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
