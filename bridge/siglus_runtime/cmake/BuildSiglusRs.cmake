@@ -47,6 +47,15 @@ function(aetherkiri_deduce_rust_target out_triple)
         endif()
         return()
     endif()
+    if(APPLE)
+        if(CMAKE_OSX_ARCHITECTURES MATCHES "x86_64")
+            set(${out_triple} "x86_64-apple-darwin" PARENT_SCOPE)
+            return()
+        elseif(CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
+            set(${out_triple} "aarch64-apple-darwin" PARENT_SCOPE)
+            return()
+        endif()
+    endif()
     # Native desktop builds follow the toolchain's host triple.
     execute_process(
         COMMAND "${RUSTC_EXECUTABLE}" -vV
@@ -250,13 +259,14 @@ function(aetherkiri_add_siglus_rs imported_target)
     # archive, instead of teaching every consumer about Rust's link surface.
     if(APPLE)
         if(IOS)
-            list(APPEND SIGLUS_APPLE_FRAMEWORKS UIKit)
+            list(APPEND SIGLUS_APPLE_FRAMEWORKS
+                UIKit Foundation Metal QuartzCore Security
+                CoreGraphics CoreAudio AudioToolbox)
         else()
-            list(APPEND SIGLUS_APPLE_FRAMEWORKS AppKit)
+            list(APPEND SIGLUS_APPLE_FRAMEWORKS
+                AppKit Foundation Metal QuartzCore IOKit Security
+                CoreGraphics CoreAudio AudioToolbox AudioUnit)
         endif()
-        list(APPEND SIGLUS_APPLE_FRAMEWORKS
-            Foundation Metal QuartzCore IOKit Security
-            CoreGraphics CoreAudio AudioToolbox AudioUnit)
         set(siglus_framework_flags "")
         foreach(framework IN LISTS SIGLUS_APPLE_FRAMEWORKS)
             list(APPEND siglus_framework_flags

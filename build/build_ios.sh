@@ -299,6 +299,16 @@ combine_ios_static_extension() {
         "$CMAKE_BUILD_DIR/cpp/external/libbpg/liblibbpg.a"
     )
 
+    local siglus_runtime_lib="$CMAKE_BUILD_DIR/bridge/siglus_runtime/libaether_siglus_runtime.a"
+    if [[ -f "$siglus_runtime_lib" ]]; then
+        libs+=("$siglus_runtime_lib")
+    fi
+    while IFS= read -r siglus_vm_lib; do
+        if [[ -n "$siglus_vm_lib" && -f "$siglus_vm_lib" ]]; then
+            libs+=("$siglus_vm_lib")
+        fi
+    done < <(find "$CMAKE_BUILD_DIR/siglus-rs-target" -name 'libsiglus_scene_vm.a' 2>/dev/null || true)
+
     if [[ "$triplet" == "x64-ios-simulator" ]]; then
         godot_cpp_arch="x86_64"
         cubism_core_lib="$cubism_package_root/third_party/cubism/Core/lib/ios/Release-iphonesimulator-x86_64/libLive2DCubismCore.a"
@@ -439,7 +449,7 @@ patch_ios_export_project() {
     for archive in "${FORCE_LOAD_PLUGIN_ARCHIVES[@]}"; do
         flags+=" -Wl,-force_load,Aether/bin/ios/$export_build_type/$archive"
     done
-    flags+=' -framework AudioToolbox -framework AVFoundation -framework CoreBluetooth -framework CoreHaptics -framework CoreMedia -framework CoreMotion -framework CoreVideo -framework GameController -framework VideoToolbox -framework CoreGraphics -framework QuartzCore -framework Metal -framework MetalKit -framework OpenGLES -framework Security -framework StoreKit -framework SystemConfiguration -framework MobileCoreServices'
+    flags+=' -framework AudioToolbox -framework AVFoundation -framework CoreAudio -framework CoreBluetooth -framework CoreHaptics -framework CoreMedia -framework CoreMotion -framework CoreVideo -framework GameController -framework VideoToolbox -framework CoreGraphics -framework QuartzCore -framework Metal -framework MetalKit -framework OpenGLES -framework Security -framework StoreKit -framework SystemConfiguration -framework MobileCoreServices'
 
     if [[ -f "$project_file" ]]; then
         FLAGS="$flags" perl -0pi -e 's/OTHER_LDFLAGS = "[^"]*";/"OTHER_LDFLAGS = \"" . $ENV{FLAGS} . "\";"/eg' "$project_file"
