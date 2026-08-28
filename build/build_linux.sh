@@ -84,6 +84,13 @@ stage_vcpkg_runtime_libraries() {
                 $2 == "=>" && index($3, runtime_dir) == 1 { print $3 }
             ' | sort -u
     )
+
+    # SDL extension modules and Lua are loaded through plugin targets and may
+    # not appear in engine_api's direct DT_NEEDED list. Stage their vcpkg
+    # runtime libraries explicitly so the bundled application is self-contained.
+    find "$runtime_dir" -maxdepth 1 -type f \
+        \( -name 'libSDL2*.so*' -o -name 'liblua.so*' \) \
+        -exec cp -Lf {} "$GODOT_BIN_DIR/" \;
 }
 
 verify_linux_libraries() {

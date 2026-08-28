@@ -16,6 +16,7 @@ add_compile_definitions(
         # beta-access grant before the runtime can open a game.
         AETHERKIRI_ENABLE_ARTEMIS_RUNTIME
         $<$<NOT:$<CONFIG:Debug>>:NDEBUG>
+        $<$<PLATFORM_ID:Windows>:NOMINMAX>
 )
 
 # Detect Android build: Gradle may set CMAKE_SYSTEM_NAME=Android or VCPKG_TARGET_ANDROID=ON
