@@ -260,7 +260,7 @@ function(aetherkiri_add_siglus_rs imported_target)
         set(siglus_framework_flags "")
         foreach(framework IN LISTS SIGLUS_APPLE_FRAMEWORKS)
             list(APPEND siglus_framework_flags
-                "-framework" "${framework}")
+                "-framework ${framework}")
         endforeach()
         set_property(TARGET ${imported_target} APPEND PROPERTY
             INTERFACE_LINK_LIBRARIES "${siglus_framework_flags}")
