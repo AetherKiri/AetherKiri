@@ -1521,6 +1521,7 @@ var detail_view: Control
 var detail_scroll: ScrollContainer
 var game_view: Control
 var game_virtual_controls
+var game_virtual_input_mode := GameVirtualControls.INPUT_MODE_MOUSE
 var modal_layer: Control
 var active_modal_scrim: ColorRect
 var active_modal_dialog: Control
@@ -2211,6 +2212,7 @@ func _build_ui() -> void:
     game_virtual_controls = GameVirtualControls.new()
     add_child(game_virtual_controls)
     game_virtual_controls.setup(ui_tokens)
+    game_virtual_controls.set_input_mode(game_virtual_input_mode)
     game_virtual_controls.key_event_requested.connect(
         _on_game_virtual_key_event
     )
@@ -2228,6 +2230,9 @@ func _build_ui() -> void:
     )
     game_virtual_controls.virtual_controls_requested.connect(
         _on_game_virtual_controls_requested
+    )
+    game_virtual_controls.input_mode_changed.connect(
+        _on_game_virtual_input_mode_changed
     )
 
     _build_video_view()
@@ -3108,6 +3113,9 @@ func _load_shell_settings() -> void:
     var orientation_schema := int(cfg.get_value("rendering", "orientation_schema", 0))
     if _mobile_runtime() and orientation_schema < MOBILE_ORIENTATION_SCHEMA_VERSION:
         lock_landscape = false
+    game_virtual_input_mode = _normalize_game_virtual_input_mode(String(
+        cfg.get_value("input", "virtual_control_mode", game_virtual_input_mode)
+    ))
     plugin_load_mode = String(cfg.get_value("developer", "plugin_load_mode", plugin_load_mode))
     if not plugin_load_mode in ["krkrsdl3", "aether_all"]:
         plugin_load_mode = "krkrsdl3"
@@ -3142,6 +3150,13 @@ func _normalize_backend_name(value: String) -> String:
         return "Godot Native"
     return backend_name
 
+func _normalize_game_virtual_input_mode(value: String) -> String:
+    return (
+        value
+        if value in GameVirtualControls.INPUT_MODES
+        else GameVirtualControls.INPUT_MODE_MOUSE
+    )
+
 func _save_shell_settings() -> void:
     var cfg := ConfigFile.new()
     cfg.set_value("interface", "language", language_mode)
@@ -3164,6 +3179,7 @@ func _save_shell_settings() -> void:
     cfg.set_value("rendering", "target_fps", target_fps)
     cfg.set_value("rendering", "force_landscape", lock_landscape)
     cfg.set_value("rendering", "orientation_schema", MOBILE_ORIENTATION_SCHEMA_VERSION)
+    cfg.set_value("input", "virtual_control_mode", game_virtual_input_mode)
     cfg.set_value("developer", "plugin_load_mode", plugin_load_mode)
     cfg.set_value("developer", "mock_enabled", mock_enabled)
     cfg.set_value("developer", "error_dialog_logs", error_dialog_logs)
@@ -3184,6 +3200,12 @@ func _save_shell_settings() -> void:
     if save_button != null:
         save_button.disabled = true
         _sync_pill_button_content_state(save_button)
+
+func _save_game_virtual_input_mode() -> void:
+    var cfg := ConfigFile.new()
+    cfg.load(SETTINGS_FILE)
+    cfg.set_value("input", "virtual_control_mode", game_virtual_input_mode)
+    cfg.save(SETTINGS_FILE)
 
 func _current_settings_snapshot() -> Dictionary:
     return {
@@ -13971,6 +13993,12 @@ func _handle_shell_scroll_input(event: InputEvent) -> bool:
     return false
 
 func _on_viewport_input(event: InputEvent) -> void:
+    if (
+        game_virtual_controls != null
+        and game_virtual_controls.routes_pointer(event)
+    ):
+        get_viewport().set_input_as_handled()
+        return
     if not _can_forward_game_input():
         if _is_game_pointer_event(event):
             if _is_game_input_busy():
@@ -14124,6 +14152,10 @@ func _on_game_virtual_keyboard_requested() -> void:
 func _on_game_virtual_controls_requested() -> void:
     if game_text_input_active or game_text_input_forced:
         _deactivate_game_text_input()
+
+func _on_game_virtual_input_mode_changed(mode: String) -> void:
+    game_virtual_input_mode = _normalize_game_virtual_input_mode(mode)
+    _save_game_virtual_input_mode()
 
 func _can_forward_virtual_controls_input() -> bool:
     return (

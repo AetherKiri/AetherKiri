@@ -9,6 +9,7 @@ var _pointer_buttons: Array[Dictionary] = []
 var _scroll_events: Array[Dictionary] = []
 var _keyboard_requests := 0
 var _virtual_requests := 0
+var _input_modes: Array[String] = []
 
 func _initialize() -> void:
     call_deferred("_run")
@@ -49,6 +50,7 @@ func _run() -> void:
     )
     controls.keyboard_requested.connect(func(): _keyboard_requests += 1)
     controls.virtual_controls_requested.connect(func(): _virtual_requests += 1)
+    controls.input_mode_changed.connect(func(mode: String): _input_modes.append(mode))
 
     var safe_rect := Rect2(Vector2(44, 0), Vector2(756, 369))
     controls.layout(Vector2(844, 390), safe_rect)
@@ -166,13 +168,21 @@ func _run() -> void:
         controls.enter_button, controls.space_button,
         controls.mouse_left_button, controls.mouse_right_button,
         controls.scroll_up_button, controls.scroll_down_button,
-        controls.cursor_handle,
+        controls.cursor_handle, controls.input_mode_button,
     ]
     required_controls.append_array(controls.digit_buttons)
     for control in required_controls:
         if not control.visible or not safe_rect.encloses(control.get_global_rect()):
             _fail("required control is hidden or outside safe area: %s" % control.name)
             return
+    if (
+        controls.input_mode() != GameVirtualControls.INPUT_MODE_MOUSE
+        or controls.is_touch_mode()
+        or controls.input_mode_button.text != "Mode: Mouse"
+        or controls.input_mode_button.get_meta("input_mode", "") != "mouse"
+    ):
+        _fail("virtual controls did not default to mouse mode")
+        return
 
     var reference_circles: Array[Button] = [
         controls.escape_button,
@@ -266,14 +276,82 @@ func _run() -> void:
         return
 
     var outside := InputEventScreenTouch.new()
+    outside.index = 11
+    outside.pressed = true
     outside.position = safe_rect.get_center() + Vector2(0, -70)
-    if controls.routes_pointer(outside):
-        _fail("pointer outside controls was captured")
+    if not controls.routes_pointer(outside):
+        _fail("mouse mode leaked a direct touch into the game")
+        return
+    var outside_drag := InputEventScreenDrag.new()
+    outside_drag.index = outside.index
+    outside_drag.position = outside.position + Vector2(12, 8)
+    if not controls.routes_pointer(outside_drag):
+        _fail("mouse mode lost its blocked direct-touch drag")
+        return
+    var outside_up := InputEventScreenTouch.new()
+    outside_up.index = outside.index
+    outside_up.pressed = false
+    outside_up.position = outside_drag.position
+    if not controls.routes_pointer(outside_up):
+        _fail("mouse mode lost its blocked direct-touch release")
+        return
+    var outside_mouse := InputEventMouseButton.new()
+    outside_mouse.button_index = MOUSE_BUTTON_LEFT
+    outside_mouse.pressed = true
+    outside_mouse.position = outside.position
+    if not controls.routes_pointer(outside_mouse):
+        _fail("mouse mode leaked a hardware click into the game")
         return
     var inside := InputEventScreenTouch.new()
+    inside.pressed = true
     inside.position = controls.escape_button.get_global_rect().get_center()
     if not controls.routes_pointer(inside):
         _fail("pointer on Esc leaked into the game")
+        return
+
+    controls.input_mode_button.emit_signal("pressed")
+    await process_frame
+    if (
+        not controls.is_touch_mode()
+        or controls.input_mode_button.text != "Mode: Touch"
+        or controls.cursor_handle.visible
+        or controls.mouse_left_button.visible
+        or controls.mouse_right_button.visible
+        or not controls.escape_button.visible
+        or _input_modes != [GameVirtualControls.INPUT_MODE_TOUCH]
+    ):
+        _fail("touch mode presentation or change signal is incorrect")
+        return
+    var direct_touch := InputEventScreenTouch.new()
+    direct_touch.index = 12
+    direct_touch.pressed = true
+    direct_touch.position = outside.position
+    if controls.routes_pointer(direct_touch):
+        _fail("touch mode did not pass direct game touch through")
+        return
+    if controls.routes_pointer(outside_mouse):
+        _fail("touch mode did not pass direct hardware clicks through")
+        return
+    var hidden_cursor_touch := InputEventScreenTouch.new()
+    hidden_cursor_touch.index = 13
+    hidden_cursor_touch.pressed = true
+    hidden_cursor_touch.position = controls.cursor_screen_position()
+    if controls.routes_pointer(hidden_cursor_touch):
+        _fail("hidden touch-mode cursor still captured input")
+        return
+    controls.input_mode_button.emit_signal("pressed")
+    await process_frame
+    if (
+        controls.is_touch_mode()
+        or not controls.cursor_handle.visible
+        or not controls.mouse_left_button.visible
+        or not controls.mouse_right_button.visible
+        or _input_modes != [
+            GameVirtualControls.INPUT_MODE_TOUCH,
+            GameVirtualControls.INPUT_MODE_MOUSE,
+        ]
+    ):
+        _fail("switching back did not restore mouse-mode controls")
         return
 
     controls.escape_button.emit_signal("button_down")
@@ -351,6 +429,17 @@ func _run() -> void:
     ):
         _fail("mouse-wheel directions are incorrect")
         return
+
+    controls.a_button.emit_signal("button_down")
+    controls.mouse_right_button.emit_signal("button_down")
+    controls.input_mode_button.emit_signal("pressed")
+    if _key_events.back() != {"pressed": false, "key_code": 0x41, "modifiers": 0}:
+        _fail("changing modes did not release the held key")
+        return
+    if _pointer_buttons.back().pressed or _pointer_buttons.back().modifiers != 0x10:
+        _fail("changing modes did not release the held mouse button")
+        return
+    controls.input_mode_button.emit_signal("pressed")
 
     controls.a_button.emit_signal("button_down")
     controls.mouse_right_button.emit_signal("button_down")

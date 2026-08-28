@@ -11,6 +11,7 @@ signal pointer_button_requested(
 signal pointer_scroll_requested(delta_y: float, screen_position: Vector2)
 signal keyboard_requested
 signal virtual_controls_requested
+signal input_mode_changed(mode: String)
 
 const VK_RETURN := 0x0D
 const VK_CONTROL := 0x11
@@ -31,6 +32,9 @@ const BUTTON_MIN_SIZE := 44.0
 const BUTTON_MAX_SIZE := 68.0
 const CURSOR_SIZE := 44.0
 const MENU_DRAG_THRESHOLD := 6.0
+const INPUT_MODE_MOUSE := "mouse"
+const INPUT_MODE_TOUCH := "touch"
+const INPUT_MODES := [INPUT_MODE_MOUSE, INPUT_MODE_TOUCH]
 
 const REFERENCE_FILL := Color(0.30, 0.31, 0.33, 0.58)
 const REFERENCE_FILL_HOVER := Color(0.36, 0.37, 0.39, 0.72)
@@ -43,6 +47,7 @@ const COMPUTER_USE_CURSOR_GLOW := Color(0.20, 0.66, 0.91, 0.24)
 var menu_button: Button
 var keyboard_button: Button
 var virtual_controls_button: Button
+var input_mode_button: Button
 var escape_button: Button
 var control_button: Button
 var w_button: Button
@@ -80,6 +85,8 @@ var _menu_drag_start_pointer_y := 0.0
 var _menu_drag_grab_offset_y := 0.0
 var _menu_drag_moved := false
 var _menu_y_ratio := 0.0
+var _input_mode := INPUT_MODE_MOUSE
+var _mouse_mode_blocked_touch_indices := {}
 
 func setup(tokens) -> void:
     if _root != null:
@@ -110,6 +117,14 @@ func setup(tokens) -> void:
     _attach_edge_menu_icon(menu_button)
     _apply_menu_option_style(keyboard_button)
     _apply_menu_option_style(virtual_controls_button)
+
+    input_mode_button = _create_action_button("InputModeButton", "")
+    input_mode_button.pressed.connect(_toggle_input_mode)
+    _root.add_child(input_mode_button)
+    _panel_controls.append(input_mode_button)
+    _interactive_controls.append(input_mode_button)
+    _apply_input_mode_style(input_mode_button)
+    _sync_input_mode_presentation()
 
     dpad_backdrop = _create_decorative_panel(
         "DpadBackdrop",
@@ -203,6 +218,7 @@ func set_enabled(enabled: bool) -> void:
         _menu_touch_index = -1
         _menu_mouse_dragging = false
         _menu_drag_moved = false
+        _mouse_mode_blocked_touch_indices.clear()
     visible = enabled
     _sync_visibility()
 
@@ -211,6 +227,28 @@ func is_panel_open() -> bool:
 
 func is_menu_open() -> bool:
     return _menu_open
+
+func input_mode() -> String:
+    return _input_mode
+
+func is_touch_mode() -> bool:
+    return _input_mode == INPUT_MODE_TOUCH
+
+func set_input_mode(mode: String, notify: bool = false) -> void:
+    var normalized := mode if mode in INPUT_MODES else INPUT_MODE_MOUSE
+    if _input_mode == normalized:
+        _sync_input_mode_presentation()
+        _sync_visibility()
+        return
+    release_all()
+    _cursor_touch_index = -1
+    _cursor_mouse_dragging = false
+    _mouse_mode_blocked_touch_indices.clear()
+    _input_mode = normalized
+    _sync_input_mode_presentation()
+    _sync_visibility()
+    if notify:
+        input_mode_changed.emit(_input_mode)
 
 func show_virtual_controls() -> void:
     if not _enabled:
@@ -254,6 +292,16 @@ func layout(_window_size: Vector2, safe_rect: Rect2) -> void:
 
     escape_button.position = safe_rect.position + Vector2(margin, margin)
     escape_button.size = key_size
+
+    var mode_size := Vector2(
+        clampf(safe_rect.size.x * 0.22, 132.0, 168.0),
+        clampf(diameter * 0.72, 40.0, 48.0)
+    )
+    input_mode_button.position = Vector2(
+        safe_rect.get_center().x - mode_size.x * 0.5,
+        safe_rect.position.y + margin
+    )
+    input_mode_button.size = mode_size
 
     var dpad_diameter := clampf(short_edge * 0.36, 118.0, 210.0)
     var dpad_origin := Vector2(
@@ -344,6 +392,10 @@ func routes_pointer(event: InputEvent) -> bool:
 
     if event is InputEventScreenTouch:
         var touch := event as InputEventScreenTouch
+        if _mouse_mode_blocked_touch_indices.has(touch.index):
+            if not touch.pressed:
+                _mouse_mode_blocked_touch_indices.erase(touch.index)
+            return true
         if touch.pressed and menu_button.get_global_rect().has_point(touch.position):
             _begin_menu_drag(touch.position.y)
             _menu_touch_index = touch.index
@@ -356,6 +408,7 @@ func routes_pointer(event: InputEvent) -> bool:
         if (
             touch.pressed
             and _panel_open
+            and not is_touch_mode()
             and cursor_handle.get_global_rect().has_point(touch.position)
         ):
             _cursor_touch_index = touch.index
@@ -364,8 +417,18 @@ func routes_pointer(event: InputEvent) -> bool:
             if not touch.pressed:
                 _cursor_touch_index = -1
             return true
+        if (
+            touch.pressed
+            and _panel_open
+            and not is_touch_mode()
+            and not _visible_interactive_control_at(touch.position)
+        ):
+            _mouse_mode_blocked_touch_indices[touch.index] = true
+            return true
     elif event is InputEventScreenDrag:
         var drag := event as InputEventScreenDrag
+        if _mouse_mode_blocked_touch_indices.has(drag.index):
+            return true
         if drag.index == _menu_touch_index:
             _drag_menu_to(drag.position.y)
             return true
@@ -390,6 +453,7 @@ func routes_pointer(event: InputEvent) -> bool:
             if (
                 mouse_button.pressed
                 and _panel_open
+                and not is_touch_mode()
                 and cursor_handle.get_global_rect().has_point(
                     mouse_button.position
                 )
@@ -418,11 +482,21 @@ func routes_pointer(event: InputEvent) -> bool:
     var position := _event_position(event)
     if position.x < 0.0 or position.y < 0.0:
         return false
-    for control in _interactive_controls:
-        if control.is_visible_in_tree() and control.get_global_rect().has_point(position):
-            return true
-    if _panel_open and cursor_handle.get_global_rect().has_point(position):
+    if _visible_interactive_control_at(position):
         return true
+    if (
+        _panel_open
+        and not is_touch_mode()
+        and cursor_handle.get_global_rect().has_point(position)
+    ):
+        return true
+    if _panel_open and not is_touch_mode():
+        return (
+            event is InputEventScreenTouch
+            or event is InputEventScreenDrag
+            or event is InputEventMouseButton
+            or event is InputEventMouseMotion
+        )
     return false
 
 func cursor_screen_position() -> Vector2:
@@ -665,6 +739,25 @@ func _apply_menu_option_style(button: Button) -> void:
             _button_style(fill, REFERENCE_BORDER, false, 2)
         )
 
+func _apply_input_mode_style(button: Button) -> void:
+    button.add_theme_font_size_override("font_size", 13)
+    button.add_theme_stylebox_override(
+        "normal",
+        _button_style(Color(0.08, 0.10, 0.12, 0.88), REFERENCE_BORDER, false)
+    )
+    button.add_theme_stylebox_override(
+        "hover",
+        _button_style(Color(0.14, 0.18, 0.21, 0.94), Color.WHITE, false)
+    )
+    button.add_theme_stylebox_override(
+        "pressed",
+        _button_style(
+            Color(_tokens.accent.r, _tokens.accent.g, _tokens.accent.b, 0.9),
+            Color.WHITE,
+            false
+        )
+    )
+
 func _attach_mouse_icon(button: Button, highlights_left: bool) -> void:
     var icon := Control.new()
     icon.name = "MouseIcon"
@@ -891,6 +984,24 @@ func _request_keyboard() -> void:
     _sync_visibility()
     keyboard_requested.emit()
 
+func _toggle_input_mode() -> void:
+    if not _enabled or not _panel_open:
+        return
+    set_input_mode(
+        INPUT_MODE_TOUCH if _input_mode == INPUT_MODE_MOUSE else INPUT_MODE_MOUSE,
+        true
+    )
+
+func _sync_input_mode_presentation() -> void:
+    if input_mode_button == null:
+        return
+    var touch_mode := is_touch_mode()
+    input_mode_button.text = "Mode: Touch" if touch_mode else "Mode: Mouse"
+    input_mode_button.tooltip_text = (
+        "Direct touch mode" if touch_mode else "Virtual mouse mode"
+    )
+    input_mode_button.set_meta("input_mode", _input_mode)
+
 func _sync_visibility() -> void:
     if menu_button == null:
         return
@@ -899,6 +1010,10 @@ func _sync_visibility() -> void:
     virtual_controls_button.visible = _enabled and _menu_open
     for control in _panel_controls:
         control.visible = _enabled and _panel_open
+    var show_virtual_mouse := _enabled and _panel_open and not is_touch_mode()
+    mouse_left_button.visible = show_virtual_mouse
+    mouse_right_button.visible = show_virtual_mouse
+    cursor_handle.visible = show_virtual_mouse
 
 func _press_key(key_code: int) -> void:
     if not _enabled or not _panel_open or _held_keys.has(key_code):
@@ -968,3 +1083,12 @@ func _event_position(event: InputEvent) -> Vector2:
     if event is InputEventMouseMotion:
         return (event as InputEventMouseMotion).position
     return Vector2(-1.0, -1.0)
+
+func _visible_interactive_control_at(screen_position: Vector2) -> bool:
+    for control in _interactive_controls:
+        if (
+            control.is_visible_in_tree()
+            and control.get_global_rect().has_point(screen_position)
+        ):
+            return true
+    return false

@@ -24,6 +24,11 @@ class MockRuntimePlayer:
 func _initialize() -> void:
     var app = MAIN_SCRIPT.new()
 
+    assert(app.game_virtual_input_mode == "mouse")
+    assert(app._normalize_game_virtual_input_mode("mouse") == "mouse")
+    assert(app._normalize_game_virtual_input_mode("touch") == "touch")
+    assert(app._normalize_game_virtual_input_mode("invalid") == "mouse")
+
     for runtime_kind in [app.RUNTIME_KIRIKIRI, app.RUNTIME_ONSCRIPTER]:
         app.active_runtime_kind = runtime_kind
         assert(app._should_enable_game_virtual_controls(true, true, false))
