@@ -1096,7 +1096,7 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
         patched.Replace(
             TJS_W("\t\t\tvar tagname = elm.tagname;\r\n"),
             TJS_W("\t\t\tvar tagname = elm.tagname;\r\n"
-                  "\t\t\tif (tagname == \"title_bg\" && elm.file === void) {\r\n"
+                  "\t\t\tif (tagname == \"title_bg\" && (elm.file === void || elm.file == \"\")) {\r\n"
                   "\t\t\t\ttry {\r\n"
                   "\t\t\t\t\tif (Storages.isExistentStorage(\"main/title_bg.png\")) {\r\n"
                   "\t\t\t\t\t\telm = Scripts.clone(elm);\r\n"
@@ -1414,7 +1414,7 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
                   "\t\t\tif (owner !== void && owner instanceof \"AffineLayer\") {\r\n"
                   "\t\t\t\tif (_separate && typeof owner._motionSeparateAdaptor != \"undefined\") return;\r\n"
                   "\t\t\t\towner.calcUpdate();\r\n"
-                  "\t\t\t\towner.entryFlip();\r\n"
+                  "\t\t\t\tif (typeof owner.entryFlip != \"undefined\") owner.entryFlip();\r\n"
                   "\t\t\t}\r\n"
                   "\t\t} catch(e) {}\r\n"
                   "\t}\r\n"
@@ -1541,6 +1541,42 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
                   "\t\t\t\t}\r\n"),
             TJS_W("\t\t\t\t// AetherKiri: renderToLayer clears the target; native clear rejects some TJS layer wrappers.\r\n"),
             false);
+        if(!hasStorageTypePlayerLifecycle) {
+            patched.Replace(
+                TJS_W("\tvar _actionCount = 0;\r\n"),
+                TJS_W("\tvar _actionCount = 0;\r\n"
+                      "\tvar _aetherKiriInitialDrawOwner;\r\n"
+                      "\tvar _aetherKiriInitialDrawPending = false;\r\n"),
+                false);
+            patched.Replace(
+                TJS_W("\t\t_interval = tick - _lastTick;\r\n"),
+                TJS_W("\t\t_interval = tick - _lastTick;\r\n"
+                      "\t\tif (_aetherKiriInitialDrawOwner !== void && _aetherKiriInitialDrawPending) {\r\n"
+                      "\t\t\tvar drawOwner = _aetherKiriInitialDrawOwner;\r\n"
+                      "\t\t\t_aetherKiriInitialDrawOwner = void;\r\n"
+                      "\t\t\t_aetherKiriInitialDrawPending = false;\r\n"
+                      "\t\t\ttry { drawAffine(drawOwner, drawOwner); } catch(e) {}\r\n"
+                      "\t\t}\r\n"),
+                false);
+            // The legacy MotionAffineSourceLayer implementation creates the
+            // player before it is entered into an AffineLayer owner.  During
+            // save restore that owner can receive its one redraw before the
+            // motion adaptor is attached, leaving only a nested effect layer
+            // visible until the next user action invalidates the layer.  Once
+            // the owner is attached, force the normal affine update path so
+            // the restored SD frame is presented immediately.
+            patched.Replace(
+                TJS_W("\t\t\towner.type = ltBinder;\r\n"
+                      "\t\t}\r\n"
+                      "\t}\r\n"),
+                TJS_W("\t\t\towner.type = ltBinder;\r\n"
+                      "\t\t\ttry { if (_player.motion != \"\") _player.play(_player.motion, Motion.PlayFlagForce); } catch(e) {}\r\n"
+                      "\t\t\t_aetherKiriInitialDrawOwner = owner;\r\n"
+                      "\t\t\t_aetherKiriInitialDrawPending = true;\r\n"
+                      "\t\t}\r\n"
+                      "\t}\r\n"),
+                false);
+        }
         if(patched != buffer) {
             buffer = patched;
             spdlog::info(
@@ -1577,7 +1613,7 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
                   "\t\t\t\t\t\telm.redraw.imageFile = Scripts.clone(elm.redraw.imageFile);\r\n"
                   "\t\t\t\t\t\telm.redraw.imageFile.file = \"main/title_bg.png\";\r\n"
                   "\t\t\t\t\t} else {\r\n"
-                  "\t\t\t\t\t\telm.redraw.imageFile = \"main/title_bg.png\";\r\n"
+                  "\t\t\t\t\t\telm.redraw.imageFile = %[file:\"main/title_bg.png\"];\r\n"
                   "\t\t\t\t\t}\r\n"
                   "\t\t\t\t}\r\n"
                   "\t\t\t} catch(e) {}\r\n"
@@ -1586,6 +1622,39 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
             false);
         if(hasTitleUpdateAnchor && patched != buffer) {
             spdlog::info("Applied compatibility patch for title_bg source resolution");
+        }
+        // On a return from the system menu, this title recreates the
+        // title_bg event with a show-only redraw record.  The record has no
+        // imageFile because the original Windows event source is unavailable
+        // on the native backend; seed the redraw with the authored static
+        // title image before EnvLayerObject.update resolves it.
+        const ttstr titleObjUpdateAnchor(
+            TJS_W("\tfunction objUpdate(elm) {\r\n"
+                  "\t\t//dm(@\"${name}:objUpdate:${elm.showmode}:${elm.trans}:${elm.redraw}:${elm.update}:${world.envTransMode}\");\r\n"
+                  "\t\t// 表示状態\r\n"
+                  "\t\tvisible = (elm.showmode & 1);\r\n"));
+        const bool hasTitleObjUpdateAnchor =
+            patched.IndexOf(titleObjUpdateAnchor) >= 0;
+        patched.Replace(
+            titleObjUpdateAnchor,
+            TJS_W("\tfunction objUpdate(elm) {\r\n"
+                  "\t\t//dm(@\"${name}:objUpdate:${elm.showmode}:${elm.trans}:${elm.redraw}:${elm.update}:${world.envTransMode}\");\r\n"
+                  "\t\tif (name == \"title_bg\" && (elm.showmode & 1) &&\r\n"
+                  "\t\t\t(elm.redraw === void || elm.redraw.imageFile === void)) {\r\n"
+                  "\t\t\ttry {\r\n"
+                  "\t\t\t\tif (Storages.isExistentStorage(\"main/title_bg.png\")) {\r\n"
+                  "\t\t\t\t\telm = Scripts.clone(elm);\r\n"
+                  "\t\t\t\t\tif (elm.redraw === void) elm.redraw = %[];\r\n"
+                  "\t\t\t\t\telse elm.redraw = Scripts.clone(elm.redraw);\r\n"
+                  "\t\t\t\t\telm.redraw.imageFile = %[file:\"main/title_bg.png\"];\r\n"
+                  "\t\t\t\t}\r\n"
+                  "\t\t\t} catch(e) {}\r\n"
+                  "\t\t}\r\n"
+                  "\t\t// 表示状態\r\n"
+                  "\t\tvisible = (elm.showmode & 1);\r\n"),
+            false);
+        if(hasTitleObjUpdateAnchor && patched != buffer) {
+            spdlog::info("Applied compatibility patch for title_bg show-only redraw");
         }
         patched.Replace(
             TJS_W("\t\tvar e = createMsgTag(text, lastText);\r\n"),
@@ -1964,7 +2033,7 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
                   "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] layer.update name:${name} target:${targetLayer !== void} redraw:${elm.redraw !== void} update:${elm.update !== void}\"); } catch(e) {}\r\n"
                   "\t\tif (targetLayer !== void) {\r\n"
                   "\t\t\tif (elm.redraw !== void) with (elm.redraw) {\r\n"
-                  "\t\t\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] layer.redraw name:${name} imageType:${typeof .imageFile} file:${.imageFile !== void ? .imageFile.file : void}\"); } catch(e) {}\r\n"),
+                  "\t\t\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] layer.redraw name:${name} imageType:${typeof .imageFile} file:${.imageFile !== void ? (typeof .imageFile == \"Object\" ? .imageFile.file : .imageFile) : void}\"); } catch(e) {}\r\n"),
             false);
         patched.Replace(
             TJS_W("\tfunction objUpdate(elm) {\r\n"
