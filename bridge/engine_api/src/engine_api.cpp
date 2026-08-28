@@ -2157,7 +2157,7 @@ engine_result_t engine_destroy(engine_handle_t handle) {
     }
     try {
       Application->FilterUserMessage(
-          [](std::vector<std::tuple<void*, int, tTVPApplication::tMsg>>& queue) {
+          [](std::deque<std::tuple<void*, int, tTVPApplication::tMsg>>& queue) {
             queue.clear();
           });
     } catch (const std::exception& e) {

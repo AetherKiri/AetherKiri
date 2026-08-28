@@ -728,7 +728,7 @@ void tTVPApplication::ProcessMessages() {
             msg_host = std::get<0>(m_lstUserMsg.front());
             msg_id = std::get<1>(m_lstUserMsg.front());
             msg = std::move(std::get<2>(m_lstUserMsg.front()));
-            m_lstUserMsg.erase(m_lstUserMsg.begin());
+            m_lstUserMsg.pop_front();
         }
         if(msg) {
 #if defined(__ANDROID__)
@@ -935,7 +935,7 @@ void tTVPApplication::PostUserMessage(const std::function<void()> &func,
 }
 
 void tTVPApplication::FilterUserMessage(
-    const std::function<void(std::vector<std::tuple<void *, int, tMsg>> &)>
+    const std::function<void(std::deque<std::tuple<void *, int, tMsg>> &)>
         &func) {
     std::lock_guard<std::mutex> cs(m_msgQueueLock);
     func(m_lstUserMsg);
