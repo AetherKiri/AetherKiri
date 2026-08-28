@@ -60,17 +60,8 @@ std::string g_stdoutpath = "stdout.txt";
 std::string g_stderrpath = "stderr.txt";
 
 // Upstream built-in layer effects refer to a process-global `ONScripter ons`.
-// Keep the ABI-visible storage without registering a global destructor. The
-// embedded host mirrors upstream static teardown on the game thread, then can
-// placement-construct a fresh object for a later session.
-union ONScripterGlobalStorage {
-    ONScripter value;
-
-    ONScripterGlobalStorage() {}
-    ~ONScripterGlobalStorage() {}
-};
-
-ONScripterGlobalStorage ons;
+// Keep the exact declared type so MSVC emits the same ABI symbol.
+ONScripter ons;
 
 namespace {
 
