@@ -168,6 +168,40 @@ namespace PSB {
                              filePath.AsStdString());
             }
         }
+
+        bool ContainsUtf16LeAscii(const std::uint8_t *data,
+                                  const size_t size,
+                                  const char *needle) {
+            if(!data || !needle)
+                return false;
+            const size_t needleLength = std::strlen(needle);
+            if(needleLength == 0 || size < needleLength * 2)
+                return false;
+            for(size_t offset = 0; offset + needleLength * 2 <= size;
+                offset += 2) {
+                bool matched = true;
+                for(size_t index = 0; index < needleLength; ++index) {
+                    if(data[offset + index * 2] !=
+                           static_cast<std::uint8_t>(needle[index]) ||
+                       data[offset + index * 2 + 1] != 0) {
+                        matched = false;
+                        break;
+                    }
+                }
+                if(matched)
+                    return true;
+            }
+            return false;
+        }
+
+        bool IsExternalPimgIndex(const std::uint8_t *data, const size_t size,
+                                 const ttstr &sourceName) {
+            return size >= 4 && data[0] == 0xff && data[1] == 0xfe &&
+                TVPExtractStorageExt(sourceName).AsLowerCase() ==
+                    TJS_W(".pimg") &&
+                ContainsUtf16LeAscii(data + 2, size - 2,
+                                     "_extra_binary_file_");
+        }
     } // namespace
 
     void PSBFile::resetState() {
@@ -188,6 +222,7 @@ namespace PSB {
         extraResources.clear();
 
         _root.reset();
+        _compatRoot.Clear();
         _objectImage.reset();
         _header = PSBHeader{};
         _type = PSBType::PSB;
@@ -554,6 +589,29 @@ namespace PSB {
                     readSize, sourceName.AsStdString());
                 return false;
             }
+        }
+
+        if(IsExternalPimgIndex(fileData, readSize, sourceName)) {
+            if(extension == nullptr || extension->loadExternalPimg == nullptr) {
+                LOGGER->warn("External-resource PIMG is unsupported: {}",
+                             sourceName.AsStdString());
+                return false;
+            }
+            std::string error;
+            tTJSVariant root;
+            if(!extension->loadExternalPimg(fileData, readSize, sourceName,
+                                            root, error) ||
+               root.Type() != tvtObject || root.AsObjectNoAddRef() == nullptr) {
+                LOGGER->warn("External-resource PIMG load failed: {} ({})",
+                             error.empty() ? "invalid root" : error,
+                             sourceName.AsStdString());
+                return false;
+            }
+            _compatRoot = root;
+            _type = PSBType::Pimg;
+            LOGGER->debug("External-resource PIMG loaded: {}",
+                          sourceName.AsStdString());
+            return true;
         }
 
         char outerSign[4];
