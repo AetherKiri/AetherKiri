@@ -191,12 +191,12 @@ jobs:
             "https://github.com/godotengine/godot-builds/releases/download/${GODOT_RELEASE}/Godot_v${GODOT_RELEASE}_export_templates.tpz"
           unzip -tq "${RUNNER_TEMP}/godot-export-templates.tpz"
           unzip -q "${RUNNER_TEMP}/godot-export-templates.tpz" -d "${RUNNER_TEMP}/godot-templates"
-          template_dir="${GITHUB_WORKSPACE}/.aetherkiri-cache/xdg/data/godot/export_templates/${GODOT_TEMPLATE_VERSION}"
+          template_dir="${HOME}/.local/share/godot/export_templates/${GODOT_TEMPLATE_VERSION}"
           mkdir -p "${template_dir}"
           cp -a "${RUNNER_TEMP}/godot-templates/templates/." "${template_dir}/"
 
           echo "GODOT_BIN=${GITHUB_WORKSPACE}/${godot_bin}" >> "$GITHUB_ENV"
-          echo "GODOT_TEMPLATE_DIR=${template_dir}" >> "$GITHUB_ENV"
+          echo "GODOT_TEMPLATE_DIR=${HOME}/.local/share/godot/export_templates" >> "$GITHUB_ENV"
 
       - name: Set up Android SDK and pinned NDK
         run: |
@@ -1081,6 +1081,7 @@ jobs:
 
   windows:
     name: Build Windows x64 App
+    if: ${{ github.event_name == 'workflow_dispatch_disabled' }}
     runs-on: windows-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
