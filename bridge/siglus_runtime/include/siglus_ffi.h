@@ -103,9 +103,10 @@ const char *siglus_ak_last_error(void *handle);
  * The Rust mixer runs on a private kira backend (see
  * overlay/files/aether_audio_bridge.rs) and pushes interleaved stereo f32
  * samples into an in-process FIFO instead of owning an audio device. The C++
- * provider drains the FIFO through the calls below and feeds an SDL2 audio
- * device. All functions are process-global (independent of any shell handle)
- * and additive to 0x00010000 of this header.
+ * provider drains the FIFO through the calls below and feeds an OpenAL
+ * streaming output (the same cross-platform audio path the embedded Artemis
+ * runtime uses). All functions are process-global (independent of any shell
+ * handle) and additive to 0x00010000 of this header.
  */
 
 /* Negotiated stream format; constant for the process lifetime. Returns

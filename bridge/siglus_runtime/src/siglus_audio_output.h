@@ -5,12 +5,13 @@
 
 namespace aetherkiri::siglus::audio {
 
-    // Opens an SDL2 audio device draining the Rust mixer FIFO through the
-    // siglus_ak_read_audio_f32 FFI (see siglus_ffi.h). Idempotent: an already
-    // running output is restarted. Returns false with details on failure.
+    // Opens an OpenAL streaming output draining the Rust mixer FIFO through
+    // the siglus_ak_read_audio_f32 FFI (see siglus_ffi.h). Idempotent: an
+    // already running output is restarted. Returns false with details on
+    // failure.
     bool StartOutput(std::string &error);
 
-    // Closes the device and logs cumulative drained/underrun statistics.
+    // Closes the stream and logs cumulative drained/underrun statistics.
     // Safe to call when not started.
     void StopOutput();
 

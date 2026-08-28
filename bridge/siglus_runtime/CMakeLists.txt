@@ -21,7 +21,7 @@ if(NOT siglus_scene_vm_rs_FOUND)
     return()
 endif()
 
-find_package(SDL2 CONFIG REQUIRED)
+find_package(OpenAL CONFIG REQUIRED)
 
 add_library(aether_siglus_runtime STATIC
     src/siglus_runtime_provider.cpp
@@ -45,9 +45,10 @@ target_link_libraries(aether_siglus_runtime PUBLIC
     siglus_scene_vm_rs
 )
 
-# Audio PCM consumer: drains the Rust kira mixer FIFO into an SDL2 device
-# (same link setup as bridge/onscripter_runtime so the shared GDExtension
-# object picks up SDL2 transitively).
+# Audio PCM consumer: drains the Rust kira mixer FIFO into an OpenAL stream.
+# This is the same cross-platform output path the embedded Artemis runtime
+# uses (OpenAL Soft on iOS/Android/desktop), which avoids owning a second
+# SDL audio consumer alongside the krkrsdl3/ONS hosts.
 target_link_libraries(aether_siglus_runtime PRIVATE
-    $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
+    OpenAL::OpenAL
 )
