@@ -370,7 +370,7 @@ std::string EnsureTrailingSeparator(const std::string &path) {
     if (last == '/' || last == '\\') {
         return path;
     }
-    return path + fs::path::preferred_separator;
+    return path + std::string(1, fs::path::preferred_separator);
 }
 
 std::string StableGameDirectoryName(const fs::path &root) {
