@@ -222,8 +222,42 @@ func _run() -> void:
     ):
         _fail("scroll controls are not contained in the UU-style wheel")
         return
-    if controls.cursor_handle.get_node_or_null("Arrow") == null:
-        _fail("draggable cursor is not rendered as a pointer arrow")
+    var cursor: Control = controls.cursor_handle
+    var cursor_glow := cursor.get_node_or_null("Glow") as TextureRect
+    var cursor_arrow := cursor.get_node_or_null("Arrow") as Polygon2D
+    var cursor_arrow_glow := cursor.get_node_or_null("ArrowGlow") as Line2D
+    var cursor_outline := cursor.get_node_or_null("Outline") as Line2D
+    if (
+        cursor.get_meta("visual_style", "") != "computer_use"
+        or cursor_glow == null
+        or cursor_arrow == null
+        or cursor_arrow_glow == null
+        or cursor_outline == null
+        or cursor.get_node_or_null("Shadow") != null
+    ):
+        _fail("draggable cursor does not use the Computer Use visual layers")
+        return
+    var cursor_glow_texture := cursor_glow.texture as GradientTexture2D
+    if (
+        cursor_glow_texture == null
+        or cursor_glow_texture.fill != GradientTexture2D.FILL_RADIAL
+        or cursor_glow_texture.gradient == null
+        or cursor_glow_texture.gradient.colors.size() != 4
+        or cursor_glow_texture.gradient.colors[0].a < 0.2
+        or cursor_glow_texture.gradient.colors[-1].a != 0.0
+    ):
+        _fail("Computer Use cursor is missing its soft radial blue glow")
+        return
+    if (
+        cursor.size.x < 40.0
+        or cursor_arrow.polygon.size() != 7
+        or cursor_arrow.color.get_luminance() > 0.2
+        or cursor_arrow.color.a < 0.8
+        or cursor_outline.default_color.b < 0.8
+        or cursor_outline.default_color.a < 0.9
+        or cursor_arrow_glow.default_color.b < 0.9
+    ):
+        _fail("Computer Use cursor arrow shape or palette is incorrect")
         return
     if controls.digit_buttons[3].get_global_rect().intersects(
         controls.menu_button.get_global_rect()

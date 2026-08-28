@@ -29,13 +29,16 @@ const POINTER_MOD_RIGHT := 0x10
 const OVERLAY_LAYER := 120
 const BUTTON_MIN_SIZE := 44.0
 const BUTTON_MAX_SIZE := 68.0
-const CURSOR_SIZE := 32.0
+const CURSOR_SIZE := 44.0
 const MENU_DRAG_THRESHOLD := 6.0
 
 const REFERENCE_FILL := Color(0.30, 0.31, 0.33, 0.58)
 const REFERENCE_FILL_HOVER := Color(0.36, 0.37, 0.39, 0.72)
 const REFERENCE_BORDER := Color(0.82, 0.84, 0.88, 0.72)
 const REFERENCE_TEXT := Color(0.94, 0.95, 0.97, 0.84)
+const COMPUTER_USE_CURSOR_FILL := Color(0.08, 0.12, 0.15, 0.82)
+const COMPUTER_USE_CURSOR_OUTLINE := Color(0.68, 0.78, 0.84, 0.96)
+const COMPUTER_USE_CURSOR_GLOW := Color(0.20, 0.66, 0.91, 0.24)
 
 var menu_button: Button
 var keyboard_button: Button
@@ -753,32 +756,61 @@ func _layout_mouse_icon(button: Button) -> void:
     wheel.size = Vector2(4.0, icon_size.y * 0.22)
 
 func _attach_pointer_visual(pointer: Control) -> void:
-    var points := PackedVector2Array([
-        Vector2(2, 1),
-        Vector2(2, 25),
-        Vector2(8, 19),
-        Vector2(14, 31),
-        Vector2(20, 28),
-        Vector2(14, 17),
-        Vector2(27, 17),
+    pointer.set_meta("visual_style", "computer_use")
+    var glow_gradient := Gradient.new()
+    glow_gradient.offsets = PackedFloat32Array([0.0, 0.28, 0.62, 1.0])
+    glow_gradient.colors = PackedColorArray([
+        COMPUTER_USE_CURSOR_GLOW,
+        Color(0.18, 0.60, 0.86, 0.16),
+        Color(0.14, 0.48, 0.72, 0.07),
+        Color(0.10, 0.36, 0.62, 0.0),
     ])
-    var shadow := Polygon2D.new()
-    shadow.name = "Shadow"
-    shadow.position = Vector2(2, 2)
-    shadow.polygon = points
-    shadow.color = Color(0, 0, 0, 0.72)
-    pointer.add_child(shadow)
+    var glow_texture := GradientTexture2D.new()
+    glow_texture.width = int(CURSOR_SIZE)
+    glow_texture.height = int(CURSOR_SIZE)
+    glow_texture.fill = GradientTexture2D.FILL_RADIAL
+    glow_texture.fill_from = Vector2(0.5, 0.5)
+    glow_texture.fill_to = Vector2(1.0, 0.5)
+    glow_texture.gradient = glow_gradient
+    var glow := TextureRect.new()
+    glow.name = "Glow"
+    glow.position = Vector2.ZERO
+    glow.size = Vector2.ONE * CURSOR_SIZE
+    glow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    glow.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+    glow.texture = glow_texture
+    pointer.add_child(glow)
+
+    var points := PackedVector2Array([
+        Vector2(15, 10),
+        Vector2(15, 29),
+        Vector2(19.5, 24.5),
+        Vector2(24, 33),
+        Vector2(27.5, 31),
+        Vector2(23, 23),
+        Vector2(32, 23),
+    ])
+    var arrow_glow := Line2D.new()
+    arrow_glow.name = "ArrowGlow"
+    arrow_glow.points = points
+    arrow_glow.closed = true
+    arrow_glow.width = 4.2
+    arrow_glow.antialiased = true
+    arrow_glow.default_color = Color(0.22, 0.70, 0.94, 0.14)
+    pointer.add_child(arrow_glow)
     var arrow := Polygon2D.new()
     arrow.name = "Arrow"
     arrow.polygon = points
-    arrow.color = Color(0.96, 0.97, 0.99, 1.0)
+    arrow.color = COMPUTER_USE_CURSOR_FILL
+    arrow.antialiased = true
     pointer.add_child(arrow)
     var outline := Line2D.new()
     outline.name = "Outline"
     outline.points = points
     outline.closed = true
-    outline.width = 1.6
-    outline.default_color = Color(0.06, 0.06, 0.07, 0.96)
+    outline.width = 1.5
+    outline.antialiased = true
+    outline.default_color = COMPUTER_USE_CURSOR_OUTLINE
     pointer.add_child(outline)
 
 func _button_style(
