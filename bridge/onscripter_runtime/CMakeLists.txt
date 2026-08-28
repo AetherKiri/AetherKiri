@@ -107,7 +107,7 @@ target_include_directories(aether_onscripter_runtime
 
 if(MSVC)
     target_compile_options(aether_onscripter_runtime PRIVATE
-        /FI"${CMAKE_CURRENT_SOURCE_DIR}/src/onscripter_host_shim.h"
+        "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/onscripter_host_shim.h"
         /W0)
 else()
     target_compile_options(aether_onscripter_runtime PRIVATE

@@ -88,8 +88,10 @@ stage_vcpkg_runtime_libraries() {
     # SDL extension modules and Lua are loaded through plugin targets and may
     # not appear in engine_api's direct DT_NEEDED list. Stage their vcpkg
     # runtime libraries explicitly so the bundled application is self-contained.
-    find "$runtime_dir" -maxdepth 1 -type f \
+    find "$CMAKE_BUILD_DIR/vcpkg_installed/x64-linux" -type f \
         \( -name 'libSDL2*.so*' -o -name 'liblua.so*' -o -name 'libwavpack.so*' \) \
+        -exec cp -Lf {} "$GODOT_BIN_DIR/" \;
+    find "$runtime_dir" -maxdepth 1 -type f -name '*.so*' \
         -exec cp -Lf {} "$GODOT_BIN_DIR/" \;
 }
 
