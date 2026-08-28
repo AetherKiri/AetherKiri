@@ -2,7 +2,7 @@
 
 [English](verified_games.md) | [简体中文](verified_games.zh-CN.md)
 
-最后更新：2026-08-19
+最后更新：2026-08-28
 
 本文档记录已经用 AetherKiri 手动 smoke test 或 flow test 过的游戏。它是兼容性记录，
 不代表每条路线、每个视频、每个插件路径或每个存档状态都已经完整验证。
@@ -73,6 +73,7 @@
 | エッチで一途なド田舎兄さまと、古式ゆかしい病弱妹 | Linux x64 release app；iOS/iPadOS iPad release app build | 导入、启动、标题/菜单渲染、开始游戏流程、场景/文字渲染、音频播放和基础输入 | 流程验证通过 | [@KYoiRyi](https://github.com/KYoiRyi) | 本地游戏文件不提交到仓库。 |
 | 穢翼のユースティア | macOS debug app；iOS/iPadOS iPad debug app build | ONS 游戏导入、启动、标题/菜单渲染、开始游戏与第二个存档读取流程、开场字幕和转场、场景/文字渲染、音频播放、快进、存档列表滚动，以及鼠标/触控输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 使用 ONScripterYuri Runtime；本地游戏文件不提交到仓库。 |
 | 美少女万華鏡 -呪われし伝説の少女- | macOS debug app；iOS/iPadOS iPad debug app build | ONS 游戏导入、启动、初始标题/菜单渲染、场景/文字渲染、音频播放和基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 使用 ONScripterYuri Runtime；本地游戏文件不提交到仓库。 |
+| DRACU-RIOT!（ドラクリオット！） | CI 生成的 macOS x86_64 release app | 导入、启动、标题/菜单渲染、鉴赏模式导航、“剧情回想”标签切换、美羽（`美羽`）回想入口、场景/文字渲染和基础输入 | 流程验证通过 | [@JasmineLCY](https://github.com/JasmineLCY) | 使用当前 CI 产物验证；本地游戏文件不提交到仓库。 |
 
 ## 如何新增游戏
 
