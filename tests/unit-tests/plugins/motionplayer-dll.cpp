@@ -2169,6 +2169,29 @@ TEST_CASE("motionplayer non-loop motion clips finish at sync boundary") {
     REQUIRE(autoPlayer.getProgressCompat() == Catch::Approx(1.0));
 }
 
+TEST_CASE("motionplayer title source clone prefers authored static clip") {
+    auto snapshot = std::make_shared<motion::detail::MotionSnapshot>();
+    snapshot->path = "motion/title_bg.psb";
+    snapshot->mainTimelineLabels = {"title_trial", "normal", "title"};
+
+    for(const auto &label : snapshot->mainTimelineLabels) {
+        auto &clip = snapshot->clipsByLabel[label];
+        clip.label = label;
+        clip.layerNames = {label + "_layer"};
+    }
+
+    motion::Player player;
+    player.loadFromSnapshot(snapshot);
+    const auto layers = player.getLayerNames();
+    REQUIRE(variantCount(layers) == 1);
+    REQUIRE(ttstr(getIndex(layers, 0)) == TJS_W("normal_layer"));
+
+    // An explicit controller selection remains authoritative.
+    player.playTimeline(TJS_W("title"), motion::PlayFlagForce);
+    const auto playingLayers = player.getLayerNames();
+    REQUIRE(ttstr(getIndex(playingLayers, 0)) == TJS_W("title_layer"));
+}
+
 TEST_CASE("motionplayer skip preserves controller-defined idle loops") {
     auto snapshot = std::make_shared<motion::detail::MotionSnapshot>();
     snapshot->path = "unit/emote-idle.psb";

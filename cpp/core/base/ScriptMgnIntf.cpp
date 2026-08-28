@@ -1062,6 +1062,56 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
                                               TVPIsExistentStorage);
     }
 
+    if(lower == TJS_W("kagenvimage.tjs")) {
+        ttstr patched(buffer);
+        // Resolve the title/event name collision before KAGEnvImage caches
+        // its source.  Patching later on the world-side layer is too late:
+        // the failed event lookup leaves no redraw record to forward.
+        patched.Replace(
+            TJS_W("\tfunction setImageFile(file, elm) {\r\n"
+                  "\t\tif (file != \"\") {\r\n"),
+            TJS_W("\tfunction setImageFile(file, elm) {\r\n"
+                  "\t\tif (name == \"title_bg\" && file == \"title_bg\") {\r\n"
+                  "\t\t\ttry {\r\n"
+                  "\t\t\t\tif (Storages.isExistentStorage(\"main/title_bg.png\"))\r\n"
+                  "\t\t\t\t\tfile = \"main/title_bg.png\";\r\n"
+                  "\t\t\t} catch(e) {}\r\n"
+                  "\t\t}\r\n"
+                  "\t\tif (file != \"\") {\r\n"),
+            false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info(
+                "Applied compatibility patch for title_bg image source initialization");
+        }
+    }
+
+    if(lower == TJS_W("kagenvironment.tjs")) {
+        ttstr patched(buffer);
+        // `title_bg` is an event command in this title, but its show-only
+        // invocation omits `file`.  The event's init value points back to
+        // the same logical name, which resolves to event metadata instead
+        // of a renderable source. Supply the authored static image before
+        // the environment creates/synchronizes the object.
+        patched.Replace(
+            TJS_W("\t\t\tvar tagname = elm.tagname;\r\n"),
+            TJS_W("\t\t\tvar tagname = elm.tagname;\r\n"
+                  "\t\t\tif (tagname == \"title_bg\" && elm.file === void) {\r\n"
+                  "\t\t\t\ttry {\r\n"
+                  "\t\t\t\t\tif (Storages.isExistentStorage(\"main/title_bg.png\")) {\r\n"
+                  "\t\t\t\t\t\telm = Scripts.clone(elm);\r\n"
+                  "\t\t\t\t\t\telm.file = \"main/title_bg.png\";\r\n"
+                  "\t\t\t\t\t}\r\n"
+                  "\t\t\t\t} catch(e) {}\r\n"
+                  "\t\t\t}\r\n"),
+            false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info(
+                "Applied compatibility patch for title_bg command source resolution");
+        }
+    }
+
     if(lower == TJS_W("messagelayer.tjs")) {
         ttstr patched(buffer);
         // This MessageLayer implementation already contains a native
@@ -1500,6 +1550,43 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
 
     if(lower == TJS_W("world.tjs")) {
         ttstr patched(buffer);
+        // Some KAG titles use an event and a motion resource with the same
+        // `title_bg` name.  EnvLayerObject.update resolves that name through
+        // the event table first, so the title layer receives metadata rather
+        // than a drawable image and remains black.  Normalize only when the
+        // authored static title asset exists; this keeps the fix generic for
+        // compatible titles without changing other event-backed layers.
+        const ttstr titleUpdateAnchor(
+            TJS_W("\tfunction update(elm) {\r\n"
+                  "\t\tif (targetLayer !== void) {\r\n"));
+        const bool hasTitleUpdateAnchor =
+            buffer.IndexOf(titleUpdateAnchor) >= 0;
+        patched.Replace(
+            titleUpdateAnchor,
+            TJS_W("\tfunction update(elm) {\r\n"
+                  "\t\tif (name == \"title_bg\" && elm !== void &&\r\n"
+                  "\t\t\t elm.redraw !== void && elm.redraw.imageFile !== void &&\r\n"
+                  "\t\t\t ((typeof elm.redraw.imageFile == \"String\" &&\r\n"
+                  "\t\t\t   elm.redraw.imageFile == \"title_bg\") ||\r\n"
+                  "\t\t\t  (typeof elm.redraw.imageFile == \"Object\" &&\r\n"
+                  "\t\t\t   elm.redraw.imageFile.file == \"title_bg\"))) {\r\n"
+                  "\t\t\ttry {\r\n"
+                  "\t\t\t\tif (Storages.isExistentStorage(\"main/title_bg.png\")) {\r\n"
+                  "\t\t\t\t\telm = Scripts.clone(elm);\r\n"
+                  "\t\t\t\t\tif (typeof elm.redraw.imageFile == \"Object\") {\r\n"
+                  "\t\t\t\t\t\telm.redraw.imageFile = Scripts.clone(elm.redraw.imageFile);\r\n"
+                  "\t\t\t\t\t\telm.redraw.imageFile.file = \"main/title_bg.png\";\r\n"
+                  "\t\t\t\t\t} else {\r\n"
+                  "\t\t\t\t\t\telm.redraw.imageFile = \"main/title_bg.png\";\r\n"
+                  "\t\t\t\t\t}\r\n"
+                  "\t\t\t\t}\r\n"
+                  "\t\t\t} catch(e) {}\r\n"
+                  "\t\t}\r\n"
+                  "\t\tif (targetLayer !== void) {\r\n"),
+            false);
+        if(hasTitleUpdateAnchor && patched != buffer) {
+            spdlog::info("Applied compatibility patch for title_bg source resolution");
+        }
         patched.Replace(
             TJS_W("\t\tvar e = createMsgTag(text, lastText);\r\n"),
             TJS_W("\t\tvar e = createMsgTag(text, lastText);\r\n"
