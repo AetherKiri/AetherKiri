@@ -119,7 +119,7 @@ strip_linux_runtime_symbols() {
     while IFS= read -r -d '' binary; do
         binaries+=("$binary")
     done < <(find "$@" -maxdepth 1 -type f \
-        \( -name 'AetherKiri.x86_64' -o -name '*.so' -o -name '*.so.*' \) \
+        \( -name 'AetherKiri.x86_64' -o -name 'libengine_api.so' -o -name 'libaether_kiri_godot.so' \) \
         -print0)
     if ((${#binaries[@]})); then
         "$PROJECT_ROOT/tools/strip_runtime_symbols.sh" elf "${binaries[@]}"
