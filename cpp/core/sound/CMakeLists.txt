@@ -1,6 +1,18 @@
 cmake_minimum_required(VERSION 3.19)
 project(core_sound_module LANGUAGES CXX)
 
+include("${CMAKE_SOURCE_DIR}/cmake/AetherKrkrzIntegration.cmake")
+
+# WaveSegmentQueue has no Aether-specific implementation delta.  Compile the
+# implementation directly from the pinned core submodule while retaining the
+# Aether-owned header and public sound ABI.  WaveLoopManager remains local
+# because Aether added DesiredFormat and host-specific lifecycle behavior.
+set(AETHER_WAVE_SEGMENT_QUEUE_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/upstream_bridge/WaveSegmentQueue.cpp")
+aether_krkrz_track_core_source(
+    "${AETHER_WAVE_SEGMENT_QUEUE_SOURCE}"
+    "common/sound/WaveSegmentQueue.cpp")
+
 set(SOUND_PATH ${CMAKE_CURRENT_LIST_DIR})
 set(SOUND_SOURCE_FILES
     ${SOUND_PATH}/CDDAIntf.cpp
@@ -16,7 +28,7 @@ set(SOUND_SOURCE_FILES
 #    ${SOUND_PATH}/WaveFormatConverter_SSE.cpp
     ${SOUND_PATH}/WaveIntf.cpp
     ${SOUND_PATH}/WaveLoopManager.cpp
-    ${SOUND_PATH}/WaveSegmentQueue.cpp
+    ${AETHER_WAVE_SEGMENT_QUEUE_SOURCE}
 #    ${SOUND_PATH}/xmmlib.cpp
 
     ${SOUND_PATH}/win32/CDDAImpl.cpp

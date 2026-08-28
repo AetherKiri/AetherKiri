@@ -1,10 +1,18 @@
 cmake_minimum_required(VERSION 3.19)
 project(core_plugin_module LANGUAGES CXX)
 
+include("${CMAKE_SOURCE_DIR}/cmake/AetherKrkrzIntegration.cmake")
+
+set(AETHER_PLUGIN_INTF_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/upstream_bridge/PluginIntf.cpp")
+aether_krkrz_track_core_source(
+    "${AETHER_PLUGIN_INTF_SOURCE}"
+    "common/base/PluginIntf.cpp")
+
 set(PLUGIN_PATH ${CMAKE_CURRENT_LIST_DIR})
 set(PLUGIN_SOURCE_FILES
         ${PLUGIN_PATH}/ncbind.cpp
-        ${PLUGIN_PATH}/PluginIntf.cpp
+        ${AETHER_PLUGIN_INTF_SOURCE}
         ${PLUGIN_PATH}/PluginImpl.cpp
         ${PLUGIN_PATH}/PluginCallTracer.cpp
 )

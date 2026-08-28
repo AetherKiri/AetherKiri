@@ -18,6 +18,13 @@ if(Python3_Interpreter_FOUND)
                 ${CMAKE_SOURCE_DIR}/tools/plugin_manifest_report.py --strict)
     set_tests_properties(plugin_manifest_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+    add_test(
+        NAME krkrz_core_contract
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tools/krkrz_core_audit.py)
+    set_tests_properties(krkrz_core_contract PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 endif()
 
 if(AETHER_BUILD_KRKRZ_CORE_PARITY)

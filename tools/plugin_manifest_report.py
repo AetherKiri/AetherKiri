@@ -30,6 +30,14 @@ VALID_STATUSES = {
 }
 VALID_CORE_STATUSES = {"upstream-adapted", "hybrid", "aether", "optional"}
 VALID_SCRIPT_STATUSES = {"reference", "fixture"}
+PLUGIN_CATALOG_CATEGORIES = {
+    "direct",
+    "hybrid",
+    "aether_owner",
+    "host_compat",
+    "optional",
+    "infrastructure",
+}
 
 
 def load_manifest(path: Path) -> dict[str, Any]:
@@ -54,6 +62,118 @@ def upstream_revision(repo_root: Path) -> str | None:
         return None
 
 
+def upstream_nested_submodules(repo_root: Path) -> tuple[list[str], list[str]]:
+    """Return recursive krkrz submodule entries and checkout problems.
+
+    The parent gitlink pins the complete krkrz tree, including every plugin,
+    core and script child. ``git submodule status --recursive`` detects a
+    child that is uninitialised (``-``), checked out at a different revision
+    (``+``), or in a merge conflict (``U``).
+    """
+    checkout = repo_root / "third_party" / "krkrz_dev"
+    try:
+        output = subprocess.check_output(
+            ["git", "-C", str(checkout), "submodule", "status", "--recursive"],
+            text=True,
+            stderr=subprocess.STDOUT,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        detail = getattr(exc, "output", "") or str(exc)
+        return [], [
+            "cannot inspect krkrz_dev nested submodules: " + detail.strip()
+        ]
+
+    entries: list[str] = []
+    errors: list[str] = []
+    for raw_line in output.splitlines():
+        if not raw_line.strip():
+            continue
+        marker = raw_line[0] if raw_line[0] in "-+U" else " "
+        fields = (
+            raw_line[1:].strip().split(maxsplit=2)
+            if marker != " "
+            else raw_line.strip().split(maxsplit=2)
+        )
+        if len(fields) < 2:
+            errors.append(f"unparseable krkrz submodule status: {raw_line}")
+            continue
+        revision, path = fields[0], fields[1]
+        entries.append(f"{revision} {path}")
+        if marker == "-":
+            errors.append(f"krkrz nested submodule is not initialized: {path}")
+        elif marker == "+":
+            errors.append(
+                "krkrz nested submodule revision differs from parent gitlink: "
+                f"{path} ({revision})"
+            )
+        elif marker == "U":
+            errors.append(f"krkrz nested submodule has merge conflicts: {path}")
+
+    # `git submodule status` validates the gitlink revision, but it does not
+    # reliably expose modified or untracked files inside an otherwise
+    # correctly checked-out child.  Inspect the krkrz superproject and every
+    # initialized descendant as well; source-level reuse must never consume a
+    # locally patched checkout by accident.
+    try:
+        root_status = subprocess.check_output(
+            [
+                "git",
+                "-C",
+                str(checkout),
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+                "--ignore-submodules=all",
+            ],
+            text=True,
+            stderr=subprocess.STDOUT,
+        ).strip()
+        if root_status:
+            sample = "; ".join(root_status.splitlines()[:3])
+            errors.append(f"krkrz_dev checkout has local changes: {sample}")
+
+        initialized = subprocess.check_output(
+            [
+                "git",
+                "-C",
+                str(checkout),
+                "submodule",
+                "foreach",
+                "--recursive",
+                "--quiet",
+                "printf '%s\\n' \"$displaypath\"",
+            ],
+            text=True,
+            stderr=subprocess.STDOUT,
+        )
+        for relative in initialized.splitlines():
+            relative = relative.strip()
+            if not relative:
+                continue
+            child = checkout / relative
+            child_status = subprocess.check_output(
+                [
+                    "git",
+                    "-C",
+                    str(child),
+                    "status",
+                    "--porcelain",
+                    "--untracked-files=all",
+                ],
+                text=True,
+                stderr=subprocess.STDOUT,
+            ).strip()
+            if child_status:
+                sample = "; ".join(child_status.splitlines()[:3])
+                errors.append(
+                    f"krkrz nested submodule has local changes: {relative}: {sample}"
+                )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        detail = getattr(exc, "output", "") or str(exc)
+        errors.append("cannot inspect krkrz checkout worktrees: " + detail.strip())
+    return entries, errors
+
+
 def paths(value: Any) -> list[str]:
     if value is None:
         return []
@@ -62,6 +182,76 @@ def paths(value: Any) -> list[str]:
     if isinstance(value, list) and all(isinstance(item, str) for item in value):
         return value
     return ["<invalid path value>"]
+
+
+def normalize_plugin_name(name: str) -> str:
+    value = name.strip().lower()
+    for suffix in (".dll", ".tpm"):
+        if value.endswith(suffix):
+            value = value[: -len(suffix)]
+    return value
+
+
+def validate_plugin_catalog(
+    data: dict[str, Any], repo_root: Path, errors: list[str]
+) -> tuple[int, dict[str, int]]:
+    """Check that the complete catalog covers every upstream plugin directory."""
+    catalog = data.get("plugin_catalog")
+    if not isinstance(catalog, dict):
+        errors.append("manifest must contain a [plugin_catalog] table")
+        return 0, {}
+
+    catalog_names: dict[str, str] = {}
+    category_counts: dict[str, int] = {}
+    for category, value in catalog.items():
+        if category not in PLUGIN_CATALOG_CATEGORIES:
+            errors.append(f"plugin_catalog has unknown category: {category}")
+            continue
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            errors.append(f"plugin_catalog.{category} must be a list of strings")
+            continue
+        category_counts[category] = len(value)
+        for item in value:
+            normalized = normalize_plugin_name(item)
+            if not normalized:
+                errors.append(f"plugin_catalog.{category} contains an empty name")
+                continue
+            if normalized in catalog_names:
+                errors.append(
+                    "plugin_catalog duplicate plugin: "
+                    f"{item} (already in {catalog_names[normalized]})"
+                )
+            else:
+                catalog_names[normalized] = category
+
+    plugin_root = repo_root / "third_party" / "krkrz_dev" / "src" / "plugins"
+    if not plugin_root.is_dir():
+        errors.append(f"upstream plugin directory does not exist: {plugin_root}")
+        return len(catalog_names), category_counts
+    actual_names = {
+        normalize_plugin_name(path.name)
+        for path in plugin_root.iterdir()
+        if path.is_dir() and not path.name.startswith(".")
+    }
+    missing = sorted(actual_names - set(catalog_names))
+    extra = sorted(set(catalog_names) - actual_names)
+    errors.extend(f"plugin_catalog missing upstream plugin: {name}" for name in missing)
+    errors.extend(f"plugin_catalog names unknown upstream plugin: {name}" for name in extra)
+
+    # Every executable manifest record must also have a complete-catalog owner.
+    for plugin in data.get("plugins", []):
+        if isinstance(plugin, dict) and isinstance(plugin.get("name"), str):
+            # Aether-only implementations and compatibility aliases do not
+            # correspond to an upstream directory and are intentionally not
+            # required to appear in the upstream catalog.
+            if "upstream_path" not in plugin:
+                continue
+            name = normalize_plugin_name(plugin["name"])
+            if name not in catalog_names:
+                errors.append(
+                    f"{plugin['name']}: executable record is absent from plugin_catalog"
+                )
+    return len(catalog_names), category_counts
 
 
 def validate(data: dict[str, Any], repo_root: Path) -> list[str]:
@@ -75,6 +265,10 @@ def validate(data: dict[str, Any], repo_root: Path) -> list[str]:
     revision = data.get("upstream_revision")
     if not isinstance(revision, str) or len(revision) < 7:
         errors.append("upstream_revision must be a pinned commit SHA")
+
+    validate_plugin_catalog(data, repo_root, errors)
+    _, nested_errors = upstream_nested_submodules(repo_root)
+    errors.extend(nested_errors)
 
     seen: set[str] = set()
     for index, plugin in enumerate(data["plugins"]):
@@ -197,6 +391,7 @@ def main() -> int:
     data = load_manifest(manifest)
     errors = validate(data, repo_root)
     actual_revision = upstream_revision(repo_root)
+    nested_submodules, nested_errors = upstream_nested_submodules(repo_root)
     expected_revision = data.get("upstream_revision")
     revision_matches = actual_revision == expected_revision
     if args.strict and actual_revision is not None and not revision_matches:
@@ -233,6 +428,14 @@ def main() -> int:
             )
             script_counts[status] = script_counts.get(status, 0) + 1
 
+    plugin_catalog = data.get("plugin_catalog", {})
+    catalog_counts = {
+        key: len(value)
+        for key, value in plugin_catalog.items()
+        if key in PLUGIN_CATALOG_CATEGORIES and isinstance(value, list)
+    } if isinstance(plugin_catalog, dict) else {}
+    catalog_count = sum(catalog_counts.values())
+
     report = {
         "manifest": str(manifest),
         "schema_version": data.get("schema_version"),
@@ -240,8 +443,13 @@ def main() -> int:
         "expected_revision": expected_revision,
         "actual_revision": actual_revision,
         "revision_matches": revision_matches,
+        "nested_submodule_count": len(nested_submodules),
+        "nested_submodules_clean": not nested_errors,
+        "nested_submodule_errors": nested_errors,
         "plugin_count": len(plugins),
         "status_counts": counts,
+        "plugin_catalog_count": catalog_count,
+        "plugin_catalog_counts": catalog_counts,
         "core_component_count": len(core_components)
         if isinstance(core_components, list)
         else 0,
@@ -258,7 +466,19 @@ def main() -> int:
         print(f"manifest: {manifest}")
         print(f"upstream: {data.get('upstream_repository')} @ {expected_revision}")
         print(f"checkout: {actual_revision or 'unavailable'}")
+        print(
+            "nested submodules: "
+            f"{len(nested_submodules)} ({'clean' if not nested_errors else 'problems'})"
+        )
         print(f"plugins: {len(plugins)}")
+        print(
+            "plugin catalog: "
+            f"{catalog_count} ("
+            + ", ".join(
+                f"{key}={catalog_counts[key]}" for key in sorted(catalog_counts)
+            )
+            + ")"
+        )
         print("status: " + ", ".join(f"{key}={counts[key]}" for key in sorted(counts)))
         print(f"core components: {len(core_components) if isinstance(core_components, list) else 0}")
         if core_counts:

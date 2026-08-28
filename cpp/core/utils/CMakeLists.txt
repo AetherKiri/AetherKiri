@@ -1,16 +1,47 @@
 cmake_minimum_required(VERSION 3.19)
 project(core_utils_module LANGUAGES CXX)
 
+include("${CMAKE_SOURCE_DIR}/cmake/AetherKrkrzIntegration.cmake")
+
+set(AETHER_REAL_FFT_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/upstream_bridge/RealFFT.cpp")
+aether_krkrz_track_core_source(
+    "${AETHER_REAL_FFT_SOURCE}"
+    "common/sound/RealFFT.cpp")
+
+set(AETHER_RANDOM_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/upstream_bridge/Random.cpp")
+aether_krkrz_track_core_source(
+    "${AETHER_RANDOM_SOURCE}"
+    "common/utils/Random.cpp")
+
+set(AETHER_CLIPBOARD_INTF_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/upstream_bridge/ClipboardIntf.cpp")
+aether_krkrz_track_core_source(
+    "${AETHER_CLIPBOARD_INTF_SOURCE}"
+    "common/utils/ClipboardIntf.cpp")
+
+set(AETHER_MISC_UTILITY_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/upstream_bridge/MiscUtility.cpp")
+aether_krkrz_track_core_source(
+    "${AETHER_MISC_UTILITY_SOURCE}"
+    "common/utils/MiscUtility.cpp")
+set(AETHER_MD5_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/upstream_bridge/md5.c")
+aether_krkrz_track_core_source(
+    "${AETHER_MD5_SOURCE}"
+    "common/utils/md5.c")
+
 set(UTILS_PATH ${CMAKE_CURRENT_LIST_DIR})
 set(UTILS_SOURCE_FILES
-    ${UTILS_PATH}/ClipboardIntf.cpp
+    ${AETHER_CLIPBOARD_INTF_SOURCE}
     ${UTILS_PATH}/DebugIntf.cpp
     ${UTILS_PATH}/MathAlgorithms_Default.cpp
-    ${UTILS_PATH}/md5.c
-    ${UTILS_PATH}/MiscUtility.cpp
+    ${AETHER_MD5_SOURCE}
+    ${AETHER_MISC_UTILITY_SOURCE}
     ${UTILS_PATH}/PadIntf.cpp
-    ${UTILS_PATH}/Random.cpp
-    ${UTILS_PATH}/RealFFT_Default.cpp
+    ${AETHER_RANDOM_SOURCE}
+    ${AETHER_REAL_FFT_SOURCE}
     ${UTILS_PATH}/ThreadIntf.cpp
     ${UTILS_PATH}/TickCount.cpp
     ${UTILS_PATH}/TimerIntf.cpp

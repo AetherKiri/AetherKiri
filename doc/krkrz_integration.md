@@ -24,6 +24,7 @@ After a fresh clone:
 ```bash
 git submodule update --init --recursive third_party/krkrz_dev
 python3 tools/plugin_manifest_report.py --strict
+python3 tools/krkrz_core_audit.py
 ```
 
 The repository URL intentionally remains the SSH URL used by maintainers. A
@@ -33,6 +34,10 @@ public CI job can override it for this command only:
 git -c submodule.third_party/krkrz_dev.url=https://github.com/wamsoft/krkrz_dev.git \
   submodule update --init --recursive --depth 1 third_party/krkrz_dev
 ```
+
+`plugin_manifest_report.py --strict` also checks all 75 nested submodules below
+the checkout. An uninitialized, drifted, conflicted, or locally dirty child
+worktree fails the check.
 
 Updating the source is a two-part change: move the parent gitlink, then update
 `upstream_revision` in
@@ -120,11 +125,18 @@ parity tests.
   state. A future individual kernel can be adopted only after namespacing and
   an engine-level image test.
 * **Sound DSP:** Aether's `cpp/core/sound` and `cpp/core/utils` own the public
-  sound ABI and default implementation. Upstream `MathAlgorithms`, `RealFFT`,
-  and phase-vocoder SIMD code are currently parity/reference inputs. Individual
-  methods may be adopted later behind renamed or namespaced symbols and the
-  upstream relative/absolute-tolerance parity test; the complete upstream
+  sound ABI and dispatch. The scalar `MathAlgorithms.cpp`, `RealFFT.cpp`, and
+  `WaveSegmentQueue.cpp` translation units are consumed through source bridges
+  from the pinned checkout; Aether keeps the public headers and lifecycle
+  owners. SIMD, phase-vocoder, and loop-manager code remain parity/reference
+  inputs because their dispatch and host state differ. The complete upstream
   sound core is not linked as a second implementation.
+* **Portable core leaves:** `visual/gl/WeightFunctor.cpp`,
+  `utils/Random.cpp`, `utils/ClipboardIntf.cpp`, `utils/MiscUtility.cpp`,
+  `utils/md5.c`, `base/PluginIntf.cpp`, and `tjs2/tjsException.cpp` are also
+  consumed through small Aether-header bridges. They contain no host lifecycle
+  state; platform storage, message registration, and public ABI remain owned by
+  Aether.
 * **DAP debugger:** Upstream `tjsDebuggerCore`, hook/symbol files, and
   `DAPServer` are recorded as `optional`. They require an adapter for Aether's
   VM hooks, thread lifecycle, socket ownership, and host event loop before they
@@ -133,6 +145,9 @@ parity tests.
 
 This distinction is deliberate: “reusable algorithm” does not mean “safe to
 link as a second core.”
+The full file-by-file decisions for similar-but-incompatible units such as
+`VelocityTracker`, `TickCount`, `CharacterSet`, `BinaryStream`, and the bitmap
+geometry code are recorded in the [Chinese full audit matrix](krkrz_full_audit.zh-CN.md).
 
 ## Optional plugins and stubs
 
@@ -220,6 +235,7 @@ The minimum pre-submit checks are:
 
 ```bash
 python3 tools/plugin_manifest_report.py --strict
+python3 tools/krkrz_core_audit.py
 python3 tools/plugin_gap_audit.py
 cmake --build <build-dir> --target krkr2plugin --parallel
 ctest --test-dir <build-dir> --output-on-failure

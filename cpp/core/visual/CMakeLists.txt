@@ -1,6 +1,14 @@
 cmake_minimum_required(VERSION 3.19)
 project(core_visual_module LANGUAGES CXX)
 
+include("${CMAKE_SOURCE_DIR}/cmake/AetherKrkrzIntegration.cmake")
+
+set(AETHER_WEIGHT_FUNCTOR_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/upstream_bridge/WeightFunctor.cpp")
+aether_krkrz_track_core_source(
+    "${AETHER_WEIGHT_FUNCTOR_SOURCE}"
+    "common/visual/gl/WeightFunctor.cpp")
+
 set(VISUAL_PATH ${CMAKE_CURRENT_LIST_DIR})
 set(VISUAL_SOURCE_FILES
     ${VISUAL_PATH}/LoadWEBP.cpp
@@ -41,7 +49,7 @@ set(VISUAL_SOURCE_FILES
 
     ${VISUAL_PATH}/gl/blend_function.cpp
     ${VISUAL_PATH}/gl/ResampleImage.cpp
-    ${VISUAL_PATH}/gl/WeightFunctor.cpp
+    ${AETHER_WEIGHT_FUNCTOR_SOURCE}
 
     ${VISUAL_PATH}/ogl/etcpak.cpp
     ${VISUAL_PATH}/ogl/PVRTDecompress.cpp

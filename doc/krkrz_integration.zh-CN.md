@@ -7,6 +7,10 @@
 在 upstream 业务逻辑兼容时复用其源码，同时由 AetherKiri 继续负责运行时 ABI、
 插件注册、平台生命周期以及渲染/音频集成。
 
+完整的 56 个插件、core、external、脚本、工具和资源入口审核见
+[`krkrz_full_audit.zh-CN.md`](krkrz_full_audit.zh-CN.md)。本文只保留已经落地的集成
+契约和构建验证方法，避免把“已审核”误解为“全部已接入产品”。
+
 ## 固定来源与 checkout
 
 父仓库通过一个公开 gitlink 引入 `third_party/krkrz_dev`。当前 gitlink 与
@@ -22,6 +26,7 @@ revision:   83cc5cc4528bf431d16b5d4949cb11966331e392
 ```bash
 git submodule update --init --recursive third_party/krkrz_dev
 python3 tools/plugin_manifest_report.py --strict
+python3 tools/krkrz_core_audit.py
 ```
 
 仓库 URL 有意保留维护者使用的 SSH 地址。公开 CI 只在这条命令中临时覆盖为
@@ -31,6 +36,9 @@ HTTPS：
 git -c submodule.third_party/krkrz_dev.url=https://github.com/wamsoft/krkrz_dev.git \
   submodule update --init --recursive --depth 1 third_party/krkrz_dev
 ```
+
+`plugin_manifest_report.py --strict` 还会检查 `krkrz_dev` 下的全部 nested
+submodule；当前 checkout 共 75 个，任何未初始化、漂移、冲突或本地脏工作区状态都会直接失败。
 
 更新 upstream 源码需要同时修改两处：移动父仓 gitlink，并更新
 [`runtime/kirikiri/manifests/plugins.toml`](../runtime/kirikiri/manifests/plugins.toml)
@@ -105,16 +113,23 @@ upstream core 有复用价值，但不是 Aether core 的直接替代品。manif
   方法级参考；整包导入会重复 `tvpgl` 符号和 CPU dispatch 状态。以后若采用单个
   kernel，必须先做 namespace 隔离并增加 engine-level 图像测试。
 * **Sound DSP：** `cpp/core/sound` 与 `cpp/core/utils` 负责公开 sound ABI 和默认
-  实现。upstream `MathAlgorithms`、`RealFFT` 与 phase-vocoder SIMD 代码目前是
-  parity/参考输入。以后可以在重命名或 namespace 隔离后，按单个方法并通过 upstream
-  相对/绝对误差 parity 测试来采用；不会把整套 upstream sound core 作为第二套实现
-  链接。
+  实现。`MathAlgorithms.cpp`、`RealFFT.cpp` 和 `WaveSegmentQueue.cpp` 已通过 Aether
+  bridge 直接编译固定 submodule 源码；upstream SSE/NEON、phase-vocoder SIMD 代码仍
+  是 parity/参考输入，后续只能按单个方法并通过相对/绝对误差测试采用；不会把整套
+  upstream sound core 作为第二套实现链接。
+* **无宿主状态叶子：** `visual/gl/WeightFunctor.cpp`、`utils/Random.cpp`、
+  `utils/ClipboardIntf.cpp`、`utils/MiscUtility.cpp`、`utils/md5.c`、`base/PluginIntf.cpp` 和 `tjs2/tjsException.cpp` 已用
+  source bridge 直接消费 pinned submodule 的实现。桥接文件先包含 Aether 头文件，
+  因此仍只有一套 TJS/message/clipboard ABI；平台存储和生命周期不会从 upstream 引入。
 * **DAP debugger：** upstream `tjsDebuggerCore`、hook/symbol 文件及 `DAPServer`
   标记为 `optional`。它们需要先适配 Aether 的 VM hook、线程生命周期、socket
   所有权和 host event loop 才能链接。upstream `dap_smoke.py` 只是未来验收测试，
   不能证明 Aether 当前已经暴露 DAP。
 
 这里的区别是有意的：“算法可复用”不等于“可以作为第二套 core 安全链接”。
+相似但被否决整文件桥接的 `VelocityTracker`、`TickCount`、`CharacterSet`、
+`BinaryStream`、`ComplexRect` 和 `LayerBitmapIntf` 的逐项原因，见
+[`krkrz_full_audit.zh-CN.md`](krkrz_full_audit.zh-CN.md) 的“相似但明确不整文件桥接”表。
 
 ## Optional 插件与 Stub
 
@@ -188,6 +203,7 @@ AetherInternal 配置都受支持；后者是扩展目标，不会替换其余�
 
 ```bash
 python3 tools/plugin_manifest_report.py --strict
+python3 tools/krkrz_core_audit.py
 python3 tools/plugin_gap_audit.py
 cmake --build <build-dir> --target krkr2plugin --parallel
 ctest --test-dir <build-dir> --output-on-failure

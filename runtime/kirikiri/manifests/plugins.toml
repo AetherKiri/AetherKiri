@@ -18,6 +18,82 @@ core_policy = "aether-owned-with-upstream-parity"
 
 # KAG/TJS assets stay in the nested public submodules.  They are references or
 # test fixtures only; no second copy is staged into the Aether runtime source.
+
+# Complete catalog for every immediate directory under src/plugins.  The
+# executable [[plugins]] records below describe the modules currently wired
+# into Aether; this catalog deliberately also records reference-only and
+# host-only modules so an upstream directory can never disappear from the
+# review unnoticed.
+[plugin_catalog]
+direct = [
+  "layerExAreaAverage",
+  "layerExRaster",
+  "layerExLongExposure",
+  "getSample",
+  "layerExBTOA",
+  "layerExImage",
+  "shrinkCopy",
+]
+hybrid = [
+  "AlphaMovie",
+  "KAGParserEx",
+  "layerExSave",
+  "extNagano",
+  "layerExVector",
+  "psdfile",
+]
+aether_owner = [
+  "addFont",
+  "binaryStream",
+  "csvParser",
+  "expat",
+  "extrans",
+  "fstat",
+  "json",
+  "layerEx",
+  "layerExDraw",
+  "lineParser",
+  "memfile",
+  "menu",
+  "minizip",
+  "saveStruct",
+  "scriptsEx",
+  "varfile",
+]
+host_compat = [
+  "fpslimit",
+  "gamepad",
+  "httprequest",
+  "httpserv",
+  "krkrgles",
+  "krkrlive2d",
+  "messenger",
+  "msgreceiver",
+  "process",
+  "resourceRW",
+  "shellExecute",
+  "sigcheck",
+  "stdio",
+  "steam",
+  "systemEx",
+  "tftSave",
+  "win32dialog",
+  "win32ole",
+  "windowEx",
+  "windowExProgress",
+]
+optional = [
+  "clipfile",
+  "krkr_richtext",
+  "krkreffekseer",
+  "krkrthreepp",
+]
+infrastructure = [
+  "ncbind",
+  "simplebinder",
+  "tp_stub",
+]
+
 [[script_components]]
 name = "KAG3"
 status = "reference"
@@ -85,20 +161,62 @@ notes = "Aether's Highway/function-pointer dispatch remains the linked implement
 name = "sound-dsp"
 status = "aether"
 upstream_path = [
-  "src/core/common/sound/MathAlgorithms.cpp",
   "src/core/common/sound/MathAlgorithms_SSE.cpp",
   "src/core/common/sound/MathAlgorithms_NEON.cpp",
-  "src/core/common/sound/RealFFT.cpp",
   "src/core/common/sound/RealFFT_SSE.cpp",
   "src/core/common/sound/RealFFT_NEON.cpp",
   "src/core/common/sound/PhaseVocoderDSP.cpp",
   "src/core/common/sound/PhaseVocoderFilter.cpp",
   "src/core/common/sound/WaveLoopManager.cpp",
-  "src/core/common/sound/WaveSegmentQueue.cpp",
 ]
 adapter = "cpp/core/sound"
 parity_test = "src/core/tests/sound_parity_test.cpp"
-notes = "Aether's sound module owns the public ABI and default/SIMD dispatch; upstream DSP is adopted only through parity-checked, symbol-separated changes."
+notes = "Aether's sound module owns the public ABI and default/SIMD dispatch. SIMD and phase-vocoder changes remain parity-checked and symbol-separated; scalar leaves are tracked separately below."
+
+[[core_components]]
+name = "sound-scalar-leaves"
+status = "upstream-adapted"
+upstream_path = [
+  "src/core/common/sound/MathAlgorithms.cpp",
+  "src/core/common/sound/RealFFT.cpp",
+]
+adapter = "cpp/core/utils"
+parity_test = "src/core/tests/sound_parity_test.cpp"
+notes = "The scalar window and real-FFT implementations are compiled through Aether source bridges; the public declarations and SIMD dispatch remain Aether-owned."
+
+[[core_components]]
+name = "sound-segment-queue"
+status = "upstream-adapted"
+upstream_path = [
+  "src/core/common/sound/WaveSegmentQueue.cpp",
+  "src/core/common/sound/WaveSegmentQueue.h",
+]
+adapter = "cpp/core/sound/CMakeLists.txt"
+notes = "The implementation is compiled directly from the pinned core submodule because its queue semantics match Aether; Aether keeps the public header and sound lifecycle owner."
+
+[[core_components]]
+name = "visual-weight-functor"
+status = "upstream-adapted"
+upstream_path = [
+  "src/core/common/visual/gl/WeightFunctor.cpp",
+  "src/core/common/visual/gl/WeightFunctor.h",
+]
+adapter = "cpp/core/visual/CMakeLists.txt"
+notes = "The static resampling weight constants are compiled from upstream through a bridge; Aether retains the header and renderer target."
+
+[[core_components]]
+name = "portable-core-leaves"
+status = "upstream-adapted"
+upstream_path = [
+  "src/core/common/utils/Random.cpp",
+  "src/core/common/utils/ClipboardIntf.cpp",
+  "src/core/common/utils/MiscUtility.cpp",
+  "src/core/common/utils/md5.c",
+  "src/core/common/base/PluginIntf.cpp",
+  "src/core/common/tjs2/tjsException.cpp",
+]
+adapter = "cpp/core"
+notes = "These stateless TJS/utility translation units are consumed directly from the pinned submodule with Aether headers pre-included; platform clipboard storage, message registry, and public ABI remain Aether-owned."
 
 [[core_components]]
 name = "tjs-dap"

@@ -1,6 +1,14 @@
 cmake_minimum_required(VERSION 3.28)
 project(tjs2)
 
+include("${CMAKE_SOURCE_DIR}/cmake/AetherKrkrzIntegration.cmake")
+
+set(AETHER_TJS_EXCEPTION_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/upstream_bridge/tjsException.cpp")
+aether_krkrz_track_core_source(
+    "${AETHER_TJS_EXCEPTION_SOURCE}"
+    "common/tjs2/tjsException.cpp")
+
 add_library(${PROJECT_NAME} STATIC)
 target_compile_definitions(${PROJECT_NAME} PRIVATE $<$<CONFIG:Debug>:_DEBUG>)
 
@@ -91,7 +99,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     tjsObject.cpp
     tjsConstArrayData.cpp
     tjsUtils.cpp
-    tjsException.cpp
+    ${AETHER_TJS_EXCEPTION_SOURCE}
     tjsDictionary.cpp
     tjsInterCodeExec.cpp
     tjsVariantString.cpp

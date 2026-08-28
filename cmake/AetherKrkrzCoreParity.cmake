@@ -96,7 +96,8 @@ function(aether_krkrz_add_core_parity_targets)
         target_include_directories(aether_krkrz_sound_parity PRIVATE
             ${_common_includes})
         target_compile_definitions(aether_krkrz_sound_parity PRIVATE
-            ${_common_definitions})
+            ${_common_definitions}
+            TVP_SOUND_HAS_X86_SIMD)
 
         if(MSVC)
             set(_avx2_flags "/arch:AVX2")
@@ -150,7 +151,8 @@ function(aether_krkrz_add_core_parity_targets)
         target_include_directories(aether_krkrz_sound_parity PRIVATE
             ${_common_includes})
         target_compile_definitions(aether_krkrz_sound_parity PRIVATE
-            ${_common_definitions})
+            ${_common_definitions}
+            TVP_SOUND_HAS_ARM_SIMD)
     endif()
 
     if(UNIX AND NOT APPLE)
