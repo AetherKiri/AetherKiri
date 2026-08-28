@@ -1,6 +1,7 @@
 #include "ncbind.hpp"
 #include <spdlog/spdlog.h>
 
+#ifdef AETHERKIRI_INTERNAL_KRKR2_PLUGIN
 // Private AetherInternal compatibility hooks.  PackinOne is the first
 // module that the game's startup script links, so use its guaranteed
 // pre-registration callback to install the recovered SliceLayer/ProxyStorage
@@ -18,6 +19,7 @@ void registerPackinOneCompat() {
 }
 
 } // namespace
+#endif
 
 // The actual features of PackinOne.dll (fstat, dirlist, addFont, saveStruct, getMD5HashString)
 // are already completely implemented in C++ across fstat/main.cpp, addFont.cpp, saveStruct.cpp, etc.
@@ -73,4 +75,6 @@ NCB_REGISTER_CLASS(CompoundStorageMedia) {
     NCB_PROPERTY_RO(archiveUniqueKey, getArchiveUniqueKey);
 }
 
+#ifdef AETHERKIRI_INTERNAL_KRKR2_PLUGIN
 NCB_PRE_REGIST_CALLBACK(registerPackinOneCompat);
+#endif

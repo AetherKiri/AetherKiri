@@ -732,6 +732,14 @@ void PluginCallTracer::LogPluginLoad(const std::string &name, bool success,
 void PluginCallTracer::LogMissingMember(const tjs_char *membername,
                                          const char *operation,
                                          iTJSDispatch2 *obj) {
+    m_missingMemberCount.fetch_add(1, std::memory_order_relaxed);
+    // Optional plugin hooks are probed frequently by KiriKiri games. When
+    // tracing is off, collecting ClassInstanceInfo plus a mutex-protected
+    // de-duplicated vector for every miss needlessly extends the game tick.
+    // Preserve the aggregate counter for the debug snapshot and defer the
+    // detailed (high-overhead) evidence to an explicitly enabled trace.
+    if (!IsEnabled()) return;
+
     tTJSNarrowStringHolder ns(membername);
     std::string className;
     if (obj) {
@@ -746,7 +754,8 @@ void PluginCallTracer::LogMissingMember(const tjs_char *membername,
 
     {
         std::lock_guard<std::mutex> lock(m_statsMutex);
-        ++m_stats.missingMembers;
+        m_stats.missingMembers =
+            m_missingMemberCount.load(std::memory_order_relaxed);
         std::string item = className.empty() ? std::string{} : className + ".";
         item += ns.operator const char *();
         item += " [";
@@ -781,12 +790,15 @@ void PluginCallTracer::LogMissingMember(const tjs_char *membername,
 PluginDebugSnapshot PluginCallTracer::GetDebugSnapshot() const {
     std::lock_guard<std::mutex> lock(m_statsMutex);
     auto snapshot = m_stats;
+    snapshot.missingMembers =
+        m_missingMemberCount.load(std::memory_order_relaxed);
     snapshot.tracingEnabled = IsEnabled();
     return snapshot;
 }
 
 void PluginCallTracer::ResetDebugStats() {
     std::lock_guard<std::mutex> lock(m_statsMutex);
+    m_missingMemberCount.store(0, std::memory_order_relaxed);
     m_stats = PluginDebugSnapshot{};
     m_stats.tracingEnabled = IsEnabled();
 }

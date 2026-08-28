@@ -1544,6 +1544,88 @@ static ttstr TVPFindExactArchiveAutoPath(const ttstr &normalized) {
     return {};
 }
 
+// Older KAG save screens stored their continue/quick-save/slot screenshots as
+// BMPs, while newer scripts may probe the same basename with a JPG suffix.
+// Keep this compatibility rule at storage resolution so an existence probe
+// and the subsequent graphic load observe the same legacy file.  The
+// basename and savedata directory checks are deliberately narrow; ordinary
+// game resources must retain the normal explicit-extension semantics.
+static bool TVPStorageNameLooksLegacySaveThumbnail(const ttstr &name) {
+    const ttstr file_name = TVPExtractStorageName(name);
+    std::string file = TVPChopStorageExt(file_name).AsStdString();
+    std::transform(file.begin(), file.end(), file.begin(),
+                   [](unsigned char ch) {
+                       return static_cast<char>(std::tolower(ch));
+                   });
+
+    bool known_save_name = file == "data_continue";
+    if(!known_save_name && file.rfind("data_quick_", 0) == 0) {
+        const std::string slot = file.substr(std::strlen("data_quick_"));
+        known_save_name = !slot.empty() &&
+            std::all_of(slot.begin(), slot.end(),
+                        [](unsigned char ch) { return std::isdigit(ch); });
+    }
+    if(!known_save_name && file.rfind("data_", 0) == 0) {
+        const std::size_t separator = file.find('_', 5);
+        if(separator > 5 && separator + 1 < file.size()) {
+            const std::string save = file.substr(5, separator - 5);
+            const std::string slot = file.substr(separator + 1);
+            known_save_name =
+                std::all_of(save.begin(), save.end(),
+                            [](unsigned char ch) { return std::isdigit(ch); }) &&
+                std::all_of(slot.begin(), slot.end(),
+                            [](unsigned char ch) { return std::isdigit(ch); });
+        }
+    }
+    if(!known_save_name)
+        return false;
+
+    std::string path = TVPExtractStoragePath(name).AsStdString();
+    std::transform(path.begin(), path.end(), path.begin(),
+                   [](unsigned char ch) {
+                       return static_cast<char>(std::tolower(ch));
+                   });
+    return path.find("savedata") != std::string::npos;
+}
+
+static ttstr TVPFindLegacySaveThumbnail(const ttstr &normalized) {
+    if(!TVPStorageNameLooksLegacySaveThumbnail(normalized))
+        return {};
+
+    const ttstr ext = TVPExtractStorageExt(normalized);
+    if(ext.IsEmpty())
+        return {}; // extensionless requests already use graphic guessing
+
+    static constexpr const char *raster_extensions[] = {
+        ".bmp",  ".jpg",  ".jpeg", ".png",  ".tlg",  ".tlg5", ".tlg6",
+        ".webp", ".jxr",  ".bpg",  ".pvr",  ".jif",  ".dib",  ".amv",
+    };
+    std::string requested_ext = ext.AsStdString();
+    std::transform(requested_ext.begin(), requested_ext.end(),
+                   requested_ext.begin(), [](unsigned char ch) {
+                       return static_cast<char>(std::tolower(ch));
+                   });
+    bool known_raster = false;
+    for(const char *candidate : raster_extensions) {
+        if(requested_ext == candidate) {
+            known_raster = true;
+            break;
+        }
+    }
+    if(!known_raster)
+        return {}; // never alias a save-state or metadata file to an image
+
+    const ttstr stem = TVPChopStorageExt(normalized);
+    for(const char *extension : raster_extensions) {
+        const ttstr candidate = stem + ttstr(extension);
+        if(candidate == normalized ||
+           !TVPIsRealStorageNoSearchNoNormalize(candidate))
+            continue;
+        return candidate;
+    }
+    return {};
+}
+
 //---------------------------------------------------------------------------
 void TVPAddAutoPath(const ttstr &name) {
     tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
@@ -1837,6 +1919,21 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
                          name.AsStdString(), normalized.AsStdString());
         }
         return normalized;
+    }
+
+    // Preserve the old save-thumbnail convention when a script explicitly
+    // asks for a missing raster suffix (for example data_quick_01.jpg) but
+    // only the same-stem BMP is present in savedata/. This must happen before
+    // the normal auto-path miss is cached, otherwise the failed JPG probe
+    // would prevent the legacy candidate from being considered later.
+    if(ttstr legacy = TVPFindLegacySaveThumbnail(normalized);
+       !legacy.IsEmpty()) {
+        if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
+            spdlog::info(
+                "StorageTrace legacy save thumbnail request={} resolved={}",
+                name.AsStdString(), legacy.AsStdString());
+        }
+        return legacy;
     }
 
     // A normalized project-relative path cannot be opened directly when the

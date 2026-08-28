@@ -11,6 +11,8 @@
 #ifndef LayerIntfH
 #define LayerIntfH
 
+#include <memory>
+
 #include "tjsNative.h"
 #include "tvpfontstruc.h"
 #include "ComplexRect.h"
@@ -431,6 +433,15 @@ public:
     // management --
     tTVPBaseTexture *MainImage;
 
+    // A large TLG can take hundreds of milliseconds to decode.  Keep the
+    // currently displayed image in place while that decode runs on the image
+    // worker, and use a generation to discard stale results when the scene
+    // advances again before the worker finishes.
+    std::shared_ptr<unsigned char> DeferredImageLoadToken;
+    tjs_uint64 DeferredImageLoadGeneration = 0;
+    ttstr DeferredImageLoadName;
+    tjs_uint32 DeferredImageLoadColorKey = TVP_clNone;
+
 protected:
     ttstr _evictedImageName;
     tjs_uint32 _evictedColorKey = 0;
@@ -471,6 +482,13 @@ public:
 
     void AssignMainImageWithUpdate(iTVPBaseBitmap *bmp);
     void CopyFromMainImage(class tTJSNI_Bitmap *bmp);
+
+    // Complete a deferred large-image load started by LoadImages().  The
+    // callback is intentionally owned by the layer so a stale worker result
+    // cannot replace a newer scene image.
+    void CompleteDeferredImageLoad(const ttstr &name, tjs_uint32 colorkey,
+                                   tjs_uint64 generation,
+                                   tTVPBaseBitmap *bitmap, bool success);
 #ifndef TVP_REVRGB
 #define TVP_REVRGB(v)                                                          \
     ((v & 0xFF00FF00) | ((v >> 16) & 0xFF) | ((v & 0xFF) << 16))
