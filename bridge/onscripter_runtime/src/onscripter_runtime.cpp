@@ -60,8 +60,16 @@ std::string g_stdoutpath = "stdout.txt";
 std::string g_stderrpath = "stderr.txt";
 
 // Upstream built-in layer effects refer to a process-global `ONScripter ons`.
-// Keep the exact declared type so MSVC emits the same ABI symbol.
+#ifdef _WIN32
 ONScripter ons;
+#else
+union ONScripterGlobalStorage {
+    ONScripter value;
+    ONScripterGlobalStorage() {}
+    ~ONScripterGlobalStorage() {}
+};
+ONScripterGlobalStorage ons;
+#endif
 
 namespace {
 

@@ -196,7 +196,7 @@ jobs:
           cp -a "${RUNNER_TEMP}/godot-templates/templates/." "${template_dir}/"
 
           echo "GODOT_BIN=${GITHUB_WORKSPACE}/${godot_bin}" >> "$GITHUB_ENV"
-          echo "GODOT_TEMPLATE_DIR=${HOME}/.local/share/godot/export_templates" >> "$GITHUB_ENV"
+          echo "GODOT_TEMPLATE_DIR=${template_dir}" >> "$GITHUB_ENV"
 
       - name: Set up Android SDK and pinned NDK
         run: |
