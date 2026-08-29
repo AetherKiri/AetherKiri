@@ -191,6 +191,8 @@ func _run() -> void:
         controls.space_button,
         controls.mouse_left_button,
         controls.mouse_right_button,
+        controls.scroll_up_button,
+        controls.scroll_down_button,
     ]
     reference_circles.append_array(controls.digit_buttons)
     for button in reference_circles:
@@ -221,25 +223,18 @@ func _run() -> void:
     ):
         _fail("mouse buttons are missing the UU-style mouse icons")
         return
+    var scroll_up_rect: Rect2 = controls.scroll_up_button.get_global_rect()
+    var scroll_down_rect: Rect2 = controls.scroll_down_button.get_global_rect()
     if (
-        controls.wheel_backdrop == null
-        or not controls.wheel_backdrop.get_global_rect().encloses(
-            controls.scroll_up_button.get_global_rect()
-        )
-        or not controls.wheel_backdrop.get_global_rect().encloses(
-            controls.scroll_down_button.get_global_rect()
-        )
+        scroll_up_rect.intersects(scroll_down_rect)
+        or scroll_up_rect.intersects(controls.escape_button.get_global_rect())
+        or scroll_down_rect.intersects(controls.dpad_backdrop.get_global_rect())
+        or not is_equal_approx(scroll_up_rect.position.x, scroll_down_rect.position.x)
+        or scroll_down_rect.position.y <= scroll_up_rect.end.y
+        or controls.scroll_up_button.text != "▲"
+        or controls.scroll_down_button.text != "▼"
     ):
-        _fail("scroll controls are not contained in the UU-style wheel")
-        return
-    var wheel_visual_rect: Rect2 = controls.wheel_backdrop.get_global_rect()
-    var wheel_gesture_rect: Rect2 = controls.wheel_gesture_rect()
-    if (
-        not wheel_gesture_rect.encloses(wheel_visual_rect)
-        or wheel_gesture_rect.size.x < GameVirtualControls.WHEEL_TOUCH_TARGET_MIN_SIZE.x
-        or wheel_gesture_rect.size.y < GameVirtualControls.WHEEL_TOUCH_TARGET_MIN_SIZE.y
-    ):
-        _fail("scroll gesture target did not expand beyond the UU-style wheel")
+        _fail("scroll actions are not two separate vertical buttons")
         return
     var cursor: Control = controls.cursor_handle
     var cursor_glow := cursor.get_node_or_null("Glow") as TextureRect
@@ -284,6 +279,7 @@ func _run() -> void:
         _fail("edge Menu overlaps the numeric controls")
         return
 
+    var cursor_before_full_screen_drag := controls.cursor_screen_position()
     var outside := InputEventScreenTouch.new()
     outside.index = 11
     outside.pressed = true
@@ -293,16 +289,23 @@ func _run() -> void:
         return
     var outside_drag := InputEventScreenDrag.new()
     outside_drag.index = outside.index
+    outside_drag.relative = Vector2(12, 8)
     outside_drag.position = outside.position + Vector2(12, 8)
-    if not controls.routes_pointer(outside_drag):
-        _fail("mouse mode lost its blocked direct-touch drag")
+    if (
+        not controls.routes_pointer(outside_drag)
+        or _pointer_moves.size() != 1
+        or not controls.cursor_screen_position().is_equal_approx(
+            cursor_before_full_screen_drag + outside_drag.relative
+        )
+    ):
+        _fail("mouse mode did not move the cursor from the full-screen touchpad")
         return
     var outside_up := InputEventScreenTouch.new()
     outside_up.index = outside.index
     outside_up.pressed = false
     outside_up.position = outside_drag.position
     if not controls.routes_pointer(outside_up):
-        _fail("mouse mode lost its blocked direct-touch release")
+        _fail("mouse mode lost its full-screen touchpad release")
         return
     var outside_mouse := InputEventMouseButton.new()
     outside_mouse.button_index = MOUSE_BUTTON_LEFT
@@ -310,6 +313,20 @@ func _run() -> void:
     outside_mouse.position = outside.position
     if not controls.routes_pointer(outside_mouse):
         _fail("mouse mode leaked a hardware click into the game")
+        return
+    var outside_mouse_motion := InputEventMouseMotion.new()
+    outside_mouse_motion.relative = Vector2(-7, 5)
+    outside_mouse_motion.position = outside_mouse.position + outside_mouse_motion.relative
+    if (
+        not controls.routes_pointer(outside_mouse_motion)
+        or _pointer_moves.size() != 2
+    ):
+        _fail("mouse mode did not support full-screen hardware-mouse dragging")
+        return
+    outside_mouse.pressed = false
+    outside_mouse.position = outside_mouse_motion.position
+    if not controls.routes_pointer(outside_mouse):
+        _fail("mouse mode lost the full-screen hardware drag release")
         return
     var inside := InputEventScreenTouch.new()
     inside.pressed = true
@@ -398,15 +415,25 @@ func _run() -> void:
     var cursor_down := InputEventScreenTouch.new()
     cursor_down.index = 7
     cursor_down.pressed = true
-    cursor_down.position = cursor_before
+    cursor_down.position = safe_rect.position + safe_rect.size * Vector2(0.62, 0.34)
+    if controls.cursor_handle.get_global_rect().has_point(cursor_down.position):
+        _fail("full-screen cursor test unexpectedly started on the cursor")
+        return
     if not controls.routes_pointer(cursor_down):
         _fail("cursor press was not captured")
         return
     var cursor_drag := InputEventScreenDrag.new()
     cursor_drag.index = 7
-    cursor_drag.position = cursor_before + Vector2(31, -24)
-    if not controls.routes_pointer(cursor_drag) or _pointer_moves.size() != 1:
-        _fail("cursor drag did not route a pointer move")
+    cursor_drag.relative = Vector2(31, -24)
+    cursor_drag.position = cursor_down.position + cursor_drag.relative
+    if (
+        not controls.routes_pointer(cursor_drag)
+        or _pointer_moves.size() != 3
+        or not controls.cursor_screen_position().is_equal_approx(
+            cursor_before + cursor_drag.relative
+        )
+    ):
+        _fail("full-screen cursor drag did not route a relative pointer move")
         return
     var cursor_up := InputEventScreenTouch.new()
     cursor_up.index = 7
@@ -429,106 +456,44 @@ func _run() -> void:
     ):
         _fail("left/right mouse modifiers are incorrect")
         return
-    var wheel_center := wheel_visual_rect.get_center()
-    var wheel_tap_x := wheel_gesture_rect.position.x + 4.0
-    var emulated_wheel_mouse := InputEventMouseButton.new()
-    emulated_wheel_mouse.device = GameVirtualControls.INPUT_DEVICE_ID_EMULATION
-    emulated_wheel_mouse.button_index = MOUSE_BUTTON_LEFT
-    emulated_wheel_mouse.pressed = true
-    emulated_wheel_mouse.position = wheel_center
-    if not controls.routes_pointer(emulated_wheel_mouse):
-        _fail("emulated iOS mouse press escaped the wheel gesture target")
-        return
-    emulated_wheel_mouse.pressed = false
-    if (
-        not controls.routes_pointer(emulated_wheel_mouse)
-        or not _scroll_events.is_empty()
-    ):
-        _fail("emulated iOS mouse event duplicated a wheel gesture")
-        return
-    var wheel_up_down := InputEventScreenTouch.new()
-    wheel_up_down.index = 20
-    wheel_up_down.pressed = true
-    wheel_up_down.position = Vector2(wheel_tap_x, wheel_center.y - 12.0)
-    var wheel_up_up := InputEventScreenTouch.new()
-    wheel_up_up.index = wheel_up_down.index
-    wheel_up_up.pressed = false
-    wheel_up_up.position = wheel_up_down.position
-    var wheel_down_down := InputEventScreenTouch.new()
-    wheel_down_down.index = 21
-    wheel_down_down.pressed = true
-    wheel_down_down.position = Vector2(wheel_tap_x, wheel_center.y + 12.0)
-    var wheel_down_up := InputEventScreenTouch.new()
-    wheel_down_up.index = wheel_down_down.index
-    wheel_down_up.pressed = false
-    wheel_down_up.position = wheel_down_down.position
-    if (
-        not controls.routes_pointer(wheel_up_down)
-        or not controls.routes_pointer(wheel_up_up)
-        or not controls.routes_pointer(wheel_down_down)
-        or not controls.routes_pointer(wheel_down_up)
-    ):
-        _fail("expanded mouse-wheel tap target did not capture input")
-        return
+    controls.scroll_up_button.emit_signal("button_down")
+    controls.scroll_up_button.emit_signal("button_up")
+    controls.scroll_down_button.emit_signal("button_down")
+    controls.scroll_down_button.emit_signal("button_up")
     if (
         _scroll_events.size() != 2
         or _scroll_events[0].delta_y != -1.0
         or _scroll_events[1].delta_y != 1.0
     ):
-        _fail("mouse-wheel directions are incorrect")
+        _fail("separate scroll-button directions are incorrect")
         return
-
-    var drag_event_start := _scroll_events.size()
-    var wheel_drag_down := InputEventScreenTouch.new()
-    wheel_drag_down.index = 22
-    wheel_drag_down.pressed = true
-    wheel_drag_down.position = wheel_center
-    var wheel_drag := InputEventScreenDrag.new()
-    wheel_drag.index = wheel_drag_down.index
-    wheel_drag.position = wheel_center + Vector2(
-        0.0, GameVirtualControls.WHEEL_SCROLL_STEP_PIXELS * 2.4
-    )
-    var wheel_drag_up := InputEventScreenTouch.new()
-    wheel_drag_up.index = wheel_drag_down.index
-    wheel_drag_up.pressed = false
-    wheel_drag_up.position = wheel_drag.position
-    controls.routes_pointer(wheel_drag_down)
-    controls.routes_pointer(wheel_drag)
-    controls.routes_pointer(wheel_drag_up)
-    var drag_event_count := _scroll_events.size() - drag_event_start
-    if drag_event_count != 2:
-        _fail("vertical wheel drag did not produce continuous scrolling")
-        return
-    for index in range(drag_event_start, _scroll_events.size()):
-        if _scroll_events[index].delta_y != 1.0:
-            _fail("downward wheel drag produced the wrong direction")
-            return
 
     var hold_event_start := _scroll_events.size()
-    var wheel_hold_down := InputEventScreenTouch.new()
-    wheel_hold_down.index = 23
-    wheel_hold_down.pressed = true
-    wheel_hold_down.position = Vector2(wheel_center.x, wheel_center.y - 12.0)
-    controls.routes_pointer(wheel_hold_down)
-    controls._advance_wheel_hold(
-        controls._wheel_next_repeat_msec
-        + GameVirtualControls.WHEEL_HOLD_REPEAT_MSEC * 2
+    controls.scroll_up_button.emit_signal("button_down")
+    controls._advance_scroll_hold(
+        controls._scroll_next_repeat_msec
+        + GameVirtualControls.SCROLL_HOLD_REPEAT_MSEC * 2
     )
-    var wheel_hold_up := InputEventScreenTouch.new()
-    wheel_hold_up.index = wheel_hold_down.index
-    wheel_hold_up.pressed = false
-    wheel_hold_up.position = wheel_hold_down.position
-    controls.routes_pointer(wheel_hold_up)
-    if _scroll_events.size() - hold_event_start != 3:
-        _fail("holding the mouse wheel did not repeat at the expected cadence")
+    controls.scroll_up_button.emit_signal("button_up")
+    if _scroll_events.size() - hold_event_start != 4:
+        _fail("holding the scroll-up button did not repeat at the expected cadence")
         return
     for index in range(hold_event_start, _scroll_events.size()):
         if _scroll_events[index].delta_y != -1.0:
-            _fail("upper wheel hold produced the wrong direction")
+            _fail("scroll-up button hold produced the wrong direction")
             return
+    var released_scroll_count := _scroll_events.size()
+    controls._advance_scroll_hold(
+        Time.get_ticks_msec() + GameVirtualControls.SCROLL_HOLD_DELAY_MSEC * 2
+    )
+    if _scroll_events.size() != released_scroll_count:
+        _fail("released scroll button kept repeating")
+        return
 
     controls.a_button.emit_signal("button_down")
     controls.mouse_right_button.emit_signal("button_down")
+    controls.scroll_down_button.emit_signal("button_down")
+    var scroll_count_before_mode_change := _scroll_events.size()
     controls.input_mode_button.emit_signal("pressed")
     if _key_events.back() != {"pressed": false, "key_code": 0x41, "modifiers": 0}:
         _fail("changing modes did not release the held key")
@@ -536,6 +501,16 @@ func _run() -> void:
     if _pointer_buttons.back().pressed or _pointer_buttons.back().modifiers != 0x10:
         _fail("changing modes did not release the held mouse button")
         return
+    controls._advance_scroll_hold(
+        Time.get_ticks_msec() + GameVirtualControls.SCROLL_HOLD_DELAY_MSEC * 2
+    )
+    if (
+        not is_zero_approx(controls._held_scroll_direction)
+        or _scroll_events.size() != scroll_count_before_mode_change
+    ):
+        _fail("changing modes did not release the held scroll button")
+        return
+    controls.scroll_down_button.emit_signal("button_up")
     controls.input_mode_button.emit_signal("pressed")
 
     controls.a_button.emit_signal("button_down")

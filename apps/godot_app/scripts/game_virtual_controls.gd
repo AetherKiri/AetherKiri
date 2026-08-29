@@ -32,12 +32,9 @@ const BUTTON_MIN_SIZE := 44.0
 const BUTTON_MAX_SIZE := 68.0
 const CURSOR_SIZE := 44.0
 const MENU_DRAG_THRESHOLD := 6.0
-const WHEEL_TOUCH_TARGET_MIN_SIZE := Vector2(96.0, 132.0)
-const WHEEL_DRAG_THRESHOLD := 8.0
-const WHEEL_SCROLL_STEP_PIXELS := 18.0
-const WHEEL_HOLD_DELAY_MSEC := 360
-const WHEEL_HOLD_REPEAT_MSEC := 90
-const WHEEL_HOLD_MAX_CATCH_UP_STEPS := 4
+const SCROLL_HOLD_DELAY_MSEC := 360
+const SCROLL_HOLD_REPEAT_MSEC := 90
+const SCROLL_HOLD_MAX_CATCH_UP_STEPS := 4
 const INPUT_DEVICE_ID_EMULATION := -1
 const INPUT_MODE_MOUSE := "mouse"
 const INPUT_MODE_TOUCH := "touch"
@@ -71,8 +68,6 @@ var scroll_down_button: Button
 var cursor_handle: Control
 var dpad_backdrop: Panel
 var dpad_center: Panel
-var wheel_backdrop: Panel
-var wheel_dot: Label
 
 var _root: Control
 var _tokens
@@ -94,17 +89,8 @@ var _menu_drag_moved := false
 var _menu_y_ratio := 0.0
 var _input_mode := INPUT_MODE_MOUSE
 var _mouse_mode_blocked_touch_indices := {}
-var _wheel_touch_index := -1
-var _wheel_mouse_dragging := false
-var _wheel_press_position := Vector2.ZERO
-var _wheel_last_position := Vector2.ZERO
-var _wheel_drag_accumulator := 0.0
-var _wheel_dragged := false
-var _wheel_drag_emitted := false
-var _wheel_repeat_started := false
-var _wheel_hold_direction := 0.0
-var _wheel_hold_started_msec := 0
-var _wheel_next_repeat_msec := 0
+var _held_scroll_direction := 0.0
+var _scroll_next_repeat_msec := 0
 
 func setup(tokens) -> void:
     if _root != null:
@@ -185,29 +171,10 @@ func setup(tokens) -> void:
     _attach_mouse_icon(mouse_left_button, true)
     _attach_mouse_icon(mouse_right_button, false)
 
-    wheel_backdrop = _create_decorative_panel(
-        "WheelBackdrop",
-        _button_style(Color(0.78, 0.80, 0.83, 0.78), REFERENCE_BORDER, true)
-    )
-    wheel_backdrop.z_index = -1
-    _root.add_child(wheel_backdrop)
-    _panel_controls.append(wheel_backdrop)
-
     scroll_up_button = _add_scroll_button("ScrollUpButton", "▲", -1.0)
     scroll_down_button = _add_scroll_button("ScrollDownButton", "▼", 1.0)
-    _apply_wheel_button_style(scroll_up_button)
-    _apply_wheel_button_style(scroll_down_button)
-
-    wheel_dot = Label.new()
-    wheel_dot.name = "WheelDot"
-    wheel_dot.text = "●"
-    wheel_dot.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    wheel_dot.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-    wheel_dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    wheel_dot.add_theme_font_size_override("font_size", 8)
-    wheel_dot.add_theme_color_override("font_color", Color(0.08, 0.08, 0.09, 0.9))
-    _root.add_child(wheel_dot)
-    _panel_controls.append(wheel_dot)
+    scroll_up_button.tooltip_text = "Scroll up (hold to repeat)"
+    scroll_down_button.tooltip_text = "Scroll down (hold to repeat)"
 
     cursor_handle = Control.new()
     cursor_handle.name = "MouseCursor"
@@ -237,7 +204,6 @@ func set_enabled(enabled: bool) -> void:
         _menu_mouse_dragging = false
         _menu_drag_moved = false
         _mouse_mode_blocked_touch_indices.clear()
-        _cancel_wheel_gesture()
     visible = enabled
     _sync_visibility()
 
@@ -278,7 +244,7 @@ func show_virtual_controls() -> void:
     virtual_controls_requested.emit()
 
 func release_all() -> void:
-    _cancel_wheel_gesture()
+    _cancel_scroll_hold()
     for key_variant in _held_keys.keys().duplicate():
         _release_key(int(key_variant))
     for mouse_variant in _held_mouse_buttons.keys().duplicate():
@@ -383,20 +349,23 @@ func layout(_window_size: Vector2, safe_rect: Rect2) -> void:
     _layout_mouse_icon(mouse_left_button)
     _layout_mouse_icon(mouse_right_button)
 
-    var wheel_size := diameter * 1.1
-    var wheel_position := Vector2(
-        safe_rect.position.x + margin + (diameter - wheel_size) * 0.5,
-        safe_rect.position.y + (safe_rect.size.y - wheel_size) * 0.46
+    var scroll_stack_height := diameter * 2.0 + gap
+    var desired_scroll_top := (
+        safe_rect.position.y
+        + (safe_rect.size.y - scroll_stack_height) * 0.46
     )
-    wheel_backdrop.position = wheel_position
-    wheel_backdrop.size = Vector2.ONE * wheel_size
-    var wheel_button_height := wheel_size * 0.43
-    scroll_up_button.position = wheel_position + Vector2(0, wheel_size * 0.03)
-    scroll_up_button.size = Vector2(wheel_size, wheel_button_height)
-    scroll_down_button.position = wheel_position + Vector2(0, wheel_size * 0.54)
-    scroll_down_button.size = Vector2(wheel_size, wheel_button_height)
-    wheel_dot.position = wheel_position + Vector2(0, wheel_size * 0.40)
-    wheel_dot.size = Vector2(wheel_size, wheel_size * 0.20)
+    var scroll_min_y := escape_button.get_rect().end.y + gap
+    var scroll_max_y := dpad_origin.y - gap - scroll_stack_height
+    var scroll_top := clampf(
+        desired_scroll_top,
+        scroll_min_y,
+        maxf(scroll_min_y, scroll_max_y)
+    )
+    var scroll_x := safe_rect.position.x + margin
+    scroll_up_button.position = Vector2(scroll_x, scroll_top)
+    scroll_up_button.size = key_size
+    scroll_down_button.position = Vector2(scroll_x, scroll_top + diameter + gap)
+    scroll_down_button.size = key_size
 
     if (
         cursor_handle.position == Vector2.ZERO
@@ -412,15 +381,6 @@ func routes_pointer(event: InputEvent) -> bool:
 
     if event is InputEventScreenTouch:
         var touch := event as InputEventScreenTouch
-        if touch.pressed and _wheel_can_begin_at(touch.position):
-            _begin_wheel_gesture(touch.position)
-            _wheel_touch_index = touch.index
-            return true
-        if touch.index == _wheel_touch_index:
-            if not touch.pressed:
-                _wheel_touch_index = -1
-                _finish_wheel_gesture(touch.position)
-            return true
         if _mouse_mode_blocked_touch_indices.has(touch.index):
             if not touch.pressed:
                 _mouse_mode_blocked_touch_indices.erase(touch.index)
@@ -438,55 +398,32 @@ func routes_pointer(event: InputEvent) -> bool:
             touch.pressed
             and _panel_open
             and not is_touch_mode()
-            and cursor_handle.get_global_rect().has_point(touch.position)
+            and not _visible_interactive_control_at(touch.position)
         ):
-            _cursor_touch_index = touch.index
+            if _cursor_touch_index == -1:
+                _cursor_touch_index = touch.index
+            else:
+                _mouse_mode_blocked_touch_indices[touch.index] = true
             return true
         if touch.index == _cursor_touch_index:
             if not touch.pressed:
                 _cursor_touch_index = -1
             return true
-        if (
-            touch.pressed
-            and _panel_open
-            and not is_touch_mode()
-            and not _visible_interactive_control_at(touch.position)
-        ):
-            _mouse_mode_blocked_touch_indices[touch.index] = true
-            return true
     elif event is InputEventScreenDrag:
         var drag := event as InputEventScreenDrag
-        if drag.index == _wheel_touch_index:
-            _drag_wheel_to(drag.position)
-            return true
         if _mouse_mode_blocked_touch_indices.has(drag.index):
             return true
         if drag.index == _menu_touch_index:
             _drag_menu_to(drag.position.y)
             return true
         if drag.index == _cursor_touch_index:
-            _move_cursor_to(drag.position)
+            _move_cursor_by(drag.relative)
             return true
     elif event is InputEventMouseButton:
         var mouse_button := event as InputEventMouseButton
         if mouse_button.device == INPUT_DEVICE_ID_EMULATION:
-            return (
-                _wheel_gesture_active()
-                or _wheel_can_begin_at(mouse_button.position)
-            )
+            return _panel_open and not is_touch_mode()
         if mouse_button.button_index == MOUSE_BUTTON_LEFT:
-            if (
-                mouse_button.pressed
-                and _wheel_can_begin_at(mouse_button.position)
-            ):
-                _begin_wheel_gesture(mouse_button.position)
-                _wheel_mouse_dragging = true
-                return true
-            if _wheel_mouse_dragging:
-                if not mouse_button.pressed:
-                    _wheel_mouse_dragging = false
-                    _finish_wheel_gesture(mouse_button.position)
-                return true
             if (
                 mouse_button.pressed
                 and menu_button.get_global_rect().has_point(mouse_button.position)
@@ -503,9 +440,7 @@ func routes_pointer(event: InputEvent) -> bool:
                 mouse_button.pressed
                 and _panel_open
                 and not is_touch_mode()
-                and cursor_handle.get_global_rect().has_point(
-                    mouse_button.position
-                )
+                and not _visible_interactive_control_at(mouse_button.position)
             ):
                 _cursor_mouse_dragging = true
                 return true
@@ -516,15 +451,12 @@ func routes_pointer(event: InputEvent) -> bool:
     elif event is InputEventMouseMotion:
         var motion := event as InputEventMouseMotion
         if motion.device == INPUT_DEVICE_ID_EMULATION:
-            return _wheel_gesture_active()
-        if _wheel_mouse_dragging:
-            _drag_wheel_to(motion.position)
-            return true
+            return _panel_open and not is_touch_mode()
         if _menu_mouse_dragging:
             _drag_menu_to(motion.position.y)
             return true
         if _cursor_mouse_dragging:
-            _move_cursor_to(motion.position)
+            _move_cursor_by(motion.relative)
             return true
 
     if not _held_keys.is_empty() or not _held_mouse_buttons.is_empty():
@@ -589,11 +521,9 @@ func _add_mouse_button(
 func _add_scroll_button(node_name: String, label: String, delta_y: float) -> Button:
     var button := _create_control_button(node_name, label, true)
     button.set_meta("scroll_delta_y", delta_y)
-    # Wheel input is handled by routes_pointer so the full enlarged gesture
-    # target can distinguish taps, vertical drags, and holds. Letting Button
-    # also consume the emulated mouse event would dispatch a duplicate scroll
-    # after the matching iOS ScreenTouch.
-    button.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    button.button_down.connect(_press_scroll.bind(delta_y))
+    button.button_up.connect(_release_scroll.bind(delta_y))
+    button.add_theme_font_size_override("font_size", 18)
     _root.add_child(button)
     _panel_controls.append(button)
     _interactive_controls.append(button)
@@ -662,17 +592,6 @@ func _apply_dpad_button_style(button: Button) -> void:
         )
     )
     button.add_theme_font_size_override("font_size", 24)
-
-func _apply_wheel_button_style(button: Button) -> void:
-    var empty := StyleBoxEmpty.new()
-    button.add_theme_stylebox_override("normal", empty)
-    button.add_theme_stylebox_override("hover", empty)
-    button.add_theme_stylebox_override("pressed", empty)
-    button.add_theme_color_override("font_color", Color(0.08, 0.08, 0.09, 0.94))
-    button.add_theme_color_override("font_hover_color", Color.BLACK)
-    button.add_theme_color_override("font_pressed_color", Color.BLACK)
-    button.add_theme_constant_override("outline_size", 0)
-    button.add_theme_font_size_override("font_size", 16)
 
 func _apply_edge_menu_style(button: Button) -> void:
     button.text = ""
@@ -1109,147 +1028,51 @@ func _scroll(delta_y: float) -> void:
         return
     pointer_scroll_requested.emit(delta_y, cursor_screen_position())
 
-func _process(_delta: float) -> void:
-    _advance_wheel_hold(Time.get_ticks_msec())
-
-func wheel_gesture_rect() -> Rect2:
-    return _wheel_gesture_rect()
-
-func _wheel_gesture_rect() -> Rect2:
+func _press_scroll(delta_y: float) -> void:
     if (
         not _enabled
         or not _panel_open
-        or wheel_backdrop == null
-        or not wheel_backdrop.is_visible_in_tree()
+        or not is_zero_approx(_held_scroll_direction)
     ):
-        return Rect2()
-    var visual_rect := wheel_backdrop.get_global_rect()
-    var target_size := Vector2(
-        minf(
-            maxf(visual_rect.size.x, WHEEL_TOUCH_TARGET_MIN_SIZE.x),
-            _safe_rect.size.x
-        ),
-        minf(
-            maxf(visual_rect.size.y, WHEEL_TOUCH_TARGET_MIN_SIZE.y),
-            _safe_rect.size.y
-        )
-    )
-    var target_position := visual_rect.get_center() - target_size * 0.5
-    target_position.x = clampf(
-        target_position.x,
-        _safe_rect.position.x,
-        _safe_rect.end.x - target_size.x
-    )
-    target_position.y = clampf(
-        target_position.y,
-        _safe_rect.position.y,
-        _safe_rect.end.y - target_size.y
-    )
-    return Rect2(target_position, target_size)
-
-func _wheel_gesture_active() -> bool:
-    return _wheel_touch_index != -1 or _wheel_mouse_dragging
-
-func _wheel_can_begin_at(screen_position: Vector2) -> bool:
-    if not _wheel_gesture_rect().has_point(screen_position):
-        return false
-    for control in _interactive_controls:
-        if control == scroll_up_button or control == scroll_down_button:
-            continue
-        if (
-            control.is_visible_in_tree()
-            and control.get_global_rect().has_point(screen_position)
-        ):
-            return false
-    return true
-
-func _begin_wheel_gesture(screen_position: Vector2) -> void:
-    _cancel_wheel_gesture()
-    _wheel_press_position = screen_position
-    _wheel_last_position = screen_position
-    _wheel_drag_accumulator = 0.0
-    _wheel_dragged = false
-    _wheel_drag_emitted = false
-    _wheel_repeat_started = false
-    _wheel_hold_direction = (
-        -1.0
-        if screen_position.y < wheel_backdrop.get_global_rect().get_center().y
-        else 1.0
-    )
-    _wheel_hold_started_msec = Time.get_ticks_msec()
-    _wheel_next_repeat_msec = _wheel_hold_started_msec + WHEEL_HOLD_DELAY_MSEC
-
-func _drag_wheel_to(screen_position: Vector2) -> void:
-    var total_distance := screen_position.distance_to(_wheel_press_position)
-    if not _wheel_dragged and total_distance < WHEEL_DRAG_THRESHOLD:
-        _wheel_last_position = screen_position
         return
-    if not _wheel_dragged:
-        _wheel_dragged = true
-        _wheel_drag_accumulator = screen_position.y - _wheel_press_position.y
-    else:
-        _wheel_drag_accumulator += screen_position.y - _wheel_last_position.y
-    _wheel_last_position = screen_position
-    _drain_wheel_drag_accumulator()
+    _held_scroll_direction = delta_y
+    _scroll(delta_y)
+    _scroll_next_repeat_msec = (
+        Time.get_ticks_msec() + SCROLL_HOLD_DELAY_MSEC
+    )
 
-func _drain_wheel_drag_accumulator() -> void:
-    while absf(_wheel_drag_accumulator) >= WHEEL_SCROLL_STEP_PIXELS:
-        var direction := signf(_wheel_drag_accumulator)
-        _scroll(direction)
-        _wheel_drag_emitted = true
-        _wheel_drag_accumulator -= direction * WHEEL_SCROLL_STEP_PIXELS
+func _release_scroll(delta_y: float) -> void:
+    if not is_equal_approx(_held_scroll_direction, delta_y):
+        return
+    _cancel_scroll_hold()
 
-func _advance_wheel_hold(now_msec: int) -> void:
+func _cancel_scroll_hold() -> void:
+    _held_scroll_direction = 0.0
+    _scroll_next_repeat_msec = 0
+
+func _process(_delta: float) -> void:
+    _advance_scroll_hold(Time.get_ticks_msec())
+
+func _advance_scroll_hold(now_msec: int) -> void:
     if (
-        not _wheel_gesture_active()
-        or _wheel_dragged
-        or now_msec < _wheel_next_repeat_msec
+        is_zero_approx(_held_scroll_direction)
+        or now_msec < _scroll_next_repeat_msec
     ):
         return
     var emitted := 0
     while (
-        now_msec >= _wheel_next_repeat_msec
-        and emitted < WHEEL_HOLD_MAX_CATCH_UP_STEPS
+        now_msec >= _scroll_next_repeat_msec
+        and emitted < SCROLL_HOLD_MAX_CATCH_UP_STEPS
     ):
-        _scroll(_wheel_hold_direction)
-        _wheel_repeat_started = true
-        _wheel_next_repeat_msec += WHEEL_HOLD_REPEAT_MSEC
+        _scroll(_held_scroll_direction)
+        _scroll_next_repeat_msec += SCROLL_HOLD_REPEAT_MSEC
         emitted += 1
-    if now_msec >= _wheel_next_repeat_msec:
-        _wheel_next_repeat_msec = now_msec + WHEEL_HOLD_REPEAT_MSEC
+    if now_msec >= _scroll_next_repeat_msec:
+        _scroll_next_repeat_msec = now_msec + SCROLL_HOLD_REPEAT_MSEC
 
-func _finish_wheel_gesture(screen_position: Vector2) -> void:
-    if _wheel_dragged:
-        _drag_wheel_to(screen_position)
-        if (
-            not _wheel_drag_emitted
-            and not _wheel_repeat_started
-            and absf(_wheel_drag_accumulator) > 0.0
-        ):
-            _scroll(signf(_wheel_drag_accumulator))
-    elif not _wheel_repeat_started:
-        _scroll(_wheel_hold_direction)
-    _reset_wheel_gesture_state()
-
-func _cancel_wheel_gesture() -> void:
-    _wheel_touch_index = -1
-    _wheel_mouse_dragging = false
-    _reset_wheel_gesture_state()
-
-func _reset_wheel_gesture_state() -> void:
-    _wheel_press_position = Vector2.ZERO
-    _wheel_last_position = Vector2.ZERO
-    _wheel_drag_accumulator = 0.0
-    _wheel_dragged = false
-    _wheel_drag_emitted = false
-    _wheel_repeat_started = false
-    _wheel_hold_direction = 0.0
-    _wheel_hold_started_msec = 0
-    _wheel_next_repeat_msec = 0
-
-func _move_cursor_to(screen_position: Vector2) -> void:
+func _move_cursor_by(screen_delta: Vector2) -> void:
     var previous := cursor_screen_position()
-    cursor_handle.position = screen_position - cursor_handle.size * 0.5
+    cursor_handle.position += screen_delta
     _clamp_cursor()
     var current := cursor_screen_position()
     var delta := current - previous
