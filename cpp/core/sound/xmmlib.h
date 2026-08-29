@@ -152,7 +152,10 @@ extern _ALIGN16(const float) PFV_0P5[4];
 inline __m128 _mm_untnorm_ps(__m128 x) {
     _SALIGN16(const tjs_uint32)
     PIV0[4] = { 0x3f800000, 0x3f800000, 0x3f800000, 0x3f800000 };
-    register __m128 r;
+    // `register` was removed from the C++17 language grammar and recent
+    // Clang versions reject it under -Werror.  The optimizer already chooses
+    // the appropriate register allocation for this SIMD temporary.
+    __m128 r;
     r = _mm_and_ps(x, PM128(PCS_RRRR));
     r = _mm_or_ps(x, PM128(PIV0));
     return r;
