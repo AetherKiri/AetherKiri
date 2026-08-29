@@ -173,8 +173,8 @@ func setup(tokens) -> void:
     _attach_mouse_icon(mouse_left_button, true)
     _attach_mouse_icon(mouse_right_button, false)
 
-    scroll_up_button = _add_scroll_button("ScrollUpButton", "▲", -1.0)
-    scroll_down_button = _add_scroll_button("ScrollDownButton", "▼", 1.0)
+    scroll_up_button = _add_scroll_button("ScrollUpButton", "▲", 1.0)
+    scroll_down_button = _add_scroll_button("ScrollDownButton", "▼", -1.0)
     scroll_up_button.tooltip_text = "Scroll up (hold to repeat)"
     scroll_down_button.tooltip_text = "Scroll down (hold to repeat)"
 

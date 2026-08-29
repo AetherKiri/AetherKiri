@@ -482,8 +482,8 @@ func _run() -> void:
     controls.scroll_down_button.emit_signal("button_up")
     if (
         _scroll_events.size() != 2
-        or _scroll_events[0].delta_y != -1.0
-        or _scroll_events[1].delta_y != 1.0
+        or _scroll_events[0].delta_y != 1.0
+        or _scroll_events[1].delta_y != -1.0
     ):
         _fail("separate scroll-button directions are incorrect")
         return
@@ -499,7 +499,7 @@ func _run() -> void:
         _fail("holding the scroll-up button did not repeat at the expected cadence")
         return
     for index in range(hold_event_start, _scroll_events.size()):
-        if _scroll_events[index].delta_y != -1.0:
+        if _scroll_events[index].delta_y != 1.0:
             _fail("scroll-up button hold produced the wrong direction")
             return
     var released_scroll_count := _scroll_events.size()
