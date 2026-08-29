@@ -287,6 +287,12 @@ func _run() -> void:
     if not controls.routes_pointer(outside):
         _fail("mouse mode leaked a direct touch into the game")
         return
+    # The same iOS event reaches both Main._input and the game viewport's
+    # gui_input callback. Re-routing the press must not classify its own touch
+    # index as a blocked second finger.
+    if not controls.routes_pointer(outside):
+        _fail("mouse mode lost a repeated iOS touch press")
+        return
     var outside_drag := InputEventScreenDrag.new()
     outside_drag.index = outside.index
     outside_drag.relative = Vector2(12, 8)
@@ -300,6 +306,12 @@ func _run() -> void:
     ):
         _fail("mouse mode did not move the cursor from the full-screen touchpad")
         return
+    if (
+        not controls.routes_pointer(outside_drag)
+        or _pointer_moves.size() != 1
+    ):
+        _fail("repeated iOS drag event moved the cursor twice")
+        return
     var outside_up := InputEventScreenTouch.new()
     outside_up.index = outside.index
     outside_up.pressed = false
@@ -308,6 +320,7 @@ func _run() -> void:
         _fail("mouse mode lost its full-screen touchpad release")
         return
     var outside_mouse := InputEventMouseButton.new()
+    outside_mouse.device = GameVirtualControls.INPUT_DEVICE_ID_EMULATION
     outside_mouse.button_index = MOUSE_BUTTON_LEFT
     outside_mouse.pressed = true
     outside_mouse.position = outside.position
@@ -315,13 +328,20 @@ func _run() -> void:
         _fail("mouse mode leaked a hardware click into the game")
         return
     var outside_mouse_motion := InputEventMouseMotion.new()
+    outside_mouse_motion.device = GameVirtualControls.INPUT_DEVICE_ID_EMULATION
     outside_mouse_motion.relative = Vector2(-7, 5)
     outside_mouse_motion.position = outside_mouse.position + outside_mouse_motion.relative
     if (
         not controls.routes_pointer(outside_mouse_motion)
         or _pointer_moves.size() != 2
     ):
-        _fail("mouse mode did not support full-screen hardware-mouse dragging")
+        _fail("mouse mode did not support iOS emulated-mouse dragging")
+        return
+    if (
+        not controls.routes_pointer(outside_mouse_motion)
+        or _pointer_moves.size() != 2
+    ):
+        _fail("repeated iOS emulated-mouse motion moved the cursor twice")
         return
     outside_mouse.pressed = false
     outside_mouse.position = outside_mouse_motion.position

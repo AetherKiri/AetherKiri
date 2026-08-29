@@ -81,6 +81,8 @@ var _panel_controls: Array[Control] = []
 var _interactive_controls: Array[Control] = []
 var _cursor_touch_index := -1
 var _cursor_mouse_dragging := false
+var _cursor_drag_has_position := false
+var _cursor_drag_last_screen_position := Vector2.ZERO
 var _menu_touch_index := -1
 var _menu_mouse_dragging := false
 var _menu_drag_start_pointer_y := 0.0
@@ -200,6 +202,7 @@ func set_enabled(enabled: bool) -> void:
         _menu_open = false
         _cursor_touch_index = -1
         _cursor_mouse_dragging = false
+        _reset_cursor_drag_position()
         _menu_touch_index = -1
         _menu_mouse_dragging = false
         _menu_drag_moved = false
@@ -228,6 +231,7 @@ func set_input_mode(mode: String, notify: bool = false) -> void:
     release_all()
     _cursor_touch_index = -1
     _cursor_mouse_dragging = false
+    _reset_cursor_drag_position()
     _mouse_mode_blocked_touch_indices.clear()
     _input_mode = normalized
     _sync_input_mode_presentation()
@@ -402,12 +406,14 @@ func routes_pointer(event: InputEvent) -> bool:
         ):
             if _cursor_touch_index == -1:
                 _cursor_touch_index = touch.index
-            else:
+                _begin_cursor_drag(touch.position)
+            elif _cursor_touch_index != touch.index:
                 _mouse_mode_blocked_touch_indices[touch.index] = true
             return true
         if touch.index == _cursor_touch_index:
             if not touch.pressed:
                 _cursor_touch_index = -1
+                _finish_cursor_drag_if_inactive()
             return true
     elif event is InputEventScreenDrag:
         var drag := event as InputEventScreenDrag
@@ -417,14 +423,14 @@ func routes_pointer(event: InputEvent) -> bool:
             _drag_menu_to(drag.position.y)
             return true
         if drag.index == _cursor_touch_index:
-            _move_cursor_by(drag.relative)
+            _drag_cursor_to(drag.position)
             return true
     elif event is InputEventMouseButton:
         var mouse_button := event as InputEventMouseButton
-        if mouse_button.device == INPUT_DEVICE_ID_EMULATION:
-            return _panel_open and not is_touch_mode()
         if mouse_button.button_index == MOUSE_BUTTON_LEFT:
             if (
+                mouse_button.device != INPUT_DEVICE_ID_EMULATION
+                and
                 mouse_button.pressed
                 and menu_button.get_global_rect().has_point(mouse_button.position)
             ):
@@ -443,20 +449,23 @@ func routes_pointer(event: InputEvent) -> bool:
                 and not _visible_interactive_control_at(mouse_button.position)
             ):
                 _cursor_mouse_dragging = true
+                _begin_cursor_drag(mouse_button.position)
                 return true
             if _cursor_mouse_dragging:
                 if not mouse_button.pressed:
                     _cursor_mouse_dragging = false
+                    _finish_cursor_drag_if_inactive()
                 return true
     elif event is InputEventMouseMotion:
         var motion := event as InputEventMouseMotion
-        if motion.device == INPUT_DEVICE_ID_EMULATION:
-            return _panel_open and not is_touch_mode()
-        if _menu_mouse_dragging:
+        if (
+            motion.device != INPUT_DEVICE_ID_EMULATION
+            and _menu_mouse_dragging
+        ):
             _drag_menu_to(motion.position.y)
             return true
         if _cursor_mouse_dragging:
-            _move_cursor_by(motion.relative)
+            _drag_cursor_to(motion.position)
             return true
 
     if not _held_keys.is_empty() or not _held_mouse_buttons.is_empty():
@@ -1078,6 +1087,26 @@ func _move_cursor_by(screen_delta: Vector2) -> void:
     var delta := current - previous
     if not delta.is_zero_approx():
         pointer_move_requested.emit(current, delta)
+
+func _begin_cursor_drag(screen_position: Vector2) -> void:
+    _cursor_drag_last_screen_position = screen_position
+    _cursor_drag_has_position = true
+
+func _drag_cursor_to(screen_position: Vector2) -> void:
+    if not _cursor_drag_has_position:
+        _begin_cursor_drag(screen_position)
+        return
+    var screen_delta := screen_position - _cursor_drag_last_screen_position
+    _cursor_drag_last_screen_position = screen_position
+    _move_cursor_by(screen_delta)
+
+func _finish_cursor_drag_if_inactive() -> void:
+    if _cursor_touch_index == -1 and not _cursor_mouse_dragging:
+        _reset_cursor_drag_position()
+
+func _reset_cursor_drag_position() -> void:
+    _cursor_drag_has_position = false
+    _cursor_drag_last_screen_position = Vector2.ZERO
 
 func _clamp_cursor() -> void:
     if cursor_handle == null or _safe_rect.size == Vector2.ZERO:
