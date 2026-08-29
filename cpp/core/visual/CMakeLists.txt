@@ -81,6 +81,7 @@ string(TOLOWER "${_aether_visual_arch}" _aether_visual_arch)
 # SIMD paths for universal/mobile targets.
 set(AETHER_RESAMPLE_SIMD_SOURCES)
 set(AETHER_RESAMPLE_SIMD_INCLUDE_DIRS)
+set(AETHER_X86_SIMD_SOURCES)
 set(_aether_visual_is_single_x86 FALSE)
 # Prefer an explicit target architecture over the host processor.  This is
 # important when an arm64 Mac cross-compiles the x86_64 slice: CMake may leave
@@ -109,6 +110,9 @@ if(_aether_visual_is_single_x86)
     set(AETHER_RESAMPLE_SIMD_SOURCES
         "${CMAKE_CURRENT_SOURCE_DIR}/upstream_bridge/ResampleImageSSE2.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/upstream_bridge/ResampleImageAVX2.cpp")
+    set(AETHER_X86_SIMD_SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/upstream_bridge/x86simdutil.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/upstream_bridge/x86simdutilAVX2.cpp")
     set(AETHER_RESAMPLE_SIMD_INCLUDE_DIRS
         "${AETHER_KRKRZ_CORE_ROOT}/common/visual/IA32"
         "${AETHER_KRKRZ_CORE_ROOT}/common/visual/gl")
@@ -118,6 +122,12 @@ if(_aether_visual_is_single_x86)
     aether_krkrz_track_core_source(
         "${CMAKE_CURRENT_SOURCE_DIR}/upstream_bridge/ResampleImageAVX2.cpp"
         "common/visual/gl/ResampleImageAVX2.cpp")
+    aether_krkrz_track_core_source(
+        "${CMAKE_CURRENT_SOURCE_DIR}/upstream_bridge/x86simdutil.cpp"
+        "common/visual/gl/x86simdutil.cpp")
+    aether_krkrz_track_core_source(
+        "${CMAKE_CURRENT_SOURCE_DIR}/upstream_bridge/x86simdutilAVX2.cpp"
+        "common/visual/gl/x86simdutilAVX2.cpp")
 endif()
 if(NOT _aether_visual_is_single_x86)
     set(AETHER_TLG_SIMD_INCLUDE_DIRS)
@@ -170,6 +180,7 @@ set(VISUAL_SOURCE_FILES
     ${VISUAL_PATH}/gl/ResampleImage.cpp
     ${AETHER_WEIGHT_FUNCTOR_SOURCE}
     ${AETHER_RESAMPLE_SIMD_SOURCES}
+    ${AETHER_X86_SIMD_SOURCES}
     ${AETHER_RESAMPLE_SIMD_DISPATCH_SOURCE}
     ${AETHER_VISUAL_SIMD_LEAF_DISPATCH_SOURCE}
     ${AETHER_VISUAL_SIMD_LEAF_SOURCES}
@@ -278,6 +289,12 @@ if(AETHER_RESAMPLE_SIMD_SOURCES)
         PROPERTIES COMPILE_OPTIONS "${_aether_resample_sse2_flags}")
     set_source_files_properties(
         "${CMAKE_CURRENT_SOURCE_DIR}/upstream_bridge/ResampleImageAVX2.cpp"
+        PROPERTIES COMPILE_OPTIONS "${_aether_resample_avx2_flags}")
+    set_source_files_properties(
+        "${CMAKE_CURRENT_SOURCE_DIR}/upstream_bridge/x86simdutil.cpp"
+        PROPERTIES COMPILE_OPTIONS "${_aether_visual_sse2_flags}")
+    set_source_files_properties(
+        "${CMAKE_CURRENT_SOURCE_DIR}/upstream_bridge/x86simdutilAVX2.cpp"
         PROPERTIES COMPILE_OPTIONS "${_aether_resample_avx2_flags}")
 endif()
 target_link_libraries(${PROJECT_NAME} PUBLIC tjs2 PRIVATE core_base_module core_environ_module core_plugin_module core_sound_module core_utils_module)
