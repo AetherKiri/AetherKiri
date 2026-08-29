@@ -83,6 +83,7 @@ var _cursor_touch_index := -1
 var _cursor_mouse_dragging := false
 var _cursor_drag_has_position := false
 var _cursor_drag_last_screen_position := Vector2.ZERO
+var _cursor_touch_waiting_for_first_drag := false
 var _menu_touch_index := -1
 var _menu_mouse_dragging := false
 var _menu_drag_start_pointer_y := 0.0
@@ -412,7 +413,7 @@ func routes_pointer(event: InputEvent) -> bool:
                 # take ownership before its first ScreenDrag.
                 if _cursor_mouse_dragging:
                     _cursor_mouse_dragging = false
-                _begin_cursor_drag(touch.position)
+                _begin_cursor_drag(touch.position, true)
             elif _cursor_touch_index != touch.index:
                 _mouse_mode_blocked_touch_indices[touch.index] = true
             return true
@@ -1068,13 +1069,25 @@ func _move_cursor_by(screen_delta: Vector2) -> void:
     if not delta.is_zero_approx():
         pointer_move_requested.emit(current, delta)
 
-func _begin_cursor_drag(screen_position: Vector2) -> void:
+func _begin_cursor_drag(
+    screen_position: Vector2,
+    discard_first_touch_drag: bool = false
+) -> void:
     _cursor_drag_last_screen_position = screen_position
     _cursor_drag_has_position = true
+    _cursor_touch_waiting_for_first_drag = discard_first_touch_drag
 
 func _drag_cursor_to(screen_position: Vector2) -> void:
     if not _cursor_drag_has_position:
         _begin_cursor_drag(screen_position)
+        return
+    # On the observed iPad, the first ScreenDrag arrived 12.6 points away from
+    # its ScreenTouch down position. Treating that initial recognition sample
+    # as relative motion makes a trackpad-style cursor visibly jump. Re-anchor
+    # once, then use only continuous samples from the same drag track.
+    if _cursor_touch_waiting_for_first_drag:
+        _cursor_touch_waiting_for_first_drag = false
+        _cursor_drag_last_screen_position = screen_position
         return
     var screen_delta := screen_position - _cursor_drag_last_screen_position
     _cursor_drag_last_screen_position = screen_position
@@ -1087,6 +1100,7 @@ func _finish_cursor_drag_if_inactive() -> void:
 func _reset_cursor_drag_position() -> void:
     _cursor_drag_has_position = false
     _cursor_drag_last_screen_position = Vector2.ZERO
+    _cursor_touch_waiting_for_first_drag = false
 
 func _clamp_cursor() -> void:
     if cursor_handle == null or _safe_rect.size == Vector2.ZERO:

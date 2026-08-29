@@ -275,8 +275,7 @@ func _run() -> void:
 
     var cursor_before_full_screen_drag := controls.cursor_screen_position()
     var emulated_down := InputEventMouseButton.new()
-    # iOS has reported synthesized mouse tracks with more than one device id.
-    # Touch ownership must not depend on recognizing a particular id.
+    # Touch ownership must not depend on recognizing a particular device id.
     emulated_down.device = 7
     emulated_down.button_index = MOUSE_BUTTON_LEFT
     emulated_down.pressed = true
@@ -309,10 +308,23 @@ func _run() -> void:
     if not controls.routes_pointer(outside):
         _fail("mouse mode lost a repeated iOS touch press")
         return
+    var threshold_drag := InputEventScreenDrag.new()
+    threshold_drag.index = outside.index
+    threshold_drag.relative = Vector2(-2.5, -12.6)
+    threshold_drag.position = outside.position + threshold_drag.relative
+    if (
+        not controls.routes_pointer(threshold_drag)
+        or not _pointer_moves.is_empty()
+        or not controls.cursor_screen_position().is_equal_approx(
+            cursor_before_full_screen_drag
+        )
+    ):
+        _fail("first iOS drag threshold displaced the virtual cursor")
+        return
     var outside_drag := InputEventScreenDrag.new()
     outside_drag.index = outside.index
     outside_drag.relative = Vector2(12, 8)
-    outside_drag.position = outside.position + Vector2(12, 8)
+    outside_drag.position = threshold_drag.position + outside_drag.relative
     if (
         not controls.routes_pointer(outside_drag)
         or _pointer_moves.size() != 1
@@ -458,10 +470,23 @@ func _run() -> void:
     if not controls.routes_pointer(cursor_down):
         _fail("cursor press was not captured")
         return
+    var cursor_threshold_drag := InputEventScreenDrag.new()
+    cursor_threshold_drag.index = 7
+    cursor_threshold_drag.relative = Vector2(-3, -13)
+    cursor_threshold_drag.position = (
+        cursor_down.position + cursor_threshold_drag.relative
+    )
+    if (
+        not controls.routes_pointer(cursor_threshold_drag)
+        or _pointer_moves.size() != 2
+        or not controls.cursor_screen_position().is_equal_approx(cursor_before)
+    ):
+        _fail("subsequent touch drag did not suppress its threshold sample")
+        return
     var cursor_drag := InputEventScreenDrag.new()
     cursor_drag.index = 7
     cursor_drag.relative = Vector2(31, -24)
-    cursor_drag.position = cursor_down.position + cursor_drag.relative
+    cursor_drag.position = cursor_threshold_drag.position + cursor_drag.relative
     if (
         not controls.routes_pointer(cursor_drag)
         or _pointer_moves.size() != 3
