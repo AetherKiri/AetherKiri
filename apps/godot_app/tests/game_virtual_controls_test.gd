@@ -232,6 +232,15 @@ func _run() -> void:
     ):
         _fail("scroll controls are not contained in the UU-style wheel")
         return
+    var wheel_visual_rect: Rect2 = controls.wheel_backdrop.get_global_rect()
+    var wheel_gesture_rect: Rect2 = controls.wheel_gesture_rect()
+    if (
+        not wheel_gesture_rect.encloses(wheel_visual_rect)
+        or wheel_gesture_rect.size.x < GameVirtualControls.WHEEL_TOUCH_TARGET_MIN_SIZE.x
+        or wheel_gesture_rect.size.y < GameVirtualControls.WHEEL_TOUCH_TARGET_MIN_SIZE.y
+    ):
+        _fail("scroll gesture target did not expand beyond the UU-style wheel")
+        return
     var cursor: Control = controls.cursor_handle
     var cursor_glow := cursor.get_node_or_null("Glow") as TextureRect
     var cursor_arrow := cursor.get_node_or_null("Arrow") as Polygon2D
@@ -420,8 +429,47 @@ func _run() -> void:
     ):
         _fail("left/right mouse modifiers are incorrect")
         return
-    controls.scroll_up_button.emit_signal("pressed")
-    controls.scroll_down_button.emit_signal("pressed")
+    var wheel_center := wheel_visual_rect.get_center()
+    var wheel_tap_x := wheel_gesture_rect.position.x + 4.0
+    var emulated_wheel_mouse := InputEventMouseButton.new()
+    emulated_wheel_mouse.device = GameVirtualControls.INPUT_DEVICE_ID_EMULATION
+    emulated_wheel_mouse.button_index = MOUSE_BUTTON_LEFT
+    emulated_wheel_mouse.pressed = true
+    emulated_wheel_mouse.position = wheel_center
+    if not controls.routes_pointer(emulated_wheel_mouse):
+        _fail("emulated iOS mouse press escaped the wheel gesture target")
+        return
+    emulated_wheel_mouse.pressed = false
+    if (
+        not controls.routes_pointer(emulated_wheel_mouse)
+        or not _scroll_events.is_empty()
+    ):
+        _fail("emulated iOS mouse event duplicated a wheel gesture")
+        return
+    var wheel_up_down := InputEventScreenTouch.new()
+    wheel_up_down.index = 20
+    wheel_up_down.pressed = true
+    wheel_up_down.position = Vector2(wheel_tap_x, wheel_center.y - 12.0)
+    var wheel_up_up := InputEventScreenTouch.new()
+    wheel_up_up.index = wheel_up_down.index
+    wheel_up_up.pressed = false
+    wheel_up_up.position = wheel_up_down.position
+    var wheel_down_down := InputEventScreenTouch.new()
+    wheel_down_down.index = 21
+    wheel_down_down.pressed = true
+    wheel_down_down.position = Vector2(wheel_tap_x, wheel_center.y + 12.0)
+    var wheel_down_up := InputEventScreenTouch.new()
+    wheel_down_up.index = wheel_down_down.index
+    wheel_down_up.pressed = false
+    wheel_down_up.position = wheel_down_down.position
+    if (
+        not controls.routes_pointer(wheel_up_down)
+        or not controls.routes_pointer(wheel_up_up)
+        or not controls.routes_pointer(wheel_down_down)
+        or not controls.routes_pointer(wheel_down_up)
+    ):
+        _fail("expanded mouse-wheel tap target did not capture input")
+        return
     if (
         _scroll_events.size() != 2
         or _scroll_events[0].delta_y != -1.0
@@ -429,6 +477,55 @@ func _run() -> void:
     ):
         _fail("mouse-wheel directions are incorrect")
         return
+
+    var drag_event_start := _scroll_events.size()
+    var wheel_drag_down := InputEventScreenTouch.new()
+    wheel_drag_down.index = 22
+    wheel_drag_down.pressed = true
+    wheel_drag_down.position = wheel_center
+    var wheel_drag := InputEventScreenDrag.new()
+    wheel_drag.index = wheel_drag_down.index
+    wheel_drag.position = wheel_center + Vector2(
+        0.0, GameVirtualControls.WHEEL_SCROLL_STEP_PIXELS * 2.4
+    )
+    var wheel_drag_up := InputEventScreenTouch.new()
+    wheel_drag_up.index = wheel_drag_down.index
+    wheel_drag_up.pressed = false
+    wheel_drag_up.position = wheel_drag.position
+    controls.routes_pointer(wheel_drag_down)
+    controls.routes_pointer(wheel_drag)
+    controls.routes_pointer(wheel_drag_up)
+    var drag_event_count := _scroll_events.size() - drag_event_start
+    if drag_event_count != 2:
+        _fail("vertical wheel drag did not produce continuous scrolling")
+        return
+    for index in range(drag_event_start, _scroll_events.size()):
+        if _scroll_events[index].delta_y != 1.0:
+            _fail("downward wheel drag produced the wrong direction")
+            return
+
+    var hold_event_start := _scroll_events.size()
+    var wheel_hold_down := InputEventScreenTouch.new()
+    wheel_hold_down.index = 23
+    wheel_hold_down.pressed = true
+    wheel_hold_down.position = Vector2(wheel_center.x, wheel_center.y - 12.0)
+    controls.routes_pointer(wheel_hold_down)
+    controls._advance_wheel_hold(
+        controls._wheel_next_repeat_msec
+        + GameVirtualControls.WHEEL_HOLD_REPEAT_MSEC * 2
+    )
+    var wheel_hold_up := InputEventScreenTouch.new()
+    wheel_hold_up.index = wheel_hold_down.index
+    wheel_hold_up.pressed = false
+    wheel_hold_up.position = wheel_hold_down.position
+    controls.routes_pointer(wheel_hold_up)
+    if _scroll_events.size() - hold_event_start != 3:
+        _fail("holding the mouse wheel did not repeat at the expected cadence")
+        return
+    for index in range(hold_event_start, _scroll_events.size()):
+        if _scroll_events[index].delta_y != -1.0:
+            _fail("upper wheel hold produced the wrong direction")
+            return
 
     controls.a_button.emit_signal("button_down")
     controls.mouse_right_button.emit_signal("button_down")
