@@ -13995,8 +13995,11 @@ func _handle_shell_scroll_input(event: InputEvent) -> bool:
 func _on_viewport_input(event: InputEvent) -> void:
     if (
         game_virtual_controls != null
-        and game_virtual_controls.routes_pointer(event)
+        and game_virtual_controls.owns_viewport_pointer(event)
     ):
+        # Main._input already routed the original full-screen event. The
+        # TextureRect receives a localized copy through gui_input; routing it
+        # again would mix the two coordinate spaces and apply a second delta.
         get_viewport().set_input_as_handled()
         return
     if not _can_forward_game_input():
