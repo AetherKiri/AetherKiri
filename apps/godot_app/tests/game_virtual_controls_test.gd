@@ -243,6 +243,7 @@ func _run() -> void:
     var cursor_outline := cursor.get_node_or_null("Outline") as Line2D
     if (
         cursor.get_meta("visual_style", "") != "computer_use"
+        or cursor.get_meta("hotspot", Vector2.ZERO) != GameVirtualControls.CURSOR_HOTSPOT
         or cursor_glow == null
         or cursor_arrow == null
         or cursor_arrow_glow == null
@@ -259,8 +260,11 @@ func _run() -> void:
         or cursor_glow_texture.gradient.colors.size() != 4
         or cursor_glow_texture.gradient.colors[0].a < 0.2
         or cursor_glow_texture.gradient.colors[-1].a != 0.0
+        or not cursor_glow_texture.fill_from.is_equal_approx(
+            GameVirtualControls.CURSOR_HOTSPOT / GameVirtualControls.CURSOR_SIZE
+        )
     ):
-        _fail("Computer Use cursor is missing its soft radial blue glow")
+        _fail("Computer Use cursor glow is not centered on its tip hotspot")
         return
     if (
         cursor.size.x < 40.0
@@ -278,14 +282,40 @@ func _run() -> void:
     ):
         _fail("edge Menu overlaps the numeric controls")
         return
+    if not controls.cursor_screen_position().is_equal_approx(
+        controls.cursor_handle.get_global_rect().position
+        + GameVirtualControls.CURSOR_HOTSPOT
+    ):
+        _fail("cursor pointer position is not anchored to the arrow tip")
+        return
 
     var cursor_before_full_screen_drag := controls.cursor_screen_position()
+    var emulated_down := InputEventMouseButton.new()
+    emulated_down.device = GameVirtualControls.INPUT_DEVICE_ID_EMULATION
+    emulated_down.button_index = MOUSE_BUTTON_LEFT
+    emulated_down.pressed = true
+    emulated_down.position = safe_rect.get_center() + Vector2(0, -96)
+    if not controls.routes_pointer(emulated_down):
+        _fail("iOS emulated press was not captured before ScreenTouch")
+        return
     var outside := InputEventScreenTouch.new()
     outside.index = 11
     outside.pressed = true
     outside.position = safe_rect.get_center() + Vector2(0, -70)
     if not controls.routes_pointer(outside):
         _fail("mouse mode leaked a direct touch into the game")
+        return
+    var stale_emulated_motion := InputEventMouseMotion.new()
+    stale_emulated_motion.device = GameVirtualControls.INPUT_DEVICE_ID_EMULATION
+    stale_emulated_motion.position = emulated_down.position + Vector2(0, -28)
+    if (
+        not controls.routes_pointer(stale_emulated_motion)
+        or not _pointer_moves.is_empty()
+        or not controls.cursor_screen_position().is_equal_approx(
+            cursor_before_full_screen_drag
+        )
+    ):
+        _fail("ScreenTouch did not take ownership from the offset emulated track")
         return
     # The same iOS event reaches both Main._input and the game viewport's
     # gui_input callback. Re-routing the press must not classify its own touch

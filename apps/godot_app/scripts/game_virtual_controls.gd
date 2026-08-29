@@ -31,6 +31,7 @@ const OVERLAY_LAYER := 120
 const BUTTON_MIN_SIZE := 44.0
 const BUTTON_MAX_SIZE := 68.0
 const CURSOR_SIZE := 44.0
+const CURSOR_HOTSPOT := Vector2(15.0, 10.0)
 const MENU_DRAG_THRESHOLD := 6.0
 const SCROLL_HOLD_DELAY_MSEC := 360
 const SCROLL_HOLD_REPEAT_MSEC := 90
@@ -81,6 +82,7 @@ var _panel_controls: Array[Control] = []
 var _interactive_controls: Array[Control] = []
 var _cursor_touch_index := -1
 var _cursor_mouse_dragging := false
+var _cursor_mouse_drag_device := 0
 var _cursor_drag_has_position := false
 var _cursor_drag_last_screen_position := Vector2.ZERO
 var _menu_touch_index := -1
@@ -202,6 +204,7 @@ func set_enabled(enabled: bool) -> void:
         _menu_open = false
         _cursor_touch_index = -1
         _cursor_mouse_dragging = false
+        _cursor_mouse_drag_device = 0
         _reset_cursor_drag_position()
         _menu_touch_index = -1
         _menu_mouse_dragging = false
@@ -231,6 +234,7 @@ func set_input_mode(mode: String, notify: bool = false) -> void:
     release_all()
     _cursor_touch_index = -1
     _cursor_mouse_dragging = false
+    _cursor_mouse_drag_device = 0
     _reset_cursor_drag_position()
     _mouse_mode_blocked_touch_indices.clear()
     _input_mode = normalized
@@ -373,9 +377,9 @@ func layout(_window_size: Vector2, safe_rect: Rect2) -> void:
 
     if (
         cursor_handle.position == Vector2.ZERO
-        or not safe_rect.encloses(cursor_handle.get_rect())
+        or not safe_rect.has_point(cursor_handle.position + CURSOR_HOTSPOT)
     ):
-        cursor_handle.position = safe_rect.get_center() - Vector2.ONE * CURSOR_SIZE * 0.5
+        cursor_handle.position = safe_rect.get_center() - CURSOR_HOTSPOT
     cursor_handle.size = Vector2.ONE * CURSOR_SIZE
     _clamp_cursor()
 
@@ -406,6 +410,12 @@ func routes_pointer(event: InputEvent) -> bool:
         ):
             if _cursor_touch_index == -1:
                 _cursor_touch_index = touch.index
+                if (
+                    _cursor_mouse_dragging
+                    and _cursor_mouse_drag_device == INPUT_DEVICE_ID_EMULATION
+                ):
+                    _cursor_mouse_dragging = false
+                    _cursor_mouse_drag_device = 0
                 _begin_cursor_drag(touch.position)
             elif _cursor_touch_index != touch.index:
                 _mouse_mode_blocked_touch_indices[touch.index] = true
@@ -448,12 +458,19 @@ func routes_pointer(event: InputEvent) -> bool:
                 and not is_touch_mode()
                 and not _visible_interactive_control_at(mouse_button.position)
             ):
+                if (
+                    mouse_button.device == INPUT_DEVICE_ID_EMULATION
+                    and _cursor_touch_index != -1
+                ):
+                    return true
                 _cursor_mouse_dragging = true
+                _cursor_mouse_drag_device = mouse_button.device
                 _begin_cursor_drag(mouse_button.position)
                 return true
             if _cursor_mouse_dragging:
                 if not mouse_button.pressed:
                     _cursor_mouse_dragging = false
+                    _cursor_mouse_drag_device = 0
                     _finish_cursor_drag_if_inactive()
                 return true
     elif event is InputEventMouseMotion:
@@ -497,7 +514,7 @@ func routes_pointer(event: InputEvent) -> bool:
 func cursor_screen_position() -> Vector2:
     if cursor_handle == null:
         return Vector2.ZERO
-    return cursor_handle.get_global_rect().get_center()
+    return cursor_handle.get_global_rect().position + CURSOR_HOTSPOT
 
 func _add_key_button(
     node_name: String,
@@ -837,6 +854,7 @@ func _layout_mouse_icon(button: Button) -> void:
 
 func _attach_pointer_visual(pointer: Control) -> void:
     pointer.set_meta("visual_style", "computer_use")
+    pointer.set_meta("hotspot", CURSOR_HOTSPOT)
     var glow_gradient := Gradient.new()
     glow_gradient.offsets = PackedFloat32Array([0.0, 0.28, 0.62, 1.0])
     glow_gradient.colors = PackedColorArray([
@@ -849,8 +867,9 @@ func _attach_pointer_visual(pointer: Control) -> void:
     glow_texture.width = int(CURSOR_SIZE)
     glow_texture.height = int(CURSOR_SIZE)
     glow_texture.fill = GradientTexture2D.FILL_RADIAL
-    glow_texture.fill_from = Vector2(0.5, 0.5)
-    glow_texture.fill_to = Vector2(1.0, 0.5)
+    var hotspot_uv := CURSOR_HOTSPOT / CURSOR_SIZE
+    glow_texture.fill_from = hotspot_uv
+    glow_texture.fill_to = hotspot_uv + Vector2(0.5, 0.0)
     glow_texture.gradient = glow_gradient
     var glow := TextureRect.new()
     glow.name = "Glow"
@@ -1113,13 +1132,13 @@ func _clamp_cursor() -> void:
         return
     cursor_handle.position.x = clampf(
         cursor_handle.position.x,
-        _safe_rect.position.x,
-        _safe_rect.end.x - cursor_handle.size.x
+        _safe_rect.position.x - CURSOR_HOTSPOT.x,
+        _safe_rect.end.x - CURSOR_HOTSPOT.x
     )
     cursor_handle.position.y = clampf(
         cursor_handle.position.y,
-        _safe_rect.position.y,
-        _safe_rect.end.y - cursor_handle.size.y
+        _safe_rect.position.y - CURSOR_HOTSPOT.y,
+        _safe_rect.end.y - CURSOR_HOTSPOT.y
     )
 
 func _event_position(event: InputEvent) -> Vector2:
