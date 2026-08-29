@@ -117,7 +117,8 @@
       "name": "harfbuzz",
       "features": [
         "icu"
-      ]
+      ],
+      "platform": "!ios"
     },
     "uchardet",
     "unrar",

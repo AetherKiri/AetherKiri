@@ -406,6 +406,20 @@ function(aetherkiri_prepare_libarchive)
             "Normalized libarchive target")
         return()
     endif()
+
+    # The vcpkg libarchive port intentionally installs only a pkg-config
+    # file (there is no LibArchiveConfig.cmake).  CMake's module-mode finder
+    # understands that layout and, when a vcpkg/toolchain root is active,
+    # resolves the target-triplet headers and archive instead of probing the
+    # host filesystem.  Keep CONFIG first for downstream providers that do
+    # ship a modern package config, then use the module as the portable
+    # cross-build path.
+    find_package(LibArchive QUIET)
+    if(TARGET LibArchive::LibArchive)
+        set(AETHERKIRI_LIBARCHIVE_TARGET LibArchive::LibArchive CACHE INTERNAL
+            "Normalized libarchive target")
+        return()
+    endif()
     foreach(_candidate LibArchive::libarchive libarchive::libarchive
                        archive::archive)
         if(TARGET "${_candidate}")
