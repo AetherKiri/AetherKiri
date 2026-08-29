@@ -47,7 +47,6 @@ const REFERENCE_BORDER := Color(0.82, 0.84, 0.88, 0.72)
 const REFERENCE_TEXT := Color(0.94, 0.95, 0.97, 0.84)
 const COMPUTER_USE_CURSOR_FILL := Color(0.08, 0.12, 0.15, 0.82)
 const COMPUTER_USE_CURSOR_OUTLINE := Color(0.68, 0.78, 0.84, 0.96)
-const COMPUTER_USE_CURSOR_GLOW := Color(0.20, 0.66, 0.91, 0.24)
 
 var menu_button: Button
 var keyboard_button: Button
@@ -82,7 +81,6 @@ var _panel_controls: Array[Control] = []
 var _interactive_controls: Array[Control] = []
 var _cursor_touch_index := -1
 var _cursor_mouse_dragging := false
-var _cursor_mouse_drag_device := 0
 var _cursor_drag_has_position := false
 var _cursor_drag_last_screen_position := Vector2.ZERO
 var _menu_touch_index := -1
@@ -204,7 +202,6 @@ func set_enabled(enabled: bool) -> void:
         _menu_open = false
         _cursor_touch_index = -1
         _cursor_mouse_dragging = false
-        _cursor_mouse_drag_device = 0
         _reset_cursor_drag_position()
         _menu_touch_index = -1
         _menu_mouse_dragging = false
@@ -234,7 +231,6 @@ func set_input_mode(mode: String, notify: bool = false) -> void:
     release_all()
     _cursor_touch_index = -1
     _cursor_mouse_dragging = false
-    _cursor_mouse_drag_device = 0
     _reset_cursor_drag_position()
     _mouse_mode_blocked_touch_indices.clear()
     _input_mode = normalized
@@ -410,12 +406,12 @@ func routes_pointer(event: InputEvent) -> bool:
         ):
             if _cursor_touch_index == -1:
                 _cursor_touch_index = touch.index
-                if (
-                    _cursor_mouse_dragging
-                    and _cursor_mouse_drag_device == INPUT_DEVICE_ID_EMULATION
-                ):
+                # iOS can deliver the same finger as both a mouse track and a
+                # ScreenTouch track. Their positions are not guaranteed to be
+                # in the same coordinate space, so the real touch must always
+                # take ownership before its first ScreenDrag.
+                if _cursor_mouse_dragging:
                     _cursor_mouse_dragging = false
-                    _cursor_mouse_drag_device = 0
                 _begin_cursor_drag(touch.position)
             elif _cursor_touch_index != touch.index:
                 _mouse_mode_blocked_touch_indices[touch.index] = true
@@ -458,19 +454,17 @@ func routes_pointer(event: InputEvent) -> bool:
                 and not is_touch_mode()
                 and not _visible_interactive_control_at(mouse_button.position)
             ):
-                if (
-                    mouse_button.device == INPUT_DEVICE_ID_EMULATION
-                    and _cursor_touch_index != -1
-                ):
+                # Ignore a mouse press synthesized after the real touch. A
+                # physical mouse remains supported because it has no active
+                # ScreenTouch track.
+                if _cursor_touch_index != -1:
                     return true
                 _cursor_mouse_dragging = true
-                _cursor_mouse_drag_device = mouse_button.device
                 _begin_cursor_drag(mouse_button.position)
                 return true
             if _cursor_mouse_dragging:
                 if not mouse_button.pressed:
                     _cursor_mouse_dragging = false
-                    _cursor_mouse_drag_device = 0
                     _finish_cursor_drag_if_inactive()
                 return true
     elif event is InputEventMouseMotion:
@@ -855,31 +849,6 @@ func _layout_mouse_icon(button: Button) -> void:
 func _attach_pointer_visual(pointer: Control) -> void:
     pointer.set_meta("visual_style", "computer_use")
     pointer.set_meta("hotspot", CURSOR_HOTSPOT)
-    var glow_gradient := Gradient.new()
-    glow_gradient.offsets = PackedFloat32Array([0.0, 0.28, 0.62, 1.0])
-    glow_gradient.colors = PackedColorArray([
-        COMPUTER_USE_CURSOR_GLOW,
-        Color(0.18, 0.60, 0.86, 0.16),
-        Color(0.14, 0.48, 0.72, 0.07),
-        Color(0.10, 0.36, 0.62, 0.0),
-    ])
-    var glow_texture := GradientTexture2D.new()
-    glow_texture.width = int(CURSOR_SIZE)
-    glow_texture.height = int(CURSOR_SIZE)
-    glow_texture.fill = GradientTexture2D.FILL_RADIAL
-    var hotspot_uv := CURSOR_HOTSPOT / CURSOR_SIZE
-    glow_texture.fill_from = hotspot_uv
-    glow_texture.fill_to = hotspot_uv + Vector2(0.5, 0.0)
-    glow_texture.gradient = glow_gradient
-    var glow := TextureRect.new()
-    glow.name = "Glow"
-    glow.position = Vector2.ZERO
-    glow.size = Vector2.ONE * CURSOR_SIZE
-    glow.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    glow.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-    glow.texture = glow_texture
-    pointer.add_child(glow)
-
     var points := PackedVector2Array([
         Vector2(15, 10),
         Vector2(15, 29),
@@ -889,14 +858,6 @@ func _attach_pointer_visual(pointer: Control) -> void:
         Vector2(23, 23),
         Vector2(32, 23),
     ])
-    var arrow_glow := Line2D.new()
-    arrow_glow.name = "ArrowGlow"
-    arrow_glow.points = points
-    arrow_glow.closed = true
-    arrow_glow.width = 4.2
-    arrow_glow.antialiased = true
-    arrow_glow.default_color = Color(0.22, 0.70, 0.94, 0.14)
-    pointer.add_child(arrow_glow)
     var arrow := Polygon2D.new()
     arrow.name = "Arrow"
     arrow.polygon = points

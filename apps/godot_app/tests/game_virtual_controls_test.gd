@@ -237,34 +237,19 @@ func _run() -> void:
         _fail("scroll actions are not two separate vertical buttons")
         return
     var cursor: Control = controls.cursor_handle
-    var cursor_glow := cursor.get_node_or_null("Glow") as TextureRect
     var cursor_arrow := cursor.get_node_or_null("Arrow") as Polygon2D
     var cursor_arrow_glow := cursor.get_node_or_null("ArrowGlow") as Line2D
     var cursor_outline := cursor.get_node_or_null("Outline") as Line2D
     if (
         cursor.get_meta("visual_style", "") != "computer_use"
         or cursor.get_meta("hotspot", Vector2.ZERO) != GameVirtualControls.CURSOR_HOTSPOT
-        or cursor_glow == null
+        or cursor.get_node_or_null("Glow") != null
         or cursor_arrow == null
-        or cursor_arrow_glow == null
+        or cursor_arrow_glow != null
         or cursor_outline == null
         or cursor.get_node_or_null("Shadow") != null
     ):
-        _fail("draggable cursor does not use the Computer Use visual layers")
-        return
-    var cursor_glow_texture := cursor_glow.texture as GradientTexture2D
-    if (
-        cursor_glow_texture == null
-        or cursor_glow_texture.fill != GradientTexture2D.FILL_RADIAL
-        or cursor_glow_texture.gradient == null
-        or cursor_glow_texture.gradient.colors.size() != 4
-        or cursor_glow_texture.gradient.colors[0].a < 0.2
-        or cursor_glow_texture.gradient.colors[-1].a != 0.0
-        or not cursor_glow_texture.fill_from.is_equal_approx(
-            GameVirtualControls.CURSOR_HOTSPOT / GameVirtualControls.CURSOR_SIZE
-        )
-    ):
-        _fail("Computer Use cursor glow is not centered on its tip hotspot")
+        _fail("Computer Use cursor must not include glow or shadow layers")
         return
     if (
         cursor.size.x < 40.0
@@ -273,7 +258,6 @@ func _run() -> void:
         or cursor_arrow.color.a < 0.8
         or cursor_outline.default_color.b < 0.8
         or cursor_outline.default_color.a < 0.9
-        or cursor_arrow_glow.default_color.b < 0.9
     ):
         _fail("Computer Use cursor arrow shape or palette is incorrect")
         return
@@ -291,7 +275,9 @@ func _run() -> void:
 
     var cursor_before_full_screen_drag := controls.cursor_screen_position()
     var emulated_down := InputEventMouseButton.new()
-    emulated_down.device = GameVirtualControls.INPUT_DEVICE_ID_EMULATION
+    # iOS has reported synthesized mouse tracks with more than one device id.
+    # Touch ownership must not depend on recognizing a particular id.
+    emulated_down.device = 7
     emulated_down.button_index = MOUSE_BUTTON_LEFT
     emulated_down.pressed = true
     emulated_down.position = safe_rect.get_center() + Vector2(0, -96)
@@ -306,7 +292,7 @@ func _run() -> void:
         _fail("mouse mode leaked a direct touch into the game")
         return
     var stale_emulated_motion := InputEventMouseMotion.new()
-    stale_emulated_motion.device = GameVirtualControls.INPUT_DEVICE_ID_EMULATION
+    stale_emulated_motion.device = 7
     stale_emulated_motion.position = emulated_down.position + Vector2(0, -28)
     if (
         not controls.routes_pointer(stale_emulated_motion)
