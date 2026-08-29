@@ -58,6 +58,7 @@ RUNTIME_SYMBOL_FONT_SOURCE="$GODOT_APP_DIR/assets/fonts/aetherkiri-runtime-symbo
 PARALLEL_JOBS="${JOBS:-8}"
 FORCE_LOAD_PLUGIN_ARCHIVES=(
     "libSDL2.a"
+    "libaether_krkrz_clipparse.a"
     "libkrkr2plugin.a"
     "libextkagparser.a"
     "libkagparserex.a"
@@ -69,6 +70,7 @@ FORCE_LOAD_PLUGIN_ARCHIVES=(
 )
 FORCE_LOAD_PLUGIN_SOURCES=(
     "vcpkg_installed/$VCPKG_TRIPLET_DIR/lib/libSDL2.a"
+    "cpp/plugins/libaether_krkrz_clipparse.a"
     "cpp/plugins/libkrkr2plugin.a"
     "cpp/plugins/extkagparser/libextkagparser.a"
     "cpp/plugins/kagparserex/libkagparserex.a"
