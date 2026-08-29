@@ -1073,9 +1073,15 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
             TJS_W("\tfunction setImageFile(file, elm) {\r\n"
                   "\t\tif (name == \"title_bg\" && file == \"title_bg\") {\r\n"
                   "\t\t\ttry {\r\n"
+                  "\t\t\t\tvar useTitleMotion = env.world.enableSceneAnimEffect &&\r\n"
+                  "\t\t\t\t\tenv.world.enableMotionAnimEffect &&\r\n"
+                  "\t\t\t\t\tenv.world.getMotionObject(\"title_bg\") !== void;\r\n"
+                  "\t\t\t\tif (!useTitleMotion && Storages.isExistentStorage(\"main/title_bg.png\"))\r\n"
+                  "\t\t\t\t\tfile = \"main/title_bg.png\";\r\n"
+                  "\t\t\t} catch(e) {\r\n"
                   "\t\t\t\tif (Storages.isExistentStorage(\"main/title_bg.png\"))\r\n"
                   "\t\t\t\t\tfile = \"main/title_bg.png\";\r\n"
-                  "\t\t\t} catch(e) {}\r\n"
+                  "\t\t\t}\r\n"
                   "\t\t}\r\n"
                   "\t\tif (file != \"\") {\r\n"),
             false);
@@ -1094,16 +1100,24 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
         // of a renderable source. Supply the authored static image before
         // the environment creates/synchronizes the object.
         patched.Replace(
-            TJS_W("\t\t\tvar tagname = elm.tagname;\r\n"),
-            TJS_W("\t\t\tvar tagname = elm.tagname;\r\n"
-                  "\t\t\tif (tagname == \"title_bg\" && (elm.file === void || elm.file == \"\")) {\r\n"
-                  "\t\t\t\ttry {\r\n"
-                  "\t\t\t\t\tif (Storages.isExistentStorage(\"main/title_bg.png\")) {\r\n"
-                  "\t\t\t\t\t\telm = Scripts.clone(elm);\r\n"
-                  "\t\t\t\t\t\telm.file = \"main/title_bg.png\";\r\n"
-                  "\t\t\t\t\t}\r\n"
-                  "\t\t\t\t} catch(e) {}\r\n"
-                  "\t\t\t}\r\n"),
+            TJS_W("\t\tvar tagname = elm.tagname;\r\n"),
+            TJS_W("\t\tvar tagname = elm.tagname;\r\n"
+                  "\t\tif (tagname == \"title_bg\" && (elm.file === void || elm.file == \"\")) {\r\n"
+                  "\t\t\ttry {\r\n"
+                  "\t\t\t\tvar useTitleMotion = world.enableSceneAnimEffect &&\r\n"
+                  "\t\t\t\t\tworld.enableMotionAnimEffect &&\r\n"
+                  "\t\t\t\t\tworld.getMotionObject(\"title_bg\") !== void;\r\n"
+                  "\t\t\t\tif (!useTitleMotion && Storages.isExistentStorage(\"main/title_bg.png\")) {\r\n"
+                  "\t\t\t\t\telm = Scripts.clone(elm);\r\n"
+                  "\t\t\t\t\telm.file = \"main/title_bg.png\";\r\n"
+                  "\t\t\t\t}\r\n"
+                  "\t\t\t} catch(e) {\r\n"
+                  "\t\t\t\tif (Storages.isExistentStorage(\"main/title_bg.png\")) {\r\n"
+                  "\t\t\t\t\telm = Scripts.clone(elm);\r\n"
+                  "\t\t\t\t\telm.file = \"main/title_bg.png\";\r\n"
+                  "\t\t\t\t}\r\n"
+                  "\t\t\t}\r\n"
+                  "\t\t}\r\n"),
             false);
         if(patched != buffer) {
             buffer = patched;
@@ -1622,6 +1636,66 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
             false);
         if(hasTitleUpdateAnchor && patched != buffer) {
             spdlog::info("Applied compatibility patch for title_bg source resolution");
+        }
+        // The title loop can be entered after an initial backlay while the
+        // environment transition flag is still set. In that case a newly-
+        // created title_bg target is attached to the hidden back page even
+        // though the title script has already reached its stable wait state.
+        // Rebind only this layer in the title scene; other transition layers
+        // retain their authored page routing.
+        const ttstr titlePlaneAnchor(
+            TJS_W("\tfunction update(elm) {\r\n"
+                  "\t\tvisible = (elm.showmode & 1);\r\n"
+                  "\t\tif (visible) {\r\n"
+                  "\t\t\tinitTarget();\r\n"
+                  "\t\t\tupdateImage(elm);\r\n"));
+        const bool hasTitlePlaneAnchor = patched.IndexOf(titlePlaneAnchor) >= 0;
+        patched.Replace(
+            titlePlaneAnchor,
+            TJS_W("\tfunction update(elm) {\r\n"
+                  "\t\tvisible = (elm.showmode & 1);\r\n"
+                  "\t\tif (visible) {\r\n"
+                  "\t\t\tinitTarget();\r\n"
+                  "\t\t\t// Some titles reach their stable wait state with the\r\n"
+                  "\t\t\t// environment transition flag still set. A title_bg\r\n"
+                  "\t\t\t// created on that path remains on the hidden back page,\r\n"
+                  "\t\t\t// so repair only this layer while the title scene is active.\r\n"
+                  "\t\t\tif (name == \"title_bg\" && targetLayer.plane != 0 &&\r\n"
+                  "\t\t\t\t(kag.currentStorage == \"title.ks\" || kag.currentStorage == \"custom.ks\")) {\r\n"
+                  "\t\t\t\ttry { targetLayer.setPlane(0); } catch(e) {}\r\n"
+                  "\t\t\t}\r\n"
+                  "\t\t\tupdateImage(elm);\r\n"),
+            false);
+        if(hasTitlePlaneAnchor && patched != buffer) {
+            spdlog::info("Applied compatibility patch for title_bg page routing");
+        }
+        // `title_bg` is present in both the event table (the static fallback)
+        // and the motion table (the authored PSB scene animation).  The
+        // stock resolver always prefers the event entry, which makes a
+        // show-only title redraw lose its PSB metadata and leaves only a
+        // static background.  Keep the event-first behavior for every other
+        // image and opt into the motion entry only when the title animation
+        // is enabled and its motion resource is available.
+        const ttstr titleImageDataAnchor(
+            TJS_W("\t\t\tvar info;\r\n"
+                  "\t\t\tif ((info = getEventObject(name)) !== void) {\r\n"));
+        const bool hasTitleImageDataAnchor =
+            patched.IndexOf(titleImageDataAnchor) >= 0;
+        patched.Replace(
+            titleImageDataAnchor,
+            TJS_W("\t\t\tvar info;\r\n"
+                  "\t\t\tvar useTitleMotion = false;\r\n"
+                  "\t\t\tif (name == \"title_bg\") {\r\n"
+                  "\t\t\t\ttry {\r\n"
+                  "\t\t\t\t\tuseTitleMotion = enableSceneAnimEffect &&\r\n"
+                  "\t\t\t\t\t\tenableMotionAnimEffect &&\r\n"
+                  "\t\t\t\t\t\tgetMotionObject(name) !== void;\r\n"
+                  "\t\t\t\t} catch(e) {}\r\n"
+                  "\t\t\t}\r\n"
+                  "\t\t\tif (!useTitleMotion && (info = getEventObject(name)) !== void) {\r\n"),
+            false);
+        if(hasTitleImageDataAnchor && patched != buffer) {
+            spdlog::info("Applied compatibility patch for title_bg motion source resolution");
         }
         // On a return from the system menu, this title recreates the
         // title_bg event with a show-only redraw record.  The record has no
