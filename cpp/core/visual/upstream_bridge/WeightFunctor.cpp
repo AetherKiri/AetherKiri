@@ -3,7 +3,7 @@
 // The header remains Aether-owned so all visual targets see one declaration.
 // The implementation contains no renderer state or host callbacks, so it is
 // safe to compile directly from the pinned krkrz_dev submodule.
-#include "tjsCommHead.h"
+#include "../../tjs2/tjsCommHead.h"
 
 #include <cfloat>
 

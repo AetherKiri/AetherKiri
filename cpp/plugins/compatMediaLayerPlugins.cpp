@@ -1,9 +1,19 @@
 #include "DebugIntf.h"
+#include "BitmapIntf.h"
+#include "FontImpl.h"
+#include "FontServiceIntf.h"
 #include "LayerBitmapIntf.h"
 #include "LayerIntf.h"
+#include "TVPScreen.h"
+#include "WindowImpl.h"
 #include "ncbind.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <cstddef>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <map>
 #include <vector>
 
@@ -23,17 +33,43 @@ void logCompatOnce(const tjs_char *module, const tjs_char *message) {
               message);
 }
 
-tjs_error TJS_INTF_METHOD trueCb(tTJSVariant *result, tjs_int,
-                                 tTJSVariant **, iTJSDispatch2 *) {
+tjs_error TJS_INTF_METHOD unavailableCb(tTJSVariant *result, tjs_int,
+                                         tTJSVariant **,
+                                         iTJSDispatch2 *) {
+    if(result)
+        *result = false;
+    logCompatOnce(TJS_W("compat"),
+                  TJS_W("requested host-only operation is unavailable"));
+    return TJS_S_OK;
+}
+
+std::atomic<bool> g_wmrDumping{false};
+
+tjs_error TJS_INTF_METHOD wmrStartDumpCb(tTJSVariant *result, tjs_int,
+                                         tTJSVariant **,
+                                         iTJSDispatch2 *) {
+    g_wmrDumping.store(true, std::memory_order_release);
+    logCompatOnce(TJS_W("wmrdump.dll"),
+                  TJS_W("portable message-dump state enabled; host UI owns the log sink"));
     if(result)
         *result = true;
     return TJS_S_OK;
 }
 
-tjs_error TJS_INTF_METHOD voidCb(tTJSVariant *result, tjs_int, tTJSVariant **,
-                                 iTJSDispatch2 *) {
+tjs_error TJS_INTF_METHOD wmrStopDumpCb(tTJSVariant *result, tjs_int,
+                                        tTJSVariant **,
+                                        iTJSDispatch2 *) {
+    g_wmrDumping.store(false, std::memory_order_release);
     if(result)
-        result->Clear();
+        *result = true;
+    return TJS_S_OK;
+}
+
+tjs_error TJS_INTF_METHOD wmrIsDumpingCb(tTJSVariant *result, tjs_int,
+                                         tTJSVariant **,
+                                         iTJSDispatch2 *) {
+    if(result)
+        *result = g_wmrDumping.load(std::memory_order_acquire);
     return TJS_S_OK;
 }
 
@@ -314,16 +350,83 @@ tjs_error TJS_INTF_METHOD makeBitmapFromProvinceCompat(
 class PluggedDrawDevice {
 public:
     PluggedDrawDevice() = default;
-    bool recreate() { return true; }
-    bool attach(tTJSVariant = tTJSVariant()) { return true; }
-    bool detach() { return true; }
-    bool show() { return true; }
-    bool hide() { return true; }
-    void setTargetWindow(tTJSVariant) {}
-    void setDestRectangle(tTJSVariant) {}
-    void setClipRectangle(tTJSVariant) {}
-    tjs_int getWidth() const { return 0; }
-    tjs_int getHeight() const { return 0; }
+
+    bool recreate() {
+        // Keep the current Aether renderer as the sole draw-device owner. The
+        // compatibility object is useful for scripts that only configure a
+        // device, but it must not replace TVPMainWindow->DrawDevice.
+        recreated_ = TVPMainWindow != nullptr;
+        return recreated_;
+    }
+
+    bool attach(tTJSVariant target = tTJSVariant()) {
+        if(!recreated_ && !recreate())
+            return false;
+        target_ = target;
+        attached_ = true;
+        return true;
+    }
+
+    bool detach() {
+        attached_ = false;
+        target_.Clear();
+        return true;
+    }
+
+    bool show() {
+        if(!attached_)
+            return false;
+        visible_ = true;
+        return true;
+    }
+
+    bool hide() {
+        if(!attached_)
+            return false;
+        visible_ = false;
+        return true;
+    }
+
+    void setTargetWindow(tTJSVariant target) { target_ = target; }
+    void setDestRectangle(tTJSVariant value) { dest_ = value; }
+    void setClipRectangle(tTJSVariant value) { clip_ = value; }
+
+    tjs_int getWidth() const { return rectangleExtent(dest_, true); }
+    tjs_int getHeight() const { return rectangleExtent(dest_, false); }
+
+private:
+    static tjs_int rectangleExtent(const tTJSVariant &value, bool width) {
+        if(value.Type() == tvtObject && value.AsObjectNoAddRef()) {
+            ncbPropAccessor prop(value);
+            const tjs_char *extent = width ? TJS_W("w") : TJS_W("h");
+            tjs_int result = prop.getIntValue(extent, 0);
+            if(result > 0)
+                return result;
+            const tjs_int first = prop.getIntValue(width ? TJS_W("left")
+                                                          : TJS_W("top"),
+                                                   0);
+            const tjs_int last = prop.getIntValue(width ? TJS_W("right")
+                                                         : TJS_W("bottom"),
+                                                  first);
+            if(last >= first)
+                return last - first;
+        }
+        if(TVPMainWindow && TVPMainWindow->GetForm()) {
+            tjs_int w = 0;
+            tjs_int h = 0;
+            TVPMainWindow->GetForm()->GetSize(w, h);
+            return width ? std::max(0, w) : std::max(0, h);
+        }
+        return width ? std::max(0, tTVPScreen::GetDesktopWidth())
+                     : std::max(0, tTVPScreen::GetDesktopHeight());
+    }
+
+    bool recreated_ = false;
+    bool attached_ = false;
+    bool visible_ = false;
+    tTJSVariant target_;
+    tTJSVariant dest_;
+    tTJSVariant clip_;
 };
 
 class PassThroughDrawDeviceCompat : public PluggedDrawDevice {};
@@ -365,7 +468,7 @@ public:
     bool recreate() {
         logCompatOnce(TJS_W("drawdeviceZ_D3D9.dll"),
                       TJS_W("D3D9 backend is not used by the Godot renderer"));
-        return true;
+        return false;
     }
 };
 
@@ -380,8 +483,12 @@ NCB_REGISTER_CLASS(DrawDeviceZ) {
 class OgreDrawDevice {
 public:
     OgreDrawDevice() = default;
-    bool recreate() { return true; }
-    bool resetDevice() { return true; }
+    bool recreate() {
+        logCompatOnce(TJS_W("drawdeviceOgre.dll"),
+                      TJS_W("Ogre backend is not used by the Aether renderer"));
+        return false;
+    }
+    bool resetDevice() { return false; }
     void finalize() {}
 };
 
@@ -410,8 +517,13 @@ NCB_REGISTER_CLASS(Irrlicht) {
     NCB_METHOD(clear);
 }
 
-NCB_ATTACH_FUNCTION(copyIImage, Layer, trueCb);
-NCB_ATTACH_FUNCTION(copyITexture, Layer, trueCb);
+// These entry points require an Irrlicht/GPU object owned by the original
+// plug-in.  Aether layers expose CPU pixels, not an IImage/ITexture handle;
+// claiming success here leaves the caller with an object that was never
+// copied.  Keep the symbol for script compatibility and report the missing
+// host capability explicitly.
+NCB_ATTACH_FUNCTION(copyIImage, Layer, unavailableCb);
+NCB_ATTACH_FUNCTION(copyITexture, Layer, unavailableCb);
 
 // -------------------------------------------------------------------------
 // layerEx*.dll
@@ -443,24 +555,50 @@ NCB_PRE_REGIST_CALLBACK(loadLayerExDrawGdiPlus);
 class AGGPrimitive {
 public:
     AGGPrimitive() = default;
-    bool setPos(tjs_int = 0, tjs_int = 0) { return true; }
-    bool rotate(tjs_real = 0) { return true; }
+    bool setPos(tjs_int x = 0, tjs_int y = 0) {
+        x_ = static_cast<tjs_real>(x);
+        y_ = static_cast<tjs_real>(y);
+        return true;
+    }
+    bool rotate(tjs_real angle = 0) {
+        if(!std::isfinite(angle))
+            return false;
+        angle_ = angle;
+        return true;
+    }
     tjs_real getX() const { return x_; }
     void setX(tjs_real value) { x_ = value; }
     tjs_real getY() const { return y_; }
     void setY(tjs_real value) { y_ = value; }
+    tjs_real getAngle() const { return angle_; }
+    void setAngle(tjs_real value) { angle_ = value; }
 
 private:
     tjs_real x_ = 0;
     tjs_real y_ = 0;
+    tjs_real angle_ = 0;
 };
 
 class LayerAggCompat {
 public:
-    bool aggSetPos(tjs_int = 0, tjs_int = 0) { return true; }
-    bool aggRotate(tjs_real = 0) { return true; }
-    tjs_real aggX() const { return 0; }
-    tjs_real aggY() const { return 0; }
+    bool aggSetPos(tjs_int x = 0, tjs_int y = 0) {
+        x_ = static_cast<tjs_real>(x);
+        y_ = static_cast<tjs_real>(y);
+        return true;
+    }
+    bool aggRotate(tjs_real angle = 0) {
+        if(!std::isfinite(angle))
+            return false;
+        angle_ = angle;
+        return true;
+    }
+    tjs_real aggX() const { return x_; }
+    tjs_real aggY() const { return y_; }
+
+private:
+    tjs_real x_ = 0;
+    tjs_real y_ = 0;
+    tjs_real angle_ = 0;
 };
 
 NCB_REGISTER_CLASS(AGGPrimitive) {
@@ -469,6 +607,7 @@ NCB_REGISTER_CLASS(AGGPrimitive) {
     NCB_METHOD(rotate);
     NCB_PROPERTY(x, getX, setX);
     NCB_PROPERTY(y, getY, setY);
+    NCB_PROPERTY(angle, getAngle, setAngle);
 }
 
 NCB_ATTACH_CLASS(LayerAggCompat, Layer) {
@@ -484,17 +623,26 @@ NCB_PRE_REGIST_CALLBACK(loadLayerExMovie);
 
 class LayerExAVICompat {
 public:
-    bool openAVI(const tjs_char *, tjs_real = 0) { return true; }
-    bool openCompressedAVI(const tjs_char *, tjs_real = 0) { return true; }
-    bool closeAVI() { return true; }
-    bool recordAVI(tjs_int = 0) { return true; }
+    bool openAVI(const tjs_char *, tjs_real = 0) { return unavailable(); }
+    bool openCompressedAVI(const tjs_char *, tjs_real = 0) {
+        return unavailable();
+    }
+    bool closeAVI() { return unavailable(); }
+    bool recordAVI(tjs_int = 0) { return unavailable(); }
     bool openWAV(const tjs_char *, tjs_int = 2, tjs_int = 44100,
                  tjs_int = 16, tjs_int = 0) {
-        return true;
+        return unavailable();
     }
-    bool startWAV() { return true; }
-    bool stopWAV() { return true; }
-    bool closeWAV() { return true; }
+    bool startWAV() { return unavailable(); }
+    bool stopWAV() { return unavailable(); }
+    bool closeWAV() { return unavailable(); }
+
+private:
+    static bool unavailable() {
+        logCompatOnce(TJS_W("layerExAVI.dll"),
+                      TJS_W("AVI/WAV capture requires a host media backend"));
+        return false;
+    }
 };
 
 NCB_ATTACH_CLASS(LayerExAVICompat, Layer) {
@@ -519,44 +667,68 @@ NCB_ATTACH_CLASS(LayerExAVICompat, Layer) {
 class SWFMovie {
 public:
     SWFMovie() = default;
-    bool load(const tjs_char *) { return false; }
-    bool update() { return true; }
-    bool notifyMouse(tjs_int = 0, tjs_int = 0, tjs_int = 0) { return true; }
+    bool load(const tjs_char *) {
+        loaded_ = false;
+        logCompatOnce(TJS_W("gameswf.dll"),
+                      TJS_W("SWF playback requires an embedded SWF runtime"));
+        return false;
+    }
+    bool update() { return loaded_; }
+    bool notifyMouse(tjs_int = 0, tjs_int = 0, tjs_int = 0) {
+        return loaded_;
+    }
     bool play() {
+        if(!loaded_)
+            return false;
         playing_ = true;
         return true;
     }
     bool stop() {
+        if(!loaded_)
+            return false;
         playing_ = false;
         return true;
     }
     bool restart() {
+        if(!loaded_)
+            return false;
         playing_ = true;
         frame_ = 0;
         return true;
     }
     bool back() {
+        if(!loaded_)
+            return false;
         if(frame_ > 0)
             --frame_;
         return true;
     }
     bool next() {
+        if(!loaded_)
+            return false;
         ++frame_;
         return true;
     }
     bool gotoFrame(tjs_int frame) {
+        if(!loaded_)
+            return false;
         frame_ = frame;
         return true;
     }
 
 private:
+    bool loaded_ = false;
     bool playing_ = false;
     tjs_int frame_ = 0;
 };
 
 class layerExSWF {
 public:
-    bool drawSWF(tTJSVariant = tTJSVariant()) { return true; }
+    bool drawSWF(tTJSVariant = tTJSVariant()) {
+        logCompatOnce(TJS_W("gameswf.dll"),
+                      TJS_W("SWF drawing requires an embedded SWF runtime"));
+        return false;
+    }
 };
 
 NCB_REGISTER_CLASS(SWFMovie) {
@@ -586,11 +758,42 @@ class MagickPP {
 public:
     MagickPP() = default;
     ttstr getVersion() const { return TJS_W("AetherKiri MagickPP compat"); }
-    ttstr getSupports() const { return TJS_W(""); }
-    tTJSVariant readImages(const tjs_char *) {
+    // Expose the formats owned by Aether's GraphicsLoader.  This is kept as
+    // a string for the historical Magick++ plug-in contract (callers split
+    // on commas); it deliberately does not claim ImageMagick-only formats.
+    ttstr getSupports() const {
+        return TJS_W("bmp,dib,jpg,jpeg,jif,png,tlg,tlg5,tlg6,webp,amv");
+    }
+
+    tTJSVariant readImages(const tjs_char *filename) {
         iTJSDispatch2 *array = TJSCreateArrayObject();
         if(!array)
             return tTJSVariant();
+
+        if(filename && *filename) {
+            iTJSDispatch2 *bitmap = nullptr;
+            try {
+                bitmap = TVPCreateBitmapObject();
+                if(bitmap) {
+                    tTJSVariant path(filename);
+                    tTJSVariant *args[] = {&path};
+                    tTJSVariant metadata;
+                    const tjs_error error = bitmap->FuncCall(
+                        0, TJS_W("load"), nullptr, &metadata, 1, args, bitmap);
+                    if(TJS_SUCCEEDED(error)) {
+                        tTJSVariant value(bitmap, bitmap);
+                        const tjs_int index = 0;
+                        array->PropSetByNum(TJS_MEMBERENSURE, index, &value,
+                                            array);
+                    }
+                }
+            } catch(...) {
+                logCompatOnce(TJS_W("magickpp.dll"),
+                              TJS_W("image could not be decoded by the core loader"));
+            }
+            if(bitmap)
+                bitmap->Release();
+        }
         tTJSVariant result(array, array);
         array->Release();
         return result;
@@ -622,10 +825,10 @@ public:
     }
     bool open(const tjs_char *filename) {
         filename_ = filename ? filename : TJS_W("");
-        opened_ = true;
+        opened_ = false;
         logCompatOnce(TJS_W("videoEncoder.dll"),
                       TJS_W("WMV/DirectShow encoding is unavailable"));
-        return true;
+        return false;
     }
     bool close() {
         opened_ = false;
@@ -634,7 +837,7 @@ public:
     static tjs_error TJS_INTF_METHOD encodeVideoSample(
         tTJSVariant *result, tjs_int, tTJSVariant **, VideoEncoderCompat *) {
         if(result)
-            *result = true;
+            *result = false;
         return TJS_S_OK;
     }
     tjs_int getVideoQuality() const { return videoQuality_; }
@@ -677,8 +880,10 @@ NCB_REGISTER_CLASS_DIFFER(videoEncoder, VideoEncoderCompat) {
 
 // -------------------------------------------------------------------------
 // tftSave.dll
-// AETHERKIRI_COMPAT_STUB: exposes pre-rendered-font API; font rasterization
-// stays in AetherKiri text/layer renderers.
+// The file cache itself is intentionally owned by the core FontService.  The
+// layer-facing half is implemented here on top of that same service so games
+// using setGlyphInfo/drawGlyph see real FreeType metrics and pixels instead of
+// a successful 1x1 placeholder.
 // -------------------------------------------------------------------------
 
 #undef NCB_MODULE_NAME
@@ -686,14 +891,16 @@ NCB_REGISTER_CLASS_DIFFER(videoEncoder, VideoEncoderCompat) {
 
 class LayerGlyphEx {
 public:
-    bool drawGlyph(tjs_int ch) {
-        setGlyph(ch);
-        return true;
-    }
-    bool setGlyphInfo(tjs_int ch) {
-        setGlyph(ch);
-        return true;
-    }
+    explicit LayerGlyphEx(iTJSDispatch2 *object) : object_(object) {}
+
+    bool drawGlyph(tjs_int ch) { return renderGlyphImpl(ch, true); }
+    bool setGlyphInfo(tjs_int ch) { return renderGlyphImpl(ch, false); }
+    // Newer tftSave builds expose renderGlyph for DirectWrite.  FreeType is
+    // the shared portable rasterizer in Aether, so it follows the same path.
+    bool renderGlyph(tjs_int ch) { return renderGlyphImpl(ch, true); }
+
+    tjs_int getGlyphCharset() const { return glyphCharset_; }
+    void setGlyphCharset(tjs_int value) { glyphCharset_ = value; }
     tjs_int getBlackboxX() const { return blackboxX_; }
     void setBlackboxX(tjs_int value) { blackboxX_ = value; }
     tjs_int getBlackboxY() const { return blackboxY_; }
@@ -710,15 +917,134 @@ public:
     void setInc(tjs_int value) { inc_ = value; }
 
 private:
-    void setGlyph(tjs_int ch) {
-        inc_ = 0;
-        incX_ = 0;
-        incY_ = 0;
-        originX_ = 0;
-        originY_ = 0;
-        blackboxX_ = ch ? 1 : 0;
-        blackboxY_ = ch ? 1 : 0;
+    static tjs_int roundedMetric(float value) {
+        if(!std::isfinite(value))
+            return 0;
+        return static_cast<tjs_int>(std::lround(value));
     }
+
+    void setMetricProperties(const tTVPFontGlyphMetrics &metrics,
+                             const tTVPFontGlyphBitmap *bitmap) {
+        blackboxX_ = bitmap ? bitmap->Width : roundedMetric(metrics.Width);
+        blackboxY_ = bitmap ? bitmap->Height : roundedMetric(metrics.Height);
+        originX_ = bitmap ? bitmap->Left : roundedMetric(metrics.BearingX);
+        originY_ = bitmap ? bitmap->Top : roundedMetric(metrics.BearingY);
+        incX_ = roundedMetric(metrics.AdvanceX);
+        incY_ = roundedMetric(metrics.AdvanceY);
+        inc_ = incX_;
+        if(object_) {
+            auto set = [this](const tjs_char *name, tjs_int value) {
+                tTJSVariant variant(value);
+                object_->PropSet(TJS_MEMBERENSURE, name, nullptr, &variant,
+                                 object_);
+            };
+            set(TJS_W("blackbox_x"), blackboxX_);
+            set(TJS_W("blackbox_y"), blackboxY_);
+            set(TJS_W("origin_x"), originX_);
+            set(TJS_W("origin_y"), originY_);
+            set(TJS_W("inc_x"), incX_);
+            set(TJS_W("inc_y"), incY_);
+            set(TJS_W("inc"), inc_);
+        }
+    }
+
+    bool renderGlyphImpl(tjs_int ch, bool writeImage) {
+        if(ch < 0 || !object_)
+            return false;
+        tTJSNI_BaseLayer *layer = compatLayerFromThis(object_);
+        if(!layer)
+            return false;
+
+        const tTVPFont &font = layer->GetFont();
+        const tjs_int pixelSize = std::max<tjs_int>(1, std::abs(font.Height));
+        const bool bold = (font.Flags & TVP_TF_BOLD) != 0;
+        const bool italic = (font.Flags & TVP_TF_ITALIC) != 0;
+        ttstr faceName = font.Face;
+        if(faceName.IsEmpty())
+            faceName = TVPGetDefaultFontName();
+
+        tTVPFontFaceHandle face = nullptr;
+        try {
+            face = TVPFontAcquireFace(faceName);
+        } catch(...) {
+            face = nullptr;
+        }
+        if(!face) {
+            logCompatOnce(TJS_W("tftSave.dll"),
+                          TJS_W("font face could not be resolved"));
+            return false;
+        }
+
+        const tjs_uint32 glyph = TVPFontGetGlyphIndex(
+            face, static_cast<tjs_uint32>(ch));
+        tTVPFontGlyphMetrics metrics{};
+        const bool haveMetrics = glyph != 0 && TVPFontGetGlyphMetrics(
+            face, glyph, pixelSize, bold, italic, &metrics);
+        tTVPFontGlyphBitmap bitmap{};
+        const bool haveBitmap = writeImage && glyph != 0 &&
+            TVPFontGetGlyphBitmap(face, glyph, pixelSize, false, bold, italic,
+                                  &bitmap);
+
+        if(haveMetrics)
+            setMetricProperties(metrics, haveBitmap ? &bitmap : nullptr);
+        else {
+            tTVPFontGlyphMetrics empty{};
+            setMetricProperties(empty, nullptr);
+        }
+
+        bool rendered = !writeImage;
+        if(writeImage && haveBitmap && bitmap.Width > 0 && bitmap.Height > 0 &&
+           bitmap.Buffer && bitmap.Pitch != 0) {
+            try {
+                if(!layer->GetMainImage())
+                    layer->SetHasImage(true);
+                layer->SetImageSize(static_cast<tjs_uint>(bitmap.Width),
+                                    static_cast<tjs_uint>(bitmap.Height));
+                auto *destination = static_cast<tjs_uint8 *>(
+                    layer->GetMainImagePixelBufferForWrite());
+                const tjs_int destinationPitch =
+                    layer->GetMainImagePixelBufferPitch();
+                if(destination && destinationPitch >= bitmap.Width * 4) {
+                    std::memset(destination,
+                                0,
+                                static_cast<size_t>(destinationPitch) *
+                                    static_cast<size_t>(bitmap.Height));
+                    for(tjs_int y = 0; y < bitmap.Height; ++y) {
+                        const tjs_int sourceY = bitmap.Pitch > 0
+                            ? y : bitmap.Height - 1 - y;
+                        const auto *source = bitmap.Buffer +
+                            static_cast<ptrdiff_t>(sourceY) *
+                                static_cast<ptrdiff_t>(std::abs(bitmap.Pitch));
+                        auto *target = destination +
+                            static_cast<size_t>(y) *
+                                static_cast<size_t>(destinationPitch);
+                        if(bitmap.Format == TVP_FONT_BITMAP_BGRA) {
+                            std::memcpy(target, source,
+                                        static_cast<size_t>(bitmap.Width) * 4);
+                        } else {
+                            for(tjs_int x = 0; x < bitmap.Width; ++x) {
+                                const tjs_uint32 alpha = source[x];
+                                const tjs_uint32 pixel = (alpha << 24) |
+                                    0x00ffffffu;
+                                std::memcpy(target + static_cast<size_t>(x) * 4,
+                                            &pixel, sizeof(pixel));
+                            }
+                        }
+                    }
+                    layer->Update(tTVPRect(0, 0, bitmap.Width,
+                                           bitmap.Height));
+                    rendered = true;
+                }
+            } catch(...) {
+                rendered = false;
+            }
+        }
+        TVPFontReleaseFace(face);
+        return glyph != 0 && haveMetrics && rendered;
+    }
+
+    iTJSDispatch2 *object_ = nullptr;
+    tjs_int glyphCharset_ = 1; // DEFAULT_CHARSET-compatible Unicode mode
     tjs_int blackboxX_ = 0;
     tjs_int blackboxY_ = 0;
     tjs_int originX_ = 0;
@@ -728,12 +1054,23 @@ private:
     tjs_int inc_ = 0;
 };
 
-NCB_ATTACH_FUNCTION(savePreRenderedFont, System, trueCb);
-NCB_ATTACH_FUNCTION(loadPreRenderedFont, System, trueCb);
+NCB_GET_INSTANCE_HOOK(LayerGlyphEx) {
+    /**/ NCB_GET_INSTANCE_HOOK_CLASS() {}
+    /**/ ~NCB_GET_INSTANCE_HOOK_CLASS() {}
 
-NCB_ATTACH_CLASS(LayerGlyphEx, Layer) {
+    NCB_INSTANCE_GETTER(objthis) {
+        ClassT *object = GetNativeInstance(objthis);
+        if(!object)
+            SetNativeInstance(objthis, (object = new ClassT(objthis)));
+        return object;
+    }
+};
+
+NCB_ATTACH_CLASS_WITH_HOOK(LayerGlyphEx, Layer) {
     NCB_METHOD(drawGlyph);
     NCB_METHOD(setGlyphInfo);
+    NCB_METHOD(renderGlyph);
+    NCB_PROPERTY(glyphCharset, getGlyphCharset, setGlyphCharset);
     NCB_PROPERTY(blackbox_x, getBlackboxX, setBlackboxX);
     NCB_PROPERTY(blackbox_y, getBlackboxY, setBlackboxY);
     NCB_PROPERTY(origin_x, getOriginX, setOriginX);
@@ -773,24 +1110,64 @@ NCB_ATTACH_CLASS(MsdfrenderLayerCompat, Layer) {
 
 class WindowExProgressCompat {
 public:
-    bool startProgress(tTJSVariant = tTJSVariant()) {
+    bool startProgress(tTJSVariant init = tTJSVariant()) {
         active_ = true;
+        cancelled_ = false;
+        percent_ = 0;
+        messages_.clear();
+        if(init.Type() == tvtObject && init.AsObjectNoAddRef()) {
+            iTJSDispatch2 *dict = init.AsObjectNoAddRef();
+            tTJSVariant value;
+            if(TJS_SUCCEEDED(dict->PropGet(TJS_IGNOREPROP,
+                                           TJS_W("cancelRequested"), nullptr,
+                                           &value, dict)) &&
+               value.Type() != tvtVoid)
+                cancelled_ = static_cast<bool>(value);
+            if(TJS_SUCCEEDED(dict->PropGet(TJS_IGNOREPROP,
+                                           TJS_W("percent"), nullptr, &value,
+                                           dict)) &&
+               value.Type() != tvtVoid)
+                percent_ = std::clamp(static_cast<tjs_int>(value), 0, 100);
+        }
         return true;
     }
     bool doProgress(tjs_int percent) {
-        percent_ = percent;
-        return false;
+        if(!active_)
+            return true;
+        if(percent < 0) {
+            cancelled_ = true;
+            percent_ = 0;
+        } else {
+            percent_ = std::clamp(percent, 0, 100);
+        }
+        return cancelled_;
     }
-    bool setProgressMessage(const tjs_char *, const tjs_char *) { return true; }
+    bool setProgressMessage(const tjs_char *name, const tjs_char *text) {
+        if(!active_ || !name)
+            return false;
+        messages_[name] = text ? text : TJS_W("");
+        return true;
+    }
     bool endProgress() {
         active_ = false;
         return true;
     }
     bool getProgressActive() const { return active_; }
+    tjs_int getProgressPercent() const { return percent_; }
+    bool getProgressCancelled() const { return cancelled_; }
+    void setProgressCancelled(bool value) { cancelled_ = value; }
+    ttstr getProgressMessage(const tjs_char *name) const {
+        if(!name)
+            return ttstr();
+        const auto found = messages_.find(name);
+        return found == messages_.end() ? ttstr() : found->second;
+    }
 
 private:
     bool active_ = false;
+    bool cancelled_ = false;
     tjs_int percent_ = 0;
+    std::map<ttstr, ttstr> messages_;
 };
 
 NCB_ATTACH_CLASS(WindowExProgressCompat, Window) {
@@ -801,91 +1178,37 @@ NCB_ATTACH_CLASS(WindowExProgressCompat, Window) {
     NCB_METHOD(setProgressMessage);
     NCB_METHOD(endProgress);
     NCB_PROPERTY_RO(progressActive, getProgressActive);
-}
-
-// -------------------------------------------------------------------------
-// httpserv.dll
-// AETHERKIRI_COMPAT_STUB: class surface without opening a native socket server.
-// -------------------------------------------------------------------------
-
-#undef NCB_MODULE_NAME
-#define NCB_MODULE_NAME TJS_W("httpserv.dll")
-
-class SimpleHTTPServer {
-public:
-    static tjs_error TJS_INTF_METHOD factory(SimpleHTTPServer **result,
-                                             tjs_int numparams,
-                                             tTJSVariant **param,
-                                             iTJSDispatch2 *) {
-        auto *server = new SimpleHTTPServer();
-        if(numparams > 0)
-            server->port_ = static_cast<tjs_int>(*param[0]);
-        if(numparams > 1)
-            server->timeout_ = static_cast<tjs_int>(*param[1]);
-        if(numparams > 2)
-            server->codepage_ = static_cast<tjs_int>(*param[2]);
-        *result = server;
-        return TJS_S_OK;
-    }
-    tjs_int start() {
-        started_ = true;
-        if(port_ == 0)
-            port_ = 12737;
-        logCompatOnce(TJS_W("httpserv.dll"),
-                      TJS_W("embedded HTTP server is not opened in compat mode"));
-        return port_;
-    }
-    bool stop() {
-        started_ = false;
-        return true;
-    }
-    tjs_int getPort() const { return port_; }
-    tjs_int getTimeout() const { return timeout_; }
-    tjs_int getCodePage() const { return codepage_; }
-    void setCodePage(tjs_int value) { codepage_ = value; }
-
-private:
-    bool started_ = false;
-    tjs_int port_ = 0;
-    tjs_int timeout_ = 10;
-    tjs_int codepage_ = 65001;
-};
-
-NCB_REGISTER_CLASS(SimpleHTTPServer) {
-    Factory(&SimpleHTTPServer::factory);
-    NCB_PROPERTY_RO(port, getPort);
-    NCB_PROPERTY_RO(timeout, getTimeout);
-    NCB_PROPERTY(codepage, getCodePage, setCodePage);
-    NCB_METHOD(start);
-    NCB_METHOD(stop);
-    Variant(TJS_W("cpACP"), static_cast<tjs_int>(0));
-    Variant(TJS_W("cpOEM"), static_cast<tjs_int>(1));
-    Variant(TJS_W("cpUTF8"), static_cast<tjs_int>(65001));
-    Variant(TJS_W("cpSJIS"), static_cast<tjs_int>(932));
-    Variant(TJS_W("cpEUC"), static_cast<tjs_int>(20932));
-    Variant(TJS_W("cpJIS"), static_cast<tjs_int>(50220));
+    NCB_PROPERTY_RO(progressPercent, getProgressPercent);
+    NCB_PROPERTY(progressCancelled, getProgressCancelled,
+                 setProgressCancelled);
+    NCB_METHOD(getProgressMessage);
 }
 
 // -------------------------------------------------------------------------
 // wsh.dll
-// AETHERKIRI_COMPAT_STUB: Windows Script Host is unavailable on macOS.
+// AETHERKIRI_COMPAT_STUB: Windows Script Host is unavailable on portable
+// hosts.  The functions remain registered so old scripts can probe them,
+// but they never report a successful execution without a WSH engine.
 // -------------------------------------------------------------------------
 
 #undef NCB_MODULE_NAME
 #define NCB_MODULE_NAME TJS_W("wsh.dll")
-NCB_ATTACH_FUNCTION(addProgId, Scripts, trueCb);
-NCB_ATTACH_FUNCTION(execWSH, Scripts, voidCb);
-NCB_ATTACH_FUNCTION(execStorageWSH, Scripts, voidCb);
+NCB_ATTACH_FUNCTION(addProgId, Scripts, unavailableCb);
+NCB_ATTACH_FUNCTION(execWSH, Scripts, unavailableCb);
+NCB_ATTACH_FUNCTION(execStorageWSH, Scripts, unavailableCb);
 
 // -------------------------------------------------------------------------
 // wmrdump.dll
-// AETHERKIRI_COMPAT_STUB: Win32 message dump helpers become no-op globals.
+// AETHERKIRI_COMPAT_STUB: message dumping is represented by a process-local
+// state flag on portable hosts.  It is intentionally not exposed as a fake
+// HWND/file dump; callers can observe whether the request was accepted.
 // -------------------------------------------------------------------------
 
 #undef NCB_MODULE_NAME
 #define NCB_MODULE_NAME TJS_W("wmrdump.dll")
-NCB_REGISTER_FUNCTION(wmrStartDump, trueCb);
-NCB_REGISTER_FUNCTION(wmrStopDump, trueCb);
+NCB_REGISTER_FUNCTION(wmrStartDump, wmrStartDumpCb);
+NCB_REGISTER_FUNCTION(wmrStopDump, wmrStopDumpCb);
+NCB_REGISTER_FUNCTION(wmrIsDumping, wmrIsDumpingCb);
 
 // -------------------------------------------------------------------------
 // onigruma.dll / xpressive.dll

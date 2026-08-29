@@ -426,6 +426,10 @@ public:
 
     bool WaitForVBlank(tjs_int *in_vblank, tjs_int *delayed);
 
+    void OnTouchDown(tjs_real x, tjs_real y, tjs_real cx, tjs_real cy,
+                     tjs_uint32 id) override;
+    void OnTouchMove(tjs_real x, tjs_real y, tjs_real cx, tjs_real cy,
+                     tjs_uint32 id) override;
     void OnTouchUp(tjs_real x, tjs_real y, tjs_real cx, tjs_real cy,
                    tjs_uint32 id) override;
 
@@ -466,6 +470,13 @@ public: // for iTVPLayerTreeOwner
 
 protected:
 };
+
+// Deliver a plug-in window message through the active host form.  The helper
+// is intentionally independent of HWND so portable plug-ins can retain the
+// krkrz receiver contract on SDL/Godot hosts as well as Win32.
+bool TVPDeliverWindowMessage(tTJSNI_Window *window, tjs_uint32 message,
+                             tjs_uint64 wparam = 0, tjs_uint64 lparam = 0,
+                             tjs_uint64 *result = nullptr);
 //---------------------------------------------------------------------------
 
 //---------------------------------------------------------------------------

@@ -11,4 +11,5 @@
 #include "MsgIntf.h"
 #include "PluginImpl.h"
 #include "CharacterSet.h"
+#include "FontServiceIntf.h"
 #include "TransIntf.h"

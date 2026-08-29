@@ -2,7 +2,7 @@
 //
 // The class declaration is owned by Aether; only the small registration
 // implementation is consumed from the pinned krkrz_dev checkout.
-#include "tjsCommHead.h"
+#include "../tjsCommHead.h"
 
 #include "../tjsException.h"
 

@@ -180,7 +180,8 @@ void InterleaveOverlappingWindow(float *__restrict dest,
 
 //---------------------------------------------------------------------------
 
-#if defined(_M_IX86) || defined(_M_X64)
+#if defined(_M_IX86) || defined(_M_X64) || defined(__i386__) || \
+    defined(__x86_64__)
 //---------------------------------------------------------------------------
 // 定数など
 //---------------------------------------------------------------------------
@@ -572,6 +573,17 @@ void InterleaveOverlappingWindow_sse(
     float *__restrict dest, const float *__restrict const *__restrict src,
     float *__restrict win, int numch, size_t srcofs, size_t len);
 //---------------------------------------------------------------------------
+#endif
+
+#if defined(__ARM_NEON) || defined(__aarch64__)
+void DeinterleaveApplyingWindow_neon(float *__restrict dest[],
+                                     const float *__restrict src,
+                                     float *__restrict win, int numch,
+                                     size_t destofs, size_t len);
+void InterleaveOverlappingWindow_neon(
+    float *__restrict dest,
+    const float *__restrict const *__restrict src,
+    float *__restrict win, int numch, size_t srcofs, size_t len);
 #endif
 
 #endif

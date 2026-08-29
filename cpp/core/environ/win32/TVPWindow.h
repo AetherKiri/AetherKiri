@@ -2,7 +2,14 @@
 #ifndef __TVP_WINDOW_H__
 #define __TVP_WINDOW_H__
 
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <limits>
 #include <string>
+#include <mutex>
+#include <vector>
 #if 0
 #include <shellapi.h>
 #include <oleidl.h> // for MK_ALT
@@ -306,7 +313,41 @@ public:
 };
 #endif
 
+// Window-message receiver ABI shared by the Win32 and portable host forms.
+// The original krkrz header only exposed this through the Windows SDK.  Keep
+// the payload integer-sized on every target so plug-ins can use the same
+// receiver callback when the host window is backed by SDL/Godot.
+struct tTVPWindowMessage {
+    tjs_uint32 Msg = 0;
+    tjs_uint64 WParam = 0;
+    tjs_uint64 LParam = 0;
+    tjs_uint64 Result = 0;
+};
+
+#if defined(_WIN32)
+using tTVPWindowMessageReceiver = bool(__stdcall *)(
+    void *userdata, tTVPWindowMessage *message);
+#else
+using tTVPWindowMessageReceiver = bool (*)(
+    void *userdata, tTVPWindowMessage *message);
+#endif
+
 enum tTVPWMRRegMode { wrmRegister = 0, wrmUnregister = 1 };
+#ifndef TVP_WM_USER
+#define TVP_WM_USER 0x8000
+#endif
+#ifndef TVP_WM_DETACH
+#define TVP_WM_DETACH (TVP_WM_USER + 106)
+#endif
+#ifndef TVP_WM_ATTACH
+#define TVP_WM_ATTACH (TVP_WM_USER + 107)
+#endif
+#ifndef TVP_WM_FULLSCREEN_CHANGING
+#define TVP_WM_FULLSCREEN_CHANGING (TVP_WM_USER + 108)
+#endif
+#ifndef TVP_WM_FULLSCREEN_CHANGED
+#define TVP_WM_FULLSCREEN_CHANGED (TVP_WM_USER + 109)
+#endif
 enum {
     orientUnknown,
     orientPortrait,
@@ -318,20 +359,94 @@ using TVPOverlayNode = void;
 
 class iWindowLayer {
 protected:
+    // The original Win32 form keeps these values in its HWND/WinForms
+    // objects.  The portable host has no native window to query, therefore
+    // retain the same state explicitly and expose it through the existing
+    // Window API.  This is deliberately independent of the renderer so a
+    // headless/test host observes the same semantics as a visible host.
+    mutable std::mutex WindowStateMutex;
     tTVPMouseCursorState MouseCursorState = mcsVisible;
     tjs_int HintDelay = 500;
     tjs_int ZoomDenom = 1; // Zooming factor denominator (setting)
     tjs_int ZoomNumer = 1; // Zooming factor numerator (setting)
     double TouchScaleThreshold = 5, TouchRotateThreshold = 5;
+    tjs_int WindowLeft = 0;
+    tjs_int WindowTop = 0;
+    tjs_int MinWidth = 0;
+    tjs_int MinHeight = 0;
+    tjs_int MaxWidth = 0;
+    tjs_int MaxHeight = 0;
+    tjs_int LayerLeft = 0;
+    tjs_int LayerTop = 0;
+    tTVPBorderStyle BorderStyle = bsNone;
+    bool StayOnTop = false;
+    bool FullScreenMode = false;
+    bool TrapKey = false;
+    bool Focusable = true;
+    bool EnableTouch = false;
+    bool InnerSunken = false;
+    bool ShowScrollBars = true;
+    bool UseMouseKey = false;
+    tjs_int MouseCursor = 0;
+    ttstr HintText;
+
+    struct PortableTouchPoint {
+        tjs_uint32 id = 0;
+        tjs_real startX = 0;
+        tjs_real startY = 0;
+        tjs_real x = 0;
+        tjs_real y = 0;
+        float velocityX = 0;
+        float velocityY = 0;
+        float velocity = 0;
+        std::chrono::steady_clock::time_point timestamp{};
+    };
+    std::vector<PortableTouchPoint> TouchPoints;
+    tjs_int MouseX = 0;
+    tjs_int MouseY = 0;
+    float MouseVelocityX = 0;
+    float MouseVelocityY = 0;
+    float MouseVelocity = 0;
+    std::chrono::steady_clock::time_point MouseTimestamp{};
+
+    struct PortableMessageReceiver {
+        tTVPWindowMessageReceiver Proc = nullptr;
+        const void *UserData = nullptr;
+    };
+    mutable std::mutex WindowMessageMutex;
+    std::vector<PortableMessageReceiver> WindowMessageReceivers;
 
 public:
+    virtual ~iWindowLayer() = default;
+    // Portable hosts can translate logical state changes into the same
+    // integer-sized receiver messages that Win32 forms emit.  Native forms
+    // keep the default no-op and continue to use their real window message
+    // pump.
+    virtual void OnWindowStateChanged(tjs_uint32, tjs_uint64, tjs_uint64) {}
     virtual void SetPaintBoxSize(tjs_int w, tjs_int h) = 0;
     virtual bool GetFormEnabled() = 0;
     virtual void SetDefaultMouseCursor() = 0;
     virtual void GetCursorPos(tjs_int &x, tjs_int &y) = 0;
     virtual void SetCursorPos(tjs_int x, tjs_int y) = 0;
-    // Update cached cursor position (called from EngineLoop on mouse events)
-    virtual void UpdateCursorPos(tjs_int x, tjs_int y) {}
+    // Update cached cursor position (called from EngineLoop on mouse events).
+    // Besides the position this records a small velocity sample, matching the
+    // native form's VelocityTracker enough for scripts that use drag inertia.
+    virtual void UpdateCursorPos(tjs_int x, tjs_int y) {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        const auto now = std::chrono::steady_clock::now();
+        if(MouseTimestamp.time_since_epoch().count() != 0) {
+            const double seconds = std::chrono::duration<double>(
+                now - MouseTimestamp).count();
+            if(seconds > 0.000001 && seconds < 2.0) {
+                MouseVelocityX = static_cast<float>((x - MouseX) / seconds);
+                MouseVelocityY = static_cast<float>((y - MouseY) / seconds);
+                MouseVelocity = std::hypot(MouseVelocityX, MouseVelocityY);
+            }
+        }
+        MouseX = x;
+        MouseY = y;
+        MouseTimestamp = now;
+    }
     virtual void SetHintText(const ttstr &text) = 0;
     virtual void SetAttentionPoint(tjs_int left, tjs_int top,
                                    const struct tTVPFont *font,
@@ -371,11 +486,35 @@ public:
     virtual void ResetImeMode() = 0;
     virtual void UpdateWindow(tTVPUpdateType type) = 0;
     virtual void SetVisibleFromScript(bool b) = 0;
-    virtual void SetUseMouseKey(bool b) = 0;
-    [[nodiscard]] virtual bool GetUseMouseKey() const = 0;
-    virtual void ResetMouseVelocity() = 0;
-    virtual void ResetTouchVelocity(tjs_int id) = 0;
-    virtual bool GetMouseVelocity(float &x, float &y, float &speed) const = 0;
+    virtual void SetUseMouseKey(bool b) {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        UseMouseKey = b;
+    }
+    [[nodiscard]] virtual bool GetUseMouseKey() const {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        return UseMouseKey;
+    }
+    virtual void ResetMouseVelocity() {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        MouseVelocityX = MouseVelocityY = MouseVelocity = 0;
+        MouseTimestamp = std::chrono::steady_clock::time_point{};
+    }
+    virtual void ResetTouchVelocity(tjs_int id) {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        for(auto &point : TouchPoints) {
+            if(static_cast<tjs_int>(point.id) == id) {
+                point.velocityX = point.velocityY = point.velocity = 0;
+                point.timestamp = std::chrono::steady_clock::now();
+            }
+        }
+    }
+    virtual bool GetMouseVelocity(float &x, float &y, float &speed) const {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        x = MouseVelocityX;
+        y = MouseVelocityY;
+        speed = MouseVelocity;
+        return MouseTimestamp.time_since_epoch().count() != 0;
+    }
     virtual void TickBeat() = 0;
     virtual TVPOverlayNode *GetPrimaryArea() = 0;
 
@@ -384,95 +523,439 @@ public:
     void SetZoomDenom(tjs_int d) { SetZoom(ZoomNumer, d); }
     [[nodiscard]] tjs_int GetZoomDenom() const { return ZoomDenom; }
 
-    // dummy function
+    // Register a plug-in receiver for the portable host window.  Win32 forms
+    // keep their native receiver chain; HostWindowLayer uses this same ABI so
+    // messenger/msgreceiver and third-party plug-ins do not silently lose
+    // messages on macOS/Linux/Android.
     void RegisterWindowMessageReceiver(tTVPWMRRegMode mode, void *proc,
-                                       const void *userdata) {}
-    void SetLeft(tjs_int) {}
-    void SetTop(tjs_int) {}
-    void SetMinWidth(tjs_int) {}
-    void SetMaxWidth(tjs_int) {}
-    void SetMinHeight(tjs_int) {}
-    void SetMaxHeight(tjs_int) {}
+                                       const void *userdata) {
+        const auto receiver = reinterpret_cast<tTVPWindowMessageReceiver>(proc);
+        if(!receiver)
+            return;
+        std::lock_guard<std::mutex> lock(WindowMessageMutex);
+        if(mode == wrmRegister) {
+            for(const auto &item : WindowMessageReceivers) {
+                if(item.Proc == receiver && item.UserData == userdata)
+                    return;
+            }
+            WindowMessageReceivers.push_back({receiver, userdata});
+        } else if(mode == wrmUnregister) {
+            WindowMessageReceivers.erase(
+                std::remove_if(WindowMessageReceivers.begin(),
+                               WindowMessageReceivers.end(),
+                               [receiver, userdata](
+                                   const PortableMessageReceiver &item) {
+                                   return item.Proc == receiver &&
+                                          item.UserData == userdata;
+                               }),
+                WindowMessageReceivers.end());
+        }
+    }
+
+    // Dispatch a synthetic/native message through the registered receiver
+    // chain.  A copy of the chain is used so callbacks may unregister while
+    // handling a message without invalidating the iteration.
+    bool DeliverWindowMessage(tTVPWindowMessage &message) {
+        std::vector<PortableMessageReceiver> receivers;
+        {
+            std::lock_guard<std::mutex> lock(WindowMessageMutex);
+            receivers = WindowMessageReceivers;
+        }
+        bool blocked = false;
+        for(const auto &item : receivers) {
+            if(item.Proc)
+                blocked = item.Proc(const_cast<void *>(item.UserData),
+                                    &message) || blocked;
+        }
+        return blocked;
+    }
+    void SetLeft(tjs_int value) {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        WindowLeft = value;
+    }
+    void SetTop(tjs_int value) {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        WindowTop = value;
+    }
+    void SetMinWidth(tjs_int value) {
+        {
+            std::lock_guard<std::mutex> lock(WindowStateMutex);
+            MinWidth = std::max<tjs_int>(0, value);
+            if(MaxWidth > 0 && MinWidth > MaxWidth)
+                MaxWidth = MinWidth;
+        }
+        tjs_int w = 0, h = 0;
+        GetSize(w, h);
+        ConstrainSize(w, h);
+        SetSize(w, h);
+    }
+    void SetMaxWidth(tjs_int value) {
+        {
+            std::lock_guard<std::mutex> lock(WindowStateMutex);
+            MaxWidth = std::max<tjs_int>(0, value);
+            if(MaxWidth > 0 && MinWidth > MaxWidth)
+                MinWidth = MaxWidth;
+        }
+        tjs_int w = 0, h = 0;
+        GetSize(w, h);
+        ConstrainSize(w, h);
+        SetSize(w, h);
+    }
+    void SetMinHeight(tjs_int value) {
+        {
+            std::lock_guard<std::mutex> lock(WindowStateMutex);
+            MinHeight = std::max<tjs_int>(0, value);
+            if(MaxHeight > 0 && MinHeight > MaxHeight)
+                MaxHeight = MinHeight;
+        }
+        tjs_int w = 0, h = 0;
+        GetSize(w, h);
+        ConstrainSize(w, h);
+        SetSize(w, h);
+    }
+    void SetMaxHeight(tjs_int value) {
+        {
+            std::lock_guard<std::mutex> lock(WindowStateMutex);
+            MaxHeight = std::max<tjs_int>(0, value);
+            if(MaxHeight > 0 && MinHeight > MaxHeight)
+                MinHeight = MaxHeight;
+        }
+        tjs_int w = 0, h = 0;
+        GetSize(w, h);
+        ConstrainSize(w, h);
+        SetSize(w, h);
+    }
     void SetInnerWidth(tjs_int v) { SetWidth(v); }
     void SetInnerHeight(tjs_int v) { SetHeight(v); }
     void SetInnerSize(tjs_int w, tjs_int h) { SetSize(w, h); }
-    void SetMinSize(tjs_int, tjs_int) {}
-    void SetMaxSize(tjs_int, tjs_int) {}
-    void SetPosition(tjs_int, tjs_int) {}
-    void SetBorderStyle(tTVPBorderStyle) {}
-    void SetStayOnTop(bool) {}
-    void SetFullScreenMode(bool) {}
-    tjs_int GetLeft() { return 0; }
-    tjs_int GetTop() { return 0; }
-    tjs_int GetMinWidth() { return 0; }
-    tjs_int GetMaxWidth() { return 1920; }
-    tjs_int GetMinHeight() { return 0; }
-    tjs_int GetMaxHeight() { return 1080; }
+    void SetMinSize(tjs_int w, tjs_int h) {
+        {
+            std::lock_guard<std::mutex> lock(WindowStateMutex);
+            MinWidth = std::max<tjs_int>(0, w);
+            MinHeight = std::max<tjs_int>(0, h);
+            if(MaxWidth > 0 && MinWidth > MaxWidth)
+                MaxWidth = MinWidth;
+            if(MaxHeight > 0 && MinHeight > MaxHeight)
+                MaxHeight = MinHeight;
+        }
+        tjs_int currentW = 0, currentH = 0;
+        GetSize(currentW, currentH);
+        ConstrainSize(currentW, currentH);
+        SetSize(currentW, currentH);
+    }
+    void SetMaxSize(tjs_int w, tjs_int h) {
+        {
+            std::lock_guard<std::mutex> lock(WindowStateMutex);
+            MaxWidth = std::max<tjs_int>(0, w);
+            MaxHeight = std::max<tjs_int>(0, h);
+            if(MaxWidth > 0 && MinWidth > MaxWidth)
+                MinWidth = MaxWidth;
+            if(MaxHeight > 0 && MinHeight > MaxHeight)
+                MinHeight = MaxHeight;
+        }
+        tjs_int currentW = 0, currentH = 0;
+        GetSize(currentW, currentH);
+        ConstrainSize(currentW, currentH);
+        SetSize(currentW, currentH);
+    }
+    void SetPosition(tjs_int l, tjs_int t) {
+        {
+            std::lock_guard<std::mutex> lock(WindowStateMutex);
+            WindowLeft = l;
+            WindowTop = t;
+        }
+        const tjs_uint64 packed =
+            (static_cast<tjs_uint64>(static_cast<tjs_uint16>(l)) & 0xffffu) |
+            ((static_cast<tjs_uint64>(static_cast<tjs_uint16>(t)) & 0xffffu)
+             << 16);
+        OnWindowStateChanged(0x0003u, 0, packed); // WM_MOVE
+    }
+    void SetBorderStyle(tTVPBorderStyle value) {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        BorderStyle = value;
+    }
+    void SetStayOnTop(bool value) {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        StayOnTop = value;
+    }
+    void SetFullScreenMode(bool value) {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        FullScreenMode = value;
+    }
+    tjs_int GetLeft() {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        return WindowLeft;
+    }
+    tjs_int GetTop() {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        return WindowTop;
+    }
+    tjs_int GetMinWidth() {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        return MinWidth;
+    }
+    tjs_int GetMaxWidth() {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        return MaxWidth;
+    }
+    tjs_int GetMinHeight() {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        return MinHeight;
+    }
+    tjs_int GetMaxHeight() {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        return MaxHeight;
+    }
     tjs_int GetInnerWidth() { return GetWidth(); }
     tjs_int GetInnerHeight() { return GetHeight(); }
-    bool GetStayOnTop() { return false; }
-    bool GetFullScreenMode() { return false; }
-    [[nodiscard]] tTVPBorderStyle GetBorderStyle() const { return bsNone; }
-    void SetTrapKey(bool b) {}
-    [[nodiscard]] bool GetTrapKey() const { return false; }
+    bool GetStayOnTop() {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        return StayOnTop;
+    }
+    bool GetFullScreenMode() {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        return FullScreenMode;
+    }
+    [[nodiscard]] tTVPBorderStyle GetBorderStyle() const {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        return BorderStyle;
+    }
+    void SetTrapKey(bool value) {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        TrapKey = value;
+    }
+    [[nodiscard]] bool GetTrapKey() const {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        return TrapKey;
+    }
     void RemoveMaskRegion() {}
     void SetMouseCursorState(tTVPMouseCursorState mcs) {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
         MouseCursorState = mcs;
     }
     [[nodiscard]] tTVPMouseCursorState GetMouseCursorState() const {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
         return MouseCursorState;
     }
-    void HideMouseCursor() {}
-    void SetFocusable(bool b) {}
-    [[nodiscard]] bool GetFocusable() const { return true; }
+    void HideMouseCursor() { SetMouseCursorState(mcsHidden); }
+    void SetFocusable(bool value) {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        Focusable = value;
+    }
+    [[nodiscard]] bool GetFocusable() const {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        return Focusable;
+    }
     int GetDisplayRotate() { return 0; }
-    int GetDisplayOrientation() { return orientLandscape; }
-    void SetEnableTouch(bool b) {}
-    [[nodiscard]] bool GetEnableTouch() const { return false; }
-    void SetHintDelay(tjs_int delay) { HintDelay = delay; }
-    [[nodiscard]] tjs_int GetHintDelay() const { return HintDelay; }
-    void SetInnerSunken(bool b) {}
-    [[nodiscard]] bool GetInnerSunken() const { return false; }
+    int GetDisplayOrientation() {
+        tjs_int width = 0, height = 0;
+        GetSize(width, height);
+        if(width <= 0 || height <= 0)
+            return orientUnknown;
+        return width >= height ? orientLandscape : orientPortrait;
+    }
+    void SetEnableTouch(bool value) {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        EnableTouch = value;
+        if(!value)
+            TouchPoints.clear();
+    }
+    [[nodiscard]] bool GetEnableTouch() const {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        return EnableTouch;
+    }
+    void SetHintDelay(tjs_int delay) {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        HintDelay = std::max<tjs_int>(0, delay);
+    }
+    [[nodiscard]] tjs_int GetHintDelay() const {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        return HintDelay;
+    }
+    void SetInnerSunken(bool value) {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        InnerSunken = value;
+    }
+    [[nodiscard]] bool GetInnerSunken() const {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        return InnerSunken;
+    }
 
     // TODO
-    void SetMouseCursor(tjs_int handle) {}
-    void SetHintText(iTJSDispatch2 *sender, const ttstr &text) {}
+    void SetMouseCursor(tjs_int handle) {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        MouseCursor = handle;
+    }
+    void SetHintText(iTJSDispatch2 *sender, const ttstr &text) {
+        (void)sender;
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        HintText = text;
+    }
     virtual void DisableAttentionPoint() {}
     static void GetVideoOffset(tjs_int &ofsx, tjs_int &ofsy) {
         ofsx = 0;
         ofsy = 0;
     }
     void SetTouchScaleThreshold(double threshold) {
-        TouchScaleThreshold = threshold;
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        TouchScaleThreshold = (std::max)(0.0, threshold);
     }
-    double GetTouchScaleThreshold() { return TouchScaleThreshold; }
+    double GetTouchScaleThreshold() {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        return TouchScaleThreshold;
+    }
     void SetTouchRotateThreshold(double threshold) {
-        TouchRotateThreshold = threshold;
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        TouchRotateThreshold = (std::max)(0.0, threshold);
     }
-    double GetTouchRotateThreshold() { return TouchRotateThreshold; }
+    double GetTouchRotateThreshold() {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        return TouchRotateThreshold;
+    }
     [[nodiscard]] tjs_real GetTouchPointStartX(tjs_int index) const {
-        return 0;
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        return index >= 0 && static_cast<size_t>(index) < TouchPoints.size()
+            ? TouchPoints[static_cast<size_t>(index)].startX : 0;
     }
     [[nodiscard]] tjs_real GetTouchPointStartY(tjs_int index) const {
-        return 0;
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        return index >= 0 && static_cast<size_t>(index) < TouchPoints.size()
+            ? TouchPoints[static_cast<size_t>(index)].startY : 0;
     }
-    [[nodiscard]] tjs_real GetTouchPointX(tjs_int index) const { return 0; }
-    [[nodiscard]] tjs_real GetTouchPointY(tjs_int index) const { return 0; }
-    [[nodiscard]] tjs_int GetTouchPointID(tjs_int index) const { return 0; }
-    [[nodiscard]] tjs_int GetTouchPointCount() const { return 0; }
+    [[nodiscard]] tjs_real GetTouchPointX(tjs_int index) const {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        return index >= 0 && static_cast<size_t>(index) < TouchPoints.size()
+            ? TouchPoints[static_cast<size_t>(index)].x : 0;
+    }
+    [[nodiscard]] tjs_real GetTouchPointY(tjs_int index) const {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        return index >= 0 && static_cast<size_t>(index) < TouchPoints.size()
+            ? TouchPoints[static_cast<size_t>(index)].y : 0;
+    }
+    [[nodiscard]] tjs_int GetTouchPointID(tjs_int index) const {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        return index >= 0 && static_cast<size_t>(index) < TouchPoints.size()
+            ? static_cast<tjs_int>(TouchPoints[static_cast<size_t>(index)].id) : 0;
+    }
+    [[nodiscard]] tjs_int GetTouchPointCount() const {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        return static_cast<tjs_int>(TouchPoints.size());
+    }
     bool GetTouchVelocity(tjs_int id, float &x, float &y, float &speed) const {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        for(const auto &point : TouchPoints) {
+            if(static_cast<tjs_int>(point.id) == id) {
+                x = point.velocityX;
+                y = point.velocityY;
+                speed = point.velocity;
+                return true;
+            }
+        }
+        x = y = speed = 0;
         return false;
+    }
+    void UpdateTouchDown(tjs_real x, tjs_real y, tjs_real cx, tjs_real cy,
+                         tjs_uint32 id) {
+        (void)cx;
+        (void)cy;
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        auto it = std::find_if(TouchPoints.begin(), TouchPoints.end(),
+                               [id](const PortableTouchPoint &point) {
+                                   return point.id == id;
+                               });
+        if(it == TouchPoints.end()) {
+            PortableTouchPoint point;
+            point.id = id;
+            point.startX = point.x = x;
+            point.startY = point.y = y;
+            point.timestamp = std::chrono::steady_clock::now();
+            TouchPoints.push_back(point);
+        } else {
+            it->startX = it->x = x;
+            it->startY = it->y = y;
+            it->velocityX = it->velocityY = it->velocity = 0;
+            it->timestamp = std::chrono::steady_clock::now();
+        }
+    }
+    void UpdateTouchMove(tjs_real x, tjs_real y, tjs_real cx, tjs_real cy,
+                         tjs_uint32 id) {
+        (void)cx;
+        (void)cy;
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        const auto it = std::find_if(TouchPoints.begin(), TouchPoints.end(),
+                                     [id](const PortableTouchPoint &point) {
+                                         return point.id == id;
+                                     });
+        if(it == TouchPoints.end())
+            return;
+        const auto now = std::chrono::steady_clock::now();
+        const double seconds = std::chrono::duration<double>(
+            now - it->timestamp).count();
+        if(seconds > 0.000001 && seconds < 2.0) {
+            it->velocityX = static_cast<float>((x - it->x) / seconds);
+            it->velocityY = static_cast<float>((y - it->y) / seconds);
+            it->velocity = std::hypot(it->velocityX, it->velocityY);
+        }
+        it->x = x;
+        it->y = y;
+        it->timestamp = now;
+    }
+    void UpdateTouchUp(tjs_real x, tjs_real y, tjs_real cx, tjs_real cy,
+                       tjs_uint32 id) {
+        UpdateTouchMove(x, y, cx, cy, id);
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        TouchPoints.erase(std::remove_if(TouchPoints.begin(), TouchPoints.end(),
+                                         [id](const PortableTouchPoint &point) {
+                                             return point.id == id;
+                                         }),
+                          TouchPoints.end());
     }
     void ResetDrawDevice() {}
     void SendCloseMessage() {}
     void BeginMove() {}
-    void SetLayerLeft(tjs_int l) {}
-    [[nodiscard]] tjs_int GetLayerLeft() const { return 0; }
-    void SetLayerTop(tjs_int t) {}
-    [[nodiscard]] tjs_int GetLayerTop() const { return 0; }
-    void SetLayerPosition(tjs_int l, tjs_int t) {}
-    void SetShowScrollBars(bool b) {}
-    [[nodiscard]] bool GetShowScrollBars() const { return true; }
+    void SetLayerLeft(tjs_int l) {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        LayerLeft = l;
+    }
+    [[nodiscard]] tjs_int GetLayerLeft() const {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        return LayerLeft;
+    }
+    void SetLayerTop(tjs_int t) {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        LayerTop = t;
+    }
+    [[nodiscard]] tjs_int GetLayerTop() const {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        return LayerTop;
+    }
+    void SetLayerPosition(tjs_int l, tjs_int t) {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        LayerLeft = l;
+        LayerTop = t;
+    }
+    void SetShowScrollBars(bool b) {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        ShowScrollBars = b;
+    }
+    [[nodiscard]] bool GetShowScrollBars() const {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        return ShowScrollBars;
+    }
+
+    // Apply the configured min/max limits before a concrete host changes its
+    // logical size.  Kept public so HostWindowLayer can use the exact same
+    // constraints as the base setters without duplicating state.
+    void ConstrainSize(tjs_int &w, tjs_int &h) const {
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
+        if(MinWidth > 0) w = (std::max)(w, MinWidth);
+        if(MaxWidth > 0) w = (std::min)(w, MaxWidth);
+        if(MinHeight > 0) h = (std::max)(h, MinHeight);
+        if(MaxHeight > 0) h = (std::min)(h, MaxHeight);
+        w = std::max<tjs_int>(0, w);
+        h = std::max<tjs_int>(0, h);
+    }
+
 };
 
 #endif // __TVP_WINDOW_H__

@@ -28,6 +28,7 @@
 #include <sys/stat.h>
 #include "StorageImpl.h"
 #include "BinaryStream.h"
+#include "FontStream.h"
 #include <spdlog/spdlog.h>
 #ifdef __APPLE__
 #include <TargetConditionals.h>
@@ -80,7 +81,12 @@ const FT_Library TVPGetFontLibrary() {
 void TVPReleaseFontLibrary() {
     if(TVPFontLibrary) {
         FT_Done_FreeType(TVPFontLibrary);
+        TVPFontLibrary = nullptr;
     }
+    // Font objects may outlive the FreeType library during orderly shutdown;
+    // clear only the cache's strong MRU references here.  Existing streams
+    // keep their immutable byte buffer alive until their own destructor.
+    TVPClearFontStreamCache();
 }
 //---------------------------------------------------------------------------
 static int TVPInternalEnumFonts(
@@ -115,9 +121,13 @@ static int TVPInternalEnumFonts(
             TVPEncodeUTF8ToUTF16(canonicalName,
                                  std::string(fontface->family_name));
         }
-        if(FT_IS_SCALABLE(fontface)) {
+        // SFNT name tables are available on both outline fonts and
+        // bitmap-strike color fonts (CBDT/sbix).  Enumerate localized family
+        // aliases for either kind; the canonical registration below handles
+        // legacy non-SFNT bitmap faces.
+        bool registeredFace = false;
+        if(FT_IS_SFNT(fontface)) {
             FT_UInt namecount = FT_Get_Sfnt_Name_Count(fontface);
-            int addCount = 0;
             for(FT_UInt j = 0; j < namecount; ++j) {
                 FT_SfntName name;
                 if(FT_Get_Sfnt_Name(fontface, j, &name)) {
@@ -166,29 +176,38 @@ static int TVPInternalEnumFonts(
                        fontNames->end()) {
                     fontNames->emplace_back(fontname);
                 }
-                addCount = 1;
+                registeredFace = true;
             }
-            /*if (!addCount)*/ {
-                ttstr fontname = canonicalName;
-                if(fontname.IsEmpty() && fontface->family_name)
-                    fontname = ttstr((tjs_nchar *)fontface->family_name);
-                if(!fontname.IsEmpty()) {
-                    TVPFontNamePathInfo info;
-                    info.Path = FontPath;
-                    info.Index = i;
-                    info.Getter = getter;
-                    info.FamilyName = canonicalName.IsEmpty() ? fontname
-                                                              : canonicalName;
-                    TVPFontNames.Add(fontname, info);
-                    if(fontNames &&
-                       std::find(fontNames->begin(), fontNames->end(), fontname) ==
-                           fontNames->end()) {
-                        fontNames->emplace_back(fontname);
-                    }
-                }
-            }
-            ++faceCount;
         }
+
+        // Bitmap-only color faces (CBDT/sbix) are not scalable, but they are
+        // still valid font faces and are exactly what the krkrz emoji
+        // fallback commonly relies on.  Register every opened face through
+        // the same path/getter/index tuple; the rasterizer will select a
+        // fixed strike when FT_Set_Pixel_Sizes is unavailable.  Scalable
+        // faces use the localized family aliases above and then fall through
+        // to this canonical registration as before.
+        ttstr fontname = canonicalName;
+        if(fontname.IsEmpty() && fontface->family_name)
+            fontname = ttstr((tjs_nchar *)fontface->family_name);
+        if(!fontname.IsEmpty()) {
+            TVPFontNamePathInfo info;
+            info.Path = FontPath;
+            info.Index = i;
+            info.Getter = getter;
+            info.FamilyName = canonicalName.IsEmpty() ? fontname
+                                                      : canonicalName;
+            TVPFontNames.Add(fontname, info);
+            if(fontNames &&
+               std::find(fontNames->begin(), fontNames->end(), fontname) ==
+                   fontNames->end()) {
+                fontNames->emplace_back(fontname);
+            }
+            registeredFace = true;
+        }
+
+        if(registeredFace)
+            ++faceCount;
 
         if(fontface)
             FT_Done_Face(fontface);
@@ -289,10 +308,20 @@ tTJSBinaryStream *TVPCreateFontStream(const ttstr &fontname,
         return nullptr;
     if(faceIndex)
         *faceIndex = std::max<tjs_int>(0, info->Index);
+    // A collection font can expose several faces under the same path.  Keep
+    // the face index in the cache key so a future resolver cannot accidentally
+    // reuse a stream that was opened for a different logical face.
+    const ttstr cacheKey = info->Path + TJS_W("#") +
+                           TJSIntegerToString(std::max<tjs_int>(0, info->Index));
     if(info->Getter) {
-        return info->Getter(info);
+        return TVPCreateCachedFontStream(info->Getter(info), cacheKey);
     }
-    return TVPCreateBinaryStreamForRead(info->Path, TJS_W(""));
+    return TVPCreateCachedFontStream(
+        TVPCreateBinaryStreamForRead(info->Path, TJS_W("")), cacheKey);
+}
+
+tTJSBinaryStream *TVPCreateFontStream(const ttstr &fontname) {
+    return TVPCreateFontStream(fontname, nullptr);
 }
 
 //---------------------------------------------------------------------------

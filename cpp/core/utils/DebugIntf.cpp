@@ -13,11 +13,13 @@
 #include <deque>
 #include <algorithm>
 #include <ctime>
+#include <vector>
 #include "DebugIntf.h"
 #include "MsgIntf.h"
 #include "StorageIntf.h"
 #include "SysInitIntf.h"
 #include "SysInitImpl.h"
+#include "tjsUtils.h"
 
 #ifdef ENABLE_DEBUGGER
 #include "tjsDebug.h"
@@ -25,6 +27,234 @@
 
 #include "Application.h"
 #include "SystemControl.h"
+
+namespace {
+
+// Keep the formatter in Aether's DebugIntf owner, but follow the upstream
+// krkrz pretty-print contract for arrays/dictionaries: bounded recursion,
+// compact/non-compact output, and cycle detection.  This is intentionally a
+// method-level port rather than a second DebugIntf translation unit, because
+// the surrounding logging state and native class are Aether-owned.
+struct TVPPrettyPrintContext {
+    int remaining_depth = 0;
+    bool compact = false;
+    std::vector<iTJSDispatch2 *> stack;
+};
+
+ttstr TVPPrettyIndent(int level) {
+    ttstr result;
+    for(int i = 0; i < level; ++i)
+        result += TJS_W("  ");
+    return result;
+}
+
+ttstr TVPPrettyPrintImpl(const tTJSVariant &value,
+                         TVPPrettyPrintContext &context, int indent);
+
+struct TVPPrettyPrintEnumCallback : public tTJSDispatch {
+    TVPPrettyPrintContext *context = nullptr;
+    int indent = 0;
+    std::vector<std::pair<ttstr, ttstr>> *entries = nullptr;
+
+    tjs_error TJS_INTF_METHOD FuncCall(
+        tjs_uint32, const tjs_char *, tjs_uint32 *, tTJSVariant *result,
+        tjs_int numparams, tTJSVariant **param, iTJSDispatch2 *) override {
+        if(numparams < 3)
+            return TJS_E_BADPARAMCOUNT;
+        const tjs_uint32 flags = static_cast<tjs_int>(*param[1]);
+        if(flags & TJS_HIDDENMEMBER) {
+            if(result)
+                *result = static_cast<tjs_int>(1);
+            return TJS_S_OK;
+        }
+        ttstr key = ttstr(TJS_W("\"")) + ttstr(*param[0]).EscapeC() +
+                    TJS_W("\"");
+        ttstr val;
+        try {
+            val = TVPPrettyPrintImpl(*param[2], *context, indent);
+        } catch(...) {
+            val = TJS_W("(?)");
+        }
+        if(entries)
+            entries->emplace_back(std::move(key), std::move(val));
+        if(result)
+            *result = static_cast<tjs_int>(1);
+        return TJS_S_OK;
+    }
+};
+
+bool TVPPrettyIsInstanceOf(iTJSDispatch2 *dispatch, const tjs_char *name) {
+    if(!dispatch)
+        return false;
+    try {
+        return dispatch->IsInstanceOf(0, nullptr, nullptr, name, dispatch) ==
+               TJS_S_TRUE;
+    } catch(...) {
+        return false;
+    }
+}
+
+ttstr TVPPrettyPrintArray(iTJSDispatch2 *dispatch,
+                          TVPPrettyPrintContext &context, int indent) {
+    tTJSVariant count_variant;
+    if(TJS_FAILED(dispatch->PropGet(0, TJS_W("count"), nullptr,
+                                    &count_variant, dispatch)))
+        return TJS_W("(Array)");
+    const tjs_int count = static_cast<tjs_int>(count_variant.AsInteger());
+    if(count <= 0)
+        return TJS_W("[]");
+    if(context.remaining_depth <= 0)
+        return TJS_W("[...]");
+
+    --context.remaining_depth;
+    std::vector<ttstr> elements;
+    elements.reserve(static_cast<size_t>(count));
+    for(tjs_int i = 0; i < count; ++i) {
+        tTJSVariant element;
+        if(TJS_FAILED(dispatch->PropGetByNum(0, i, &element, dispatch))) {
+            elements.emplace_back(TJS_W("(?)"));
+            continue;
+        }
+        elements.push_back(TVPPrettyPrintImpl(element, context, indent + 1));
+    }
+    ++context.remaining_depth;
+
+    ttstr result = TJS_W("[");
+    if(context.compact) {
+        for(size_t i = 0; i < elements.size(); ++i) {
+            if(i)
+                result += TJS_W(", ");
+            result += elements[i];
+        }
+        result += TJS_W("]");
+        return result;
+    }
+    result += TJS_W("\n");
+    const ttstr inner = TVPPrettyIndent(indent + 1);
+    const ttstr outer = TVPPrettyIndent(indent);
+    for(size_t i = 0; i < elements.size(); ++i) {
+        result += inner;
+        result += elements[i];
+        if(i + 1 < elements.size())
+            result += TJS_W(",");
+        result += TJS_W("\n");
+    }
+    result += outer;
+    result += TJS_W("]");
+    return result;
+}
+
+ttstr TVPPrettyPrintDictionary(iTJSDispatch2 *dispatch,
+                               TVPPrettyPrintContext &context, int indent) {
+    if(context.remaining_depth <= 0)
+        return TJS_W("%[...]");
+
+    --context.remaining_depth;
+    std::vector<std::pair<ttstr, ttstr>> entries;
+    TVPPrettyPrintEnumCallback callback;
+    callback.context = &context;
+    callback.indent = indent + 1;
+    callback.entries = &entries;
+    tTJSVariantClosure closure(&callback, nullptr);
+    try {
+        dispatch->EnumMembers(TJS_IGNOREPROP, &closure, dispatch);
+    } catch(...) {
+        // A property getter may throw while a debugger is inspecting it.  A
+        // partial dictionary is more useful than aborting the entire DAP
+        // response.
+    }
+    ++context.remaining_depth;
+
+    if(entries.empty())
+        return TJS_W("%[]");
+    ttstr result = TJS_W("%[");
+    if(context.compact) {
+        for(size_t i = 0; i < entries.size(); ++i) {
+            if(i)
+                result += TJS_W(", ");
+            result += entries[i].first;
+            result += TJS_W(" => ");
+            result += entries[i].second;
+        }
+        result += TJS_W("]");
+        return result;
+    }
+    result += TJS_W("\n");
+    const ttstr inner = TVPPrettyIndent(indent + 1);
+    const ttstr outer = TVPPrettyIndent(indent);
+    for(size_t i = 0; i < entries.size(); ++i) {
+        result += inner;
+        result += entries[i].first;
+        result += TJS_W(" => ");
+        result += entries[i].second;
+        if(i + 1 < entries.size())
+            result += TJS_W(",");
+        result += TJS_W("\n");
+    }
+    result += outer;
+    result += TJS_W("]");
+    return result;
+}
+
+ttstr TVPPrettyPrintObject(const tTJSVariant &value,
+                           TVPPrettyPrintContext &context, int indent) {
+    tTJSVariantClosure closure = value.AsObjectClosureNoAddRef();
+    iTJSDispatch2 *dispatch = closure.SelectObjectNoAddRef();
+    if(!dispatch)
+        return TJS_W("(null)");
+    for(iTJSDispatch2 *seen : context.stack) {
+        if(seen == dispatch)
+            return TJS_W("(recursion)");
+    }
+
+    context.stack.push_back(dispatch);
+    ttstr result;
+    try {
+        if(TVPPrettyIsInstanceOf(dispatch, TJS_W("Array")))
+            result = TVPPrettyPrintArray(dispatch, context, indent);
+        else if(TVPPrettyIsInstanceOf(dispatch, TJS_W("Dictionary")))
+            result = TVPPrettyPrintDictionary(dispatch, context, indent);
+        else if(TVPPrettyIsInstanceOf(dispatch, TJS_W("Function")))
+            result = TJS_W("(function)");
+        else if(TVPPrettyIsInstanceOf(dispatch, TJS_W("Class")))
+            result = TJS_W("(class)");
+        else if(TVPPrettyIsInstanceOf(dispatch, TJS_W("Property")))
+            result = TJS_W("(property)");
+        else
+            result = TJS_W("(object)");
+    } catch(...) {
+        result = TJS_W("(object)");
+    }
+    context.stack.pop_back();
+    return result;
+}
+
+ttstr TVPPrettyPrintImpl(const tTJSVariant &value,
+                         TVPPrettyPrintContext &context, int indent) {
+    switch(value.Type()) {
+    case tvtVoid:
+        return TJS_W("(void)");
+    case tvtObject:
+        return TVPPrettyPrintObject(value, context, indent);
+    case tvtString:
+    case tvtInteger:
+    case tvtReal:
+    case tvtOctet:
+    default:
+        return TJS::TJSVariantToExpressionString(value);
+    }
+}
+
+} // namespace
+
+ttstr TVPPrettyPrint(const tTJSVariant &variant, int depth, bool compact) {
+    TVPPrettyPrintContext context;
+    // Prevent an accidentally huge DAP request from causing unbounded
+    // recursion while retaining the upstream meaning of non-positive depth.
+    context.remaining_depth = std::max(0, std::min(depth, 64));
+    context.compact = compact;
+    return TVPPrettyPrintImpl(variant, context, 0);
+}
 
 //---------------------------------------------------------------------------
 // global variables
@@ -682,6 +912,24 @@ tTJSNC_Debug::tTJSNC_Debug() : tTJSNativeClass(TJS_W("Debug")) {
         return TJS_S_OK;
     }
     TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ getLastLog)
+    //---------------------------------------------------------------------------
+    TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ prettyPrint) {
+        // Match the krkrz Debug.prettyPrint(value [, depth = 2 [, compact]])
+        // contract while keeping the Aether-native Debug class as the sole
+        // registration owner.
+        if(numparams < 1)
+            return TJS_E_BADPARAMCOUNT;
+        int depth = 2;
+        bool compact = false;
+        if(numparams >= 2)
+            depth = static_cast<int>(param[1]->AsInteger());
+        if(numparams >= 3)
+            compact = param[2]->operator bool();
+        if(result)
+            *result = TVPPrettyPrint(*param[0], depth, compact);
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ prettyPrint)
     //---------------------------------------------------------------------------
 
     //-- properies

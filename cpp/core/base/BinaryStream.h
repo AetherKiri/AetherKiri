@@ -1,5 +1,6 @@
 #pragma once
 
+#include <limits>
 #include <optional>
 
 #include "StorageIntf.h"
@@ -27,11 +28,16 @@ inline std::optional<std::uint32_t> parseModeNumber(const tjs_char *mode,
         if(!(p[1] >= TJS_W('0') && p[1] <= TJS_W('9'))) {
             return {};
         }
-        int value = 0;
+        std::uint32_t value = 0;
         p++; // 跳过模式字符
         for(int i = 0;
             i < maxDigits && p[i] >= TJS_W('0') && p[i] <= TJS_W('9'); i++) {
-            value = value * 10 + (p[i] - TJS_W('0'));
+            const std::uint32_t digit =
+                static_cast<std::uint32_t>(p[i] - TJS_W('0'));
+            if(value > (std::numeric_limits<std::uint32_t>::max() - digit) /
+                          10u)
+                return {};
+            value = value * 10u + digit;
         }
         return value;
     }

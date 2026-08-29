@@ -45,6 +45,68 @@
 
 // #include "tvpgl_ia32_intf.h"
 #include "DetectCPU.h"
+#include "cpu_types.h"
+
+namespace {
+
+void AetherDeinterleaveApplyingWindow(
+    float *__restrict dest[], const float *__restrict src,
+    const float *__restrict win, int channels, size_t destofs, size_t len,
+    bool use_simd) {
+    if(use_simd) {
+#if defined(TVP_SOUND_HAS_X86_SIMD)
+        DeinterleaveApplyingWindow_sse(
+            dest, src, const_cast<float *>(win), channels, destofs, len);
+        return;
+#elif defined(TVP_SOUND_HAS_ARM_SIMD)
+        DeinterleaveApplyingWindow_neon(
+            dest, src, const_cast<float *>(win), channels, destofs, len);
+        return;
+#endif
+    }
+    DeinterleaveApplyingWindow(dest, src, win, channels, destofs, len);
+}
+
+void AetherInterleaveOverlappingWindow(
+    float *__restrict dest,
+    const float *__restrict const *__restrict src,
+    const float *__restrict win, int channels, size_t srcofs, size_t len,
+    bool use_simd) {
+    if(use_simd) {
+#if defined(TVP_SOUND_HAS_X86_SIMD)
+        InterleaveOverlappingWindow_sse(
+            dest, src, const_cast<float *>(win), channels, srcofs, len);
+        return;
+#elif defined(TVP_SOUND_HAS_ARM_SIMD)
+        InterleaveOverlappingWindow_neon(
+            dest, src, const_cast<float *>(win), channels, srcofs, len);
+        return;
+#endif
+    }
+    InterleaveOverlappingWindow(dest, src, win, channels, srcofs, len);
+}
+
+// FFT dispatch is deliberately kept at the leaf boundary.  The phase
+// vocoder's phase bookkeeping remains Aether-owned, while krkrz contributes
+// the ISA-specific transform kernel when the runtime detector confirms that
+// the current CPU can execute it.  This also keeps universal/fallback builds
+// safe: an unavailable leaf can never be called merely because the source was
+// compiled for another architecture slice.
+void AetherRealDFT(int n, int sign, float *data, int *ip, float *weights,
+                   bool use_simd) {
+    if(use_simd) {
+#if defined(TVP_SOUND_HAS_X86_SIMD)
+        rdft_sse(n, sign, data, ip, weights);
+        return;
+#elif defined(TVP_SOUND_HAS_ARM_SIMD)
+        rdft_neon(n, sign, data, ip, weights);
+        return;
+#endif
+    }
+    rdft(n, sign, data, ip, weights);
+}
+
+} // namespace
 
 //---------------------------------------------------------------------------
 tRisaPhaseVocoderDSP::tRisaPhaseVocoderDSP(unsigned int framesize,
@@ -297,11 +359,17 @@ bool tRisaPhaseVocoderDSP::GetOutputBuffer(size_t numsamplegranules,
 
 //---------------------------------------------------------------------------
 tRisaPhaseVocoderDSP::tStatus tRisaPhaseVocoderDSP::Process() {
-    const static bool use_sse = false;
-#if 0
-    (TVPCPUType & TVP_CPU_HAS_MMX) &&
-    (TVPCPUType & TVP_CPU_HAS_SSE) &&
-    (TVPCPUType & TVP_CPU_HAS_CMOV);
+#if defined(TVP_SOUND_HAS_X86_SIMD)
+    TVPDetectCPU();
+    // The krkrz RealFFT_SSE leaf contains SSE2 shuffles and is not safe to
+    // call on an SSE-only 32-bit CPU.  Window kernels may use SSE, but the
+    // complete phase-vocoder path requires the stricter SSE2 capability.
+    const bool use_simd = (TVPCPUType & TVP_CPU_HAS_SSE2) != 0;
+#elif defined(TVP_SOUND_HAS_ARM_SIMD)
+    TVPDetectCPU();
+    const bool use_simd = (TVPCPUType & TVP_CPU_HAS_NEON) != 0;
+#else
+    const bool use_simd = false;
 #endif
 
     // パラメータの再計算の必要がある場合は再計算をする
@@ -362,11 +430,12 @@ tRisaPhaseVocoderDSP::tStatus tRisaPhaseVocoderDSP::Process() {
         InputBuffer.GetReadPointer(FrameSize * Channels, p1, p1len, p2, p2len);
         p1len /= Channels;
         p2len /= Channels;
-        DeinterleaveApplyingWindow(AnalWork, p1, InputWindow, Channels, 0,
-                                   p1len);
+        AetherDeinterleaveApplyingWindow(AnalWork, p1, InputWindow, Channels,
+                                         0, p1len, use_simd);
         if(p2)
-            DeinterleaveApplyingWindow(AnalWork, p2, InputWindow + p1len,
-                                       Channels, p1len, p2len);
+            AetherDeinterleaveApplyingWindow(AnalWork, p2,
+                                             InputWindow + p1len, Channels,
+                                             p1len, p2len, use_simd);
     }
 
     // チャンネルごとに処理
@@ -376,7 +445,7 @@ tRisaPhaseVocoderDSP::tStatus tRisaPhaseVocoderDSP::Process() {
         //------------------------------------------------
 
         // 演算の根幹部分を実行する
-        ProcessCore(ch);
+        ProcessCore(ch, use_simd);
     }
 
     // 窓関数を適用しつつ、SynthWork から出力バッファに書き込む
@@ -388,11 +457,12 @@ tRisaPhaseVocoderDSP::tStatus tRisaPhaseVocoderDSP::Process() {
                                      p2len);
         p1len /= Channels;
         p2len /= Channels;
-        InterleaveOverlappingWindow(p1, SynthWork, OutputWindow, Channels, 0,
-                                    p1len);
+        AetherInterleaveOverlappingWindow(p1, SynthWork, OutputWindow,
+                                          Channels, 0, p1len, use_simd);
         if(p2)
-            InterleaveOverlappingWindow(p2, SynthWork, OutputWindow + p1len,
-                                        Channels, p1len, p2len);
+            AetherInterleaveOverlappingWindow(
+                p2, SynthWork, OutputWindow + p1len, Channels, p1len, p2len,
+                use_simd);
     }
 
     // LastSynthPhase を再調整するか
@@ -431,13 +501,13 @@ tRisaPhaseVocoderDSP::tStatus tRisaPhaseVocoderDSP::Process() {
 //---------------------------------------------------------------------------
 
 //---------------------------------------------------------------------------
-void tRisaPhaseVocoderDSP::ProcessCore(int ch) {
+void tRisaPhaseVocoderDSP::ProcessCore(int ch, bool use_simd) {
     unsigned int framesize_d2 = FrameSize / 2;
     float *analwork = AnalWork[ch];
     float *synthwork = SynthWork[ch];
 
     // FFT を実行する
-    rdft(FrameSize, 1, analwork, FFTWorkIp, FFTWorkW); // Real DFT
+    AetherRealDFT(FrameSize, 1, analwork, FFTWorkIp, FFTWorkW, use_simd);
     analwork[1] = 0.0; // analwork[1] = nyquist freq. power
                        // (どっちみち使えないので0に)
 
@@ -629,8 +699,8 @@ void tRisaPhaseVocoderDSP::ProcessCore(int ch) {
     // FFT を実行する
     synthwork[1] = 0.0; // synthwork[1] = nyquist freq. power
                         // (どっちみち使えないので0に)
-    rdft(FrameSize, -1, SynthWork[ch], FFTWorkIp,
-         FFTWorkW); // Inverse Real DFT
+    AetherRealDFT(FrameSize, -1, SynthWork[ch], FFTWorkIp, FFTWorkW,
+                  use_simd); // Inverse Real DFT
 }
 //---------------------------------------------------------------------------
 

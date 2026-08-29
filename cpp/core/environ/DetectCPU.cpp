@@ -140,15 +140,54 @@ void TVPDetectCPU() {
         return;
     TVPCPUChecked = true;
 
-#ifdef __APPLE__
-    // must be iOS
+    // The portable detector used by SDL/Godot targets historically left the
+    // feature mask empty on desktop macOS/Linux.  That made every optional
+    // krkrz SIMD leaf (including the sound/TLG adapters) silently fall back to
+    // scalar code even when the ISA was guaranteed by the target.  Seed only
+    // features that are safe for the current compile-time architecture; the
+    // Windows detector keeps its more detailed CPUID path.
+#if defined(__aarch64__) || defined(__arm64__) || defined(__ARM_NEON)
     TVPCPUFeatures |= TVP_CPU_FAMILY_ARM | TVP_CPU_HAS_NEON;
+#elif defined(__x86_64__) || defined(_M_X64)
+    // SSE2 and CMOV are architectural requirements of x86-64.  SSE/MMX are
+    // also available on all supported x86-64 hosts and are used by the legacy
+    // audio mixer and the krkrz window kernels.
+    TVPCPUFeatures |= TVP_CPU_FAMILY_X64 | TVP_CPU_HAS_FPU |
+                      TVP_CPU_HAS_MMX | TVP_CPU_HAS_SSE |
+                      TVP_CPU_HAS_SSE2 | TVP_CPU_HAS_CMOV;
+#if defined(__GNUC__) || defined(__clang__)
+    // Unlike SSE2, AVX is not architectural on x86-64.  The compiler probe
+    // includes the OSXSAVE/XCR0 checks, so selecting the AVX2 leaf here cannot
+    // fault on hosts that merely expose the CPUID bit.
+    if(__builtin_cpu_supports("avx"))
+        TVPCPUFeatures |= TVP_CPU_HAS_AVX;
+    if(__builtin_cpu_supports("avx2"))
+        TVPCPUFeatures |= TVP_CPU_HAS_AVX | TVP_CPU_HAS_AVX2;
+#endif
+#elif defined(__i386__) || defined(_M_IX86)
+    // 32-bit builds may run on older CPUs.  Ask the compiler's runtime probe
+    // when available and leave the mask empty otherwise, preserving the
+    // scalar path instead of emitting an illegal instruction.
+    TVPCPUFeatures |= TVP_CPU_FAMILY_X86;
+#if defined(__GNUC__) || defined(__clang__)
+    if(__builtin_cpu_supports("sse"))
+        TVPCPUFeatures |= TVP_CPU_HAS_SSE;
+    if(__builtin_cpu_supports("sse2"))
+        TVPCPUFeatures |= TVP_CPU_HAS_SSE2;
+    if(__builtin_cpu_supports("cmov"))
+        TVPCPUFeatures |= TVP_CPU_HAS_CMOV;
+    if(__builtin_cpu_supports("avx"))
+        TVPCPUFeatures |= TVP_CPU_HAS_AVX;
+    if(__builtin_cpu_supports("avx2"))
+        TVPCPUFeatures |= TVP_CPU_HAS_AVX | TVP_CPU_HAS_AVX2;
+#endif
 #endif
 
     tjs_uint32 features = 0;
     features = (TVPCPUFeatures & TVP_CPU_FEATURE_MASK);
-    TVPCPUType &= ~TVP_CPU_FEATURE_MASK;
+    TVPCPUType &= ~(TVP_CPU_FEATURE_MASK | TVP_CPU_FAMILY_MASK);
     TVPCPUType |= features;
+    TVPCPUType |= TVPCPUFeatures & TVP_CPU_FAMILY_MASK;
 
     TVPDisableCPU(TVP_CPU_HAS_NEON, TJS_W("-cpuneon"));
 }

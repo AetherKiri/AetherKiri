@@ -4,6 +4,8 @@
 #include <optional>
 #include <algorithm>
 #include <cctype>
+#include <cstring>
+#include <limits>
 
 #include <boost/locale/encoding.hpp>
 
@@ -21,6 +23,22 @@
 // Legacy KiriKiri scripts without a BOM are traditionally encoded as CP932.
 // UTF-8 remains auto-detected before this fallback is used.
 static std::string G_DefaultReadEncoding = "cp932";
+
+// Text streams are often fed directly from a game archive.  Keep the
+// decompressor and the UTF conversion bounded even when a malformed header
+// advertises a multi-gigabyte payload.
+static constexpr std::uint64_t kMaxTextStreamBytes =
+    256ull * 1024ull * 1024ull;
+
+static bool readU64LE(const std::uint8_t *data, std::size_t size,
+                      std::size_t offset, std::uint64_t &value) {
+    if(!data || offset > size || size - offset < sizeof(std::uint64_t))
+        return false;
+    value = 0;
+    for(std::size_t i = 0; i < sizeof(std::uint64_t); ++i)
+        value |= static_cast<std::uint64_t>(data[offset + i]) << (i * 8);
+    return true;
+}
 
 static std::string toUpperAscii(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(),
@@ -210,12 +228,19 @@ class tTVPTextReadStream : public iTJSTextReadStream {
 public:
     tTVPTextReadStream(const ttstr &name, const ttstr &mode) {
         _stream.reset(TVPCreateStream(name, TJS_BS_READ));
-        size_t ofs = parseModeNumber(mode.c_str(), TJS_W('o'), 255, 0).value();
+        if(!_stream)
+            TVPThrowExceptionMessage(TJS_W("cannot open text stream"));
+        const std::uint64_t ofs = parseModeNumber(
+            mode.c_str(), TJS_W('o'), 255, 0).value_or(0);
+        const std::uint64_t streamSize = _stream->GetSize();
+        if(ofs > streamSize || streamSize - ofs > kMaxTextStreamBytes)
+            TVPThrowExceptionMessage(TJS_W("text stream is too large"));
         _stream->SetPosition(ofs);
 
-        auto size = static_cast<size_t>(_stream->GetSize() - ofs);
+        std::size_t size = static_cast<std::size_t>(streamSize - ofs);
         std::vector<std::uint8_t> raw(size);
-        _stream->ReadBuffer(raw.data(), size);
+        if(size != 0)
+            _stream->ReadBuffer(raw.data(), static_cast<tjs_uint>(size));
 
         // ---------- 检查是否加密/压缩 ----------
         if(size >= 3 && raw[0] == 0xFE && raw[1] == 0xFE) {
@@ -250,29 +275,45 @@ public:
                 if(size < 3 + 2 + 16)
                     TVPThrowExceptionMessage(TVPUnsupportedCipherMode, name);
 
-                // 读压缩大小和解压大小
-                std::uint8_t *ptr = raw.data() + 5;
-                std::uint64_t compressed =
-                    *reinterpret_cast<std::uint64_t *>(ptr);
-                ptr += 8;
-                std::uint64_t uncompressed =
-                    *reinterpret_cast<std::uint64_t *>(ptr);
-                ptr += 8;
-
-                std::vector<std::uint8_t> compBuf(compressed);
-                memcpy(compBuf.data(), ptr, compressed);
-
-                std::vector<std::uint8_t> uncompBuf(uncompressed);
-                auto destLen = static_cast<unsigned long>(uncompressed);
-                int ret = uncompress(uncompBuf.data(), &destLen, compBuf.data(),
-                                     static_cast<unsigned long>(compressed));
-                if(ret != Z_OK || destLen != uncompressed)
+                // Read the little-endian sizes without an unaligned cast and
+                // validate every range before allocating or copying.
+                std::uint64_t compressed = 0;
+                std::uint64_t uncompressed = 0;
+                if(!readU64LE(raw.data(), size, 5, compressed) ||
+                   !readU64LE(raw.data(), size, 13, uncompressed) ||
+                   compressed > kMaxTextStreamBytes ||
+                   uncompressed > kMaxTextStreamBytes ||
+                   (uncompressed % sizeof(char16_t)) != 0 ||
+                   compressed > size - (3 + 2 + 16) ||
+                   compressed > std::numeric_limits<uLong>::max() ||
+                   uncompressed > std::numeric_limits<uLongf>::max())
                     TVPThrowExceptionMessage(TVPUnsupportedCipherMode, name);
 
-                // 解压得到 UTF-16 数据
-                _buffer.assign(reinterpret_cast<char16_t *>(uncompBuf.data()),
-                               reinterpret_cast<char16_t *>(uncompBuf.data() +
-                                                            uncompressed));
+                const std::size_t compressedSize =
+                    static_cast<std::size_t>(compressed);
+                const std::size_t uncompressedSize =
+                    static_cast<std::size_t>(uncompressed);
+                const std::uint8_t *compressedData = raw.data() + 21;
+                std::vector<std::uint8_t> uncompBuf(uncompressedSize);
+                uLongf destLen = static_cast<uLongf>(uncompressedSize);
+                const int ret = uncompress(
+                    uncompBuf.empty() ? nullptr : uncompBuf.data(), &destLen,
+                    compressedSize == 0 ? nullptr : compressedData,
+                    static_cast<uLong>(compressedSize));
+                if(ret != Z_OK || destLen != uncompressedSize)
+                    TVPThrowExceptionMessage(TVPUnsupportedCipherMode, name);
+
+                // The writer emits UTF-16LE.  Decode explicitly so the
+                // reader remains well-defined on big-endian hosts and for
+                // buffers whose alignment is only one byte.
+                _buffer.resize(uncompressedSize / sizeof(char16_t));
+                for(std::size_t i = 0; i < _buffer.size(); ++i) {
+                    const std::size_t offset = i * sizeof(char16_t);
+                    _buffer[i] = static_cast<char16_t>(
+                        static_cast<std::uint16_t>(uncompBuf[offset]) |
+                        (static_cast<std::uint16_t>(uncompBuf[offset + 1])
+                         << 8));
+                }
                 return;
             }
             TVPThrowExceptionMessage(TVPUnsupportedCipherMode, name);
@@ -304,7 +345,9 @@ public:
             encoding = G_DefaultReadEncoding; // 默认回退
 
         if(encoding == "ASCII") {
-            _buffer.assign(raw.data(), raw.data() + raw.size());
+            _buffer.resize(raw.size());
+            for(std::size_t i = 0; i < raw.size(); ++i)
+                _buffer[i] = static_cast<char16_t>(raw[i]);
             return;
         }
 
@@ -317,28 +360,44 @@ public:
 
         if(encoding == "UTF-16" || encoding == "UTF-16LE" ||
            encoding == "UTF-16BE") {
-            _buffer.assign(
-                reinterpret_cast<const char16_t *>(raw.data()),
-                reinterpret_cast<const char16_t *>(raw.data() + raw.size()));
-
-            if(encoding == "UTF-16BE") {
-                size_t len = raw.size() / 2;
-                _buffer.resize(len);
-                auto src = reinterpret_cast<const char16_t *>(raw.data());
-                for(size_t i = 0; i < len; i++) {
-                    char16_t ch = src[i];
-                    _buffer[i] = (ch >> 8) | (ch << 8);
-                }
+            if((raw.size() & 1u) != 0)
+                TVPThrowExceptionMessage(TJS_W("invalid UTF-16 text stream"));
+            const std::size_t len = raw.size() / 2;
+            _buffer.resize(len);
+            const bool bigEndian = encoding == "UTF-16BE";
+            for(std::size_t i = 0; i < len; ++i) {
+                const std::size_t offset = i * 2;
+                const std::uint16_t first = raw[offset];
+                const std::uint16_t second = raw[offset + 1];
+                _buffer[i] = static_cast<char16_t>(
+                    bigEndian ? ((first << 8) | second)
+                              : (first | (second << 8)));
             }
-
             return;
         }
 
         if(encoding == "UTF-32" || encoding == "UTF-32LE" ||
            encoding == "UTF-32BE") {
-            _buffer = boost::locale::conv::utf_to_utf<char16_t>(
-                reinterpret_cast<const char32_t *>(raw.data()),
-                reinterpret_cast<const char32_t *>(raw.data() + raw.size()));
+            if((raw.size() & 3u) != 0)
+                TVPThrowExceptionMessage(TJS_W("invalid UTF-32 text stream"));
+            const std::size_t len = raw.size() / 4;
+            std::u32string codepoints(len, U'\0');
+            const bool bigEndian = encoding == "UTF-32BE";
+            for(std::size_t i = 0; i < len; ++i) {
+                const std::size_t offset = i * 4;
+                const std::uint32_t b0 = raw[offset];
+                const std::uint32_t b1 = raw[offset + 1];
+                const std::uint32_t b2 = raw[offset + 2];
+                const std::uint32_t b3 = raw[offset + 3];
+                const std::uint32_t value = bigEndian
+                    ? ((b0 << 24) | (b1 << 16) | (b2 << 8) | b3)
+                    : (b0 | (b1 << 8) | (b2 << 16) | (b3 << 24));
+                if(value > 0x10ffffu ||
+                   (value >= 0xd800u && value <= 0xdfffu))
+                    TVPThrowExceptionMessage(TJS_W("invalid UTF-32 text stream"));
+                codepoints[i] = static_cast<char32_t>(value);
+            }
+            _buffer = boost::locale::conv::utf_to_utf<char16_t>(codepoints);
             return;
         }
 
@@ -396,6 +455,7 @@ class tTVPTextWriteStream : public iTJSTextWriteStream {
     std::vector<Bytef> _compressionBuffer =
         std::vector<Bytef>(COMPRESSION_BUFFER_SIZE);
     bool _compressionFailed{ false };
+    std::uint64_t _textBytesWritten{ 0 };
 
 public:
     tTVPTextWriteStream(const ttstr &name, const ttstr &mode) {
@@ -421,13 +481,18 @@ public:
                                      TJS_W("unsupported cipher mode"));
 
         // check o mode
-        int ofs = parseModeNumber(mode.c_str(), TJS_W('o'), 255, 0).value();
+        const std::uint64_t ofs = parseModeNumber(
+            mode.c_str(), TJS_W('o'), 255, 0).value_or(0);
         if(ofs != 0) {
             _stream.reset(TVPCreateStream(name, TJS_BS_UPDATE));
+            if(!_stream || ofs > kMaxTextStreamBytes)
+                TVPThrowExceptionMessage(TJS_W("text stream offset is invalid"));
             _stream->SetPosition(ofs);
         } else {
             _stream.reset(TVPCreateStream(name, TJS_BS_WRITE));
         }
+        if(!_stream)
+            TVPThrowExceptionMessage(TJS_W("cannot open text stream"));
 
         if(_cryptMode == 1 || _cryptMode == 2) {
             // simple crypt or compressed
@@ -459,8 +524,11 @@ public:
             _zStream->avail_out = COMPRESSION_BUFFER_SIZE;
 
             // Compression Size (write dummy)
-            _compressionSizePosition =
-                static_cast<tjs_uint>(_stream->GetPosition());
+            const std::uint64_t position = _stream->GetPosition();
+            if(position > std::numeric_limits<tjs_uint>::max() ||
+               position > kMaxTextStreamBytes)
+                TVPThrowExceptionMessage(TJS_W("text stream is too large"));
+            _compressionSizePosition = static_cast<tjs_uint>(position);
             WriteI64LE(0);
             WriteI64LE(0);
         }
@@ -477,6 +545,10 @@ public:
                         result = deflate(_zStream.get(), Z_FINISH);
                         if(result != Z_OK && result != Z_STREAM_END) {
                             TVPThrowExceptionMessage(TVPCompressionFailed);
+                        }
+                        if(_zStream->total_out > kMaxTextStreamBytes) {
+                            TVPThrowExceptionMessage(
+                                TJS_W("text stream is too large"));
                         }
                         _stream->WriteBuffer(_compressionBuffer.data(),
                                              COMPRESSION_BUFFER_SIZE -
@@ -515,6 +587,13 @@ public:
 
     void Write(const ttstr &targ) override {
         tjs_int len = targ.GetLen();
+        if(len < 0 || _textBytesWritten > kMaxTextStreamBytes ||
+           static_cast<std::uint64_t>(len) >
+               (kMaxTextStreamBytes - _textBytesWritten) /
+                   sizeof(tjs_uint16))
+            TVPThrowExceptionMessage(TJS_W("text stream is too large"));
+        const std::size_t byteCount =
+            static_cast<std::size_t>(len) * sizeof(tjs_uint16);
         auto buf = std::make_unique<tjs_uint16[]>(len + 1);
         const tjs_char *src = targ.c_str();
         tjs_int i;
@@ -534,23 +613,32 @@ public:
                 }
             }
 
-            WriteRawData(buf.get(), len * sizeof(tjs_uint16));
+            WriteRawData(buf.get(), byteCount);
         } else {
-            WriteRawData(buf.get(), len * sizeof(tjs_uint16));
+            WriteRawData(buf.get(), byteCount);
         }
+        _textBytesWritten += byteCount;
     }
 
     void WriteRawData(void *ptr, size_t size) {
+        if(size > kMaxTextStreamBytes || _textBytesWritten > kMaxTextStreamBytes ||
+           _textBytesWritten > kMaxTextStreamBytes - size ||
+           size > std::numeric_limits<uInt>::max())
+            TVPThrowExceptionMessage(TJS_W("text stream is too large"));
         if(_cryptMode == 2) {
             // compressed with zlib stream.
             _zStream->next_in = static_cast<Bytef *>(ptr);
-            _zStream->avail_in = size;
+            _zStream->avail_in = static_cast<uInt>(size);
 
             while(_zStream->avail_in > 0) {
                 int result = deflate(_zStream.get(), Z_NO_FLUSH);
                 if(result != Z_OK) {
                     _compressionFailed = true;
                     TVPThrowExceptionMessage(TVPCompressionFailed);
+                }
+                if(_zStream->total_out > kMaxTextStreamBytes) {
+                    _compressionFailed = true;
+                    TVPThrowExceptionMessage(TJS_W("text stream is too large"));
                 }
                 if(_zStream->avail_out == 0) {
                     _stream->WriteBuffer(_compressionBuffer.data(),

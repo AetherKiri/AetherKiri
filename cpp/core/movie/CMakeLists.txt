@@ -51,6 +51,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC tjs2 PRIVATE core_base_module core_
 
 find_package(FFMPEG COMPONENTS
         avutil
+        avformat
         avfilter
         avcodec
         swscale

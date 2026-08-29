@@ -35,9 +35,11 @@ direct = [
   "shrinkCopy",
 ]
 hybrid = [
-  "AlphaMovie",
-  "KAGParserEx",
-  "layerExSave",
+    "AlphaMovie",
+    "KAGParserEx",
+    "clipfile",
+    "krkr_richtext",
+    "layerExSave",
   "extNagano",
   "layerExVector",
   "psdfile",
@@ -83,8 +85,6 @@ host_compat = [
   "windowExProgress",
 ]
 optional = [
-  "clipfile",
-  "krkr_richtext",
   "krkreffekseer",
   "krkrthreepp",
 ]
@@ -138,40 +138,59 @@ notes = "Upstream TJS2 regression corpus; the Aether unit-test host executes the
 name = "visual-simd"
 status = "aether"
 upstream_path = [
-  "src/core/common/visual/gl/ResampleImageAVX2.cpp",
-  "src/core/common/visual/gl/ResampleImageSSE2.cpp",
   "src/core/common/visual/gl/blend_function_sse2.cpp",
   "src/core/common/visual/gl/blend_function_avx2.cpp",
   "src/core/common/visual/gl/adjust_color_sse2.cpp",
-  "src/core/common/visual/gl/boxblur_sse2.cpp",
-  "src/core/common/visual/gl/colormap_sse2.cpp",
   "src/core/common/visual/gl/colorfill_sse2.cpp",
-  "src/core/common/visual/gl/pixelformat_sse2.cpp",
   "src/core/common/visual/gl/blend_function_neon.cpp",
   "src/core/common/visual/gl/adjust_color_neon.cpp",
-  "src/core/common/visual/gl/colormap_neon.cpp",
   "src/core/common/visual/gl/colorfill_neon.cpp",
-  "src/core/common/visual/gl/pixelformat_neon.cpp",
 ]
 adapter = "cpp/core/visual/simd"
 parity_test = "src/core/tests/simd_parity_test.cpp"
-notes = "Aether's Highway/function-pointer dispatch remains the linked implementation; upstream SIMD is reference/parity input, not a second symbol set."
+notes = "Aether's Highway/function-pointer dispatch remains the linked implementation for blend, adjust-color and color-fill. The krkrz colormap/pixel-format leaves are tracked separately because only their parity-safe subset is installed."
+
+[[core_components]]
+name = "visual-simd-leaves"
+status = "hybrid"
+upstream_path = [
+  "src/core/common/visual/gl/colormap_sse2.cpp",
+  "src/core/common/visual/gl/colormap_avx2.cpp",
+  "src/core/common/visual/gl/colormap_neon.cpp",
+  "src/core/common/visual/gl/pixelformat_sse2.cpp",
+  "src/core/common/visual/gl/pixelformat_neon.cpp",
+  "src/core/common/visual/gl/univtrans_sse2.cpp",
+]
+adapter = "cpp/core/visual/upstream_bridge/VisualSIMDLeavesDispatch.cpp"
+aether_test = "tests/unit-tests/plugins/visual-simd-leaves.cpp"
+notes = "The dispatcher installs only the parity-verified ColorMap/ColorMap65 base and opacity variants, 24-bit conversion, and universal-transition leaves (with an Aether alpha-normalization wrapper). Aether keeps additive-alpha, HDA, box-blur and other variants whose arithmetic differs by one or more least-significant bits, preserving legacy game pixels."
+
+[[core_components]]
+name = "visual-resample-leaves"
+status = "hybrid"
+upstream_path = [
+  "src/core/common/visual/gl/ResampleImageSSE2.cpp",
+  "src/core/common/visual/gl/ResampleImageAVX2.cpp",
+]
+adapter = "cpp/core/visual/upstream_bridge/ResampleImageDispatch.cpp"
+aether_test = "tests/unit-tests/plugins/resample-simd.cpp"
+notes = "The pinned SSE2/AVX2 resampling leaves are compiled only for single-architecture x86 targets through bitmap and thread shims. Runtime CPU/OS probing selects AVX2 or SSE2 only for 32-bit scanline-capable bitmaps; nearest-neighbour, unsupported filters, unavailable scanlines, and universal/mobile builds stay on Aether's scalar/render owner."
 
 [[core_components]]
 name = "sound-dsp"
-status = "aether"
+status = "hybrid"
 upstream_path = [
   "src/core/common/sound/MathAlgorithms_SSE.cpp",
   "src/core/common/sound/MathAlgorithms_NEON.cpp",
+  "src/core/common/sound/xmmlib.cpp",
   "src/core/common/sound/RealFFT_SSE.cpp",
   "src/core/common/sound/RealFFT_NEON.cpp",
   "src/core/common/sound/PhaseVocoderDSP.cpp",
   "src/core/common/sound/PhaseVocoderFilter.cpp",
-  "src/core/common/sound/WaveLoopManager.cpp",
 ]
-adapter = "cpp/core/sound"
+adapter = "cpp/core/sound/PhaseVocoderDSP.cpp"
 parity_test = "src/core/tests/sound_parity_test.cpp"
-notes = "Aether's sound module owns the public ABI and default/SIMD dispatch. SIMD and phase-vocoder changes remain parity-checked and symbol-separated; scalar leaves are tracked separately below."
+notes = "Aether owns the public sound ABI and lifecycle. The pinned MathAlgorithms SSE/NEON and xmmlib leaves are compiled through namespaced source bridges; PhaseVocoderDSP dispatches the compatible window/FFT methods with a scalar fallback. WaveLoopManager is tracked separately as an upstream-adapted component; host audio remains Aether-owned."
 
 [[core_components]]
 name = "sound-scalar-leaves"
@@ -193,6 +212,17 @@ upstream_path = [
 ]
 adapter = "cpp/core/sound/CMakeLists.txt"
 notes = "The implementation is compiled directly from the pinned core submodule because its queue semantics match Aether; Aether keeps the public header and sound lifecycle owner."
+
+[[core_components]]
+name = "sound-loop-manager"
+status = "upstream-adapted"
+upstream_path = [
+  "src/core/common/sound/WaveLoopManager.cpp",
+  "src/core/common/sound/WaveLoopManager.h",
+]
+adapter = "cpp/core/sound/upstream_bridge/WaveLoopManager.cpp"
+aether_test = "tests/unit-tests/plugins/sound-loop-manager.cpp"
+notes = "The loop/link/cross-fade implementation is consumed directly from the pinned submodule. Aether retains the public header and supplies the extra DesiredFormat virtual plus a local throwing allocator shim, so no upstream sound registry or allocator lifecycle is imported."
 
 [[core_components]]
 name = "visual-weight-functor"
@@ -219,24 +249,64 @@ adapter = "cpp/core"
 notes = "These stateless TJS/utility translation units are consumed directly from the pinned submodule with Aether headers pre-included; platform clipboard storage, message registry, and public ABI remain Aether-owned."
 
 [[core_components]]
+name = "visual-tlg-leaves"
+status = "upstream-adapted"
+upstream_path = [
+  "src/core/common/visual/gl/tlg_sse2.cpp",
+]
+adapter = "cpp/core/visual/upstream_bridge/TLGSIMD.cpp"
+parity_test = "src/core/tests/simd_parity_test.cpp"
+notes = "The TLG5 slide, color composition and TLG6 line kernels are consumed through an x86-only source bridge and installed after Aether scalar/Highway initialization. Aether LoadTLG remains the sole format router and retains TLGmux/TLGref/TLGqoi/QHDR/LZ4/diagnostics."
+
+[[core_components]]
+name = "font-runtime"
+status = "hybrid"
+upstream_path = [
+  "src/core/common/visual/FontVariations.cpp",
+]
+adapter = "cpp/core/visual/upstream_bridge/FontVariations.cpp"
+notes = "FreeType face selection, variable-axis clamping and the bounded immutable FontStream cache are Aether-owned; the axis parser is compiled from the pinned krkrz leaf. Cache keys include path and face index so fallback faces cannot alias."
+
+[[core_components]]
+name = "font-service"
+status = "hybrid"
+upstream_path = [
+  "src/core/common/visual/FontServiceIntf.h",
+]
+adapter = "cpp/core/visual/FontServiceIntf.cpp"
+aether_test = "tests/unit-tests/plugins/font-service.cpp"
+notes = "Aether keeps the FreeType registry and rendering ABI, while the adapter exposes glyphware-compatible metadata, Unicode coverage, fallback, color glyph layers, variable-axis metadata, stroke masks and optional HarfBuzz/FriBidi shaping."
+
+[[core_components]]
 name = "tjs-dap"
-status = "optional"
+status = "hybrid"
 upstream_path = [
   "src/core/common/tjs2/tjsDebuggerCore.cpp",
   "src/core/common/tjs2/tjsDebuggerHook.cpp",
   "src/core/common/tjs2/tjsDebuggerSymbols.cpp",
   "src/core/common/utils/DAPServer.cpp",
 ]
-adapter = "cpp/core/utils/Debugger.h"
+adapter = "cpp/core/tjs2/upstream_bridge/tjsDebuggerCore.cpp"
 parity_test = "src/core/tests/dap_smoke.py"
-notes = "The upstream DAP implementation is a future opt-in boundary; it is not linked until its VM hook, thread, socket, and host lifecycle contracts are adapted to Aether."
+notes = "The DAP VM hook, symbols, debugger core and Content-Length transport are linked on desktop by Aether ABI bridges. Aether owns the VM/thread/event lifecycle; the server is inert unless -dap=<port> is supplied, and the smoke test still requires a real host session."
+
+[[core_components]]
+name = "tjs-repl"
+status = "hybrid"
+upstream_path = [
+  "src/core/common/utils/ReplMainQueue.cpp",
+  "src/core/common/utils/ReplFileChannel.cpp",
+  "src/core/common/utils/REPL.cpp",
+]
+adapter = "cpp/core/utils/ReplFileChannel.cpp"
+notes = "Aether provides the compatible -replfile=<directory> cmd/resp channel and main-thread TJS evaluation using its RAII stream ABI. The upstream console/icline/socket frontends are reference-only; no second thread or plugin registry is linked."
 
 # status values:
 #   upstream-adapted  — upstream business source compiled through an Aether ABI shim
 #   hybrid            — upstream algorithms plus an Aether-owned runtime/renderer bridge
 #   aether            — Aether owns the implementation; upstream is reference-only
 #   stub              — name/shape compatibility only, not feature-complete
-#   optional          — available behind an explicit future integration switch
+#   optional          — source-validated only; host/SDK adapter is not linked
 
 [[plugins]]
 name = "layerExAreaAverage.dll"
@@ -286,6 +356,17 @@ implementation = "aether-wrapper-with-upstream-codecs"
 upstream_path = "src/plugins/layerExSave"
 adapter = "cpp/plugins/layerExSaveCompat.cpp"
 notes = "The Aether Layer/Storage and threading boundary remains authoritative while namespaced upstream LodePNG and TLG5 SlideCompressor code is compiled through cpp/plugins/upstream_bridge/layerExSaveCodecs.cpp. Legacy BMP, crop/diff operations, and TJS/octet ownership stay Aether-owned."
+
+[[plugins]]
+name = "clipfile.dll"
+status = "hybrid"
+implementation = "upstream-clipparse-with-aether-stream-bridge"
+upstream_path = [
+  "src/plugins/clipfile",
+  "src/plugins/clipfile/external/clipparse",
+]
+adapter = "cpp/plugins/upstream_bridge/clipfile_compat.hpp"
+notes = "The CLIP parser/writer and clip:// storage are compiled from the pinned submodule. Aether owns the TJS/Layer/Storage ABI and one shared SQLite owner (the vcpkg-pinned package in CI, a deserialize-capable system provider for local hosts, or the hash-verified 3.45.1 fallback); desktop and Android builds enable the adapter by default, while web targets keep the existing fallback because the storage module is not portable there."
 
 [[plugins]]
 name = "extNagano.dll"
@@ -409,9 +490,16 @@ notes = "The krkrz vector API is forwarded to Aether's single LayerExDraw render
 
 [[plugins]]
 name = "krkr_richtext.dll"
-status = "optional"
-implementation = "upstream-pending-adapter"
+status = "hybrid"
+implementation = "upstream-source-minikin-aether-fontservice"
 upstream_path = "src/plugins/krkr_richtext"
+adapter = [
+  "cpp/plugins/upstream_bridge/krkrz_richtext_main.cpp",
+  "cpp/plugins/upstream_bridge/krkrz_richtext_host_font.cpp",
+  "cpp/plugins/upstream_bridge/krkrz_richtext_escape.cpp",
+  "cpp/plugins/upstream_bridge/krkrz_richtext_licenses.cpp",
+]
+notes = "The portable richtext/Minikin sources are compiled from the pinned submodule and use Aether's shared FreeType/FontService, ICU and HarfBuzz owners. Existing TextRenderBase remains the compatibility path for legacy games; iOS/web targets keep the source contract but disable this dependency-heavy adapter at configure time."
 
 [[plugins]]
 name = "krkreffekseer.dll"
@@ -427,20 +515,38 @@ upstream_path = "src/plugins/krkrthreepp"
 
 [[plugins]]
 name = "sigcheck.dll"
-status = "stub"
-implementation = "aether-compatibility-stub"
-adapter = "cpp/plugins/compatSystemPlugins.cpp"
+status = "hybrid"
+implementation = "aether-portable-rsa-pss"
+adapter = [
+  "cpp/plugins/compatSystemPlugins.cpp",
+  "cpp/plugins/portableSignatureCheck.cpp",
+]
 upstream_path = "src/plugins/sigcheck"
-notes = "The real upstream implementation is intentionally not linked until its platform/security contract is reviewed."
+notes = "The SHA256/PSS/RSA file format and asynchronous callback contract are implemented by Aether's portable verifier; OpenSSL is the process crypto owner when available. Builds without a crypto provider remain fail-closed instead of reporting a false success."
+
+[[plugins]]
+name = "resourceRW.dll"
+status = "hybrid"
+implementation = "aether-portable-resource-sidecar"
+upstream_path = "src/plugins/resourceRW"
+adapter = [
+  "cpp/plugins/compatSystemPlugins.cpp",
+  "cpp/plugins/portableResourceBundle.cpp",
+  "cpp/plugins/portableResourceObjects.cpp",
+]
+notes = "Reader/Writer preserve the upstream TJS contract. On hosts without Win32 PE APIs, resources are retained in a bounded deterministic .aetherres sidecar; the original executable is never modified."
 
 [[plugins]]
 name = "krkrsteam.dll"
-status = "stub"
-implementation = "aether-compatibility-stub"
-adapter = "cpp/plugins/stubs/dummy_plugin_stubs.cpp"
+status = "hybrid"
+implementation = "aether-offline-steam-compat"
+upstream_path = "src/plugins/steam"
+adapter = "cpp/plugins/compatSystemPlugins.cpp"
+notes = "Achievements, language, steam:// local cloud storage and cloud metadata persist through Aether Storage. Steamworks-only screenshots, broadcast, DLC and account ownership return false instead of reporting fabricated success."
 
 [[plugins]]
 name = "win32ole.dll"
 status = "stub"
 implementation = "aether-compatibility-stub"
-adapter = "cpp/plugins/stubs/dummy_plugin_stubs.cpp"
+adapter = "cpp/plugins/compatSystemPlugins.cpp"
+notes = "COM/ActiveX remains unavailable on non-Windows hosts and is kept as an explicit fail-closed compatibility surface."

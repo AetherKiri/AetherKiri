@@ -16,7 +16,11 @@ const ttstr &TVPGetDefaultFontName();
 bool TVPSetDefaultFontName(const ttstr &fontName);
 void TVPGetAllFontList(std::vector<ttstr> &list);
 tTJSBinaryStream *TVPCreateFontStream(const ttstr &fontname,
-                                      tjs_int *faceIndex = nullptr);
+                                      tjs_int *faceIndex);
+// FontServiceIntf follows krkrz's one-argument stream API.  Keep an explicit
+// overload instead of a default argument so the two public contracts cannot
+// become ambiguous when both headers are included by a plugin.
+tTJSBinaryStream *TVPCreateFontStream(const ttstr &fontname);
 struct TVPFontNamePathInfo {
     ttstr Path;
     std::function<tTJSBinaryStream *(TVPFontNamePathInfo *)> Getter;

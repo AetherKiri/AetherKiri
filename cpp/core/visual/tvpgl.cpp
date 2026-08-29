@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include "tjsTypes.h"
 #include "tvpgl.h"
+#include "VisualSIMDLeaves.h"
 #include <float.h>
 
 #define __cdecl
@@ -26,6 +27,8 @@
 
 extern void TVPGL_C_Init();
 #include "simd/tvpgl_simd_init.h"
+extern void TVPInitTLGSIMD();
+extern void TVPInitResampleSIMD();
 extern "C" {
 /*-----------------------------------------------------------------*/
 unsigned char TVPDivTable[256 * 256];
@@ -14119,6 +14122,15 @@ TVP_GL_FUNC_DECL(void, TVPInitTVPGL, ()) {
     if(TVPShouldUseHighwaySIMD()) {
         TVPGL_SIMD_Init();  // Highway SIMD override
     }
+    // Install only the krkrz leaves whose ABI matches Aether's scalar
+    // registry.  The dispatcher restores the Aether-owned baseline when SIMD
+    // is disabled, so repeated initialization remains deterministic.
+    TVPInitVisualSIMDLeaves();
+    // TLG's SSE2 leaves are independent of the Highway renderer.  Install
+    // them last so every existing loader/texture call site gets the same
+    // runtime-selected pointer while scalar remains the fallback.
+    TVPInitTLGSIMD();
+    TVPInitResampleSIMD();
 }
 
 /*export*/

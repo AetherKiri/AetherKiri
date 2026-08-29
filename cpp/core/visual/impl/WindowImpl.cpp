@@ -1465,6 +1465,21 @@ void tTJSNI_Window::RegisterWindowMessageReceiver(tTVPWMRRegMode mode,
         return;
     Form->RegisterWindowMessageReceiver(mode, proc, userdata);
 }
+
+bool TVPDeliverWindowMessage(tTJSNI_Window *window, tjs_uint32 message,
+                             tjs_uint64 wparam, tjs_uint64 lparam,
+                             tjs_uint64 *result) {
+    if(!window || !window->GetForm())
+        return false;
+    tTVPWindowMessage payload;
+    payload.Msg = message;
+    payload.WParam = wparam;
+    payload.LParam = lparam;
+    const bool blocked = window->GetForm()->DeliverWindowMessage(payload);
+    if(result)
+        *result = payload.Result;
+    return blocked;
+}
 //---------------------------------------------------------------------------
 void tTJSNI_Window::Close() {
     if(Form)
@@ -2100,10 +2115,25 @@ void tTJSNI_Window::ResetImeMode(class iTVPLayerManager *manager) {
         DrawDevice->ResetImeMode(manager);
 }
 //---------------------------------------------------------------------------
+void tTJSNI_Window::OnTouchDown(tjs_real x, tjs_real y, tjs_real cx,
+                                tjs_real cy, tjs_uint32 id) {
+    tTJSNI_BaseWindow::OnTouchDown(x, y, cx, cy, id);
+    if(Form)
+        Form->UpdateTouchDown(x, y, cx, cy, id);
+}
+//---------------------------------------------------------------------------
+void tTJSNI_Window::OnTouchMove(tjs_real x, tjs_real y, tjs_real cx,
+                                tjs_real cy, tjs_uint32 id) {
+    tTJSNI_BaseWindow::OnTouchMove(x, y, cx, cy, id);
+    if(Form)
+        Form->UpdateTouchMove(x, y, cx, cy, id);
+}
+//---------------------------------------------------------------------------
 void tTJSNI_Window::OnTouchUp(tjs_real x, tjs_real y, tjs_real cx, tjs_real cy,
                               tjs_uint32 id) {
     tTJSNI_BaseWindow::OnTouchUp(x, y, cx, cy, id);
     if(Form) {
+        Form->UpdateTouchUp(x, y, cx, cy, id);
         Form->ResetTouchVelocity(id);
     }
 }

@@ -17,6 +17,14 @@ bool encodePng(const std::uint8_t *bgra, int width, int height, int pitch,
                std::vector<std::uint8_t> &output);
 
 /**
+ * Encode an 8-bit Aether province image as the fixed 256-entry palette PNG
+ * used by krkrz_dev's layerExSave plug-in.  `pitch` is the signed byte offset
+ * between logical rows and may be negative.
+ */
+bool encodeProvincePng(const std::uint8_t *indices, int width, int height,
+                       int pitch, std::vector<std::uint8_t> &output);
+
+/**
  * Encode an Aether BGRA layer image with the upstream krkrz_dev TLG5 codec.
  *
  * The caller owns the input buffer.  The pointer denotes the first logical

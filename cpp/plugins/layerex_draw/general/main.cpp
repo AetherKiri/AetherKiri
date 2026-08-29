@@ -948,23 +948,24 @@ NCB_ATTACH_CLASS_WITH_HOOK(LayerExDraw, Layer) {
 
     NCB_METHOD(getColorRegionRects);
 
-#define ENUM(n) Variant(#n, (int)n)
-    ENUM(EncoderValueCompressionLZW);
-    ENUM(EncoderValueCompressionCCITT3);
-    ENUM(EncoderValueCompressionCCITT4);
-    ENUM(EncoderValueCompressionRle);
-    ENUM(EncoderValueCompressionNone);
-    ENUM(EncoderValueScanMethodInterlaced);
-    ENUM(EncoderValueScanMethodNonInterlaced);
-    ENUM(EncoderValueVersionGif87);
-    ENUM(EncoderValueVersionGif89);
-    ENUM(EncoderValueRenderProgressive);
-    ENUM(EncoderValueRenderNonProgressive);
-    ENUM(EncoderValueTransformRotate90);
-    ENUM(EncoderValueTransformRotate180);
-    ENUM(EncoderValueTransformRotate270);
-    ENUM(EncoderValueTransformFlipHorizontal);
-    ENUM(EncoderValueTransformFlipVertical);
+#define ENCODER_ENUM(n) Variant(#n, static_cast<int>(libgdiplus::n))
+    ENCODER_ENUM(EncoderValueCompressionLZW);
+    ENCODER_ENUM(EncoderValueCompressionCCITT3);
+    ENCODER_ENUM(EncoderValueCompressionCCITT4);
+    ENCODER_ENUM(EncoderValueCompressionRle);
+    ENCODER_ENUM(EncoderValueCompressionNone);
+    ENCODER_ENUM(EncoderValueScanMethodInterlaced);
+    ENCODER_ENUM(EncoderValueScanMethodNonInterlaced);
+    ENCODER_ENUM(EncoderValueVersionGif87);
+    ENCODER_ENUM(EncoderValueVersionGif89);
+    ENCODER_ENUM(EncoderValueRenderProgressive);
+    ENCODER_ENUM(EncoderValueRenderNonProgressive);
+    ENCODER_ENUM(EncoderValueTransformRotate90);
+    ENCODER_ENUM(EncoderValueTransformRotate180);
+    ENCODER_ENUM(EncoderValueTransformRotate270);
+    ENCODER_ENUM(EncoderValueTransformFlipHorizontal);
+    ENCODER_ENUM(EncoderValueTransformFlipVertical);
+#undef ENCODER_ENUM
 }
 
 // ----------------------------------- 起動・開放処理

@@ -65,6 +65,12 @@ public:
 
     void Expand();
 
+    // Build a grayscale coverage mask from a straight-alpha RGBA glyph.
+    // Color glyphs cannot be blurred/tinted in place because those operations
+    // intentionally preserve their RGB channels; shadow rendering uses this
+    // conversion to retain the historical KiriKiri shadow semantics.
+    [[nodiscard]] tTVPCharacterData *CreateAlphaMask() const;
+
     void Blur(tjs_int blurlevel, tjs_int blurwidth);
     void Blur();
 
@@ -89,17 +95,22 @@ public:
 struct tTVPFontAndCharacterData {
     tTVPFont Font;
     tjs_uint32 FontHash{};
-    tjs_char Character{};
+    // Unicode scalar value (astral code points are decoded from UTF-16 before
+    // entering the cache).  Unpaired surrogates remain representable for the
+    // legacy tofu path.
+    tjs_uint32 Character{};
     tjs_int BlurLevel{};
     tjs_int BlurWidth{};
     bool Antialiased{};
     bool Blured{};
     bool Hinting{};
+    tjs_int EmojiPresentation = TVP_EMOJI_PRESENTATION_DEFAULT;
     bool operator==(const tTVPFontAndCharacterData &rhs) const {
         return Character == rhs.Character && Font == rhs.Font &&
             Antialiased == rhs.Antialiased && BlurLevel == rhs.BlurLevel &&
             BlurWidth == rhs.BlurWidth && Blured == rhs.Blured &&
-            Hinting == rhs.Hinting;
+            Hinting == rhs.Hinting &&
+            EmojiPresentation == rhs.EmojiPresentation;
     }
 };
 //---------------------------------------------------------------------------
@@ -112,6 +123,7 @@ public:
         v ^= val.Character;
         v ^= val.Blured ? 1 : 0;
         v ^= val.BlurLevel ^ val.BlurWidth;
+        v ^= static_cast<tjs_uint32>(val.EmojiPresentation) << 6;
         return v;
     }
 };

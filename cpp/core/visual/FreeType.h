@@ -41,6 +41,14 @@
     0x00020000 //!< 強制的に auto hinting を行う
 #define TVP_FACE_OPTIONS_NO_ANTIALIASING                                       \
     0x00040000 //!< アンチエイリアスを行わない
+#define TVP_FACE_OPTIONS_COLOR                                                  \
+    0x00080000 //!< カラーグリフを BGRA で読み込む
+// Internal FontService adapter bit: distinguish an explicitly requested face
+// zero from the legacy "use the registry-selected face" default.  The low
+// byte still carries the TTC/OTC index for compatibility with the historical
+// FreeType options contract.
+#define TVP_FACE_OPTIONS_EXPLICIT_FACE_INDEX                                   \
+    0x00100000
 
 //---------------------------------------------------------------------------
 /**
@@ -80,6 +88,10 @@ public:
     tjs_int GetHeight() { return Height; }
     void SetHeight(int height);
 
+    // Apply normalized krkrz variable-font coordinates to this face.  Faces
+    // without an OpenType variation table intentionally remain unchanged.
+    void ApplyFontVariations(tjs_int weight, const ttstr &variations);
+
     void SetOption(tjs_uint32 opt) { Options |= opt; }
     void ClearOption(tjs_uint32 opt) { Options &= ~opt; }
     [[nodiscard]] bool GetOption(tjs_uint32 opt) const {
@@ -88,17 +100,29 @@ public:
     [[nodiscard]] tjs_char GetDefaultChar() const {
         return Face ? Face->GetDefaultChar() : 0;
     }
-    tjs_char GetFirstChar() {
+    // FreeType returns a full 32-bit charmap code here.  Keeping the value
+    // wide is important for faces whose first (or only) glyph lives outside
+    // the BMP; truncating to tjs_char made the tofu fallback miss astral
+    // glyphs even though the rasterizer otherwise supports them.
+    tjs_uint32 GetFirstChar() {
         if(!FTFace) return 0;
         FT_UInt gindex;
-        return static_cast<tjs_char>(FT_Get_First_Char(FTFace, &gindex));
+        return static_cast<tjs_uint32>(FT_Get_First_Char(FTFace, &gindex));
     }
 
     [[nodiscard]] tjs_int GetAscent() const {
         if(!FTFace || !FTFace->size) return 0;
         tjs_int ppem = FTFace->size->metrics.y_ppem;
         tjs_int upe = FTFace->units_per_EM;
-        if(upe == 0) return 0;
+        // Bitmap-strike-only color fonts (CBDT/sbix) commonly report
+        // units_per_EM == 0.  Their strike metrics are already in 26.6
+        // pixels; scale the ascent into the requested logical line height.
+        if(upe == 0) {
+            if(ppem <= 0) return Height;
+            const tjs_int strike_ascent = FT_PosToInt(
+                FTFace->size->metrics.ascender);
+            return strike_ascent > 0 ? strike_ascent * Height / ppem : Height;
+        }
         return FTFace->ascender * ppem / upe;
     }
     [[nodiscard]] tjs_int GetLineBaseline() const;
@@ -130,17 +154,17 @@ public:
             thickness = 1;
         pos = FTFace->ascender * 7 * ppem / (10 * upe);
     }
-    tTVPCharacterData *GetGlyphFromCharcode(tjs_char code);
-    bool GetGlyphRectFromCharcode(struct tTVPRect &rt, tjs_char code,
+    tTVPCharacterData *GetGlyphFromCharcode(tjs_uint32 code);
+    bool GetGlyphRectFromCharcode(struct tTVPRect &rt, tjs_uint32 code,
                                   tjs_int &advancex, tjs_int &advancey);
-    bool GetGlyphMetricsFromCharcode(tjs_char code, tGlyphMetrics &metrics);
-    bool GetGlyphSizeFromCharcode(tjs_char code, tGlyphMetrics &metrics);
+    bool GetGlyphMetricsFromCharcode(tjs_uint32 code, tGlyphMetrics &metrics);
+    bool GetGlyphSizeFromCharcode(tjs_uint32 code, tGlyphMetrics &metrics);
 
-    const FT_Outline *GetOulineData(tjs_char code, float &w, float &h);
+    const FT_Outline *GetOulineData(tjs_uint32 code, float &w, float &h);
     tBaseFreeTypeFace *GetBaseFace() { return Face; }
 
 private:
-    bool LoadGlyphSlotFromCharcode(tjs_char code);
+    bool LoadGlyphSlotFromCharcode(tjs_uint32 code);
 };
 //---------------------------------------------------------------------------
 

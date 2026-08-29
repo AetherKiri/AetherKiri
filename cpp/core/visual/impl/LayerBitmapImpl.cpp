@@ -36,6 +36,7 @@ void TVPInitWindowOptions();
 // #include "FontSelectFormUnit.h"
 
 #include "StringUtil.h"
+#include "CharacterSet.h"
 // #include "TVPSysFont.h"
 #include "CharacterData.h"
 #include "PrerenderedFont.h"
@@ -111,6 +112,53 @@ void TVPSetFontRasterizer(tjs_int index) {
 tjs_int TVPGetFontRasterizer() { return TVPCurrentFontRasterizers; }
 FontRasterizer *GetCurrentRasterizer() {
     return TVPFontRasterizers[TVPCurrentFontRasterizers];
+}
+
+// ---------------------------------------------------------------------------
+// krkrz-compatible emoji policy.  The names are aliases into Aether's single
+// font registry (Font.addFont/FontSystem); no second registry or renderer is
+// created.  Defaults are intentionally inert so existing games retain their
+// pre-emoji output until they opt in.
+static tjs_int TVPDefaultEmojiMode = TVP_EMOJI_NONE;
+static ttstr TVPMonoEmojiFaceName(TJS_W("Noto Emoji Regular"));
+static ttstr TVPColorEmojiFaceName(TJS_W("Noto Color Emoji"));
+
+void TVPSetDefaultEmojiMode(tjs_int mode) {
+    mode = std::clamp(mode, static_cast<tjs_int>(TVP_EMOJI_NONE),
+                      static_cast<tjs_int>(TVP_EMOJI_COLOR));
+    if(TVPDefaultEmojiMode == mode)
+        return;
+    TVPDefaultEmojiMode = mode;
+    TVPClearFontCache();
+    ++TVPGlobalFontStateMagic;
+}
+
+tjs_int TVPGetDefaultEmojiMode() { return TVPDefaultEmojiMode; }
+
+tjs_int TVPResolveEmojiMode(tjs_int fontmode) {
+    if(fontmode == TVP_EMOJI_DEFAULT)
+        return TVPDefaultEmojiMode;
+    return std::clamp(fontmode, static_cast<tjs_int>(TVP_EMOJI_NONE),
+                      static_cast<tjs_int>(TVP_EMOJI_COLOR));
+}
+
+const tjs_char *TVPGetEmojiFaceName(tjs_int mode) {
+    if(mode == TVP_EMOJI_MONO)
+        return TVPMonoEmojiFaceName.c_str();
+    if(mode == TVP_EMOJI_COLOR)
+        return TVPColorEmojiFaceName.c_str();
+    return TJS_W("");
+}
+
+void TVPSetEmojiFaceName(tjs_int mode, const tjs_char *name) {
+    if(mode == TVP_EMOJI_MONO)
+        TVPMonoEmojiFaceName = name ? name : TJS_W("");
+    else if(mode == TVP_EMOJI_COLOR)
+        TVPColorEmojiFaceName = name ? name : TJS_W("");
+    else
+        return;
+    TVPClearFontCache();
+    ++TVPGlobalFontStateMagic;
 }
 
 //---------------------------------------------------------------------------
@@ -782,6 +830,9 @@ void tTVPNativeBaseBitmap::ApplyFont() {
         // compute font hash
         FontHash = tTJSHashFunc<ttstr>::Make(Font.Face);
         FontHash ^= Font.Height ^ Font.Flags ^ Font.Angle;
+        FontHash ^= static_cast<tjs_uint32>(Font.EmojiMode) << 5;
+        FontHash ^= static_cast<tjs_uint32>(Font.Weight);
+        FontHash ^= tTJSHashFunc<ttstr>::Make(Font.Variations);
     } else {
         GetCurrentRasterizer()->ApplyFont(this, false);
     }
@@ -822,6 +873,44 @@ struct tTVPDrawTextData {
     bool holdalpha;
     tTVPBBBltMethod bltmode;
 };
+
+// Return a shadow-ready reference.  Grayscale glyphs can be shared directly;
+// color glyphs need an alpha-only copy so the requested shadow color is
+// applied by the normal text blend path instead of leaking the emoji RGB.
+static tTVPCharacterData *TVPCreateTextShadowData(
+    tTVPCharacterData *data) {
+    if(!data)
+        return nullptr;
+    if(!data->FullColored) {
+        data->AddRef();
+        return data;
+    }
+    return data->CreateAlphaMask();
+}
+
+// Decode one user-visible text unit for all bitmap text entry points.  Keeping
+// the selector consumption here guarantees draw, measure and glyph-cache
+// paths agree on astral code points and never render VS15/VS16 as tofu.
+static bool TVPReadTextCodePoint(const tjs_char *text, tjs_size length,
+                                 tjs_size &index, tjs_uint32 &codepoint,
+                                 tjs_int &presentation) {
+    presentation = TVP_EMOJI_PRESENTATION_DEFAULT;
+    if(index >= length)
+        return false;
+    tjs_size consumed = 0;
+    if(!TVPReadUtf16CodePoint(text + index, length - index, codepoint,
+                              consumed) || consumed == 0)
+        return false;
+    index += consumed;
+    if(index < length && text[index] == TVP_EMOJI_VS15) {
+        presentation = TVP_EMOJI_PRESENTATION_TEXT;
+        ++index;
+    } else if(index < length && text[index] == TVP_EMOJI_VS16) {
+        presentation = TVP_EMOJI_PRESENTATION_EMOJI;
+        ++index;
+    }
+    return true;
+}
 
 static iTVPTexture2D *_CharacterTexture = nullptr,
                      *_CharacterTextureRGBA = nullptr;
@@ -871,6 +960,58 @@ bool tTVPNativeBaseBitmap::InternalBlendText(tTVPCharacterData *data,
     tjs_int w = drect.right - drect.left;
     tjs_uint8 *bp = data->GetData() + pitch * srect.top;
 
+    // Color glyphs already contain their final RGB values.  The historical
+    // grayscale path applies the requested text color through ApplyColorMap,
+    // which would turn an RGBA emoji bitmap into a solid monochrome mask.  Use
+    // the matching TVPAlphaBlend family for software targets and preserve the
+    // existing opacity/additive-alpha semantics.
+    if(data->FullColored && TVPIsSoftwareRenderManager()) {
+        if(Is8BPP())
+            TVPThrowExceptionMessage(TVPInvalidOperationFor8BPP);
+        auto *dst = static_cast<tjs_uint8 *>(GetScanLineForWrite(drect.top)) +
+            static_cast<size_t>(drect.left) * 4;
+        const auto *src = data->GetData() + pitch * srect.top +
+            static_cast<size_t>(srect.left) * 4;
+        for(tjs_int row = 0; row < h; ++row) {
+            auto *dst32 = reinterpret_cast<tjs_uint32 *>(dst);
+            const auto *src32 = reinterpret_cast<const tjs_uint32 *>(src);
+            if(dtdata->bltmode == bmAlphaOnAlpha) {
+                if(dtdata->opa == 255)
+                    TVPAlphaBlend_d(dst32, src32, w);
+                else if(dtdata->opa > 0)
+                    TVPAlphaBlend_do(dst32, src32, w, dtdata->opa);
+            } else if(dtdata->bltmode == bmAlphaOnAddAlpha) {
+                if(dtdata->opa == 255)
+                    TVPAlphaBlend_a(dst32, src32, w);
+                else if(dtdata->opa > 0)
+                    TVPAlphaBlend_ao(dst32, src32, w, dtdata->opa);
+            } else if(dtdata->bltmode == bmAlpha) {
+                if(dtdata->opa == 255) {
+                    if(dtdata->holdalpha)
+                        TVPAlphaBlend_HDA(dst32, src32, w);
+                    else
+                        TVPAlphaBlend(dst32, src32, w);
+                } else if(dtdata->opa > 0) {
+                    if(dtdata->holdalpha)
+                        TVPAlphaBlend_HDA_o(dst32, src32, w, dtdata->opa);
+                    else
+                        TVPAlphaBlend_o(dst32, src32, w, dtdata->opa);
+                }
+            } else {
+                // For the remaining legacy blend modes a color glyph is an
+                // alpha-bearing source; AlphaBlend is the closest defined
+                // operation and, importantly, does not tint its RGB channels.
+                if(dtdata->opa == 255)
+                    TVPAlphaBlend_d(dst32, src32, w);
+                else if(dtdata->opa > 0)
+                    TVPAlphaBlend_do(dst32, src32, w, dtdata->opa);
+            }
+            dst += dtdata->bmppitch;
+            src += pitch;
+        }
+        return true;
+    }
+
     iTVPRenderMethod *method = nullptr;
     int opa_id, clr_id;
 #define GEMTHOD_OPA_CLR(n)                                                     \
@@ -887,17 +1028,76 @@ bool tTVPNativeBaseBitmap::InternalBlendText(tTVPCharacterData *data,
             "ogl_accurate_render", false);
 
     iTVPTexture2D *pTexSrc;
-    if(fastGPURoute && dtdata->bltmode == bmAlphaOnAlpha && dtdata->opa > 0) {
+    if(data->FullColored && !TVPIsSoftwareRenderManager()) {
+        if(dtdata->bltmode == bmAlphaOnAlpha && dtdata->opa <= 0)
+            return true;
+
+        // Upload the straight-alpha RGBA glyph without applying the script
+        // color.  AlphaBlend_d/a then handles destination alpha in the same
+        // way as the software branch above.
+        tTVPBitmap *tmp = new tTVPBitmap(w, h, 32);
+        const tjs_int dpitch = tmp->GetPitch();
+        auto *dst = const_cast<tjs_uint8 *>(
+            static_cast<const tjs_uint8 *>(tmp->GetBits()));
+        const auto *src = data->GetData() + pitch * srect.top +
+            static_cast<size_t>(srect.left) * 4;
+        for(tjs_int y = 0; y < h; ++y) {
+            std::memcpy(dst + static_cast<size_t>(y) * dpitch,
+                        src + static_cast<size_t>(y) * pitch,
+                        static_cast<size_t>(w) * 4);
+        }
+
+        if(_CharacterTextureRGBA) {
+            if(_CharacterTextureRGBA->GetFormat() != TVPTextureFormat::RGBA) {
+                _CharacterTextureRGBA->Release();
+                _CharacterTextureRGBA = nullptr;
+            }
+        }
+        const tjs_int texturew = std::max(w, TVPTextScratchTextureMinSize());
+        const tjs_int textureh = std::max(h, TVPTextScratchTextureMinSize());
+        if(!_CharacterTextureRGBA) {
+            _CharacterTextureRGBA = GetRenderManager()->CreateTexture2D(
+                nullptr, 0, texturew, textureh, TVPTextureFormat::RGBA,
+                RENDER_CREATE_TEXTURE_FLAG_NO_COMPRESS);
+        } else if(_CharacterTextureRGBA->GetInternalWidth() < w ||
+                  _CharacterTextureRGBA->GetInternalHeight() < h) {
+            _CharacterTextureRGBA->Release();
+            _CharacterTextureRGBA = GetRenderManager()->CreateTexture2D(
+                nullptr, 0, texturew, textureh, TVPTextureFormat::RGBA,
+                RENDER_CREATE_TEXTURE_FLAG_NO_COMPRESS);
+        }
+        if(_CharacterTextureRGBA) {
+            _CharacterTextureRGBA->Update(tmp->GetBits(),
+                                          TVPTextureFormat::RGBA, dpitch,
+                                          tTVPRect(0, 0, w, h));
+        }
+        tmp->Release();
+        if(!_CharacterTextureRGBA)
+            return false;
+
+        const char *methodName = dtdata->bltmode == bmAlphaOnAddAlpha
+            ? "AlphaBlend_a" : "AlphaBlend_d";
+        method = TVPGetRenderManager()->GetRenderMethod(methodName);
+        opa_id = method->EnumParameterID("opacity");
+        method->SetParameterOpa(opa_id, std::max(0, dtdata->opa));
+        pTexSrc = _CharacterTextureRGBA;
+    } else if(fastGPURoute && dtdata->bltmode == bmAlphaOnAlpha && dtdata->opa > 0) {
         // convert to addalpha bitmap
         tTVPBitmap *tmp = new tTVPBitmap(w, h, 32);
         tjs_int spitch = pitch;
         tjs_int dpitch = tmp->GetPitch();
-        tjs_uint8 *src = bp;
+        tjs_uint8 *src = bp +
+            static_cast<size_t>(srect.left) * (data->FullColored ? 4 : 1);
         tjs_uint8 *dst = (tjs_uint8 *)tmp->GetBits();
         for(tjs_int y = 0; y < h; ++y) {
             for(tjs_int x = 0; x < w; ++x) {
-                TVPWriteTextScratchPixel(((tjs_uint32 *)dst)[x], color,
-                                         src[x]);
+                if(data->FullColored) {
+                    reinterpret_cast<tjs_uint32 *>(dst)[x] =
+                        reinterpret_cast<const tjs_uint32 *>(src)[x];
+                } else {
+                    TVPWriteTextScratchPixel(((tjs_uint32 *)dst)[x], color,
+                                             src[x]);
+                }
             }
             dst += dpitch;
             src += spitch;
@@ -1018,6 +1218,11 @@ bool tTVPNativeBaseBitmap::InternalBlendTextVerticalGradient(
     tTVPCharacterData *data, tTVPDrawTextData *dtdata, tjs_uint32 topcolor,
     tjs_uint32 bottomcolor, const tTVPRect &srect, tTVPRect &drect,
     tjs_int gradientTop, tjs_int gradientHeight) {
+    // Color glyphs carry their own RGB channels; a text-color gradient is a
+    // mask operation and must not flatten them.  Preserve the color bitmap
+    // and use the normal alpha blend contract.
+    if(data->FullColored)
+        return InternalBlendText(data, dtdata, bottomcolor, srect, drect);
     if(dtdata->bltmode != bmAlphaOnAlpha || dtdata->opa <= 0)
         return InternalBlendText(data, dtdata, bottomcolor, srect, drect);
 
@@ -1280,8 +1485,7 @@ void tTVPNativeBaseBitmap::DrawGlyph(
         if(shlevel != 0) {
             if(shlevel == 255 && shwidth == 0) {
                 // normal shadow
-                shadow = data;
-                shadow->AddRef();
+                shadow = TVPCreateTextShadowData(data);
             } else {
                 // blured shadow
                 shadow = new tTVPCharacterData(
@@ -1295,8 +1499,12 @@ void tTVPNativeBaseBitmap::DrawGlyph(
                 shadow->BlurWidth = shwidth;
                 shadow->BlurLevel = shlevel;
                 shadow->Gray = numcolor;
-                if(!shadow->FullColored)
-                    shadow->Blur();
+                if(shadow->FullColored) {
+                    tTVPCharacterData *mask = shadow->CreateAlphaMask();
+                    shadow->Release();
+                    shadow = mask;
+                }
+                shadow->Blur();
             }
         }
 
@@ -1468,7 +1676,8 @@ void tTVPNativeBaseBitmap::DrawTextSingle(
 
     ApplyFont();
 
-    const tjs_char *p = text.c_str();
+    if(text.IsEmpty())
+        return;
     tTVPDrawTextData dtdata;
     dtdata.rect = destrect;
     dtdata.bmppitch = GetPitchBytes();
@@ -1484,7 +1693,12 @@ void tTVPNativeBaseBitmap::DrawTextSingle(
     font.BlurWidth = shwidth;
     font.FontHash = FontHash;
 
-    font.Character = *p;
+    tjs_size text_index = 0;
+    tjs_uint32 codepoint = 0;
+    if(!TVPReadTextCodePoint(text.c_str(), text.length(), text_index,
+                             codepoint, font.EmojiPresentation))
+        return;
+    font.Character = codepoint;
 
     font.Blured = false;
     tTVPCharacterData *shadow = nullptr;
@@ -1497,8 +1711,7 @@ void tTVPNativeBaseBitmap::DrawTextSingle(
         if(shlevel != 0) {
             if(shlevel == 255 && shwidth == 0) {
                 // normal shadow
-                shadow = data;
-                shadow->AddRef();
+                shadow = TVPCreateTextShadowData(data);
             } else {
                 // blured shadow
                 font.Blured = true;
@@ -1678,10 +1891,15 @@ void tTVPNativeBaseBitmap::DrawTextVerticalGradient(
     font.Blured = false;
 
     const tjs_char *p = text.c_str();
-    const tjs_int len = text.GetLen();
+    const tjs_size len = text.length();
+    tjs_size text_index = 0;
     tjs_int cursorX = x;
-    for(tjs_int i = 0; i < len; ++i) {
-        font.Character = p[i];
+    while(text_index < len) {
+        tjs_uint32 codepoint = 0;
+        if(!TVPReadTextCodePoint(p, len, text_index, codepoint,
+                                 font.EmojiPresentation))
+            break;
+        font.Character = codepoint;
         tTVPCharacterData *data =
             TVPGetCharacter(font, this, PrerenderedFont, AscentOfsX, AscentOfsY);
         try {
@@ -1814,6 +2032,36 @@ void tTVPNativeBaseBitmap::FlushPendingTextDraws() {
                 drawdata.push_back(tTVPCharacterDrawData(
                     pending.Data, pending.Shadow, pending.X, pending.Y));
                 drawrects.push_back(pending.DestRect);
+            }
+
+            // The scratch batch is intentionally a one-channel mask.  A
+            // queued color glyph must therefore take the regular per-glyph
+            // path; otherwise the batching upload would flatten its RGB
+            // pixels to the requested script color.  This branch is rare
+            // (only embedded color fonts/emoji) and keeps the legacy fast
+            // batch untouched for ordinary text.
+            const bool hasFullColoredGlyph = std::any_of(
+                drawdata.begin(), drawdata.end(),
+                [](const tTVPCharacterDrawData &draw) {
+                    return (draw.Data && draw.Data->FullColored) ||
+                        (draw.Shadow && draw.Shadow->FullColored);
+                });
+            if(hasFullColoredGlyph) {
+                for(auto &draw : drawdata) {
+                    tTVPRect shadowRect;
+                    if(key.ShLevel != 0 && draw.Shadow)
+                        InternalDrawText(draw.Shadow,
+                                         draw.X + key.ShOfsX,
+                                         draw.Y + key.ShOfsY,
+                                         key.ShadowColor, &dtdata, shadowRect);
+                    if(draw.Data) {
+                        tTVPRect mainRect;
+                        InternalDrawText(draw.Data, draw.X, draw.Y,
+                                         key.Color, &dtdata, mainRect);
+                    }
+                }
+                begin = end;
+                continue;
             }
 
             struct tTVPTextBatchGlyph {
@@ -2026,6 +2274,8 @@ void tTVPNativeBaseBitmap::DrawTextMultiple(
     ApplyFont();
 
     const tjs_char *p = text.c_str();
+    const tjs_size text_length = text.length();
+    tjs_size text_index = 0;
     tTVPDrawTextData dtdata;
     dtdata.rect = destrect;
     dtdata.bmppitch = GetPitchBytes();
@@ -2045,9 +2295,10 @@ void tTVPNativeBaseBitmap::DrawTextMultiple(
     drawdata.reserve(text.GetLen());
 
     // prepare all drawn characters
-    while(*p) // while input string is remaining
-    {
-        font.Character = *p;
+    while(text_index < text_length) {
+        if(!TVPReadTextCodePoint(p, text_length, text_index,
+                                 font.Character, font.EmojiPresentation))
+            break;
 
         font.Blured = false;
         tTVPCharacterData *data = nullptr;
@@ -2061,8 +2312,7 @@ void tTVPNativeBaseBitmap::DrawTextMultiple(
                     if(shlevel == 255 && shwidth == 0) {
                         // normal shadow
                         // shadow is the same as main character data
-                        shadow = data;
-                        shadow->AddRef();
+                        shadow = TVPCreateTextShadowData(data);
                     } else {
                         // blured shadow
                         font.Blured = true;
@@ -2104,10 +2354,15 @@ void tTVPNativeBaseBitmap::DrawTextMultiple(
     if(shadow)
         shadow->Release();
 
-        p++;
     }
 
-    const bool batchGPURoute = !TVPIsSoftwareRenderManager() &&
+    const bool hasFullColoredGlyph = std::any_of(
+        drawdata.begin(), drawdata.end(), [](const tTVPCharacterDrawData &draw) {
+            return (draw.Data && draw.Data->FullColored) ||
+                (draw.Shadow && draw.Shadow->FullColored);
+        });
+    const bool batchGPURoute = !hasFullColoredGlyph &&
+        !TVPIsSoftwareRenderManager() &&
         !IndividualConfigManager::GetInstance()->GetValue<bool>(
             "ogl_accurate_render", false) &&
         bltmode == bmAlphaOnAlpha && opa > 0 && !drawdata.empty();
@@ -2423,29 +2678,40 @@ void tTVPNativeBaseBitmap::GetTextSize(const ttstr &text) {
         if(PrerenderedFont) {
             tjs_uint width = 0;
             const tjs_char *buf = text.c_str();
-            while(*buf) {
+            const tjs_size len = text.length();
+            tjs_size index = 0;
+            while(index < len) {
+                tjs_uint32 codepoint = 0;
+                tjs_int presentation = TVP_EMOJI_PRESENTATION_DEFAULT;
+                if(!TVPReadTextCodePoint(buf, len, index, codepoint,
+                                         presentation))
+                    break;
                 const tTVPPrerenderedCharacterItem *item =
-                    PrerenderedFont->Find(*buf);
+                    PrerenderedFont->Find(codepoint);
                 if(item != nullptr) {
                     width += item->Inc;
                 } else {
                     tjs_int w, h;
-                    GetCurrentRasterizer()->GetTextExtent(*buf, w, h);
+                    GetCurrentRasterizer()->GetTextExtent(codepoint, w, h);
                     width += w;
                 }
-                buf++;
             }
             TextWidth = width;
             TextHeight = std::abs(Font.Height);
         } else {
             tjs_uint width = 0;
             const tjs_char *buf = text.c_str();
-
-            while(*buf) {
+            const tjs_size len = text.length();
+            tjs_size index = 0;
+            while(index < len) {
+                tjs_uint32 codepoint = 0;
+                tjs_int presentation = TVP_EMOJI_PRESENTATION_DEFAULT;
+                if(!TVPReadTextCodePoint(buf, len, index, codepoint,
+                                         presentation))
+                    break;
                 tjs_int w, h;
-                GetCurrentRasterizer()->GetTextExtent(*buf, w, h);
+                GetCurrentRasterizer()->GetTextExtent(codepoint, w, h);
                 width += w;
-                buf++;
             }
             TextWidth = width;
             TextHeight = std::abs(Font.Height);
@@ -2465,13 +2731,16 @@ void tTVPNativeBaseBitmap::GetTextSize(const ttstr &text) {
         font.BlurWidth = 0;
         font.FontHash = FontHash;
         const tjs_char *buf = text.c_str();
-        while(*buf) {
-            font.Character = *buf;
+        const tjs_size len = text.length();
+        tjs_size index = 0;
+        while(index < len) {
+            if(!TVPReadTextCodePoint(buf, len, index, font.Character,
+                                     font.EmojiPresentation))
+                break;
             tTVPCharacterData *data = TVPGetCharacter(
                 font, this, PrerenderedFont, AscentOfsX, AscentOfsY);
             if(data)
                 data->Release();
-            buf++;
         }
 #endif
     }

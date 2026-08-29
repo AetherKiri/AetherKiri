@@ -15,6 +15,7 @@
 #include "tjsHashSearch.h"
 #include "tjsInterCodeGen.h"
 #include "tjsGlobalStringMap.h"
+#include "tjsScriptBlock.h"
 
 namespace TJS {
 
@@ -657,6 +658,57 @@ namespace TJS {
 
             return ret;
         }
+
+        void GetFrames(std::vector<TJSStackFrame> &out) {
+            out.clear();
+#if defined(_DEBUG) || defined(KRKRZ_ENABLE_DAP)
+            // Walk from the active frame toward its caller.  Try/catch
+            // helper contexts are implementation details and would appear
+            // as duplicate frames in a debugger, so omit them just like the
+            // upstream stack-string formatter does.
+            for(tjs_int top = static_cast<tjs_int>(Stack.size()) - 1;
+                top >= 0; --top) {
+                const tTJSStackRecord &rec = Stack[static_cast<size_t>(top)];
+                if(rec.InTry || !rec.Context)
+                    continue;
+
+                TJSStackFrame frame;
+                frame.ctx = rec.Context;
+                if(auto *block = rec.Context->GetBlock()) {
+                    if(const tjs_char *name = block->GetName())
+                        frame.filename = tjs_string(name);
+                }
+
+                ttstr class_name = rec.Context->GetClassName();
+                const tjs_char *func_name = rec.Context->GetName();
+                ttstr display;
+                if(!class_name.IsEmpty()) {
+                    display = class_name + ttstr(TJS_W("."));
+                    display += func_name ? ttstr(func_name)
+                                         : ttstr(TJS_W("(anon)"));
+                } else if(func_name) {
+                    display = ttstr(func_name);
+                } else {
+                    display = ttstr(TJS_W("(top)"));
+                }
+                frame.funcname = display.AsUtf16String();
+
+                if(rec.CodeBase && rec.CodePtr) {
+                    const tjs_int offset = static_cast<tjs_int>(
+                        *rec.CodePtr - rec.CodeBase);
+                    if(offset >= 0) {
+                        const tjs_int source_pos =
+                            rec.Context->CodePosToSrcPos(offset);
+                        if(source_pos >= 0 && rec.Context->GetBlock()) {
+                            frame.line = rec.Context->GetBlock()->SrcPosToLine(
+                                              source_pos) + 1;
+                        }
+                    }
+                }
+                out.push_back(std::move(frame));
+            }
+#endif
+        }
     };
 
     //---------------------------------------------------------------------------
@@ -690,6 +742,13 @@ namespace TJS {
             return TJSStackTracer->GetTraceString(limit, delimiter);
         else
             return {};
+    }
+
+    void TJSGetStackTraceFrames(std::vector<TJSStackFrame> &out) {
+        if(TJSStackTracer)
+            TJSStackTracer->GetFrames(out);
+        else
+            out.clear();
     }
 
 } // namespace TJS

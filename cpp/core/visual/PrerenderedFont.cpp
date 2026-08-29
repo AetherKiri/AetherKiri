@@ -111,6 +111,13 @@ const tTVPPrerenderedCharacterItem *tTVPPrerenderedFont::Find(tjs_char ch) {
             s = m;
     }
 }
+
+const tTVPPrerenderedCharacterItem *
+tTVPPrerenderedFont::Find(tjs_uint32 codepoint) {
+    if(codepoint > 0xFFFFu)
+        return nullptr;
+    return Find(static_cast<tjs_char>(codepoint));
+}
 //---------------------------------------------------------------------------
 void tTVPPrerenderedFont::Retrieve(const tTVPPrerenderedCharacterItem *item,
                                    tjs_uint8 *buffer, tjs_int bufferpitch) {

@@ -1,7 +1,7 @@
 #include "CharacterSet.h"
 #include "StorageIntf.h"
 #include "ncbind.hpp"
-#include "sqlite/sqlite3.h"
+#include <sqlite3.h>
 
 #include <algorithm>
 #include <chrono>

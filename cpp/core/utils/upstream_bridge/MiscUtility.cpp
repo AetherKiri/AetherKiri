@@ -3,7 +3,7 @@
 // krkrz names the string typedef `tjs_string`; Aether exposes the equivalent
 // TJS string as `ttstr`.  The narrow macro adaptation is confined to this
 // bridge, while CharacterSet and all public symbols remain Aether-owned.
-#include "tjsCommHead.h"
+#include "../../tjs2/tjsCommHead.h"
 
 #include "../CharacterSet.h"
 

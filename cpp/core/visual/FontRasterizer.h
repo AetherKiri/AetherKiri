@@ -14,6 +14,14 @@ public:
     virtual void ApplyFont(class tTVPNativeBaseBitmap *bmp, bool force) = 0;
     virtual void ApplyFont(const struct tTVPFont &font) = 0;
     virtual void GetTextExtent(tjs_char ch, tjs_int &w, tjs_int &h) = 0;
+    // Code-point overload used by Unicode-aware layout.  Keeping the legacy
+    // UTF-16-unit virtual intact preserves third-party/GDI rasterizer ABI;
+    // implementations that do not support supplementary planes naturally
+    // fall back to the old one-unit query.
+    virtual void GetTextExtent(tjs_uint32 codepoint, tjs_int &w,
+                               tjs_int &h) {
+        GetTextExtent(static_cast<tjs_char>(codepoint), w, h);
+    }
     virtual tjs_int GetAscentHeight() = 0;
     virtual class tTVPCharacterData *
     GetBitmap(const struct tTVPFontAndCharacterData &font, tjs_int aofsx,

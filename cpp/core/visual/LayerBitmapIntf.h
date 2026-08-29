@@ -132,6 +132,15 @@ struct t2DAffineMatrix {
 extern tTVPGLGammaAdjustData TVPIntactGammaAdjustData;
 extern tjs_int TVPDrawThreadNum;
 extern tjs_int TVPGetProcessorNum();
+
+// Shared emoji policy.  The registry and cache remain Aether-owned; these
+// functions only expose the krkrz-compatible script contract to rasterizers
+// and adapters.
+extern void TVPSetDefaultEmojiMode(tjs_int mode);
+extern tjs_int TVPGetDefaultEmojiMode();
+extern tjs_int TVPResolveEmojiMode(tjs_int fontmode);
+extern const tjs_char *TVPGetEmojiFaceName(tjs_int mode);
+extern void TVPSetEmojiFaceName(tjs_int mode, const tjs_char *name);
 //---------------------------------------------------------------------------
 
 //---------------------------------------------------------------------------

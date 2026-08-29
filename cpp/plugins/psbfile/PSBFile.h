@@ -1,8 +1,11 @@
 #pragma once
 
+#include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -96,14 +99,39 @@ namespace PSB {
         }
 
         [[nodiscard]] PSBSpec getPlatform() const {
-            auto spec = (*getObjects())["spec"];
-            std::string specStr = !spec ? "" : spec->toString();
-            if(specStr.empty()) {
+            const auto objects = getObjects();
+            if(!objects) {
                 return PSBSpec::None;
             }
-
-            // auto p = static_cast<PSBSpec>(spec);
-            return /*p ? p : */ PSBSpec::Other;
+            const auto spec = (*objects)["spec"];
+            if(!spec) {
+                return PSBSpec::None;
+            }
+            std::string value;
+            try {
+                value = spec->toString();
+            } catch(...) {
+                return PSBSpec::Other;
+            }
+            std::transform(value.begin(), value.end(), value.begin(),
+                           [](const unsigned char ch) {
+                               return static_cast<char>(std::tolower(ch));
+                           });
+            if(value.empty() || value == "none") return PSBSpec::None;
+            if(value == "common") return PSBSpec::Common;
+            if(value == "krkr" || value == "kirikiri") return PSBSpec::Krkr;
+            if(value == "win" || value == "windows") return PSBSpec::Win;
+            if(value == "ems" || value == "webgl") return PSBSpec::Ems;
+            if(value == "psp") return PSBSpec::PSP;
+            if(value == "vita" || value == "psvita") return PSBSpec::Vita;
+            if(value == "ps3") return PSBSpec::PS3;
+            if(value == "ps4") return PSBSpec::PS4;
+            if(value == "nx" || value == "switch") return PSBSpec::NX;
+            if(value == "citra" || value == "3ds") return PSBSpec::Citra;
+            if(value == "and" || value == "android") return PSBSpec::And;
+            if(value == "x360" || value == "xbox360") return PSBSpec::X360;
+            if(value == "revo" || value == "wii") return PSBSpec::Revo;
+            return PSBSpec::Other;
         }
 
         [[nodiscard]] IPSBType *getTypeHandler() const {
@@ -135,13 +163,27 @@ namespace PSB {
         PSBType _type{ PSBType::PSB };
 
         PSBType inferType() {
-            for(const auto &[type, handler] : TypeHandlers) {
-                if(handler->isThisType(*this)) {
+            // Keep the same precedence as FreeMote's format discriminator.
+            // A tachie/image PSB can contain fields that also look like a
+            // generic motion tree; relying on map iteration made the result
+            // depend on registration order and produced different aliases.
+            constexpr PSBType kOrder[] = {
+                PSBType::Pimg,
+                PSBType::Scn,
+                PSBType::Mmo,
+                PSBType::Tachie,
+                PSBType::ArchiveInfo,
+                PSBType::SoundArchive,
+                PSBType::Motion,
+            };
+            for(const auto type : kOrder) {
+                const auto it = TypeHandlers.find(type);
+                if(it != TypeHandlers.end() && it->second->isThisType(*this)) {
                     this->_type = type;
-                    break;
+                    return this->_type;
                 }
             }
-
+            this->_type = PSBType::PSB;
             return this->_type;
         }
     };

@@ -7,6 +7,8 @@ add_executable(tjs2-missing
     variant-array-stack.cpp
     main.cpp
     stubs.cpp
+    $<$<BOOL:${AETHERKIRI_DAP_ENABLED}>:${CMAKE_CURRENT_SOURCE_DIR}/dap_host_stubs.cpp>
+    $<$<BOOL:${AETHERKIRI_DAP_ENABLED}>:${CMAKE_SOURCE_DIR}/cpp/core/base/CharacterSet.cpp>
     ${KRKR2CORE_PATH}/plugin/PluginCallTracer.cpp
 )
 
@@ -38,5 +40,13 @@ foreach(_aether_krkrz_tjs_file IN LISTS _AETHER_KRKRZ_TJS_TEST_FILES)
 endforeach()
 target_compile_definitions(tjs2-missing PRIVATE
     AETHER_KRKRZ_TJS2_TEST_ROOT="${_AETHER_KRKRZ_TJS2_TEST_ROOT}")
+
+if(AETHERKIRI_DAP_ENABLED)
+    target_include_directories(tjs2-missing PRIVATE
+        "${CMAKE_SOURCE_DIR}/cpp/core/base"
+        "${CMAKE_SOURCE_DIR}/cpp/core/base/impl"
+        "${CMAKE_SOURCE_DIR}/cpp/core/utils"
+        "${CMAKE_SOURCE_DIR}/cpp/core/utils/win32")
+endif()
 
 catch_discover_tests(tjs2-missing)

@@ -58,7 +58,11 @@ env:
   # checked-in krkrz adapters, optional-source validation, and native parity
   # tests cannot silently disappear because a preset chose a local default.
   AETHERKIRI_ENABLE_ONSCRIPTER: 'ON'
+  AETHERKIRI_ENABLE_DAP: 'ON'
+  AETHERKIRI_ENABLE_FONT_SHAPING: 'ON'
+  AETHERKIRI_ENABLE_RICHTEXT: 'ON'
   AETHER_USE_KRKRZ_OPTIONAL_PLUGINS: 'ON'
+  AETHERKIRI_ENABLE_CLIPFILE: 'ON'
   AETHER_BUILD_KRKRZ_CORE_PARITY: 'ON'
   # krkrz_dev currently uses master as its release/development head. The
   # helper verifies that the reviewed gitlink is exactly this latest revision.
@@ -840,6 +844,7 @@ jobs:
             -D VCPKG_MANIFEST_INSTALL=OFF \
             -D VCPKG_INSTALLED_DIR="${GITHUB_WORKSPACE}/out/macos-x64/debug/vcpkg_installed" \
             -D AETHERKIRI_ENABLE_ONSCRIPTER=ON \
+            -D AETHERKIRI_ENABLE_RICHTEXT=ON \
             -D AETHER_USE_KRKRZ_OPTIONAL_PLUGINS=ON \
             -D AETHER_BUILD_KRKRZ_CORE_PARITY=ON \
             -D CMAKE_C_COMPILER_LAUNCHER=ccache \
@@ -853,6 +858,7 @@ jobs:
           fi
           grep -F "krkrz_dev optional plugin sources validated" "$configure_log"
           grep -F "AETHERKIRI_ENABLE_ONSCRIPTER:BOOL=ON" "$test_build_dir/CMakeCache.txt"
+          grep -F "AETHERKIRI_ENABLE_RICHTEXT:BOOL=ON" "$test_build_dir/CMakeCache.txt"
           grep -F "AETHER_USE_KRKRZ_OPTIONAL_PLUGINS:BOOL=ON" "$test_build_dir/CMakeCache.txt"
           grep -F "AETHER_BUILD_KRKRZ_CORE_PARITY:BOOL=ON" "$test_build_dir/CMakeCache.txt"
 

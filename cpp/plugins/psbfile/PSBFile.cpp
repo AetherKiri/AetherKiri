@@ -11,6 +11,7 @@
 #endif
 #include <iostream>
 #include <memory>
+#include <stdexcept>
 #include <vector>
 #include <zlib.h>
 
@@ -202,6 +203,12 @@ namespace PSB {
                 ContainsUtf16LeAscii(data + 2, size - 2,
                                      "_extra_binary_file_");
         }
+
+        bool IsStreamRangeValid(const std::uint64_t base,
+                                const std::uint64_t relative,
+                                const std::uint64_t size) {
+            return base <= size && relative <= size - base;
+        }
     } // namespace
 
     void PSBFile::resetState() {
@@ -229,26 +236,53 @@ namespace PSB {
     }
 
     void PSBFile::loadKeys(TJS::tTJSBinaryStream *stream) {
+        if(stream == nullptr || _header.offsetNames > stream->GetSize()) {
+            throw std::runtime_error("PSB name table is outside the stream");
+        }
         const size_t len = nameIndexes.value.size();
+        names.clear();
         names.reserve(len);
-        for(int i = 0; i < len; i++) {
-            stream->SetPosition(_header.offsetNames + nameIndexes[i]);
+        const auto streamSize = stream->GetSize();
+        for(size_t i = 0; i < len; i++) {
+            const auto relative = static_cast<std::uint64_t>(nameIndexes[i]);
+            if(!IsStreamRangeValid(_header.offsetNames, relative,
+                                   streamSize)) {
+                throw std::runtime_error("PSB name index is outside the stream");
+            }
+            stream->SetPosition(static_cast<std::uint64_t>(_header.offsetNames) +
+                                relative);
             names.push_back(PSB::Extension::readStringZeroTrim(stream));
         }
     }
 
     void PSBFile::loadNames() {
         const size_t len = nameIndexes.value.size();
+        names.clear();
         names.reserve(len);
-        for(int i = 0; i < len; i++) {
+        for(size_t i = 0; i < len; i++) {
             std::string codepoints;
             const auto index = nameIndexes[i];
-            auto chr = namesData[index];
+            if(index >= namesData.value.size()) {
+                throw std::runtime_error("PSB name index is outside namesData");
+            }
+            auto chr = namesData[static_cast<int>(index)];
+            size_t steps = 0;
             while(chr != u'\0') {
-                const auto code = namesData[chr];
-                const auto d = charset[code];
-                const auto realChr = chr - d;
-                codepoints.push_back(realChr);
+                if(++steps > namesData.value.size()) {
+                    throw std::runtime_error("PSB name chain is cyclic");
+                }
+                if(chr >= namesData.value.size()) {
+                    throw std::runtime_error("PSB name chain index is invalid");
+                }
+                const auto code = namesData[static_cast<int>(chr)];
+                if(code >= charset.value.size()) {
+                    throw std::runtime_error("PSB name charset index is invalid");
+                }
+                const auto d = charset[static_cast<int>(code)];
+                if(d > chr || chr - d > 0xff) {
+                    throw std::runtime_error("PSB name character value is invalid");
+                }
+                codepoints.push_back(static_cast<char>(chr - d));
 
                 chr = code;
             }
@@ -260,14 +294,28 @@ namespace PSB {
 
     void PSBFile::loadString(std::unique_ptr<PSB::PSBString> &str,
                              TJS::tTJSBinaryStream *stream) {
-        assert(str->index.has_value() && "Index can not be null");
+        if(!str || !str->index.has_value() || stream == nullptr) {
+            throw std::runtime_error("PSB string index is invalid");
+        }
         auto idx = str->index;
+        if(idx.value() >= stringOffsets.value.size()) {
+            throw std::runtime_error("PSB string index is outside offsets");
+        }
+        if(_header.offsetStringsData > stream->GetSize()) {
+            throw std::runtime_error("PSB string data table is outside stream");
+        }
+        const auto relative = static_cast<std::uint64_t>(stringOffsets[
+            static_cast<int>(idx.value())]);
+        if(!IsStreamRangeValid(_header.offsetStringsData, relative,
+                               stream->GetSize())) {
+            throw std::runtime_error("PSB string offset is outside stream");
+        }
         const auto refStr = std::find_if(
             strings.begin(), strings.end(),
             [idx](const PSB::PSBString &s) { return s.index == idx; });
 
-        stream->SetPosition(_header.offsetStringsData +
-                            stringOffsets[static_cast<int>(idx.value())]);
+        stream->SetPosition(static_cast<std::uint64_t>(_header.offsetStringsData) +
+                            relative);
         auto strValue = PSB::Extension::readStringZeroTrim(stream);
 
         // Strict value equal check
@@ -298,16 +346,16 @@ namespace PSB {
             maxOffset = *std::max_element(offsets.cbegin(), offsets.cend());
         }
         for(const auto offset : offsets) {
+            if(!IsStreamRangeValid(pos, offset, stream->GetSize())) {
+                throw std::runtime_error("PSB list offset is outside stream");
+            }
             stream->SetPosition(pos + offset);
             auto obj = unpack(stream);
             if(obj != nullptr) {
-                if(typeid(obj.get()) == typeid(PSB::IPSBChild)) {
-                    dynamic_cast<PSB::IPSBChild *>(obj.get())->parent = list;
-                }
-                if(typeid(obj.get()) == typeid(PSB::IPSBSingleton)) {
-                    dynamic_cast<PSB::IPSBSingleton *>(obj.get())
-                        ->parents.push_back(list);
-                }
+                if(auto *child = dynamic_cast<PSB::IPSBChild *>(obj.get()))
+                    child->parent = list;
+                if(auto *singleton = dynamic_cast<PSB::IPSBSingleton *>(obj.get()))
+                    singleton->parents.push_back(list);
 
                 list->push_back(obj);
             }
@@ -354,6 +402,9 @@ namespace PSB {
             std::uint32_t offset = 0;
             if(i < offsets.size()) {
                 offset = offsets[i];
+                if(!IsStreamRangeValid(pos, offset, stream->GetSize())) {
+                    throw std::runtime_error("PSB object offset is outside stream");
+                }
                 stream->SetPosition(pos + offset);
                 obj = unpack(stream, lazyLoad);
             } else {
@@ -399,10 +450,18 @@ namespace PSB {
         auto endPos = pos;
         auto dictionary = std::make_shared<PSBDictionary>(offsets.size());
         for(const auto offset : offsets) {
+            if(!IsStreamRangeValid(pos, offset, stream->GetSize())) {
+                throw std::runtime_error("PSB v1 object offset is outside stream");
+            }
             stream->SetPosition(pos + offset);
             PSBNumber nameIdx(static_cast<PSBObjType>(stream->ReadI8LE()),
                               stream);
-            auto name = PSBFile::names[static_cast<int>(nameIdx)];
+            const auto nameValue = nameIdx.getLongValue();
+            if(nameValue < 0 ||
+               static_cast<std::uint64_t>(nameValue) >= PSBFile::names.size()) {
+                throw std::runtime_error("PSB v1 name index is invalid");
+            }
+            auto name = PSBFile::names[static_cast<size_t>(nameValue)];
             auto obj = unpack(stream, lazyLoad);
             if(obj != nullptr) {
 
@@ -539,7 +598,7 @@ namespace PSB {
     }
 
     bool PSBFile::loadPSBData(const void *data, size_t readSize,
-                              const ttstr &sourceName, bool loadResources) {
+                              const ttstr &sourceName, bool loadResources) try {
         const bool traceLoad = IsPSBLoadDebugEnabled();
         if(traceLoad) {
             LOGGER->info("PSBFile load begin: path={} seed={}",
@@ -793,6 +852,26 @@ namespace PSB {
             return false;
         }
 
+        const auto streamSize = static_cast<std::uint64_t>(stream.GetSize());
+        if(_header.GetHeaderLength() > streamSize ||
+           !IsStreamRangeValid(0, _header.offsetNames, streamSize) ||
+           !IsStreamRangeValid(0, _header.offsetStrings, streamSize) ||
+           !IsStreamRangeValid(0, _header.offsetStringsData, streamSize) ||
+           !IsStreamRangeValid(0, _header.offsetChunkOffsets, streamSize) ||
+           !IsStreamRangeValid(0, _header.offsetChunkLengths, streamSize) ||
+           !IsStreamRangeValid(0, _header.offsetChunkData, streamSize) ||
+           !IsStreamRangeValid(0, _header.offsetEntries, streamSize) ||
+           (_header.version >= 4 &&
+            (!IsStreamRangeValid(0, _header.offsetExtraChunkOffsets,
+                                 streamSize) ||
+             !IsStreamRangeValid(0, _header.offsetExtraChunkLengths,
+                                 streamSize) ||
+             !IsStreamRangeValid(0, _header.offsetExtraChunkData, streamSize)))) {
+            LOGGER->warn("PSB header contains an out-of-range offset ({})",
+                         sourceName.AsStdString());
+            return false;
+        }
+
         auto objectImage = std::make_shared<std::vector<std::uint8_t>>(
             static_cast<const std::uint8_t *>(stream.GetInternalBuffer()),
             static_cast<const std::uint8_t *>(stream.GetInternalBuffer()) +
@@ -923,6 +1002,16 @@ namespace PSB {
                 strings.size(), resources.size(), extraResources.size());
         }
         return true;
+    } catch(const std::exception &error) {
+        resetState();
+        LOGGER->warn("PSB parse failed: {} ({})", error.what(),
+                     sourceName.AsStdString());
+        return false;
+    } catch(...) {
+        resetState();
+        LOGGER->warn("PSB parse failed with an unknown error ({})",
+                     sourceName.AsStdString());
+        return false;
     }
 
     bool PSBFile::loadPSBFile(const ttstr &filePath) {
@@ -991,31 +1080,55 @@ namespace PSB {
 
     void PSBFile::loadResource(PSBResource &res,
                                TJS::tTJSBinaryStream *stream) const {
-        if(!res.index.has_value()) {
+        if(!res.index.has_value() || stream == nullptr) {
             throw std::runtime_error("Resource Index invalid");
         }
 
-        auto index = static_cast<int>(res.index.value());
-        auto offset = chunkOffsets[index];
-        auto length = chunkLengths[index];
+        const auto index = static_cast<size_t>(res.index.value());
+        if(index >= chunkOffsets.value.size() ||
+           index >= chunkLengths.value.size()) {
+            throw std::runtime_error("Resource Index out of range");
+        }
+        const auto offset = static_cast<std::uint64_t>(chunkOffsets[index]);
+        const auto length = static_cast<std::uint64_t>(chunkLengths[index]);
+        const auto dataStart = static_cast<std::uint64_t>(_header.offsetChunkData);
+        const auto streamSize = static_cast<std::uint64_t>(stream->GetSize());
+        if(dataStart > streamSize || offset > streamSize - dataStart ||
+           length > streamSize - dataStart - offset) {
+            throw std::runtime_error("Resource chunk exceeds PSB stream");
+        }
         stream->SetPosition(_header.offsetChunkData + offset);
-        std::vector<std::uint8_t> tmp(length);
-        stream->ReadBuffer(tmp.data(), length);
+        std::vector<std::uint8_t> tmp(static_cast<size_t>(length));
+        if(length > 0) {
+            stream->ReadBuffer(tmp.data(), static_cast<size_t>(length));
+        }
         res.data = std::move(tmp);
     }
 
     void PSBFile::loadExtraResource(PSBResource &res,
                                     TJS::tTJSBinaryStream *stream) const {
-        if(!res.index.has_value()) {
+        if(!res.index.has_value() || stream == nullptr) {
             throw std::runtime_error("Extra Resource Index invalid");
         }
 
-        auto index = static_cast<int>(res.index.value());
-        auto offset = extraChunkOffsets[index];
-        auto length = extraChunkLengths[index];
+        const auto index = static_cast<size_t>(res.index.value());
+        if(index >= extraChunkOffsets.value.size() ||
+           index >= extraChunkLengths.value.size()) {
+            throw std::runtime_error("Extra Resource Index out of range");
+        }
+        const auto offset = static_cast<std::uint64_t>(extraChunkOffsets[index]);
+        const auto length = static_cast<std::uint64_t>(extraChunkLengths[index]);
+        const auto dataStart = static_cast<std::uint64_t>(_header.offsetExtraChunkData);
+        const auto streamSize = static_cast<std::uint64_t>(stream->GetSize());
+        if(dataStart > streamSize || offset > streamSize - dataStart ||
+           length > streamSize - dataStart - offset) {
+            throw std::runtime_error("Extra resource chunk exceeds PSB stream");
+        }
         stream->SetPosition(_header.offsetExtraChunkData + offset);
-        std::vector<std::uint8_t> tmp(length);
-        stream->ReadBuffer(tmp.data(), length);
+        std::vector<std::uint8_t> tmp(static_cast<size_t>(length));
+        if(length > 0) {
+            stream->ReadBuffer(tmp.data(), static_cast<size_t>(length));
+        }
         res.data = std::move(tmp);
     }
 

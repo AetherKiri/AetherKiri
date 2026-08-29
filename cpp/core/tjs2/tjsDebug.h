@@ -14,9 +14,11 @@
 #include "tjs.h"
 #include "tjsString.h"
 
+#include <list>
+#include <vector>
+
 namespace TJS {
 
-#ifdef _DEBUG
     struct ScopeKey {
         int ClassIndex; //!< クラス名インデックス
         int FuncIndex; //!< 関数名インデックス
@@ -62,7 +64,6 @@ namespace TJS {
             }
         }
     };
-#endif // _DEBUG
 
 //---------------------------------------------------------------------------
 // ObjectHashMap : hash map to track object construction/destruction
@@ -150,6 +151,61 @@ namespace TJS {
 
     extern ttstr TJSGetStackTraceString(tjs_int limit = 0,
                                         const tjs_char *delimiter = nullptr);
+
+    // Structured stack frames and variable symbols are consumed by the
+    // krkrz DAP adapter.  The declarations stay in Aether's debug header so
+    // the VM and adapter share one ScopeKey/variant ABI; non-DAP builds simply
+    // return an empty frame/symbol collection.
+    struct TJSStackFrame {
+        tTJSInterCodeContext *ctx = nullptr;
+        tjs_string filename;
+        tjs_string funcname;
+        int line = -1;
+    };
+
+    extern void TJSGetStackTraceFrames(std::vector<TJSStackFrame> &out);
+
+    struct TJSDebuggerVar {
+        tjs_string name;
+        tTJSVariant value;
+    };
+
+    extern void TJSDebuggerGetScopeKey(
+        ScopeKey &scope, const tjs_char *classname, const tjs_char *funcname,
+        const tjs_char *filename, int codeoffset);
+    extern void TJSDebuggerAddLocalVariable(const ScopeKey &key,
+                                            const tjs_char *varname,
+                                            int regaddr);
+    extern void TJSDebuggerAddLocalVariable(
+        const tjs_char *classname, const tjs_char *funcname,
+        const tjs_char *filename, int codeoffset, const tjs_char *varname,
+        int regaddr);
+    extern void TJSDebuggerGetLocalVariables(
+        const ScopeKey &key, tTJSVariant *ra,
+        std::vector<TJSDebuggerVar> &out);
+    extern void TJSDebuggerGetClassVariables(
+        const tjs_char *classname, tTJSVariant *ra, tTJSVariant *da,
+        std::vector<TJSDebuggerVar> &out);
+    extern void TJSDebuggerGetLocalVariableString(
+        const ScopeKey &key, tTJSVariant *ra, std::list<tjs_string> &values);
+    extern void TJSDebuggerGetClassVariableString(
+        const tjs_char *classname, tTJSVariant *ra, tTJSVariant *da,
+        std::list<tjs_string> &values);
+    extern void TJSDebuggerClearLocalVariable(const ScopeKey &key);
+    extern void TJSDebuggerClearLocalVariable(
+        const tjs_char *classname, const tjs_char *funcname,
+        const tjs_char *filename, int codeoffset);
+    extern void TJSDebuggerAddClassVariable(const tjs_char *classname,
+                                            const tjs_char *varname,
+                                            int regaddr);
+
+    // DAP/REPL hook boundary.  The implementation is a source bridge to the
+    // pinned krkrz hook and is a no-op when no client is attached.
+    extern void TJSDebuggerHook(tjs_int evtype, const tjs_char *filename,
+                                tjs_int lineno,
+                                tTJSInterCodeContext *ctx = nullptr,
+                                tTJSVariant *exception = nullptr);
+    extern void TJSDebuggerLog(const ttstr &line, bool important);
 
     static inline bool TJSStackTracerEnabled() {
         return nullptr != TJSStackTracer;

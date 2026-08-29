@@ -127,6 +127,16 @@ namespace TJS {
             return { holder.operator const char *() };
         }
 
+        // Upstream krkrz utility leaves use AsStdString() for the owning
+        // UTF-16 representation, while Aether historically exposes that
+        // name as a UTF-8/narrow diagnostic helper.  Adapters can request the
+        // unambiguous script-string form without changing the existing ABI.
+        [[nodiscard]] tjs_string AsUtf16String() const {
+            if(!Ptr)
+                return {};
+            return tjs_string(Ptr->operator const tjs_char *());
+        }
+
         [[nodiscard]] tTJSVariantString *AsVariantStringNoAddRef() const {
             return Ptr;
         }

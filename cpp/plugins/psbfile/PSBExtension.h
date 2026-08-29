@@ -5,8 +5,9 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <vector>
 #include <cctype>
+#include <stdexcept>
+#include <vector>
 #include "tjs.h"
 
 #include "PSBEnums.h"
@@ -27,25 +28,45 @@ namespace PSB::Extension {
     static void readAndUnzip(TJS::tTJSBinaryStream *stream, std::uint8_t size,
                              std::vector<std::uint8_t> &data,
                              bool usigned = false) {
-        stream->Read(data.data(), size);
+        if(stream == nullptr || size == 0) {
+            data.clear();
+            return;
+        }
+        if(data.size() < size) {
+            data.resize(size);
+        }
+        stream->ReadBuffer(data.data(), size);
 
         std::uint8_t fill = 0x0;
         if(!usigned && data[size - 1] >= 0b10000000) { // negative
             fill = 0xFF;
         }
 
-        for(int i = 0; i < data.size(); i++) {
-            data[i] = i < size ? data[i] : fill;
+        for(size_t i = size; i < data.size(); i++) {
+            data[i] = fill;
         }
     }
 
     static std::string readStringZeroTrim(TJS::tTJSBinaryStream *stream) {
         std::string name;
+        if(stream == nullptr)
+            return name;
+
+        constexpr size_t kMaxStringBytes = 16 * 1024 * 1024;
+        const auto streamSize = stream->GetSize();
+        auto position = stream->GetPosition();
+        if(position > streamSize)
+            throw std::runtime_error("PSB string starts outside stream");
 
         while(true) {
             constexpr size_t CHUNK_SIZE = 256;
             char temp[CHUNK_SIZE]; // default encoding: UTF-8
-            const size_t bytes_read = stream->Read(temp, CHUNK_SIZE);
+            const auto remaining = streamSize - position;
+            if(remaining == 0)
+                break;
+            const auto request = static_cast<tjs_uint>(
+                std::min<std::uint64_t>(remaining, CHUNK_SIZE));
+            const size_t bytes_read = stream->Read(temp, request);
             if(bytes_read == 0)
                 break;
 
@@ -56,7 +77,10 @@ namespace PSB::Extension {
                     return std::move(name);
                 }
             }
+            if(name.size() > kMaxStringBytes - bytes_read)
+                throw std::runtime_error("PSB string exceeds safety limit");
             name.append(temp, bytes_read);
+            position += bytes_read;
         }
 
         return "";

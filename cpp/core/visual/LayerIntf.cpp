@@ -57,6 +57,8 @@
 #include "FontRasterizer.h"
 #include "RectItf.h"
 #include "FontSystem.h"
+#include "FontVariations.h"
+#include "CharacterSet.h"
 #include "tjsDictionary.h"
 #include "ConfigManager/IndividualConfigManager.h"
 #include "vkdefine.h"
@@ -11182,6 +11184,45 @@ void tTJSNI_BaseLayer::SetFontHeight(tjs_int height) {
 //---------------------------------------------------------------------------
 tjs_int tTJSNI_BaseLayer::GetFontHeight() const { return Font.Height; }
 
+void tTJSNI_BaseLayer::SetFontEmojiMode(tjs_int mode) {
+    if(mode != TVP_EMOJI_DEFAULT)
+        mode = std::clamp(mode, static_cast<tjs_int>(TVP_EMOJI_NONE),
+                          static_cast<tjs_int>(TVP_EMOJI_COLOR));
+    if(Font.EmojiMode != mode) {
+        Font.EmojiMode = mode;
+        FontChanged = true;
+    }
+}
+
+tjs_int tTJSNI_BaseLayer::GetFontEmojiMode() const { return Font.EmojiMode; }
+
+void tTJSNI_BaseLayer::SetFontWeight(tjs_int weight) {
+    // Match krkrz's usWeightClass contract: -1 means unspecified; explicit
+    // values are clamped to the OpenType 1..1000 range.
+    if(weight < 0)
+        weight = -1;
+    else
+        weight = std::clamp(weight, 1, 1000);
+    if(Font.Weight != weight) {
+        Font.Weight = weight;
+        FontChanged = true;
+    }
+}
+
+tjs_int tTJSNI_BaseLayer::GetFontWeight() const { return Font.Weight; }
+
+void tTJSNI_BaseLayer::SetFontVariations(const ttstr &variations) {
+    const ttstr normalized = TVPNormalizeFontVariations(variations);
+    if(Font.Variations != normalized) {
+        Font.Variations = normalized;
+        FontChanged = true;
+    }
+}
+
+ttstr tTJSNI_BaseLayer::GetFontVariations() const {
+    return Font.Variations;
+}
+
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::SetFontAngle(tjs_int angle) {
     if(Font.Angle != angle) {
@@ -17666,6 +17707,14 @@ TJS_END_NATIVE_MEMBERS
 //---------------------------------------------------------------------------
 
 extern FontSystem *TVPFontSystem;
+// The rasterizer owns the cache; class-level font policy changes must flush
+// it so a glyph rendered before the change cannot be reused afterwards.
+extern void TVPClearFontCache();
+// Initialise the shared FontSystem/FreeType owner before a Font class is
+// exposed to a script or to an embedding test host.  The historical upstream
+// class constructor performs this eagerly, and doing it here avoids a null
+// owner when Font() is created before the first Layer is realised.
+extern void TVPInializeFontRasterizers();
 
 //---------------------------------------------------------------------------
 // tTJSNI_Font : Font Native Object
@@ -17742,6 +17791,47 @@ tjs_int tTJSNI_Font::GetFontHeight() const {
         return Layer->GetFontHeight();
     else
         return Font.Height;
+}
+
+void tTJSNI_Font::SetFontEmojiMode(tjs_int mode) {
+    if(mode != TVP_EMOJI_DEFAULT)
+        mode = std::clamp(mode, static_cast<tjs_int>(TVP_EMOJI_NONE),
+                          static_cast<tjs_int>(TVP_EMOJI_COLOR));
+    if(Layer)
+        Layer->SetFontEmojiMode(mode);
+    else
+        Font.EmojiMode = mode;
+}
+
+tjs_int tTJSNI_Font::GetFontEmojiMode() const {
+    return Layer ? Layer->GetFontEmojiMode() : Font.EmojiMode;
+}
+
+void tTJSNI_Font::SetFontWeight(tjs_int weight) {
+    if(Layer) {
+        Layer->SetFontWeight(weight);
+        return;
+    }
+    if(weight < 0)
+        weight = -1;
+    else
+        weight = std::clamp(weight, 1, 1000);
+    Font.Weight = weight;
+}
+
+tjs_int tTJSNI_Font::GetFontWeight() const {
+    return Layer ? Layer->GetFontWeight() : Font.Weight;
+}
+
+void tTJSNI_Font::SetFontVariations(const ttstr &variations) {
+    if(Layer)
+        Layer->SetFontVariations(variations);
+    else
+        Font.Variations = TVPNormalizeFontVariations(variations);
+}
+
+ttstr tTJSNI_Font::GetFontVariations() const {
+    return Layer ? Layer->GetFontVariations() : Font.Variations;
 }
 
 //---------------------------------------------------------------------------
@@ -17876,11 +17966,21 @@ tjs_int tTJSNI_Font::GetTextWidthDirect(const ttstr &text) {
     GetCurrentRasterizer()->ApplyFont(Font);
     tjs_uint width = 0;
     const tjs_char *buf = text.c_str();
-    while(*buf) {
+    const tjs_size len = text.length();
+    tjs_size index = 0;
+    while(index < len) {
+        tjs_uint32 codepoint = 0;
+        tjs_size consumed = 0;
+        if(!TVPReadUtf16CodePoint(buf + index, len - index, codepoint,
+                                  consumed) || consumed == 0)
+            break;
+        index += consumed;
+        if(index < len && (buf[index] == TVP_EMOJI_VS15 ||
+                           buf[index] == TVP_EMOJI_VS16))
+            ++index;
         tjs_int w, h;
-        GetCurrentRasterizer()->GetTextExtent(*buf, w, h);
+        GetCurrentRasterizer()->GetTextExtent(codepoint, w, h);
         width += w;
-        buf++;
     }
     return width;
 }
@@ -18276,6 +18376,76 @@ TJS_END_NATIVE_PROP_SETTER
 }
 TJS_END_NATIVE_PROP_DECL(height)
 //----------------------------------------------------------------------
+// Emoji rendering mode: -1 follows Font.defaultEmojiMode, 0 disables the
+// emoji fallback, 1 prefers a registered monochrome face, and 2 enables
+// registered color glyphs.  VS15/VS16 in text provide a per-character hint.
+TJS_BEGIN_NATIVE_PROP_DECL(emojiMode){
+    TJS_BEGIN_NATIVE_PROP_GETTER{
+        TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
+                                /*var. type*/ tTJSNI_Font);
+        *result = _this->GetFontEmojiMode();
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_PROP_GETTER
+
+    TJS_BEGIN_NATIVE_PROP_SETTER{
+        TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
+                                /*var. type*/ tTJSNI_Font);
+        _this->SetFontEmojiMode(static_cast<tjs_int>(*param));
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_PROP_SETTER
+}
+TJS_END_NATIVE_PROP_DECL(emojiMode)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_PROP_DECL(weight){
+    TJS_BEGIN_NATIVE_PROP_GETTER{
+        TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
+                                /*var. type*/ tTJSNI_Font);
+        const tjs_int weight = _this->GetFontWeight();
+        if(weight < 0)
+            *result = tTJSVariant();
+        else
+            *result = weight;
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_PROP_GETTER
+
+    TJS_BEGIN_NATIVE_PROP_SETTER{
+        TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
+                                /*var. type*/ tTJSNI_Font);
+        if(param->Type() == tvtVoid)
+            _this->SetFontWeight(-1);
+        else
+            _this->SetFontWeight(static_cast<tjs_int>(*param));
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_PROP_SETTER
+}
+TJS_END_NATIVE_PROP_DECL(weight)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_PROP_DECL(variations){
+    TJS_BEGIN_NATIVE_PROP_GETTER{
+        TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
+                                /*var. type*/ tTJSNI_Font);
+        *result = _this->GetFontVariations();
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_PROP_GETTER
+
+    TJS_BEGIN_NATIVE_PROP_SETTER{
+        TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
+                                /*var. type*/ tTJSNI_Font);
+        if(param->Type() == tvtVoid)
+            _this->SetFontVariations(ttstr());
+        else
+            _this->SetFontVariations(*param);
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_PROP_SETTER
+}
+TJS_END_NATIVE_PROP_DECL(variations)
+//----------------------------------------------------------------------
 TJS_BEGIN_NATIVE_PROP_DECL(bold){ TJS_BEGIN_NATIVE_PROP_GETTER{
     TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
                             /*var. type*/ tTJSNI_Font);
@@ -18416,6 +18586,81 @@ TJS_END_NATIVE_PROP_SETTER
 }
 TJS_END_NATIVE_STATIC_PROP_DECL(defaultFaceName)
 //----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_PROP_DECL(defaultEmojiMode){
+    TJS_BEGIN_NATIVE_PROP_GETTER{
+        if(result)
+            *result = TVPGetDefaultEmojiMode();
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_PROP_GETTER
+
+    TJS_BEGIN_NATIVE_PROP_SETTER{
+        TVPSetDefaultEmojiMode(static_cast<tjs_int>(*param));
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_PROP_SETTER
+}
+TJS_END_NATIVE_STATIC_PROP_DECL(defaultEmojiMode)
+//----------------------------------------------------------------------
+// When enabled, a variable face's wght/slnt/ital axes represent bold/italic
+// before synthetic styling is considered.  The default remains false to
+// preserve Aether's historical rendering for games that rely on synthetic
+// bold/italic.  The setting is shared with the pinned krkrz variable-font
+// parser/glyphware bridge, so both paths observe one policy value.
+TJS_BEGIN_NATIVE_PROP_DECL(defaultUseVarStyle){
+    TJS_BEGIN_NATIVE_PROP_GETTER{
+        if(result)
+            *result = TVPFontDefaultUseVarStyle ? 1 : 0;
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_PROP_GETTER
+
+    TJS_BEGIN_NATIVE_PROP_SETTER{
+        const bool enabled = static_cast<tjs_int>(*param) != 0;
+        if(TVPFontDefaultUseVarStyle != enabled) {
+            TVPFontDefaultUseVarStyle = enabled;
+            TVPClearFontCache();
+        }
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_PROP_SETTER
+}
+TJS_END_NATIVE_STATIC_PROP_DECL(defaultUseVarStyle)
+//---------------------------------------------------------------------
+TJS_BEGIN_NATIVE_PROP_DECL(emojiFaceName){
+    TJS_BEGIN_NATIVE_PROP_GETTER{
+        if(result)
+            *result = ttstr(TVPGetEmojiFaceName(TVP_EMOJI_MONO));
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_PROP_GETTER
+
+    TJS_BEGIN_NATIVE_PROP_SETTER{
+        const ttstr name(*param);
+        TVPSetEmojiFaceName(TVP_EMOJI_MONO, name.c_str());
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_PROP_SETTER
+}
+TJS_END_NATIVE_STATIC_PROP_DECL(emojiFaceName)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_PROP_DECL(colorEmojiFaceName){
+    TJS_BEGIN_NATIVE_PROP_GETTER{
+        if(result)
+            *result = ttstr(TVPGetEmojiFaceName(TVP_EMOJI_COLOR));
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_PROP_GETTER
+
+    TJS_BEGIN_NATIVE_PROP_SETTER{
+        const ttstr name(*param);
+        TVPSetEmojiFaceName(TVP_EMOJI_COLOR, name.c_str());
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_PROP_SETTER
+}
+TJS_END_NATIVE_STATIC_PROP_DECL(colorEmojiFaceName)
+//----------------------------------------------------------------------
 
 TJS_END_NATIVE_MEMBERS
 }
@@ -18445,6 +18690,7 @@ struct tFontClassHolder {
 
 //---------------------------------------------------------------------------
 tTJSNativeClass *TVPCreateNativeClass_Font() {
+    TVPInializeFontRasterizers();
     if(fontclassholder.Obj) {
         tTJSNativeClass *fontclass = fontclassholder.Obj;
         fontclass->AddRef();

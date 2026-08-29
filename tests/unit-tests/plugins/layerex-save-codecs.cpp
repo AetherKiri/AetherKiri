@@ -102,3 +102,30 @@ TEST_CASE("krkrz layerExSave codecs reject invalid layer geometry") {
     CHECK_FALSE(aether::krkrz::layer_save::encodePng(pixel, 0, 1, 4, output));
     CHECK_FALSE(aether::krkrz::layer_save::encodeTlg5(pixel, 1, 1, 2, output));
 }
+
+TEST_CASE("krkrz layerExSave province codec keeps the fixed palette") {
+    const std::vector<std::uint8_t> indices = {
+        0, 1, 63, 255,
+        2, 16, 32, 128,
+    };
+    std::vector<std::uint8_t> png;
+    REQUIRE(aether::krkrz::layer_save::encodeProvincePng(
+        indices.data(), 4, 2, 4, png));
+
+    std::vector<unsigned char> decoded;
+    unsigned width = 0;
+    unsigned height = 0;
+    REQUIRE(lexsave::lodepng::decode(decoded, width, height, png,
+                                     lexsave::LCT_RGBA, 8) == 0);
+    REQUIRE(width == 4);
+    REQUIRE(height == 2);
+    // Index zero is transparent; the other entries use GGG RRR BB.
+    CHECK(decoded[3] == 0);
+    CHECK(decoded[7] == 255);
+    CHECK(decoded[0] == 0);
+    CHECK(decoded[1] == 0);
+    CHECK(decoded[2] == 0);
+    CHECK(decoded[4] == 0);
+    CHECK(decoded[5] == 0);
+    CHECK(decoded[6] == 128);
+}

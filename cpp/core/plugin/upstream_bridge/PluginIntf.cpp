@@ -3,7 +3,7 @@
 // The local interface/message headers are included first so the Aether TJS
 // declarations and message registry remain the only ABI visible to the
 // translation unit.
-#include "tjsCommHead.h"
+#include "../../tjs2/tjsCommHead.h"
 
 #include "../PluginIntf.h"
 #include "../../base/MsgIntf.h"

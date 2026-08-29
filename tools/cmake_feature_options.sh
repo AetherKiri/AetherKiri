@@ -37,7 +37,11 @@ _aetherkiri_append_bool_feature() {
 # CI environment variable.
 for _aetherkiri_feature in \
     AETHERKIRI_ENABLE_ONSCRIPTER \
+    AETHERKIRI_ENABLE_DAP \
+    AETHERKIRI_ENABLE_FONT_SHAPING \
+    AETHERKIRI_ENABLE_RICHTEXT \
     AETHER_USE_KRKRZ_OPTIONAL_PLUGINS \
+    AETHERKIRI_ENABLE_CLIPFILE \
     AETHER_BUILD_KRKRZ_CORE_PARITY; do
     if _aetherkiri_append_bool_feature "$_aetherkiri_feature"; then
         :

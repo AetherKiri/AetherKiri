@@ -41,6 +41,7 @@
     "expat",
     "fmt",
     "freetype",
+    "fribidi",
     "godot-cpp",
     "jxrlib",
     "libarchive",
@@ -68,6 +69,11 @@
     },
     "oniguruma",
     "openal-soft",
+    {
+      "name": "openssl",
+      "platform": "!emscripten"
+    },
+    "picojson",
     {
       "name": "opencv4",
       "default-features": false,
@@ -98,6 +104,7 @@
       ]
     },
     "sdl2-mixer",
+    "sqlite3",
     {
       "name": "sdl2-ttf",
       "features": [
@@ -106,6 +113,12 @@
     },
     "spdlog",
     "highway",
+    {
+      "name": "harfbuzz",
+      "features": [
+        "icu"
+      ]
+    },
     "uchardet",
     "unrar",
     {

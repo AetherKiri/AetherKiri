@@ -27,6 +27,13 @@ namespace PSB {
 
     std::vector<std::unique_ptr<IResourceMetadata>>
     ArchiveType::collectResources(const PSBFile &psb, bool deDuplication) {
+        (void)psb;
+        (void)deDuplication;
+        // Archive-info PSBs describe an external MDF/PSB file table.  They do
+        // not own media chunks; returning no metadata is the format contract
+        // (and matches the upstream FreeMote handler).  The owning archive
+        // loader exposes the referenced files through its normal Storage
+        // provider instead.
         return {};
     }
 } // namespace PSB

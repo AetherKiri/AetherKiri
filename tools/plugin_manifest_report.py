@@ -39,6 +39,14 @@ PLUGIN_CATALOG_CATEGORIES = {
     "infrastructure",
 }
 
+# Historical DLL names do not always match the upstream plugin directory.
+# This validation-only alias keeps ``krkrsteam.dll`` as the public module
+# while checking it against the upstream ``steam`` catalog entry. It never
+# creates a second registration or source owner.
+MANIFEST_PLUGIN_ALIASES = {
+    "krkrsteam": "steam",
+}
+
 
 def load_manifest(path: Path) -> dict[str, Any]:
     if tomllib is None:
@@ -246,8 +254,9 @@ def validate_plugin_catalog(
             # required to appear in the upstream catalog.
             if "upstream_path" not in plugin:
                 continue
-            name = normalize_plugin_name(plugin["name"])
-            if name not in catalog_names:
+        name = normalize_plugin_name(plugin["name"])
+        catalog_name = MANIFEST_PLUGIN_ALIASES.get(name, name)
+        if catalog_name not in catalog_names:
                 errors.append(
                     f"{plugin['name']}: executable record is absent from plugin_catalog"
                 )

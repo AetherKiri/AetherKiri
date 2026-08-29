@@ -30,7 +30,10 @@ Keep these rules when adding an adapter:
 The current direct leaf adapters are the low-risk plugins:
 `layerExAreaAverage`, `layerExRaster`, `layerExLongExposure`, `getSample`,
 `layerExBTOA`, `layerExImage`, and `shrinkCopy`. Hybrid source reuse additionally
-includes the namespaced LodePNG/TLG5 methods used by `layerExSave`, plus the
+includes the namespaced LodePNG/TLG5 methods used by `layerExSave`. Its Aether
+wrapper also exposes the upstream `oozeColor`, fingerprint, shrink-vector,
+octet-vector, and province-palette methods without importing the upstream
+Layer/Storage ABI. Hybrid reuse additionally includes the
 `blurfade`, `book`, `flutter`, `honeyturn`, `morphing`, `multiripple`, `rgbfade`,
 `scanline`, `spin`, and `zoomfade` transition algorithms. The extNagano
 `3duniversal` and `imagewipe` providers remain Aether fallbacks because their
@@ -52,3 +55,43 @@ for the process lifetime so existing Font objects cannot dangle.
 This is an implementation-level compatibility rule, not a runtime switch:
 there is one Aether plugin registry, and a game sees the same module/provider
 names regardless of whether an upstream operation accepts its inputs.
+
+Core adapters follow the same single-owner rule. The pinned checkout supplies
+the implementation bytes, while Aether supplies the public ABI and lifecycle:
+
+| Area | Adapter | What remains Aether-owned |
+| --- | --- | --- |
+| Sound DSP/loop/FFT | `cpp/core/sound/upstream_bridge` and `cpp/core/utils/upstream_bridge` | sound host, allocator, `DesiredFormat`, scalar fallback and dispatch policy |
+| Visual SIMD leaves | `cpp/core/visual/upstream_bridge/VisualSIMDLeavesDispatch.cpp` and `UnivTransSSE2.cpp` | Highway blend/adjust/color-fill owner; Aether alpha semantics, HDA/additive-alpha ColorMap variants, box-blur, bitmap/thread ABI and scalar fallback |
+| TLG/resampling | `cpp/core/visual/upstream_bridge/TLGSIMD.cpp` and `ResampleImage{SSE2,AVX2}.cpp` | `LoadTLG` format router, virtual streams, metadata and nearest/unsupported-filter/no-scanline fallback |
+| Resampling | `cpp/core/visual/upstream_bridge/ResampleImage{SSE2,AVX2}.cpp` plus `ResampleImageDispatch.cpp` | bitmap/thread ABI, CPU/OS selection, and nearest/unsupported-filter/no-scanline/universal fallback |
+| Variable fonts | `cpp/core/visual/upstream_bridge/FontVariations.cpp` plus `FontStream.cpp` | FreeType faces, fallback order, bounded cache and FontSystem registry |
+| DAP | `cpp/core/tjs2/upstream_bridge`, `cpp/core/utils/upstream_bridge/DAPServer.cpp` | VM hook installation, Aether thread ABI and main event loop |
+| File REPL | `cpp/core/utils/ReplFileChannel.cpp` | RAII stream ABI and main-thread evaluation; upstream console/socket code is reference-only |
+| CLIP | `cpp/plugins/upstream_bridge/clipfile_*.cpp` plus `clipfile_compat.hpp` | `clip://` Storage, Layer/TJS wrapper, the SQLite owner, and platform lifecycle |
+| Richtext/Minikin | `cpp/plugins/upstream_bridge/krkrz_richtext_*.cpp` | Aether FontService/FreeType owner, module registration, stream lifetime, and renderer upload boundary |
+
+The file REPL accepts `-replfile=<directory>` and exchanges UTF-8 `cmd` and
+`resp` JSON files. It is intentionally a development/diagnostic channel, not
+a game-facing compatibility switch.
+
+`clipfile` is now a default hybrid adapter. Three bridge translation units
+include only the pinned submodule's `clipclass.cpp`, `clipwriter.cpp`, and
+`main.cpp`; the five portable `clipparse` C++ files are compiled as an
+independent static target, and one modern SQLite owner is shared process-wide
+(the vcpkg-pinned package in CI, a deserialize-capable system provider on a
+developer host, or the hash-verified 3.45.1 fallback in a standalone
+checkout). `clipfile_compat.hpp` primes Aether's `tp_stub` and event
+interfaces before introducing a local macro scope that maps
+`iTJSBinaryStream` to a `Destruct()`-capable wrapper and routes
+`TVPCreateStream` ownership back to RAII. It also supplies the non-Windows
+`S_OK`, BMP-header, and reverse-string compatibility names. CLIP lazy loading,
+region reads, writing, and `clip://` media can therefore be reused without a
+second upstream registry. Web/emscripten omits the adapter because its Storage
+host differs. `krkr_richtext` is now a hybrid adapter on desktop and Android:
+its pinned richtext/Minikin sources share Aether's FontService, FreeType,
+HarfBuzz, and ICU owners, while the legacy `TextRenderBase` remains available
+for games that use the classic text API. iOS and web keep the source contract
+but skip the dependency-heavy target. Effekseer and threepp remain
+source-validated optional projects because their OpenGL/VRM host lifecycles do
+not match Aether's renderer yet.

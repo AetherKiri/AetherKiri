@@ -24,6 +24,9 @@
 #include "ComplexRect.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <limits>
 
 #ifdef _MSC_VER
 #pragma warning(push)
@@ -33,10 +36,13 @@
 #include FT_TRUETYPE_UNPATENTED_H
 #include FT_SYNTHESIS_H
 #include FT_BITMAP_H
+#include FT_MULTIPLE_MASTERS_H
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif
 #include "FontImpl.h"
+#include "FreeTypeColor.h"
+#include "FontVariations.h"
 
 extern bool TVPEncodeUTF8ToUTF16(ttstr &output, const std::string &source);
 
@@ -154,12 +160,14 @@ tGenericFreeTypeFace::tGenericFreeTypeFace(const ttstr &fontname,
         // caller only supplied a family name (the normal path), prefer the
         // face selected by the shared registry.  Face 0 remains the
         // backward-compatible default for ordinary single-face files.
-        if(index == 0 && registeredFaceIndex > 0)
+        const bool explicitFaceIndex =
+            (options & TVP_FACE_OPTIONS_EXPLICIT_FACE_INDEX) != 0;
+        if(!explicitFaceIndex && index == 0 && registeredFaceIndex > 0)
             index = static_cast<tjs_uint>(registeredFaceIndex);
         if(!OpenFaceByIndex(index, Face)) {
             // A stale registry entry must not make an otherwise valid font
             // unusable.  Retry face 0 before reporting the original error.
-            if(index != 0 && OpenFaceByIndex(0, Face)) {
+            if(!explicitFaceIndex && index != 0 && OpenFaceByIndex(0, Face)) {
                 index = 0;
             } else {
                 // フォントを開けなかった
@@ -419,17 +427,86 @@ void tFreeTypeFace::GetFaceNameList(std::vector<ttstr> &dest) {
  * @param height	フォントの高さ(ピクセル単位)
  */
 void tFreeTypeFace::SetHeight(int height) {
-    Height = height;
+    Height = std::max(1, height);
+    if(!FTFace)
+        return;
     FT_Error err = FT_Set_Pixel_Sizes(FTFace, 0, Height);
-    if(err) {
-        // TODO: Error ハンドリング
+    if(!err)
+        return;
+
+    // CBDT/sbix and other bitmap-strike fonts reject arbitrary pixel sizes.
+    // Select the nearest available strike and let GetGlyphFromCharcode scale
+    // the copied BGRA bitmap to the requested logical height.
+    if(FTFace->num_fixed_sizes <= 0)
+        return;
+    int best = 0;
+    int best_ppem = static_cast<int>(FTFace->available_sizes[0].y_ppem >> 6);
+    for(int i = 1; i < FTFace->num_fixed_sizes; ++i) {
+        const int ppem = static_cast<int>(FTFace->available_sizes[i].y_ppem >> 6);
+        const bool best_above = best_ppem >= Height;
+        const bool current_above = ppem >= Height;
+        if((current_above && !best_above) ||
+           (current_above && best_above && ppem < best_ppem) ||
+           (!current_above && !best_above && ppem > best_ppem)) {
+            best = i;
+            best_ppem = ppem;
+        }
     }
+    FT_Select_Size(FTFace, best);
+}
+
+void tFreeTypeFace::ApplyFontVariations(tjs_int weight,
+                                        const ttstr &variations) {
+    if(!FTFace || !FreeTypeLibrary)
+        return;
+
+    std::vector<tTVPFontAxisCoord> requested;
+    TVPFontGetEffectiveVarCoords(weight, variations, requested);
+    if(requested.empty())
+        return;
+
+    FT_MM_Var *mm = nullptr;
+    if(FT_Get_MM_Var(FTFace, &mm) != 0 || !mm)
+        return; // static face: the compatibility property is harmless
+
+    std::vector<FT_Fixed> coords(mm->num_axis);
+    for(FT_UInt i = 0; i < mm->num_axis; ++i)
+        coords[i] = mm->axis[i].def;
+
+    for(const auto &[tag, value] : requested) {
+        for(FT_UInt i = 0; i < mm->num_axis; ++i) {
+            if(mm->axis[i].tag != tag)
+                continue;
+            const float minimum = static_cast<float>(mm->axis[i].minimum) /
+                                  65536.0f;
+            const float maximum = static_cast<float>(mm->axis[i].maximum) /
+                                  65536.0f;
+            const float clamped = std::max(minimum, std::min(maximum, value));
+            const double fixed = static_cast<double>(clamped) * 65536.0;
+            coords[i] = static_cast<FT_Fixed>(std::llround(fixed));
+            break;
+        }
+    }
+
+    // FreeType owns the axis metadata allocation.  Applying coordinates is
+    // deliberately best-effort: unsupported/invalid axes fall back to the
+    // face defaults, preserving the pre-variable-font rendering contract.
+    FT_Set_Var_Design_Coordinates(FTFace, mm->num_axis, coords.data());
+    FT_Done_MM_Var(FreeTypeLibrary, mm);
 }
 //---------------------------------------------------------------------------
 
 tjs_int tFreeTypeFace::GetLineBaseline() const {
     if(!FTFace || !FTFace->size)
         return 0;
+    if(FTFace->units_per_EM == 0) {
+        const tjs_int ppem = FTFace->size->metrics.y_ppem;
+        if(ppem <= 0)
+            return Height;
+        const tjs_int strike_ascent = FT_PosToInt(
+            FTFace->size->metrics.ascender);
+        return strike_ascent > 0 ? strike_ascent * Height / ppem : Height;
+    }
     return krkr::font::ComputeLineBaseline(
         Height, FTFace->ascender, FTFace->descender,
         FTFace->size->metrics.y_ppem, FTFace->units_per_EM);
@@ -443,7 +520,7 @@ tjs_int tFreeTypeFace::GetLineBaseline() const {
  * @return	新規作成されたグリフビットマップオブジェクトへのポインタ
  *			nullptr の場合は変換に失敗した場合
  */
-tTVPCharacterData *tFreeTypeFace::GetGlyphFromCharcode(tjs_char code) {
+tTVPCharacterData *tFreeTypeFace::GetGlyphFromCharcode(tjs_uint32 code) {
     // グリフスロットにグリフを読み込み、寸法を取得する
     tGlyphMetrics metrics;
     if(!GetGlyphMetricsFromCharcode(code, metrics))
@@ -472,7 +549,8 @@ tTVPCharacterData *tFreeTypeFace::GetGlyphFromCharcode(tjs_char code) {
     bool release_ft_bmp = false;
     tTVPCharacterData *glyph_bmp = nullptr;
     try {
-        if(ft_bmp->rows && ft_bmp->width) {
+        if(ft_bmp->rows && ft_bmp->width &&
+           ft_bmp->pixel_mode != FT_PIXEL_MODE_BGRA) {
             // ビットマップがサイズを持っている場合
             if(ft_bmp->pixel_mode != ft_pixel_mode_grays) {
                 // ft_pixel_mode_grays ではないので
@@ -523,26 +601,147 @@ tTVPCharacterData *tFreeTypeFace::GetGlyphFromCharcode(tjs_char code) {
         // as punctuation and CJK characters are revealed next to each other.
         const int baseline = GetLineBaseline();
 
-        glyph_bmp = new tTVPCharacterData(ft_bmp->buffer, ft_bmp->pitch,
-                                          FTFace->glyph->bitmap_left,
-                                          krkr::font::ComputeGlyphOriginY(
-                                              baseline,
-                                              FTFace->glyph->bitmap_top),
-                                          ft_bmp->width, ft_bmp->rows, metrics);
-        glyph_bmp->Gray = 256;
+        if(ft_bmp->pixel_mode == FT_PIXEL_MODE_BGRA) {
+            // FreeType exposes color glyphs as premultiplied BGRA.  Convert
+            // every path (including an unscaled fixed strike) to Aether's
+            // straight-alpha RGBA byte layout before handing it to the
+            // character-data owner.  This also makes a negative-pitch bitmap
+            // obey FreeType's documented row-step contract.
+            const tjs_uint sw = ft_bmp->width;
+            const tjs_uint sh = ft_bmp->rows;
+            if(sw == 0 || sh == 0)
+                return nullptr;
 
-        if(Options & TVP_TF_UNDERLINE) {
-            tjs_int pos = -1, thickness = -1;
-            GetUnderline(pos, thickness);
-            if(pos >= 0 && thickness > 0) {
-                glyph_bmp->AddHorizontalLine(pos, thickness, 255);
+            const tjs_int y_ppem = FTFace->size
+                ? static_cast<tjs_int>(FTFace->size->metrics.y_ppem)
+                : 0;
+            const double scale = y_ppem > 0
+                ? static_cast<double>(Height) / y_ppem : 1.0;
+            if(!std::isfinite(scale) || scale <= 0.0)
+                return nullptr;
+            // The requested logical height comes from script input.  Reject
+            // dimensions that cannot be represented by CharacterData's
+            // signed pitch/allocation instead of allowing a floating-point
+            // to integer wrap to a tiny buffer (or a size_t multiplication
+            // overflow) on malformed fonts or hostile scripts.
+            const auto scaled_dimension = [scale](tjs_uint source,
+                                                   tjs_uint &destination) {
+                const long double scaled =
+                    static_cast<long double>(source) * scale;
+                const long double max_dimension = static_cast<long double>(
+                    std::numeric_limits<tjs_int>::max());
+                if(!std::isfinite(scaled) || scaled <= 0.0L ||
+                   scaled > max_dimension)
+                    return false;
+                const long double rounded = std::floor(scaled + 0.5L);
+                if(rounded < 1.0L || rounded > max_dimension)
+                    return false;
+                destination = static_cast<tjs_uint>(rounded);
+                return destination != 0;
+            };
+            tjs_uint dw = 0, dh = 0;
+            if(!scaled_dimension(sw, dw) || !scaled_dimension(sh, dh))
+                return nullptr;
+            const std::size_t max_size =
+                std::numeric_limits<std::size_t>::max();
+            if(dw > static_cast<tjs_uint>(
+                         std::numeric_limits<tjs_int>::max() / 4) ||
+               static_cast<std::size_t>(dh) >
+                   max_size / (static_cast<std::size_t>(dw) * 4u))
+                return nullptr;
+            const tjs_int src_pitch = ft_bmp->pitch;
+            const std::size_t converted_size =
+                static_cast<std::size_t>(dw) * dh * 4;
+            std::vector<tjs_uint8> converted(converted_size);
+            auto source_row = [&](tjs_uint row) -> const tjs_uint8 * {
+                // FT_Bitmap::pitch is the signed byte offset to the next
+                // logical row; do not reverse rows a second time when it is
+                // negative.
+                return ft_bmp->buffer +
+                    static_cast<std::ptrdiff_t>(row) * src_pitch;
+            };
+            for(tjs_uint dy = 0; dy < dh; ++dy) {
+                tjs_uint sy0 = static_cast<tjs_uint>(
+                    static_cast<tjs_uint64>(dy) * sh / dh);
+                tjs_uint sy1 = static_cast<tjs_uint>(
+                    static_cast<tjs_uint64>(dy + 1) * sh / dh);
+                if(sy1 <= sy0)
+                    sy1 = std::min<tjs_uint>(sh, sy0 + 1);
+                for(tjs_uint dx = 0; dx < dw; ++dx) {
+                    tjs_uint sx0 = static_cast<tjs_uint>(
+                        static_cast<tjs_uint64>(dx) * sw / dw);
+                    tjs_uint sx1 = static_cast<tjs_uint>(
+                        static_cast<tjs_uint64>(dx + 1) * sw / dw);
+                    if(sx1 <= sx0)
+                        sx1 = std::min<tjs_uint>(sw, sx0 + 1);
+
+                    // Average premultiplied channels before converting to
+                    // straight alpha.  This is the same area rule used by
+                    // the krkrz color-glyph leaf and avoids dark fringes on
+                    // downscaled emoji.
+                    tjs_uint64 blue = 0, green = 0, red = 0, alpha = 0;
+                    tjs_uint64 count = 0;
+                    for(tjs_uint sy = sy0; sy < sy1; ++sy) {
+                        const tjs_uint8 *pixel = source_row(sy) +
+                            static_cast<std::size_t>(sx0) * 4;
+                        for(tjs_uint sx = sx0; sx < sx1; ++sx) {
+                            blue += pixel[0];
+                            green += pixel[1];
+                            red += pixel[2];
+                            alpha += pixel[3];
+                            ++count;
+                            pixel += 4;
+                        }
+                    }
+                    if(count == 0)
+                        continue;
+                    const tjs_uint8 bgra[4] = {
+                        static_cast<tjs_uint8>(blue / count),
+                        static_cast<tjs_uint8>(green / count),
+                        static_cast<tjs_uint8>(red / count),
+                        static_cast<tjs_uint8>(alpha / count)};
+                    krkr::font::ConvertFreeTypeBGRAPixel(
+                        bgra, &converted[(static_cast<std::size_t>(dy) * dw +
+                                          dx) * 4]);
+                }
             }
-        }
-        if(Options & TVP_TF_STRIKEOUT) {
-            tjs_int pos = -1, thickness = -1;
-            GetStrikeOut(pos, thickness);
-            if(pos >= 0 && thickness > 0) {
-                glyph_bmp->AddHorizontalLine(pos, thickness, 255);
+
+            const tjs_int origin_x = static_cast<tjs_int>(
+                FTFace->glyph->bitmap_left * scale +
+                (FTFace->glyph->bitmap_left >= 0 ? 0.5 : -0.5));
+            const tjs_int origin_top = static_cast<tjs_int>(
+                FTFace->glyph->bitmap_top * scale +
+                (FTFace->glyph->bitmap_top >= 0 ? 0.5 : -0.5));
+            tGlyphMetrics color_metrics = metrics;
+            color_metrics.CellIncX = static_cast<tjs_int>(
+                color_metrics.CellIncX * scale +
+                (color_metrics.CellIncX >= 0 ? 0.5 : -0.5));
+            color_metrics.CellIncY = static_cast<tjs_int>(
+                color_metrics.CellIncY * scale +
+                (color_metrics.CellIncY >= 0 ? 0.5 : -0.5));
+            glyph_bmp = new tTVPCharacterData(
+                converted.data(), static_cast<tjs_int>(dw), origin_x,
+                krkr::font::ComputeGlyphOriginY(baseline, origin_top), dw, dh,
+                color_metrics, true);
+        } else {
+            glyph_bmp = new tTVPCharacterData(
+                ft_bmp->buffer, ft_bmp->pitch, FTFace->glyph->bitmap_left,
+                krkr::font::ComputeGlyphOriginY(
+                    baseline, FTFace->glyph->bitmap_top),
+                ft_bmp->width, ft_bmp->rows, metrics);
+            glyph_bmp->Gray = 256;
+
+            if(Options & TVP_TF_UNDERLINE) {
+                tjs_int pos = -1, thickness = -1;
+                GetUnderline(pos, thickness);
+                if(pos >= 0 && thickness > 0)
+                    glyph_bmp->AddHorizontalLine(pos, thickness, 255);
+            }
+            if(Options & TVP_TF_STRIKEOUT) {
+                tjs_int pos = -1, thickness = -1;
+                GetStrikeOut(pos, thickness);
+                if(pos >= 0 && thickness > 0)
+                    glyph_bmp->AddHorizontalLine(pos, thickness, 255);
             }
         }
     } catch(...) {
@@ -564,7 +763,7 @@ tTVPCharacterData *tFreeTypeFace::GetGlyphFromCharcode(tjs_char code) {
  * @return	レンダリング領域矩形へのポインタ
  *			nullptr の場合は変換に失敗した場合
  */
-bool tFreeTypeFace::GetGlyphRectFromCharcode(tTVPRect &rt, tjs_char code,
+bool tFreeTypeFace::GetGlyphRectFromCharcode(tTVPRect &rt, tjs_uint32 code,
                                              tjs_int &advancex,
                                              tjs_int &advancey) {
     advancex = advancey = 0;
@@ -625,7 +824,7 @@ bool tFreeTypeFace::GetGlyphRectFromCharcode(tTVPRect &rt, tjs_char code,
  * @param metrics	寸法
  * @return	成功の場合真、失敗の場合偽
  */
-bool tFreeTypeFace::GetGlyphMetricsFromCharcode(tjs_char code,
+bool tFreeTypeFace::GetGlyphMetricsFromCharcode(tjs_uint32 code,
                                                 tGlyphMetrics &metrics) {
     if(!LoadGlyphSlotFromCharcode(code))
         return false;
@@ -648,7 +847,7 @@ bool tFreeTypeFace::GetGlyphMetricsFromCharcode(tjs_char code,
  * @param metrics	サイズ
  * @return	成功の場合真、失敗の場合偽
  */
-bool tFreeTypeFace::GetGlyphSizeFromCharcode(tjs_char code,
+bool tFreeTypeFace::GetGlyphSizeFromCharcode(tjs_uint32 code,
                                              tGlyphMetrics &metrics) {
     if(!LoadGlyphSlotFromCharcode(code))
         return false;
@@ -668,7 +867,7 @@ bool tFreeTypeFace::GetGlyphSizeFromCharcode(tjs_char code,
  * @param code	文字コード
  * @return	成功の場合真、失敗の場合偽
  */
-bool tFreeTypeFace::LoadGlyphSlotFromCharcode(tjs_char code) {
+bool tFreeTypeFace::LoadGlyphSlotFromCharcode(tjs_uint32 code) {
     if(!FTFace)
         return false;
 
@@ -686,7 +885,15 @@ bool tFreeTypeFace::LoadGlyphSlotFromCharcode(tjs_char code) {
 
     // グリフスロットに文字を読み込む
     FT_Int32 load_glyph_flag = 0;
-    if(!(Options & TVP_FACE_OPTIONS_NO_ANTIALIASING))
+    if(Options & TVP_FACE_OPTIONS_COLOR) {
+        // Keep embedded color strikes available.  FT_LOAD_COLOR is harmless
+        // for ordinary outline-only faces and lets COLR/CBDT/sbix faces
+        // expose BGRA data to GetGlyphFromCharcode.
+        load_glyph_flag |= FT_LOAD_COLOR;
+    } else if(!FT_IS_SCALABLE(FTFace)) {
+        // Bitmap-strike-only fonts cannot satisfy FT_LOAD_NO_BITMAP.
+        load_glyph_flag |= FT_LOAD_COLOR;
+    } else if(!(Options & TVP_FACE_OPTIONS_NO_ANTIALIASING))
         load_glyph_flag |= FT_LOAD_NO_BITMAP;
     else
         load_glyph_flag |= FT_LOAD_TARGET_MONO;
@@ -720,7 +927,7 @@ float FT_fixed26p6_to_float(long fixP) {
     return (float)(abs(fixP) & fractional_mask) / fractional_base + (fixP >> 6);
 }
 
-const FT_Outline *tFreeTypeFace::GetOulineData(tjs_char code, float &w,
+const FT_Outline *tFreeTypeFace::GetOulineData(tjs_uint32 code, float &w,
                                                float &h) {
     FT_UInt glyph_index = FT_Get_Char_Index(FTFace, code);
     if(glyph_index == 0)

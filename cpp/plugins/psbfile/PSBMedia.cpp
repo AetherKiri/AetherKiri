@@ -9,6 +9,7 @@
 #include <cstring>
 #include <fstream>
 #include <mutex>
+#include <set>
 #include <unordered_set>
 #include <vector>
 #include <spdlog/spdlog.h>
@@ -305,11 +306,7 @@ namespace PSB {
         }
 
         std::string ArchiveKeyFromResourceKey(const std::string &key) {
-            const auto slashPos = key.find('/');
-            if(slashPos == std::string::npos) {
-                return key;
-            }
-            return key.substr(0, slashPos);
+            return ArchiveBoundaryKey(key);
         }
 
         bool IsPinnedPSBArchive(const std::string &archiveKey) {
@@ -1738,12 +1735,79 @@ namespace PSB {
     }
 
     void PSBMedia::GetListAt(const ttstr &name, iTVPStorageLister *lister) {
-        LOGGER->error("TODO: PSBMedia GetListAt");
+        if(lister == nullptr) {
+            return;
+        }
+
+        std::string requested = canonicalizeKey(name.AsStdString());
+        while(!requested.empty() && requested.back() == '/') {
+            requested.pop_back();
+        }
+
+        // A PSB media path is a virtual directory rooted at an archive.  A
+        // list request can be the first operation that touches the archive
+        // (gallery/index scripts commonly enumerate before opening an image),
+        // so make the same bounded lazy-load attempt as Open/CheckExistent.
+        if(!requested.empty()) {
+            const auto archive = ArchiveBoundaryKey(requested);
+            const auto lowerArchive = LowerAscii(archive);
+            const bool archiveLike =
+                lowerArchive.size() > 4 &&
+                ((lowerArchive.size() >= 4 &&
+                  lowerArchive.compare(lowerArchive.size() - 4, 4, ".mtn") == 0) ||
+                 (lowerArchive.size() >= 4 &&
+                  lowerArchive.compare(lowerArchive.size() - 4, 4, ".psb") == 0) ||
+                 (lowerArchive.size() >= 5 &&
+                  lowerArchive.compare(lowerArchive.size() - 5, 5, ".pimg") == 0));
+            if(archiveLike) {
+                ensureArchiveLoaded(archive, false);
+            }
+        }
+
+        std::string prefix = requested;
+        if(!prefix.empty()) {
+            prefix.push_back('/');
+        }
+
+        std::set<std::string> children;
+        {
+            std::lock_guard<std::mutex> lock(_mutex);
+            auto appendChildren = [&children, &prefix](const std::string &key) {
+                if(!prefix.empty()) {
+                    if(key.rfind(prefix, 0) != 0) {
+                        return;
+                    }
+                }
+                const auto rest = key.substr(prefix.size());
+                if(rest.empty() || rest.find('/') != std::string::npos) {
+                    return;
+                }
+                children.insert(rest);
+            };
+
+            // _knownResourceKeys survives LRU eviction, so enumeration does
+            // not make a previously loaded archive appear empty just because
+            // its payload was reclaimed under memory pressure.
+            for(const auto &key : _knownResourceKeys) {
+                appendChildren(key);
+            }
+            for(const auto &[key, entry] : _resources) {
+                (void)entry;
+                appendChildren(key);
+            }
+        }
+
+        for(const auto &child : children) {
+            lister->Add(ttstr(child.c_str()));
+        }
     }
 
     void PSBMedia::GetLocallyAccessibleName(ttstr &name) {
-        LOGGER->error("can't get GetLocallyAccessibleName from {}!",
-                      name.AsStdString());
+        // PSB resources are virtual and have no stable local filesystem path.
+        // Returning an empty name is the storage-media contract used by the
+        // other virtual providers; logging this as an error made harmless
+        // enumeration look like a load failure.
+        name = ttstr();
     }
 
     void PSBMedia::add(const std::string &name,
@@ -1870,45 +1934,95 @@ namespace PSB {
 
     void PSBMedia::removeByPrefix(const std::string &prefix) {
         std::string normalizedPrefix = canonicalizeKey(prefix);
-        if(!normalizedPrefix.empty() && normalizedPrefix.back() != '/') {
-            normalizedPrefix.push_back('/');
+        while(!normalizedPrefix.empty() && normalizedPrefix.back() == '/') {
+            normalizedPrefix.pop_back();
         }
+        {
+            std::lock_guard<std::mutex> lock(_mutex);
+            if(normalizedPrefix.empty()) {
+                _resources.clear();
+                _lru.clear();
+                _bytesInUse = 0;
+                _loadedArchives.clear();
+                _failedArchives.clear();
+                _knownResourceKeys.clear();
+                _missingResourceKeys.clear();
+                _layerPositions.clear();
+                _buttonBoundsMap.clear();
+                _motionSliceSets.clear();
+                _motionSliceAliases.clear();
+                _motionSliceGeneration = 0;
+            } else {
+                const std::string resourcePrefix = normalizedPrefix + "/";
+                const std::string archiveKey = ArchiveBoundaryKey(normalizedPrefix);
+                const std::string archivePrefix = archiveKey + "/";
+                const auto isUnder = [&](const std::string &key) {
+                    return key == normalizedPrefix ||
+                        key.rfind(resourcePrefix, 0) == 0 ||
+                        key == archiveKey || key.rfind(archivePrefix, 0) == 0;
+                };
 
-        std::lock_guard<std::mutex> lock(_mutex);
-        for(auto it = _resources.begin(); it != _resources.end();) {
-            if(it->first.rfind(normalizedPrefix, 0) == 0) {
-                _bytesInUse -= it->second.sizeBytes;
-                _lru.erase(it->second.lruIt);
-                _knownResourceKeys.erase(it->first);
-                _missingResourceKeys.erase(it->first);
-                it = _resources.erase(it);
-                continue;
-            }
-            ++it;
-        }
-        if(!normalizedPrefix.empty()) {
-            std::string archiveKey = normalizedPrefix;
-            archiveKey.pop_back();
-            _loadedArchives.erase(archiveKey);
-            _failedArchives.erase(archiveKey);
-
-            for(auto it = _motionSliceSets.begin();
-                it != _motionSliceSets.end();) {
-                if(it->archiveKey == archiveKey ||
-                   it->archiveKey.rfind(archiveKey + "/", 0) == 0) {
-                    for(auto alias = _motionSliceAliases.begin();
-                        alias != _motionSliceAliases.end();) {
-                        if(alias->second.rfind(archiveKey + "/", 0) == 0) {
-                            alias = _motionSliceAliases.erase(alias);
-                        } else {
-                            ++alias;
-                        }
+                for(auto it = _resources.begin(); it != _resources.end();) {
+                    if(isUnder(it->first)) {
+                        _bytesInUse -= it->second.sizeBytes;
+                        _lru.erase(it->second.lruIt);
+                        it = _resources.erase(it);
+                    } else {
+                        ++it;
                     }
-                    it = _motionSliceSets.erase(it);
-                } else {
-                    ++it;
+                }
+                for(auto it = _knownResourceKeys.begin();
+                    it != _knownResourceKeys.end();) {
+                    if(isUnder(*it)) it = _knownResourceKeys.erase(it);
+                    else ++it;
+                }
+                for(auto it = _missingResourceKeys.begin();
+                    it != _missingResourceKeys.end();) {
+                    if(isUnder(*it)) it = _missingResourceKeys.erase(it);
+                    else ++it;
+                }
+                for(auto it = _loadedArchives.begin();
+                    it != _loadedArchives.end();) {
+                    if(isUnder(*it)) it = _loadedArchives.erase(it);
+                    else ++it;
+                }
+                for(auto it = _failedArchives.begin();
+                    it != _failedArchives.end();) {
+                    if(isUnder(*it)) it = _failedArchives.erase(it);
+                    else ++it;
+                }
+                for(auto it = _motionSliceSets.begin();
+                    it != _motionSliceSets.end();) {
+                    bool remove = isUnder(it->archiveKey);
+                    if(!remove) {
+                        remove = std::any_of(
+                            it->imageKeys.begin(), it->imageKeys.end(), isUnder);
+                    }
+                    if(remove) it = _motionSliceSets.erase(it);
+                    else ++it;
+                }
+                for(auto it = _motionSliceAliases.begin();
+                    it != _motionSliceAliases.end();) {
+                    if(isUnder(it->first) || isUnder(it->second))
+                        it = _motionSliceAliases.erase(it);
+                    else ++it;
+                }
+                for(auto it = _layerPositions.begin();
+                    it != _layerPositions.end();) {
+                    if(isUnder(it->first)) it = _layerPositions.erase(it);
+                    else ++it;
+                }
+                for(auto it = _buttonBoundsMap.begin();
+                    it != _buttonBoundsMap.end();) {
+                    if(isUnder(it->first)) it = _buttonBoundsMap.erase(it);
+                    else ++it;
                 }
             }
+        }
+        if(normalizedPrefix.empty()) {
+            std::lock_guard<std::mutex> discoveryLock(_motionDiscoveryMutex);
+            _motionScannedRoots.clear();
+            _motionKnownArchives.clear();
         }
     }
 
@@ -1924,6 +2038,8 @@ namespace PSB {
             _failedArchives.clear();
             _knownResourceKeys.clear();
             _missingResourceKeys.clear();
+            _layerPositions.clear();
+            _buttonBoundsMap.clear();
             _motionSliceSets.clear();
             _motionSliceAliases.clear();
             _motionSliceGeneration = 0;
@@ -2140,13 +2256,13 @@ namespace PSB {
     void PSBMedia::addLayerPositions(const std::string &archiveKey,
                                      std::vector<LayerPosition> positions) {
         std::lock_guard<std::mutex> lock(_mutex);
-        _layerPositions[archiveKey] = std::move(positions);
+        _layerPositions[canonicalizeKey(archiveKey)] = std::move(positions);
     }
 
     std::vector<PSBMedia::LayerPosition>
     PSBMedia::getLayerPositions(const std::string &prefix) const {
         std::lock_guard<std::mutex> lock(_mutex);
-        auto it = _layerPositions.find(prefix);
+        auto it = _layerPositions.find(canonicalizeKey(prefix));
         if(it != _layerPositions.end())
             return it->second;
         return {};
@@ -2155,13 +2271,13 @@ namespace PSB {
     void PSBMedia::addButtonBounds(const std::string &archiveKey,
                                    std::vector<ButtonBoundInfo> bounds) {
         std::lock_guard<std::mutex> lock(_mutex);
-        _buttonBoundsMap[archiveKey] = std::move(bounds);
+        _buttonBoundsMap[canonicalizeKey(archiveKey)] = std::move(bounds);
     }
 
     std::vector<PSBMedia::ButtonBoundInfo>
     PSBMedia::getButtonBounds(const std::string &prefix) const {
         std::lock_guard<std::mutex> lock(_mutex);
-        auto it = _buttonBoundsMap.find(prefix);
+        auto it = _buttonBoundsMap.find(canonicalizeKey(prefix));
         if(it != _buttonBoundsMap.end())
             return it->second;
         return {};

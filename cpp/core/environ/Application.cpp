@@ -12,6 +12,10 @@
 
 #include "Application.h"
 #include "SysInitIntf.h"
+#include "../utils/ReplFileChannel.h"
+#ifdef KRKRZ_ENABLE_DAP
+#include "tjsDebuggerCore.h"
+#endif
 #include "SysInitImpl.h"
 #include "DebugIntf.h"
 #include "MsgIntf.h"
@@ -631,6 +635,15 @@ void tTVPApplication::ShowException(const ttstr &e) {
 }
 void tTVPApplication::Run() {
     try {
+#ifdef KRKRZ_ENABLE_DAP
+        // engine_api drives Application::Run directly, without EngineLoop;
+        // this common boundary keeps DAP requests on the VM's main thread.
+        TVPDrainDAP();
+#endif
+        // File REPL commands use the same main-thread boundary as DAP.  Keep
+        // this call outside the DAP guard so public/mobile builds retain a
+        // harmless no-op symbol and hosts do not need a second event loop.
+        TVPDrainREPL();
 #if defined(__ANDROID__)
         TVPAndroidAppLog("Application::Run begin");
 #endif

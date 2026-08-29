@@ -4,6 +4,7 @@
 #include "MsgIntf.h"
 #include "tjsUtils.h"
 #include <complex>
+#include <limits>
 
 //---------------------------------------------------------------------------
 tTVPCharacterData::tTVPCharacterData(const tjs_uint8 *indata, tjs_int inpitch,
@@ -80,6 +81,46 @@ tTVPCharacterData::tTVPCharacterData(const tTVPCharacterData &ref) {
 tTVPCharacterData::~tTVPCharacterData() {
     if(Data)
         TJSAlignedDealloc(Data);
+}
+
+tTVPCharacterData *tTVPCharacterData::CreateAlphaMask() const {
+    auto *mask = new tTVPCharacterData();
+    mask->OriginX = OriginX;
+    mask->OriginY = OriginY;
+    mask->Metrics = Metrics;
+    mask->BlackBoxX = BlackBoxX;
+    mask->BlackBoxY = BlackBoxY;
+    mask->BlurLevel = BlurLevel;
+    mask->BlurWidth = BlurWidth;
+    mask->Antialiased = Antialiased;
+    mask->Blured = Blured;
+    mask->FullColored = false;
+    mask->Gray = 256;
+
+    if(BlackBoxX == 0 || BlackBoxY == 0 || !Data || Pitch <= 0)
+        return mask;
+
+    const tjs_uint max_pitch = static_cast<tjs_uint>(
+        std::numeric_limits<tjs_int>::max());
+    if(BlackBoxX > max_pitch - 7)
+        return mask;
+    mask->Pitch = (((BlackBoxX - 1) >> 3) + 1) << 3;
+    if(static_cast<std::size_t>(mask->Pitch) >
+       std::numeric_limits<std::size_t>::max() / BlackBoxY)
+        return mask;
+    try {
+        mask->Alloc(mask->Pitch * static_cast<tjs_int>(BlackBoxY));
+        for(tjs_uint y = 0; y < BlackBoxY; ++y) {
+            const tjs_uint8 *src = Data + Pitch * y;
+            tjs_uint8 *dst = mask->Data + mask->Pitch * y;
+            for(tjs_uint x = 0; x < BlackBoxX; ++x)
+                dst[x] = src[x * 4 + 3];
+        }
+    } catch(...) {
+        mask->Release();
+        throw;
+    }
+    return mask;
 }
 
 void tTVPCharacterData::Alloc(tjs_int size) {

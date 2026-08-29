@@ -3,6 +3,7 @@
 
 #include "PluginImpl.h"
 #include "ScriptMgnIntf.h"
+#include "SystemIntf.h"
 #include "TransIntf.h"
 #include "FontImpl.h"
 #include "ncbind.hpp"
@@ -621,6 +622,116 @@ TEST_CASE("legacy compatibility plugins expose observable behavior") {
     REQUIRE(ncbAutoRegister::LoadModule(TJS_W("kztouch.dll")));
     tTJSVariant touchClass = getGlobalProp(TJS_W("KZTouch"));
     CHECK(touchClass.Type() == tvtObject);
+}
+
+TEST_CASE("compatibility capability API describes portable and host-only paths") {
+    ensurePluginRegistryRuntime();
+    ncbAutoRegister::UnloadModule(TJS_W("systemEx.dll"));
+
+    // Some Catch2 orderings start with a bare TJS world.  Install the same
+    // core System class that the product bootstrap provides before probing
+    // the adapter's methods.
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    REQUIRE(global != nullptr);
+    tTJSVariant existingSystem;
+    if(TJS_FAILED(global->PropGet(0, TJS_W("System"), nullptr,
+                                  &existingSystem, global))) {
+        iTJSDispatch2 *systemClass = TVPCreateNativeClass_System();
+        REQUIRE(systemClass != nullptr);
+        tTJSVariant value(systemClass);
+        systemClass->Release();
+        REQUIRE(TJS_SUCCEEDED(global->PropSet(
+            TJS_MEMBERENSURE | TJS_IGNOREPROP, TJS_W("System"), nullptr,
+            &value, global)));
+    }
+    global->Release();
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("systemEx.dll")));
+
+    const tTJSVariant system = getGlobalProp(TJS_W("System"));
+    REQUIRE(system.Type() == tvtObject);
+    const tTJSVariant getAll = getProp(
+        system, TJS_W("getCompatibilityCapabilities"));
+    REQUIRE(getAll.Type() == tvtObject);
+    tTJSVariant all;
+    REQUIRE(TJS_SUCCEEDED(getAll.AsObjectClosureNoAddRef().FuncCall(
+        0, nullptr, nullptr, &all, 0, nullptr,
+        system.AsObjectNoAddRef())));
+    REQUIRE(all.Type() == tvtObject);
+    CHECK(static_cast<tjs_int>(getProp(all, TJS_W("schema"))) == 1);
+    CHECK(ttstr(getProp(all, TJS_W("platform"))).GetLen() > 0);
+    const tTJSVariant modules = getProp(all, TJS_W("modules"));
+    REQUIRE(modules.Type() == tvtObject);
+    CHECK(static_cast<tjs_int>(getProp(modules, TJS_W("count"))) >= 20);
+
+    const tTJSVariant getOne = getProp(
+        system, TJS_W("getCompatibilityCapability"));
+    REQUIRE(getOne.Type() == tvtObject);
+    tTJSVariant steamName(TJS_W("steam"));
+    tTJSVariant *steamArgs[] = {&steamName};
+    tTJSVariant steam;
+    REQUIRE(TJS_SUCCEEDED(getOne.AsObjectClosureNoAddRef().FuncCall(
+        0, nullptr, nullptr, &steam, 1, steamArgs,
+        system.AsObjectNoAddRef())));
+    CHECK(ttstr(getProp(steam, TJS_W("module"))) ==
+          TJS_W("krkrsteam.dll"));
+    CHECK(static_cast<tjs_int64>(getProp(steam, TJS_W("available"))) == 1);
+    CHECK(ttstr(getProp(steam, TJS_W("mode"))) == TJS_W("offline"));
+    CHECK(static_cast<tjs_int>(getProp(
+              getProp(steam, TJS_W("implemented")), TJS_W("count"))) >= 4);
+
+    tTJSVariant oleName(TJS_W("win32ole"));
+    tTJSVariant *oleArgs[] = {&oleName};
+    tTJSVariant ole;
+    REQUIRE(TJS_SUCCEEDED(getOne.AsObjectClosureNoAddRef().FuncCall(
+        0, nullptr, nullptr, &ole, 1, oleArgs,
+        system.AsObjectNoAddRef())));
+    CHECK(getProp(ole, TJS_W("available")).Type() == tvtInteger);
+    CHECK(static_cast<tjs_int64>(getProp(ole, TJS_W("available"))) == 0);
+    CHECK(ttstr(getProp(ole, TJS_W("mode"))) == TJS_W("host-only"));
+    CHECK(static_cast<tjs_int>(getProp(
+              getProp(ole, TJS_W("unsupported")), TJS_W("count"))) > 0);
+
+    tTJSVariant unknownName(TJS_W("not-a-real-plugin"));
+    tTJSVariant *unknownArgs[] = {&unknownName};
+    tTJSVariant unknown;
+    REQUIRE(TJS_SUCCEEDED(getOne.AsObjectClosureNoAddRef().FuncCall(
+        0, nullptr, nullptr, &unknown, 1, unknownArgs,
+        system.AsObjectNoAddRef())));
+    CHECK(getProp(unknown, TJS_W("available")).Type() == tvtInteger);
+    CHECK(static_cast<tjs_int64>(getProp(unknown, TJS_W("available"))) == 0);
+    CHECK(ttstr(getProp(unknown, TJS_W("mode"))) == TJS_W("unknown"));
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("krkrsteam.dll")));
+    const tTJSVariant steamClass = getGlobalProp(TJS_W("Steam"));
+    REQUIRE(steamClass.Type() == tvtObject);
+    const tTJSVariant steamCapabilities = getProp(
+        steamClass, TJS_W("capabilities"));
+    REQUIRE(steamCapabilities.Type() == tvtObject);
+    tTJSVariant steamCapabilityValue;
+    REQUIRE(TJS_SUCCEEDED(steamCapabilities.AsObjectClosureNoAddRef().FuncCall(
+        0, nullptr, nullptr, &steamCapabilityValue, 0, nullptr,
+        steamClass.AsObjectNoAddRef())));
+    CHECK(ttstr(getProp(steamCapabilityValue, TJS_W("backend"))) ==
+          TJS_W("offline"));
+    CHECK(static_cast<tjs_int>(getProp(steamCapabilityValue,
+                                       TJS_W("screenshotWrite"))) == 1);
+    CHECK(static_cast<tjs_int>(getProp(steamCapabilityValue,
+                                       TJS_W("screenshotTrigger"))) == 0);
+
+    const tTJSVariant writeScreenshot = getProp(
+        steamClass, TJS_W("writeScreenshot"));
+    iTJSDispatch2 *notALayer = TJSCreateDictionaryObject();
+    REQUIRE(notALayer != nullptr);
+    tTJSVariant notALayerValue(notALayer, notALayer);
+    tTJSVariant screenshotPath(TJS_W("capability-test.png"));
+    tTJSVariant *screenshotArgs[] = {&notALayerValue, &screenshotPath};
+    tTJSVariant screenshotResult;
+    REQUIRE(TJS_SUCCEEDED(writeScreenshot.AsObjectClosureNoAddRef().FuncCall(
+        0, nullptr, nullptr, &screenshotResult, 2, screenshotArgs,
+        steamClass.AsObjectNoAddRef())));
+    CHECK(static_cast<tjs_int>(screenshotResult) == 0);
+    notALayer->Release();
 }
 
 TEST_CASE("plugin load mode defaults to krkrsdl3 and can select all modules") {

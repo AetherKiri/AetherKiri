@@ -45,7 +45,17 @@
 #include "tjsCommHead.h"
 #include <cstdlib>
 
-#if defined(_M_IX86) || defined(_M_X64)
+// Keep the upstream SIMD capability names available on both MSVC and the
+// Clang/GCC targets used by Aether.  The old header only checked the MSVC
+// spelling, which silently disabled the krkrz SSE leaf on macOS/Linux.
+#if defined(_M_IX86) || defined(_M_X64) || defined(__i386__) || \
+    defined(__x86_64__)
+#define TVP_SOUND_HAS_X86_SIMD 1
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+#define TVP_SOUND_HAS_ARM_SIMD 1
+#endif
+
+#if defined(TVP_SOUND_HAS_X86_SIMD)
 
 //---------------------------------------------------------------------------
 

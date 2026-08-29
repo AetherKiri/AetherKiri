@@ -1016,7 +1016,10 @@ void TTVPWindowForm::RegisterWindowMessageReceiver(tTVPWMRRegMode mode,
             tTVPMessageReceiverRecord *item = WindowMessageReceivers[i];
             if(!item)
                 continue;
-            if((void *)item->Proc == proc)
+            // A single thunk may serve several WindowEx/messenger objects.
+            // Keep the userdata as part of the identity so registering one
+            // window does not silently steal another window's callbacks.
+            if((void *)item->Proc == proc && item->UserData == userdata)
                 break; // have already registered
         }
         if(i == count) {
@@ -1033,7 +1036,7 @@ void TTVPWindowForm::RegisterWindowMessageReceiver(tTVPWMRRegMode mode,
             tTVPMessageReceiverRecord *item = WindowMessageReceivers[i];
             if(!item)
                 continue;
-            if((void *)item->Proc == proc) {
+            if((void *)item->Proc == proc && item->UserData == userdata) {
                 // found
                 WindowMessageReceivers.Remove(i);
                 delete item;

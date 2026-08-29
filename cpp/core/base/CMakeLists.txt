@@ -52,24 +52,54 @@ target_include_directories(${PROJECT_NAME} PUBLIC ${BASE_HEADERS_DIR})
 target_link_libraries(${PROJECT_NAME} PUBLIC tjs2 PRIVATE core_visual_module core_plugin_module core_environ_module core_extension_module core_sound_module core_utils_module)
 
 find_package(uchardet CONFIG REQUIRED)
-find_package(unrar CONFIG REQUIRED)
-find_package(LibArchive REQUIRED)
+# The RARLab decoder is preferred when the vcpkg package is available.  On
+# developer hosts without that SDK, libarchive still provides RAR4/RAR5
+# extraction, so make the specialised decoder optional instead of making the
+# entire core impossible to configure.  The source uses the same callback
+# contract in either case; only the fast/native RAR path is conditional.
+find_package(unrar CONFIG QUIET)
+set(AETHERKIRI_HAS_UNRAR OFF)
+set(AETHERKIRI_UNRAR_TARGET "")
+if(TARGET unrar::unrar)
+    set(AETHERKIRI_HAS_UNRAR ON)
+    set(AETHERKIRI_UNRAR_TARGET unrar::unrar)
+elseif(TARGET unofficial::unrar::unrar)
+    set(AETHERKIRI_HAS_UNRAR ON)
+    set(AETHERKIRI_UNRAR_TARGET unofficial::unrar::unrar)
+endif()
+if(NOT AETHERKIRI_HAS_UNRAR)
+    message(STATUS
+        "unrar SDK not found; archive extraction will use libarchive's RAR provider")
+endif()
+if(NOT DEFINED AETHERKIRI_LIBARCHIVE_TARGET OR
+   NOT TARGET "${AETHERKIRI_LIBARCHIVE_TARGET}")
+    include("${CMAKE_SOURCE_DIR}/cmake/AetherKiriDependencyAdapters.cmake")
+    aetherkiri_prepare_libarchive()
+endif()
 find_package(LibXml2 REQUIRED)
 find_package(SDL2 CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
-find_package(unofficial-minizip CONFIG REQUIRED)
+if(NOT DEFINED AETHERKIRI_MINIZIP_TARGET OR
+   NOT TARGET "${AETHERKIRI_MINIZIP_TARGET}")
+    include("${CMAKE_SOURCE_DIR}/cmake/AetherKiriDependencyAdapters.cmake")
+    aetherkiri_prepare_minizip()
+endif()
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     uchardet::libuchardet
-    unrar::unrar
-    LibArchive::LibArchive
+    ${AETHERKIRI_LIBARCHIVE_TARGET}
     LibXml2::LibXml2
     zstd::libzstd
 
     $<TARGET_NAME_IF_EXISTS:SDL2::SDL2main>
     $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
-    unofficial::minizip::minizip
+    ${AETHERKIRI_MINIZIP_TARGET}
 )
+
+if(AETHERKIRI_HAS_UNRAR)
+    target_link_libraries(${PROJECT_NAME} PRIVATE ${AETHERKIRI_UNRAR_TARGET})
+    target_compile_definitions(${PROJECT_NAME} PRIVATE AETHERKIRI_HAS_UNRAR=1)
+endif()
 
 if(APPLE)
     # The static libarchive package on macOS requires libb2 for RAR5 checksum

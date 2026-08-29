@@ -22,6 +22,10 @@
 #include "SysInitIntf.h"
 #include "ScriptMgnIntf.h"
 #include "tvpgl.h"
+#include "../utils/ReplFileChannel.h"
+#ifdef KRKRZ_ENABLE_DAP
+#include "tjsDebuggerCore.h"
+#endif
 
 //---------------------------------------------------------------------------
 // global data
@@ -52,6 +56,17 @@ void TVPSystemInit() {
     //	TVPGL_C_Init();
 
     TVPAfterSystemInit();
+    // The file REPL is an opt-in development channel selected by
+    // -replfile=<directory>.  Its implementation is Aether-owned and runs
+    // commands on the existing VM thread; no second console/thread ABI is
+    // linked into the product.
+    TVPCreateREPL();
+#ifdef KRKRZ_ENABLE_DAP
+    // The server is inert unless -dap is present.  Start it only after the
+    // script/graphics systems are ready so an early attach can inspect the
+    // startup script safely.
+    TVPCreateDAP();
+#endif
 }
 //---------------------------------------------------------------------------
 
@@ -66,6 +81,13 @@ void TVPSystemUninit() {
     if(TVPSystemUninitCalled)
         return;
     TVPSystemUninitCalled = true;
+
+    TVPDestroyREPL();
+#ifdef KRKRZ_ENABLE_DAP
+    // Stop the socket worker before tearing down the VM and variant storage;
+    // a debugger hook can otherwise race script-engine destruction.
+    TVPDestroyDAP();
+#endif
 
     TVPBeforeSystemUninit();
 

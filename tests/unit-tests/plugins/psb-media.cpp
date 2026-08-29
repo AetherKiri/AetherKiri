@@ -9,6 +9,12 @@
 #include "psbfile/PSBMedia.h"
 
 namespace {
+    class CollectingLister final : public iTVPStorageLister {
+    public:
+        void Add(const ttstr &file) override { files.push_back(file.AsStdString()); }
+        std::vector<std::string> files;
+    };
+
     std::vector<uint8_t> makeWebPHeader(const size_t encodedSize) {
         std::vector<uint8_t> encoded(encodedSize, 0xa5);
         REQUIRE(encoded.size() >= 15);
@@ -55,6 +61,47 @@ TEST_CASE("PSB media resolves authored motion slices by family and order") {
     CHECK(canvasWidth == 1280);
     CHECK(canvasHeight == 720);
     CHECK_FALSE(media.resolveMotionSliceStorage("other.png", resolved));
+}
+
+TEST_CASE("PSB media enumerates virtual directories and purges metadata") {
+    PSB::PSBMedia media;
+    auto first = std::make_shared<PSB::PSBResource>();
+    first->index = 1;
+    first->data = {0x01, 0x02};
+    auto second = std::make_shared<PSB::PSBResource>();
+    second->index = 2;
+    second->data = {0x03, 0x04};
+    auto nested = std::make_shared<PSB::PSBResource>();
+    nested->index = 3;
+    nested->data = {0x05};
+
+    media.add("gallery.pimg/title/cover.tlg", first);
+    media.add("gallery.pimg/title/icon.tlg", second);
+    media.add("gallery.pimg/title/deep/ignored.tlg", nested);
+
+    CollectingLister lister;
+    media.GetListAt(ttstr("GALLERY.PIMG/TITLE/"), &lister);
+    REQUIRE(lister.files.size() == 2);
+    CHECK(lister.files[0] == "cover.tlg");
+    CHECK(lister.files[1] == "icon.tlg");
+
+    PSB::PSBMedia::LayerPosition position;
+    position.sceneName = "title";
+    position.layerName = "cover";
+    media.addLayerPositions("gallery.pimg", {position});
+    PSB::PSBMedia::ButtonBoundInfo button;
+    button.sceneName = "title";
+    button.buttonName = "cover";
+    media.addButtonBounds("gallery.pimg", {button});
+    REQUIRE(media.getLayerPositions("GALLERY.PIMG").size() == 1);
+    REQUIRE(media.getButtonBounds("gallery.pimg").size() == 1);
+
+    media.removeByPrefix("gallery.pimg/title");
+    CollectingLister after;
+    media.GetListAt(ttstr("gallery.pimg/title/"), &after);
+    CHECK(after.files.empty());
+    CHECK(media.getLayerPositions("gallery.pimg").empty());
+    CHECK(media.getButtonBounds("gallery.pimg").empty());
 }
 
 TEST_CASE("PIMG composites normalize selected layers to their own bounds") {

@@ -21,9 +21,9 @@
 #include "tjsObject.h"
 #include "tjs.tab.hpp"
 
-#ifdef _DEBUG
+#if defined(_DEBUG) || defined(KRKRZ_ENABLE_DAP)
 #include "tjsDebug.h"
-#endif // _DEBUG
+#endif // _DEBUG || KRKRZ_ENABLE_DAP
 
 namespace TJS {
     class tTJSScriptBlock;
@@ -455,10 +455,10 @@ namespace TJS {
         tjs_int ExecutingCount;
         bool DeferredFinalize;
 
-#ifdef _DEBUG
+#if defined(_DEBUG) || defined(KRKRZ_ENABLE_DAP)
         ScopeKey DebuggerScopeKey; //!< for exec
         tTJSVariant *DebuggerRegisterArea; //!< for exec
-#endif // _DEBUG
+#endif // _DEBUG || KRKRZ_ENABLE_DAP
 
     public:
         tTJSContextType GetContextType() const { return ContextType; }
@@ -476,14 +476,14 @@ namespace TJS {
         void EnterExecution();
         void LeaveExecution();
 
-#ifdef _DEBUG
+#if defined(_DEBUG) || defined(KRKRZ_ENABLE_DAP)
         ttstr GetClassName() const;
         ttstr GetSelfClassName() const;
 
         const ScopeKey &GetDebuggerScopeKey() { return DebuggerScopeKey; }
         tTJSVariant *GetDebuggerRegisterArea() { return DebuggerRegisterArea; }
         tTJSVariant *GetDebuggerDataArea() { return DataArea; }
-#endif // _DEBUG
+#endif // _DEBUG || KRKRZ_ENABLE_DAP
     private:
         void OutputWarning(const tjs_char *msg, tjs_int pos = -1);
 

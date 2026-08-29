@@ -52,10 +52,32 @@ if(VCPKG_TARGET_ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Android")
         include(cmake/vcpkg_android.cmake)
     endif()
 else()
-    set(CMAKE_TOOLCHAIN_FILE $ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake)
+    # Respect an explicit toolchain passed by the caller.  Older revisions
+    # unconditionally replaced it with "$VCPKG_ROOT/..."; when the
+    # environment variable was unset this became /scripts/buildsystems/... and
+    # prevented even host-package fallback configuration.  Auto-select vcpkg
+    # only when the environment points at a real checkout.
+    if(NOT DEFINED CMAKE_TOOLCHAIN_FILE OR
+       CMAKE_TOOLCHAIN_FILE STREQUAL "")
+        if(DEFINED ENV{VCPKG_ROOT} AND
+           EXISTS "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
+            set(CMAKE_TOOLCHAIN_FILE
+                "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+                CACHE FILEPATH "vcpkg toolchain file")
+        endif()
+    endif()
 endif()
 
 project(krkr2)
+
+# Keep toolchain-provided find modules first, while allowing a small host
+# fallback (notably Homebrew's FFmpeg) when a vcpkg binary is unavailable.
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(cmake/AetherKiriDependencyAdapters.cmake)
+aetherkiri_prepare_minizip()
+aetherkiri_prepare_lz4()
+aetherkiri_prepare_libarchive()
+aetherkiri_prepare_curl()
 
 if(ANDROID)
     add_compile_options(-Wno-inconsistent-missing-override)
@@ -94,12 +116,29 @@ set(AETHERKIRI_OBFUSCATION_BUILD_ID "local" CACHE STRING
     "non-secret identifier mixed into deterministic obfuscation output")
 option(AETHERKIRI_ENABLE_INTERNAL
        "enable optional private AetherInternal packages when available" ON)
+option(AETHERKIRI_ENABLE_DAP
+       "enable the krkrz Debug Adapter Protocol bridge on desktop targets" ON)
 set(AETHERKIRI_MOTIONPLAYER_BACKEND_API_VERSION 4)
 set(AETHERKIRI_LIVE2D_HOST_API_VERSION 1)
 set(AETHERKIRI_FRAME_EFFECT_HOST_API_VERSION 2)
 set(AETHERKIRI_INTERNAL_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/packages/AetherInternal"
     CACHE PATH "path to an AetherInternal package checkout")
+
+# DAP is a host-side debugging transport.  Keep the VM hook ABI available on
+# desktop targets while leaving mobile/web products free of socket and JSON
+# dependencies.  The server is inert unless the process receives -dap=<port>.
+set(AETHERKIRI_DAP_ENABLED OFF)
+if(AETHERKIRI_ENABLE_DAP AND NOT (IOS OR ANDROID OR WEB OR EMSCRIPTEN))
+    set(AETHERKIRI_DAP_ENABLED ON)
+    find_path(AETHERKIRI_PICOJSON_INCLUDE_DIR
+        NAMES picojson/picojson.h
+        REQUIRED)
+    add_compile_definitions(KRKRZ_ENABLE_DAP PICOJSON_USE_INT64)
+    message(STATUS "krkrz DAP bridge: enabled")
+else()
+    message(STATUS "krkrz DAP bridge: disabled for this target")
+endif()
 
 include(cmake/AetherKiriBinaryProtection.cmake)
 
@@ -173,7 +212,11 @@ if(DEFINED AETHER_USE_KRKRZ_LEAF_PLUGINS)
     unset(AETHER_USE_KRKRZ_LEAF_PLUGINS CACHE)
 endif()
 option(AETHER_USE_KRKRZ_OPTIONAL_PLUGINS
-       "Validate experimental krkrz_dev plugin sources without linking them" OFF)
+       "Validate the remaining experimental krkrz_dev plugin sources" OFF)
+option(AETHERKIRI_ENABLE_CLIPFILE
+       "Build the krkrz CLIP parser/writer adapter" ON)
+option(AETHERKIRI_ENABLE_RICHTEXT
+       "Build the krkrz richtext/Minikin adapter on supported native hosts" ON)
 option(AETHER_BUILD_KRKRZ_CORE_PARITY
        "Build isolated krkrz_dev visual/sound SIMD parity executables" OFF)
 

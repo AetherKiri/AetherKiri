@@ -4,7 +4,7 @@
 // their include guards prevent the upstream tree from introducing a second
 // ABI or string/type definition.  The upstream translation unit itself is
 // otherwise unchanged.
-#include "tjsCommHead.h"
+#include "../../tjs2/tjsCommHead.h"
 
 #include "../Random.h"
 #include "../md5.h"

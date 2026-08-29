@@ -12,6 +12,9 @@
 #ifndef __RESAMPLE_IMAGE_INTERNAL_H__
 #define __RESAMPLE_IMAGE_INTERNAL_H__
 
+#include <cfloat>
+#include <vector>
+
 struct tTVPImageCopyFuncBase {
     virtual ~tTVPImageCopyFuncBase() = default;
     virtual void operator()(tjs_uint32 *dest, const tjs_uint32 *src,

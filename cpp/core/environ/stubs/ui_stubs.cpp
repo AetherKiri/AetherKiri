@@ -970,7 +970,18 @@ public:
 
     bool GetFormEnabled() override { return !closing_; }
 
-    void SetDefaultMouseCursor() override {}
+    void OnWindowStateChanged(tjs_uint32 message, tjs_uint64 wparam,
+                              tjs_uint64 lparam) override {
+        tTVPWindowMessage payload;
+        payload.Msg = message;
+        payload.WParam = wparam;
+        payload.LParam = lparam;
+        DeliverWindowMessage(payload);
+    }
+
+    void SetDefaultMouseCursor() override {
+        SetMouseCursorState(mcsVisible);
+    }
 
     void GetCursorPos(tjs_int &x, tjs_int &y) override {
         x = last_mouse_x_;
@@ -980,14 +991,18 @@ public:
     void SetCursorPos(tjs_int x, tjs_int y) override {
         last_mouse_x_ = x;
         last_mouse_y_ = y;
+        iWindowLayer::UpdateCursorPos(x, y);
     }
 
     void UpdateCursorPos(tjs_int x, tjs_int y) override {
         last_mouse_x_ = x;
         last_mouse_y_ = y;
+        iWindowLayer::UpdateCursorPos(x, y);
     }
 
-    void SetHintText(const ttstr &text) override {}
+    void SetHintText(const ttstr &text) override {
+        iWindowLayer::SetHintText(nullptr, text);
+    }
 
     void SetAttentionPoint(tjs_int left, tjs_int top,
                            const struct tTVPFont *font,
@@ -1005,7 +1020,14 @@ public:
         // No zoom transformation — coordinates pass through 1:1
     }
 
-    void BringToFront() override {}
+    void BringToFront() override {
+        // There is no native z-order in an embedded host, but keeping the
+        // logical window active/visible makes Window.bringToFront() useful to
+        // scripts and lets focus-sensitive code observe the transition.
+        active_ = true;
+        visible_ = true;
+        OnWindowStateChanged(0x0006u, 1, 0); // WM_ACTIVATE
+    }
 
     void ShowWindowAsModal() override {
         // The engine runs on the host UI thread, so returning immediately
@@ -1031,26 +1053,70 @@ public:
 
     bool GetVisible() override { return visible_; }
 
-    void SetVisible(bool bVisible) override { visible_ = bVisible; }
+    void SetVisible(bool bVisible) override {
+        const bool changed = visible_ != bVisible;
+        visible_ = bVisible;
+        if(!bVisible)
+            active_ = false;
+        if(changed)
+            OnWindowStateChanged(0x0018u, bVisible ? 1 : 0,
+                                 bVisible ? 1 : 0); // WM_SHOWWINDOW
+    }
 
     const char *GetCaption() override { return caption_.c_str(); }
 
     void SetCaption(const std::string &cap) override { caption_ = cap; }
 
     void SetWidth(tjs_int w) override {
-        if (w > 0) width_ = w;
+        if (w > 0) {
+            tjs_int constrained_w = w;
+            tjs_int constrained_h = height_;
+            ConstrainSize(constrained_w, constrained_h);
+            width_ = constrained_w;
+            height_ = constrained_h;
+        }
         SyncDrawDeviceWindowSize(width_, height_);
+        OnWindowStateChanged(0x0005u, 0,
+                             (static_cast<tjs_uint64>(
+                                  static_cast<tjs_uint16>(width_)) & 0xffffu) |
+                                 ((static_cast<tjs_uint64>(
+                                      static_cast<tjs_uint16>(height_)) &
+                                   0xffffu)
+                                  << 16)); // WM_SIZE
     }
 
     void SetHeight(tjs_int h) override {
-        if (h > 0) height_ = h;
+        if (h > 0) {
+            tjs_int constrained_w = width_;
+            tjs_int constrained_h = h;
+            ConstrainSize(constrained_w, constrained_h);
+            width_ = constrained_w;
+            height_ = constrained_h;
+        }
         SyncDrawDeviceWindowSize(width_, height_);
+        OnWindowStateChanged(0x0005u, 0,
+                             (static_cast<tjs_uint64>(
+                                  static_cast<tjs_uint16>(width_)) & 0xffffu) |
+                                 ((static_cast<tjs_uint64>(
+                                      static_cast<tjs_uint16>(height_)) &
+                                   0xffffu)
+                                  << 16)); // WM_SIZE
     }
 
     void SetSize(tjs_int w, tjs_int h) override {
-        if (w > 0) width_ = w;
-        if (h > 0) height_ = h;
+        tjs_int constrained_w = w > 0 ? w : width_;
+        tjs_int constrained_h = h > 0 ? h : height_;
+        ConstrainSize(constrained_w, constrained_h);
+        if (constrained_w > 0) width_ = constrained_w;
+        if (constrained_h > 0) height_ = constrained_h;
         SyncDrawDeviceWindowSize(width_, height_);
+        OnWindowStateChanged(0x0005u, 0,
+                             (static_cast<tjs_uint64>(
+                                  static_cast<tjs_uint16>(width_)) & 0xffffu) |
+                                 ((static_cast<tjs_uint64>(
+                                      static_cast<tjs_uint16>(height_)) &
+                                   0xffffu)
+                                  << 16)); // WM_SIZE
     }
 
     void GetSize(tjs_int &w, tjs_int &h) override {
@@ -1068,6 +1134,9 @@ public:
     }
 
     void SetZoom(tjs_int numer, tjs_int denom) override {
+        if(numer <= 0 || denom <= 0)
+            return;
+        std::lock_guard<std::mutex> lock(WindowStateMutex);
         ZoomNumer = numer;
         ZoomDenom = denom;
     }
@@ -1426,6 +1495,8 @@ public:
 
     void Close() override {
         closing_ = true;
+        active_ = false;
+        OnWindowStateChanged(0x0010u, 0, 0); // WM_CLOSE
         spdlog::debug("HostWindowLayer::Close called");
         if(owner_ == TVPMainWindow) {
             TVPTerminateAsync(0);
@@ -1464,19 +1535,24 @@ public:
         // Rendering is driven by engine_tick / engine_read_frame_rgba
     }
 
-    void SetVisibleFromScript(bool b) override { visible_ = b; }
+    void SetVisibleFromScript(bool b) override { SetVisible(b); }
 
-    void SetUseMouseKey(bool b) override {}
+    void SetUseMouseKey(bool b) override {
+        iWindowLayer::SetUseMouseKey(b);
+    }
 
-    [[nodiscard]] bool GetUseMouseKey() const override { return false; }
+    [[nodiscard]] bool GetUseMouseKey() const override {
+        return iWindowLayer::GetUseMouseKey();
+    }
 
-    void ResetMouseVelocity() override {}
+    void ResetMouseVelocity() override { iWindowLayer::ResetMouseVelocity(); }
 
-    void ResetTouchVelocity(tjs_int id) override {}
+    void ResetTouchVelocity(tjs_int id) override {
+        iWindowLayer::ResetTouchVelocity(id);
+    }
 
     bool GetMouseVelocity(float &x, float &y, float &speed) const override {
-        x = y = speed = 0;
-        return false;
+        return iWindowLayer::GetMouseVelocity(x, y, speed);
     }
 
     void TickBeat() override {
@@ -1689,6 +1765,20 @@ private:
 // TVPInitUIExtension — originally in ui/extension/UIExtension.cpp
 // Registered custom UI widgets (PageView, etc.)
 // ---------------------------------------------------------------------------
+// The krkrz generic/systemEx bridge exposes these two entry points even on
+// hosts without a Win32 message queue.  Keep them as real exported helpers,
+// backed by Aether's bounded user-message queue, so callers do not hit an
+// unresolved symbol and queued window/timer work is still progressed.
+void TVPProcessApplicationMessages() {
+    if(Application)
+        Application->ProcessMessages();
+}
+
+void TVPHandleApplicationMessage() {
+    if(Application)
+        Application->ProcessMessages();
+}
+
 void TVPInitUIExtension() {
     spdlog::debug("TVPInitUIExtension: stub (UI handled by host)");
 }

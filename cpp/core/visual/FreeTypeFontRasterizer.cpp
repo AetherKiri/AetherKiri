@@ -14,9 +14,12 @@
 #include "MsgIntf.h"
 #include "FontSystem.h"
 #include "FontImpl.h"
+#include "CharacterSet.h"
+#include <algorithm>
 #include <complex>
 #include <mutex>
 #include <string>
+#include <unordered_set>
 #include <unordered_map>
 
 extern FontSystem *TVPFontSystem;
@@ -24,7 +27,7 @@ extern FontSystem *TVPFontSystem;
 namespace {
 struct GlyphExtentCacheKey {
     std::string font;
-    tjs_char ch = 0;
+    tjs_uint32 ch = 0;
 
     bool operator==(const GlyphExtentCacheKey &other) const {
         return ch == other.ch && font == other.font;
@@ -78,20 +81,28 @@ void FreeTypeFontRasterizer::ApplyFaceOptions(tFreeTypeFace *face) {
     } else {
         face->ClearOption(TVP_TF_STRIKEOUT);
     }
+    if(EffectiveEmojiMode == TVP_EMOJI_COLOR)
+        face->SetOption(TVP_FACE_OPTIONS_COLOR);
+    else
+        face->ClearOption(TVP_FACE_OPTIONS_COLOR);
 }
 
 void FreeTypeFontRasterizer::ClearFallbackFaces() {
     FaceFallbacks.clear();
+    FaceFallbackEmoji.clear();
 }
 
 class tFreeTypeFace *FreeTypeFontRasterizer::GetOrCreateFace(
-    const ttstr &name, tjs_uint32 options) {
+    const ttstr &name, tjs_uint32 options, tjs_int weight,
+    const ttstr &variations) {
     const std::string key = name.AsStdString() + "|" +
-        std::to_string(options);
+        std::to_string(options) + "|" + std::to_string(weight) + "|" +
+        variations.AsStdString();
     auto found = FaceCache.find(key);
     if(found != FaceCache.end())
         return found->second.get();
     auto face = std::make_unique<tFreeTypeFace>(name, options);
+    face->ApplyFontVariations(weight, variations);
     auto *result = face.get();
     FaceCache.emplace(key, std::move(face));
     return result;
@@ -102,29 +113,81 @@ void FreeTypeFontRasterizer::ApplyFallbackFaces() {
         return;
 
     std::vector<ttstr> candidates;
+    std::vector<bool> candidateEmoji;
     const ttstr &current = Face->GetFontName();
     const ttstr &default_font = TVPGetDefaultFontName();
-    auto append_unique = [&](const ttstr &name) {
-        if(name.IsEmpty() || name == current)
-            return;
-        for(const auto &existing : candidates) {
-            if(existing == name)
-                return;
+    const ttstr monoEmoji(TVPGetEmojiFaceName(TVP_EMOJI_MONO));
+    const ttstr colorEmoji(TVPGetEmojiFaceName(TVP_EMOJI_COLOR));
+    const ttstr selectedEmoji = EffectiveEmojiMode == TVP_EMOJI_COLOR
+        ? colorEmoji : monoEmoji;
+    std::unordered_set<std::string> seenFaces;
+    std::unordered_set<std::string> emojiFaces;
+    auto faceIdentity = [](const ttstr &name) {
+        if(auto *info = TVPFindFont(name)) {
+            return info->Path.AsStdString() + "#" +
+                std::to_string(std::max(0, info->Index));
         }
+        return name.AsStdString();
+    };
+    const std::string currentIdentity = faceIdentity(current);
+    if(!monoEmoji.IsEmpty())
+        emojiFaces.insert(faceIdentity(monoEmoji));
+    if(!colorEmoji.IsEmpty())
+        emojiFaces.insert(faceIdentity(colorEmoji));
+    auto append_unique = [&](const ttstr &name) {
+        if(name.IsEmpty())
+            return;
+        const std::string identity = faceIdentity(name);
+        if(identity == currentIdentity || !seenFaces.insert(identity).second)
+            return;
         candidates.emplace_back(name);
+        candidateEmoji.emplace_back(emojiFaces.find(identity) != emojiFaces.end());
     };
 
     append_unique(default_font);
     std::vector<ttstr> all_fonts;
     TVPGetAllFontList(all_fonts);
+    // The hash-table iteration order is intentionally unspecified.  A stable
+    // secondary order keeps fallback selection reproducible across runs while
+    // preserving the configured default face as the first candidate.
+    std::sort(all_fonts.begin(), all_fonts.end(),
+              [](const ttstr &lhs, const ttstr &rhs) {
+                  return lhs.AsStdString() < rhs.AsStdString();
+              });
     for(const auto &name : all_fonts) {
         append_unique(name);
     }
 
-    for(const auto &name : candidates) {
-        auto *fallback = GetOrCreateFace(name, 0);
+    for(size_t i = 0; i < candidates.size(); ++i) {
+        const auto &name = candidates[i];
+        const tjs_uint32 options = EffectiveEmojiMode == TVP_EMOJI_COLOR
+            ? TVP_FACE_OPTIONS_COLOR : 0;
+        auto *fallback = GetOrCreateFace(name, options, CurrentFont.Weight,
+                                         CurrentFont.Variations);
         ApplyFaceOptions(fallback);
         FaceFallbacks.emplace_back(fallback);
+        FaceFallbackEmoji.emplace_back(candidateEmoji[i]);
+    }
+
+    // Keep the explicitly configured emoji face at the end of the chain.  It
+    // is only added when the shared registry knows the alias; unknown names
+    // must remain a no-op for legacy games.
+    if((EffectiveEmojiMode == TVP_EMOJI_MONO ||
+        EffectiveEmojiMode == TVP_EMOJI_COLOR) &&
+       !selectedEmoji.IsEmpty() && TVPFindFont(selectedEmoji)) {
+        bool already = false;
+        for(const auto &existing : candidates)
+            already = already || existing == selectedEmoji;
+        if(!already) {
+            const tjs_uint32 options = EffectiveEmojiMode == TVP_EMOJI_COLOR
+                ? TVP_FACE_OPTIONS_COLOR : 0;
+            auto *emojiFace = GetOrCreateFace(selectedEmoji, options,
+                                               CurrentFont.Weight,
+                                               CurrentFont.Variations);
+            ApplyFaceOptions(emojiFace);
+            FaceFallbacks.emplace_back(emojiFace);
+            FaceFallbackEmoji.emplace_back(true);
+        }
     }
 }
 
@@ -165,6 +228,7 @@ void FreeTypeFontRasterizer::ApplyFont(class tTVPNativeBaseBitmap *bmp,
 void FreeTypeFontRasterizer::ApplyFont(const tTVPFont &font) {
     std::lock_guard<std::recursive_mutex> stateLock(Mutex);
     CurrentFont = font;
+    EffectiveEmojiMode = TVPResolveEmojiMode(font.EmojiMode);
     ttstr stdname = TVPFontSystem->GetBeingFont(font.Face);
     // TVP_FACE_OPTIONS_NO_ANTIALIASING
     // TVP_FACE_OPTIONS_NO_HINTING
@@ -175,15 +239,24 @@ void FreeTypeFontRasterizer::ApplyFont(const tTVPFont &font) {
     opt |= (font.Flags & TVP_TF_UNDERLINE) ? TVP_TF_UNDERLINE : 0;
     opt |= (font.Flags & TVP_TF_STRIKEOUT) ? TVP_TF_STRIKEOUT : 0;
     opt |= (font.Flags & TVP_TF_FONTFILE) ? TVP_FACE_OPTIONS_FILE : 0;
+    opt |= (EffectiveEmojiMode == TVP_EMOJI_COLOR)
+        ? TVP_FACE_OPTIONS_COLOR : 0;
+    const std::string requestedFaceKey =
+        stdname.AsStdString() + "|" + std::to_string(opt) + "|" +
+        std::to_string(font.Weight) + "|" + font.Variations.AsStdString() +
+        "|emoji=" + std::to_string(EffectiveEmojiMode);
     bool recreate = false;
     if(Face) {
-        if(Face->GetFontName() != stdname) {
+        if(CurrentFaceCacheKey != requestedFaceKey) {
             ClearFallbackFaces();
-            Face = GetOrCreateFace(stdname, opt);
+            Face = GetOrCreateFace(stdname, opt, font.Weight,
+                                   font.Variations);
+            CurrentFaceCacheKey = requestedFaceKey;
             recreate = true;
         }
     } else {
-        Face = GetOrCreateFace(stdname, opt);
+        Face = GetOrCreateFace(stdname, opt, font.Weight, font.Variations);
+        CurrentFaceCacheKey = requestedFaceKey;
         ClearFallbackFaces();
         recreate = true;
     }
@@ -209,6 +282,10 @@ void FreeTypeFontRasterizer::ApplyFont(const tTVPFont &font) {
         } else {
             Face->ClearOption(TVP_TF_STRIKEOUT);
         }
+        if(EffectiveEmojiMode == TVP_EMOJI_COLOR)
+            Face->SetOption(TVP_FACE_OPTIONS_COLOR);
+        else
+            Face->ClearOption(TVP_FACE_OPTIONS_COLOR);
     }
     for(auto *fallback : FaceFallbacks) {
         ApplyFaceOptions(fallback);
@@ -218,15 +295,27 @@ void FreeTypeFontRasterizer::ApplyFont(const tTVPFont &font) {
     CurrentExtentCacheFontKey = resolved_face.AsStdString() + "|" +
                                 std::to_string(height) + "|" +
                                 std::to_string(font.Flags) + "|" +
+                                std::to_string(font.Weight) + "|" +
+                                font.Variations.AsStdString() + "|" +
                                 std::to_string(TVPFontNames.GetCount());
     LastBitmap = nullptr;
 }
 //---------------------------------------------------------------------------
-static bool isUnicodeSpace(char16_t ch);
-static bool isDefaultIgnorableUnicode(char16_t ch);
+static bool isUnicodeSpace(tjs_uint32 ch) { return TVPIsUnicodeSpace(ch); }
+static bool isDefaultIgnorableUnicode(tjs_uint32 ch) {
+    return TVPIsUnicodeDefaultIgnorable(ch);
+}
+
 void FreeTypeFontRasterizer::GetTextExtent(tjs_char ch, tjs_int &w,
                                            tjs_int &h) {
+    GetTextExtent(static_cast<tjs_uint32>(static_cast<tjs_uint16>(ch)), w, h);
+}
+
+void FreeTypeFontRasterizer::GetTextExtent(tjs_uint32 ch, tjs_int &w,
+                                           tjs_int &h) {
     std::lock_guard<std::recursive_mutex> stateLock(Mutex);
+    w = 0;
+    h = 0;
     if(!Face)
         return;
     if(isDefaultIgnorableUnicode(ch)) {
@@ -291,17 +380,7 @@ tjs_int FreeTypeFontRasterizer::GetAscentHeight() {
         return Face->GetLineBaseline();
     return 0;
 }
-static bool isUnicodeSpace(char16_t ch) {
-    return (ch >= 0x0009 && ch <= 0x000D) || ch == 0x0020 || ch == 0x0085 ||
-        ch == 0x00A0 || ch == 0x1680 || (ch >= 0x2000 && ch <= 0x200A) ||
-        ch == 0x2028 || ch == 0x2029 || ch == 0x202F || ch == 0x205F ||
-        ch == 0x3000;
-}
 
-static bool isDefaultIgnorableUnicode(char16_t ch) {
-    return ch == 0x00AD || (ch >= 0x200B && ch <= 0x200F) ||
-        ch == 0x2060 || (ch >= 0xFE00 && ch <= 0xFE0F) || ch == 0xFEFF;
-}
 //---------------------------------------------------------------------------
 tTVPCharacterData *
 FreeTypeFontRasterizer::GetBitmap(const tTVPFontAndCharacterData &font,
@@ -318,6 +397,45 @@ FreeTypeFontRasterizer::GetBitmap(const tTVPFontAndCharacterData &font,
         data->BlurLevel = font.BlurLevel;
         return data;
     }
+
+    // A variation selector can override the global/font emoji policy for one
+    // code point.  Rebuild the face chain only for the duration of this glyph;
+    // all returned data is owned by the character cache, so restoring the
+    // caller's chain afterwards is safe and keeps the public Font ABI stable.
+    const bool preferEmoji =
+        font.EmojiPresentation == TVP_EMOJI_PRESENTATION_EMOJI;
+    const bool forceText =
+        font.EmojiPresentation == TVP_EMOJI_PRESENTATION_TEXT;
+    tjs_int requestedMode = EffectiveEmojiMode;
+    if(preferEmoji && requestedMode == TVP_EMOJI_NONE)
+        requestedMode = TVP_EMOJI_COLOR;
+    if(forceText)
+        requestedMode = TVP_EMOJI_NONE;
+    bool reapplied = false;
+    if(requestedMode != EffectiveEmojiMode) {
+        tTVPFont adjusted = font.Font;
+        adjusted.EmojiMode = requestedMode;
+        ApplyFont(adjusted);
+        reapplied = true;
+    }
+
+    // VS15/VS16 temporarily changes the mutable face chain.  Restore it on
+    // every exit path, including a rasterizer exception, so one malformed
+    // glyph cannot affect the following glyph.
+    auto restoreFace = [&]() noexcept {
+        if(!reapplied)
+            return;
+        try {
+            ApplyFont(font.Font);
+        } catch(...) {
+            // Keep the original exception (if any); the next ApplyFont call
+            // will retry the canonical face chain.
+        }
+        reapplied = false;
+    };
+
+    tTVPCharacterData *data = nullptr;
+    try {
     if(font.Antialiased) {
         Face->ClearOption(TVP_FACE_OPTIONS_NO_ANTIALIASING);
     } else {
@@ -330,21 +448,38 @@ FreeTypeFontRasterizer::GetBitmap(const tTVPFontAndCharacterData &font,
         Face->SetOption(TVP_FACE_OPTIONS_NO_HINTING);
         // Face->ClearOption( TVP_FACE_OPTIONS_FORCE_AUTO_HINTING );
     }
-    tTVPCharacterData *data = Face->GetGlyphFromCharcode(font.Character);
+
+    ApplyFallbackFaces();
+    auto tryFallback = [&](size_t index) -> bool {
+        if(index >= FaceFallbacks.size())
+            return false;
+        auto *fallback = FaceFallbacks[index];
+        data = fallback->GetGlyphFromCharcode(font.Character);
+        if(!data)
+            return false;
+        // The caller supplies a single y coordinate for the whole line.
+        // Missing glyphs from fallback faces must share the primary baseline.
+        data->OriginY += krkr::font::ComputeFallbackBaselineAdjustment(
+            Face->GetLineBaseline(), fallback->GetLineBaseline());
+        return true;
+    };
+
+    if(preferEmoji) {
+        // VS16 explicitly prefers the configured emoji face, even when the
+        // primary text face also contains a monochrome star/heart glyph.
+        for(size_t i = 0; i < FaceFallbacks.size() && !data; ++i) {
+            if(i < FaceFallbackEmoji.size() && FaceFallbackEmoji[i])
+                tryFallback(i);
+        }
+    }
+    if(!data)
+        data = Face->GetGlyphFromCharcode(font.Character);
     if(!data && !isUnicodeSpace(font.Character)) {
-        ApplyFallbackFaces();
-        for(auto *fallback : FaceFallbacks) {
-            data = fallback->GetGlyphFromCharcode(font.Character);
-            if(data) {
-                // The caller supplies a single y coordinate for the whole
-                // line. Missing CJK glyphs may come from several fallback
-                // faces, whose ascender/descent metrics differ. Keep those
-                // bitmaps on the requested face's baseline instead of
-                // letting adjacent characters jump vertically.
-                data->OriginY += krkr::font::ComputeFallbackBaselineAdjustment(
-                    Face->GetLineBaseline(), fallback->GetLineBaseline());
-                break;
-            }
+        for(size_t i = 0; i < FaceFallbacks.size() && !data; ++i) {
+            if(preferEmoji && i < FaceFallbackEmoji.size() &&
+               FaceFallbackEmoji[i])
+                continue;
+            tryFallback(i);
         }
     }
     if(data == nullptr) {
@@ -355,6 +490,16 @@ FreeTypeFontRasterizer::GetBitmap(const tTVPFontAndCharacterData &font,
     }
     if(data == nullptr) {
         TVPThrowExceptionMessage(TVPFontRasterizeError);
+    }
+
+    // Shadows use the glyph's alpha as a coverage mask.  Converting here
+    // keeps both the normal (unblurred) and blurred shadow paths compatible
+    // with the legacy text-color/blend contract while the main glyph retains
+    // its original RGB channels.
+    if(font.Blured && data->FullColored) {
+        tTVPCharacterData *mask = data->CreateAlphaMask();
+        data->Release();
+        data = mask;
     }
 
     int cx = data->Metrics.CellIncX;
@@ -372,7 +517,6 @@ FreeTypeFontRasterizer::GetBitmap(const tTVPFontAndCharacterData &font,
     }
 
     data->Antialiased = font.Antialiased;
-    data->FullColored = false;
     data->Blured = font.Blured;
     data->BlurWidth = font.BlurWidth;
     data->BlurLevel = font.BlurLevel;
@@ -380,9 +524,17 @@ FreeTypeFontRasterizer::GetBitmap(const tTVPFontAndCharacterData &font,
                             //	data->OriginY += aofsy;
 
     // apply blur
-    if(font.Blured)
+    if(font.Blured && !data->FullColored)
         data->Blur(); // nasty ...
+
+    restoreFace();
     return data;
+    } catch(...) {
+        if(data)
+            data->Release();
+        restoreFace();
+        throw;
+    }
 }
 //---------------------------------------------------------------------------
 void FreeTypeFontRasterizer::GetGlyphDrawRect(const ttstr &text,
@@ -398,9 +550,20 @@ void FreeTypeFontRasterizer::GetGlyphDrawRect(const ttstr &text,
     area.left = area.top = area.right = area.bottom = 0;
     tjs_int offsetx = 0;
     tjs_int offsety = 0;
-    tjs_uint len = text.length();
-    for(tjs_uint i = 0; i < len; i++) {
-        tjs_char ch = text[i];
+    const tjs_size len = text.length();
+    tjs_size index = 0;
+    bool have_area = false;
+    while(index < len) {
+        tjs_uint32 ch = 0;
+        tjs_size consumed = 0;
+        if(!TVPReadUtf16CodePoint(text.c_str() + index, len - index, ch,
+                                  consumed) || consumed == 0)
+            break;
+        index += consumed;
+        // VS15/VS16 are presentation hints, not independent glyphs.
+        if(index < len && (text[index] == TVP_EMOJI_VS15 ||
+                           text[index] == TVP_EMOJI_VS16))
+            ++index;
         if(isDefaultIgnorableUnicode(ch))
             continue;
         tjs_int ax, ay;
@@ -427,10 +590,11 @@ void FreeTypeFontRasterizer::GetGlyphDrawRect(const ttstr &text,
                                                     ax, ay);
         if(result) {
             rt.add_offsets(offsetx, offsety);
-            if(i != 0) {
+            if(have_area) {
                 area.do_union(rt);
             } else {
                 area = rt;
+                have_area = true;
             }
         }
         offsetx += ax;

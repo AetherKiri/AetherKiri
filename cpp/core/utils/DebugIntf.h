@@ -27,6 +27,12 @@ TJS_EXP_FUNC_DEF(void, TVPAddLog, (const ttstr &line));
 
 TJS_EXP_FUNC_DEF(void, TVPAddImportantLog, (const ttstr &line));
 
+// Human-readable variant formatting used by the krkrz DAP/REPL adapters.
+// The implementation keeps Aether's existing variant conversion as the
+// portable baseline and preserves the public logging ABI.
+TJS_EXP_FUNC_DEF(ttstr, TVPPrettyPrint,
+                 (const tTJSVariant &variant, int depth, bool compact));
+
 extern ttstr TVPGetLastLog(tjs_uint n);
 
 extern iTJSConsoleOutput *TVPGetTJS2ConsoleOutputGateway();

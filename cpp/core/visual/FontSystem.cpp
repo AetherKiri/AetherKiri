@@ -47,6 +47,9 @@ void FontSystem::ConstructDefaultFont() {
         DefaultFont.Flags = 0;
         DefaultFont.Angle = 0;
         DefaultFont.Face = ttstr(TVPGetDefaultFontName());
+        DefaultFont.EmojiMode = TVP_EMOJI_DEFAULT;
+        DefaultFont.Weight = -1;
+        DefaultFont.Variations.Clear();
     }
 }
 

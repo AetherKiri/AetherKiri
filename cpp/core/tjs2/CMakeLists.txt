@@ -9,6 +9,34 @@ aether_krkrz_track_core_source(
     "${AETHER_TJS_EXCEPTION_SOURCE}"
     "common/tjs2/tjsException.cpp")
 
+# Keep the debugger hook and symbol table in the pinned krkrz checkout.  The
+# hook source is harmless when KRKRZ_ENABLE_DAP is not defined, so every
+# target gets one stable no-op ABI; the socket-backed DAP state machine is
+# added only when the parent enables the desktop bridge.
+set(AETHER_TJS_DEBUGGER_HOOK_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/upstream_bridge/tjsDebuggerHook.cpp")
+set(AETHER_TJS_DEBUGGER_SYMBOLS_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/upstream_bridge/tjsDebuggerSymbols.cpp")
+aether_krkrz_track_core_source(
+    "${AETHER_TJS_DEBUGGER_HOOK_SOURCE}"
+    "common/tjs2/tjsDebuggerHook.cpp")
+aether_krkrz_track_core_source(
+    "${AETHER_TJS_DEBUGGER_SYMBOLS_SOURCE}"
+    "common/tjs2/tjsDebuggerSymbols.cpp")
+
+set(AETHER_TJS_DEBUGGER_SOURCES
+    ${AETHER_TJS_DEBUGGER_HOOK_SOURCE}
+    ${AETHER_TJS_DEBUGGER_SYMBOLS_SOURCE})
+if(AETHERKIRI_DAP_ENABLED)
+    set(AETHER_TJS_DEBUGGER_CORE_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/upstream_bridge/tjsDebuggerCore.cpp")
+    aether_krkrz_track_core_source(
+        "${AETHER_TJS_DEBUGGER_CORE_SOURCE}"
+        "common/tjs2/tjsDebuggerCore.cpp")
+    list(APPEND AETHER_TJS_DEBUGGER_SOURCES
+        ${AETHER_TJS_DEBUGGER_CORE_SOURCE})
+endif()
+
 add_library(${PROJECT_NAME} STATIC)
 target_compile_definitions(${PROJECT_NAME} PRIVATE $<$<CONFIG:Debug>:_DEBUG>)
 
@@ -125,6 +153,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     tjsObjectExtendable.cpp
     tjsVariant.cpp
     tjsString.cpp
+    ${AETHER_TJS_DEBUGGER_SOURCES}
 )
 
 install(DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/"
@@ -141,14 +170,48 @@ target_include_directories(${PROJECT_NAME}
         $<INSTALL_INTERFACE:include/tjs2/parser>
 )
 
+if(AETHERKIRI_DAP_ENABLED)
+    target_include_directories(${PROJECT_NAME} PRIVATE
+        "${CMAKE_SOURCE_DIR}/cpp/core/utils"
+        "${AETHERKIRI_PICOJSON_INCLUDE_DIR}"
+        # The bridged upstream translation units retain their own include
+        # spelling (LogIntf.h, CharacterSet.h, ...).  Headers are included
+        # after Aether's guarded ABI headers, so these paths only provide
+        # leaf declarations and cannot introduce a second runtime owner.
+        "${AETHER_KRKRZ_CORE_ROOT}/common/tjs2"
+        "${AETHER_KRKRZ_CORE_ROOT}/common/utils"
+        "${AETHER_KRKRZ_CORE_ROOT}/common/base")
+endif()
+
 find_package(Boost COMPONENTS locale REQUIRED NO_MODULE)
 find_package(fmt CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
-find_package(oniguruma CONFIG REQUIRED)
+find_package(oniguruma CONFIG QUIET)
+set(AETHER_ONIGURUMA_TARGET "")
+if(TARGET oniguruma::onig)
+    set(AETHER_ONIGURUMA_TARGET oniguruma::onig)
+else()
+    # Homebrew and several distro packages expose Oniguruma through headers
+    # and pkg-config but do not ship a CMake config file. Keep the vcpkg target
+    # preferred while providing the same ABI-compatible fallback for native
+    # developer builds.
+    find_path(AETHER_ONIGURUMA_INCLUDE_DIR NAMES oniguruma.h)
+    find_library(AETHER_ONIGURUMA_LIBRARY NAMES onig oniguruma)
+    if(NOT AETHER_ONIGURUMA_INCLUDE_DIR OR NOT AETHER_ONIGURUMA_LIBRARY)
+        message(FATAL_ERROR
+            "Oniguruma was not found. Install the vcpkg oniguruma package or "
+            "provide oniguruma.h and libonig.")
+    endif()
+    add_library(aether_oniguruma UNKNOWN IMPORTED)
+    set_target_properties(aether_oniguruma PROPERTIES
+        IMPORTED_LOCATION "${AETHER_ONIGURUMA_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${AETHER_ONIGURUMA_INCLUDE_DIR}")
+    set(AETHER_ONIGURUMA_TARGET aether_oniguruma)
+endif()
 
 target_link_libraries(${PROJECT_NAME} PUBLIC
     Boost::locale
     fmt::fmt
     spdlog::spdlog
-    oniguruma::onig
+    ${AETHER_ONIGURUMA_TARGET}
 )

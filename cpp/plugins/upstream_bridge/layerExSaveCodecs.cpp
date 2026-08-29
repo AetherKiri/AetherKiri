@@ -117,6 +117,72 @@ bool encodePng(const std::uint8_t *bgra, int width, int height, int pitch,
     return !output.empty();
 }
 
+bool encodeProvincePng(const std::uint8_t *indices, int width, int height,
+                       int pitch, std::vector<std::uint8_t> &output) {
+    output.clear();
+    if(!indices || width <= 0 || height <= 0 || pitch == 0)
+        return false;
+
+    const auto widthSize = static_cast<std::size_t>(width);
+    const auto heightSize = static_cast<std::size_t>(height);
+    const auto pitch64 = static_cast<std::int64_t>(pitch);
+    const auto absolutePitch = pitch64 < 0 ? -pitch64 : pitch64;
+    if(widthSize > static_cast<std::size_t>(absolutePitch) ||
+       (heightSize > 1 &&
+        (heightSize - 1) >
+            static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max()) /
+                static_cast<std::size_t>(absolutePitch)))
+        return false;
+    if(widthSize > std::numeric_limits<std::size_t>::max() / heightSize)
+        return false;
+
+    try {
+        std::vector<unsigned char> image(widthSize * heightSize);
+        for(int y = 0; y < height; ++y) {
+            const auto *src = indices + static_cast<std::ptrdiff_t>(
+                                         static_cast<std::int64_t>(y) * pitch64);
+            std::copy(src, src + widthSize,
+                      image.begin() + static_cast<std::size_t>(y) * widthSize);
+        }
+
+        lexsave::lodepng::State state;
+        state.info_png.color.colortype = state.info_raw.colortype =
+            lexsave::LCT_PALETTE;
+        state.info_png.color.bitdepth = state.info_raw.bitdepth = 8;
+        state.info_png.color.key_defined = state.info_raw.key_defined = 0;
+
+        // Match MakeDefaultPalette in the pinned layerExSave source: the
+        // province byte is encoded as GGG RRR BB, with index zero transparent.
+        static constexpr std::uint8_t table2bit[] = {0, 128, 192, 255};
+        static constexpr std::uint8_t table3bit[] = {
+            0, 64, 96, 128, 160, 192, 224, 255};
+        for(unsigned index = 0; index < 256; ++index) {
+            const unsigned r = table3bit[(index >> 2) & 0x7u];
+            const unsigned g = table3bit[(index >> 5) & 0x7u];
+            const unsigned b = table2bit[index & 0x3u];
+            const unsigned a = index == 0 ? 0u : 255u;
+            if(lexsave::lodepng_palette_add(&state.info_png.color, r, g, b,
+                                            a) != 0 ||
+               lexsave::lodepng_palette_add(&state.info_raw, r, g, b, a) !=
+                   0) {
+                output.clear();
+                return false;
+            }
+        }
+
+        if(lexsave::lodepng::encode(
+               output, image, static_cast<unsigned>(width),
+               static_cast<unsigned>(height), state) != 0) {
+            output.clear();
+            return false;
+        }
+    } catch(const std::exception &) {
+        output.clear();
+        return false;
+    }
+    return !output.empty();
+}
+
 bool encodeTlg5(const std::uint8_t *bgra, int width, int height, int pitch,
                 std::vector<std::uint8_t> &output) {
     output.clear();
@@ -184,8 +250,17 @@ bool encodeTlg5(const std::uint8_t *bgra, int width, int height, int pitch,
                 for(int x = 0; x < width; ++x) {
                     int value[colors];
                     for(int c = 0; c < colors; ++c) {
-                        const int currentValue = current[c];
-                        const int upperValue = upper ? upper[c] : 0;
+                        // Aether's legacy TLG loader exposes the historical
+                        // channel-composition result as RGBA bytes, while
+                        // layerExSave's public contract is a BGRA layer
+                        // buffer.  Feed the inverse channel permutation to
+                        // the upstream writer so a save/load round-trip at
+                        // the Aether boundary preserves the caller's bytes.
+                        const int sourceChannel =
+                            c == 0 ? 2 : (c == 2 ? 0 : c);
+                        const int currentValue = current[sourceChannel];
+                        const int upperValue =
+                            upper ? upper[sourceChannel] : 0;
                         const int delta = upper ? currentValue - upperValue
                                                 : currentValue;
                         value[c] = delta - previous[c];

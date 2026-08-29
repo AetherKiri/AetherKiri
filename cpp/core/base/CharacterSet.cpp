@@ -13,199 +13,212 @@
 #include "CharacterSet.h"
 #include "MsgIntf.h"
 
-//---------------------------------------------------------------------------
-static tjs_int inline TVPWideCharToUtf8(tjs_char in, char *out) {
-    // convert a wide character 'in' to utf-8 character 'out'
-    if(in < (1 << 7)) {
-        if(out) {
-            out[0] = (char)in;
-        }
-        return 1;
-    } else if(in < (1 << 11)) {
-        if(out) {
-            out[0] = (char)(0xc0 | (in >> 6));
-            out[1] = (char)(0x80 | (in & 0x3f));
-        }
-        return 2;
-    } else {
-        if(out) {
-            out[0] = (char)(0xe0 | (in >> 12));
-            out[1] = (char)(0x80 | ((in >> 6) & 0x3f));
-            out[2] = (char)(0x80 | (in & 0x3f));
-        }
-        return 3;
-    }
-}
+#include <cstring>
+#include <string>
+
+namespace {
+bool TVPDecodeUtf8(const std::string &input, tjs_string &output);
+bool TVPEncodeUtf16(const tjs_string &input, std::string &output);
+} // namespace
 
 //---------------------------------------------------------------------------
 tjs_int TVPWideCharToUtf8String(const tjs_char *in, char *out) {
-    // convert input wide string to output utf-8 string
-    int count = 0;
-    while(*in) {
-        tjs_int n;
-        if(out) {
-            n = TVPWideCharToUtf8(*in, out);
-            out += n;
-        } else {
-            n = TVPWideCharToUtf8(*in, nullptr);
-            /*
-                in this situation, the compiler's inliner
-                will collapse all nullptr check parts in
-                TVPWideCharToUtf8.
-            */
-        }
-        if(n == -1)
-            return -1; // invalid character found
-        count += n;
-        in++;
-    }
-    return count;
+    if(!in)
+        return -1;
+    // Decode/encode through the same surrogate-aware implementation used by
+    // DAP and REPL adapters.  The old byte-at-a-time routine emitted lone
+    // UTF-16 surrogates and accepted obsolete 5/6-byte UTF-8 sequences, which
+    // made source paths fail to round-trip on modern platforms.
+    const tjs_string input(in);
+    std::string encoded;
+    if(!TVPEncodeUtf16(input, encoded))
+        return -1;
+    if(out && !encoded.empty())
+        std::memcpy(out, encoded.data(), encoded.size());
+    return static_cast<tjs_int>(encoded.size());
 }
 
-//---------------------------------------------------------------------------
-static bool inline TVPUtf8ToWideChar(const char *&in, tjs_char *out) {
-    // convert a utf-8 charater from 'in' to wide charater 'out'
-    const auto &p = (const unsigned char *&)in;
-    if(p[0] < 0x80) {
-        if(out)
-            *out = (tjs_char)in[0];
-        in++;
-        return true;
-    } else if(p[0] < 0xc2) {
-        // invalid character
-        return false;
-    } else if(p[0] < 0xe0) {
-        // two bytes (11bits)
-        if((p[1] & 0xc0) != 0x80)
-            return false;
-        if(out)
-            *out = ((p[0] & 0x1f) << 6) + (p[1] & 0x3f);
-        in += 2;
-        return true;
-    } else if(p[0] < 0xf0) {
-        // three bytes (16bits)
-        if((p[1] & 0xc0) != 0x80)
-            return false;
-        if((p[2] & 0xc0) != 0x80)
-            return false;
-        if(out)
-            *out = ((p[0] & 0x1f) << 12) + ((p[1] & 0x3f) << 6) + (p[2] & 0x3f);
-        in += 3;
-        return true;
-    } else if(p[0] < 0xf8) {
-        // four bytes (21bits)
-        if((p[1] & 0xc0) != 0x80)
-            return false;
-        if((p[2] & 0xc0) != 0x80)
-            return false;
-        if((p[3] & 0xc0) != 0x80)
-            return false;
-        if(out)
-            *out = ((p[0] & 0x07) << 18) + ((p[1] & 0x3f) << 12) +
-                ((p[2] & 0x3f) << 6) + (p[3] & 0x3f);
-        in += 4;
-        return true;
-    } else if(p[0] < 0xfc) {
-        // five bytes (26bits)
-        if((p[1] & 0xc0) != 0x80)
-            return false;
-        if((p[2] & 0xc0) != 0x80)
-            return false;
-        if((p[3] & 0xc0) != 0x80)
-            return false;
-        if((p[4] & 0xc0) != 0x80)
-            return false;
-        if(out)
-            *out = ((p[0] & 0x03) << 24) + ((p[1] & 0x3f) << 18) +
-                ((p[2] & 0x3f) << 12) + ((p[3] & 0x3f) << 6) + (p[4] & 0x3f);
-        in += 5;
-        return true;
-    } else if(p[0] < 0xfe) {
-        // six bytes (31bits)
-        if((p[1] & 0xc0) != 0x80)
-            return false;
-        if((p[2] & 0xc0) != 0x80)
-            return false;
-        if((p[3] & 0xc0) != 0x80)
-            return false;
-        if((p[4] & 0xc0) != 0x80)
-            return false;
-        if((p[5] & 0xc0) != 0x80)
-            return false;
-        if(out)
-            *out = ((p[0] & 0x01) << 30) + ((p[1] & 0x3f) << 24) +
-                ((p[2] & 0x3f) << 18) + ((p[3] & 0x3f) << 12) +
-                ((p[4] & 0x3f) << 6) + (p[5] & 0x3f);
-        in += 6;
-        return true;
-    }
-    return false;
+// Length-bounded counterpart retained for krkrz's stream and logging leaves.
+// The historical contract stops at the first NUL even when a larger bound is
+// supplied, while still rejecting a truncated/lone UTF-16 surrogate.
+tjs_int TVPWideCharToUtf8String(const tjs_char *in, tjs_uint length,
+                                char *out) {
+    if(!in)
+        return -1;
+    size_t bounded = 0;
+    while(bounded < static_cast<size_t>(length) && in[bounded] != '\0')
+        ++bounded;
+    const tjs_string input(in, bounded);
+    std::string encoded;
+    if(!TVPEncodeUtf16(input, encoded))
+        return -1;
+    if(out && !encoded.empty())
+        std::memcpy(out, encoded.data(), encoded.size());
+    return static_cast<tjs_int>(encoded.size());
 }
 
 //---------------------------------------------------------------------------
 tjs_int TVPUtf8ToWideCharString(const char *in, tjs_char *out) {
-    // convert input utf-8 string to output wide string
-    int count = 0;
-    while(*in) {
-        tjs_char c;
-        if(out) {
-            if(!TVPUtf8ToWideChar(in, &c))
-                return -1; // invalid character found
-            *out++ = c;
-        } else {
-            if(!TVPUtf8ToWideChar(in, nullptr))
-                return -1; // invalid character found
-        }
-        count++;
-    }
-    return count;
+    if(!in)
+        return -1;
+    tjs_string decoded;
+    if(!TVPDecodeUtf8(std::string(in), decoded))
+        return -1;
+    if(out && !decoded.empty())
+        std::memcpy(out, decoded.data(), decoded.size() * sizeof(tjs_char));
+    return static_cast<tjs_int>(decoded.size());
 }
 
 //---------------------------------------------------------------------------
 tjs_int TVPUtf8ToWideCharString(const char *in, tjs_uint length,
                                 tjs_char *out) {
-    // convert input utf-8 string to output wide string
-    int count = 0;
-    const char *end = in + length;
-    while(*in && in < end) {
-        if(in + 6 > end) {
-            // fetch utf-8 character length
-            const unsigned char ch = *(const unsigned char *)in;
+    if(!in)
+        return -1;
+    size_t bounded = 0;
+    while(bounded < static_cast<size_t>(length) && in[bounded] != '\0')
+        ++bounded;
+    tjs_string decoded;
+    if(!TVPDecodeUtf8(std::string(in, bounded), decoded))
+        return -1;
+    if(out && !decoded.empty())
+        std::memcpy(out, decoded.data(), decoded.size() * sizeof(tjs_char));
+    return static_cast<tjs_int>(decoded.size());
+}
 
-            if(ch >= 0x80) {
-                tjs_uint len = 0;
+namespace {
 
-                if(ch < 0xc2)
-                    return -1;
-                else if(ch < 0xe0)
-                    len = 2;
-                else if(ch < 0xf0)
-                    len = 3;
-                else if(ch < 0xf8)
-                    len = 4;
-                else if(ch < 0xfc)
-                    len = 5;
-                else if(ch < 0xfe)
-                    len = 6;
-                else
-                    return -1;
-
-                if(in + len > end)
-                    return -1;
-            }
-        }
-
-        tjs_char c;
-        if(out) {
-            if(!TVPUtf8ToWideChar(in, &c))
-                return -1; // invalid character found
-            *out++ = c;
+bool TVPDecodeUtf8(const std::string &input, tjs_string &output) {
+    output.clear();
+    output.reserve(input.size());
+    for(size_t i = 0; i < input.size();) {
+        const auto byte = static_cast<unsigned char>(input[i]);
+        tjs_uint32 codepoint = 0;
+        size_t width = 0;
+        if(byte <= 0x7f) {
+            codepoint = byte;
+            width = 1;
+        } else if(byte >= 0xc2 && byte <= 0xdf) {
+            codepoint = byte & 0x1f;
+            width = 2;
+        } else if(byte >= 0xe0 && byte <= 0xef) {
+            codepoint = byte & 0x0f;
+            width = 3;
+        } else if(byte >= 0xf0 && byte <= 0xf4) {
+            codepoint = byte & 0x07;
+            width = 4;
         } else {
-            if(!TVPUtf8ToWideChar(in, nullptr))
-                return -1; // invalid character found
+            return false;
         }
-        count++;
+        if(i + width > input.size())
+            return false;
+        for(size_t j = 1; j < width; ++j) {
+            const auto continuation = static_cast<unsigned char>(input[i + j]);
+            if((continuation & 0xc0) != 0x80)
+                return false;
+            codepoint = (codepoint << 6) | (continuation & 0x3f);
+        }
+        if((width == 2 && codepoint < 0x80) ||
+           (width == 3 && codepoint < 0x800) ||
+           (width == 4 && codepoint < 0x10000) ||
+           codepoint > 0x10ffff ||
+           (codepoint >= 0xd800 && codepoint <= 0xdfff))
+            return false;
+        if(codepoint <= 0xffff) {
+            output.push_back(static_cast<tjs_char>(codepoint));
+        } else {
+            codepoint -= 0x10000;
+            output.push_back(static_cast<tjs_char>(0xd800 + (codepoint >> 10)));
+            output.push_back(static_cast<tjs_char>(0xdc00 + (codepoint & 0x3ff)));
+        }
+        i += width;
     }
-    return count;
+    return true;
+}
+
+bool TVPEncodeUtf16(const tjs_string &input, std::string &output) {
+    output.clear();
+    output.reserve(input.size());
+    for(size_t i = 0; i < input.size(); ++i) {
+        tjs_uint32 codepoint = input[i];
+        if(codepoint >= 0xd800 && codepoint <= 0xdbff) {
+            if(i + 1 >= input.size())
+                return false;
+            const tjs_uint32 low = input[++i];
+            if(low < 0xdc00 || low > 0xdfff)
+                return false;
+            codepoint = 0x10000 + ((codepoint - 0xd800) << 10) +
+                        (low - 0xdc00);
+        } else if(codepoint >= 0xdc00 && codepoint <= 0xdfff) {
+            return false;
+        }
+        if(codepoint <= 0x7f) {
+            output.push_back(static_cast<char>(codepoint));
+        } else if(codepoint <= 0x7ff) {
+            output.push_back(static_cast<char>(0xc0 | (codepoint >> 6)));
+            output.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
+        } else if(codepoint <= 0xffff) {
+            output.push_back(static_cast<char>(0xe0 | (codepoint >> 12)));
+            output.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3f)));
+            output.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
+        } else if(codepoint <= 0x10ffff) {
+            output.push_back(static_cast<char>(0xf0 | (codepoint >> 18)));
+            output.push_back(static_cast<char>(0x80 | ((codepoint >> 12) & 0x3f)));
+            output.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3f)));
+            output.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+bool TVPUtf8ToUtf16(tjs_string &out, const char *in) {
+    if(!in) {
+        out.clear();
+        return false;
+    }
+    return TVPDecodeUtf8(std::string(in), out);
+}
+
+bool TVPUtf8ToUtf16(tjs_string &out, const std::string &in) {
+    return TVPDecodeUtf8(in, out);
+}
+
+bool TVPUtf16ToUtf8(std::string &out, const tjs_char *in) {
+    if(!in) {
+        out.clear();
+        return false;
+    }
+    return TVPEncodeUtf16(tjs_string(in), out);
+}
+
+bool TVPUtf16ToUtf8(std::string &out, const tjs_string &in) {
+    return TVPEncodeUtf16(in, out);
+}
+
+bool TVPReadUtf16CodePoint(const tjs_char *text, tjs_size remaining,
+                           tjs_uint32 &codepoint, tjs_size &consumed) {
+    if(!text || remaining == 0) {
+        codepoint = 0;
+        consumed = 0;
+        return false;
+    }
+
+    const tjs_uint32 first = static_cast<tjs_uint16>(text[0]);
+    codepoint = first;
+    consumed = 1;
+    if(first < 0xD800 || first > 0xDBFF || remaining < 2)
+        return true;
+
+    const tjs_uint32 second = static_cast<tjs_uint16>(text[1]);
+    if(second < 0xDC00 || second > 0xDFFF)
+        return true;
+
+    codepoint = 0x10000u + ((first - 0xD800u) << 10) +
+        (second - 0xDC00u);
+    consumed = 2;
+    return true;
 }
 //---------------------------------------------------------------------------

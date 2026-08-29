@@ -3,7 +3,7 @@
 // Clipboard storage/platform calls remain Aether-owned.  This translation
 // unit only supplies the portable TJS class registration and therefore uses
 // the Aether interface header and calling-convention definition.
-#include "tjsCommHead.h"
+#include "../../tjs2/tjsCommHead.h"
 
 #ifndef TJS_INTF_METHOD
 #define TJS_INTF_METHOD

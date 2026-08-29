@@ -1,6 +1,9 @@
 //
 // Created by lidong on 2025/1/31.
-// TODO: implement psbfile.dll plugin
+// Portable psbfile.dll compatibility adapter.  The parser, lazy PSB tree,
+// resource media and both historical construction forms are implemented
+// below; platform-specific decoding extensions remain behind the explicit
+// PSBFile extension ABI.
 // ref: https://github.com/number201724/psbfile
 // ref: https://github.com/UlyssesWu/FreeMote
 //
@@ -540,8 +543,8 @@ static tjs_error load(tTJSVariant *r, tjs_int count, tTJSVariant **p,
     return TJS_S_OK;
 }
 
-// 因为有两种版本的psbfile插件调用方式不一样
-// TODO: 第一种（新) 实现有问题, 可能忽略了某些东西
+// 兼容两个历史版本的 psbfile 插件调用方式。Factory 同时接受无参后
+// 显式 load，以及构造函数直接传入路径/Octet 的形式。
 // var psbfile = new PSBFile();
 // psbfile.load("xxxx.PIMG");
 // 第二种（旧)

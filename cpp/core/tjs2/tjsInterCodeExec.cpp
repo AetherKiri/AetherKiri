@@ -22,6 +22,9 @@
 #include "tjsNative.h"
 #include "tjsArray.h"
 #include "tjsDebug.h"
+#ifdef KRKRZ_ENABLE_DAP
+#include "tjsDebuggerHook.h"
+#endif
 #include "tjsOctPack.h"
 #include "tjsGlobalStringMap.h"
 #include <chrono>
@@ -1570,10 +1573,10 @@ namespace TJS {
                 TJSWarnIfObjectIsDeleting(CachedTJSEngine->GetConsoleOutput(),
                                           objthis);
 
-#ifdef _DEBUG
+#if defined(_DEBUG) || defined(KRKRZ_ENABLE_DAP)
             ScopeKey oldkey;
             tTJSVariant *oldra = nullptr;
-#endif // _DEBUG
+#endif // _DEBUG || KRKRZ_ENABLE_DAP
             try {
                 TJSTraceExecArgs(this, objthis, args, numargs, FuncDeclArgCount,
                                  FuncDeclCollapseBase);
@@ -1623,9 +1626,35 @@ namespace TJS {
                     }
                 }
 
+#ifdef KRKRZ_ENABLE_DAP
+                oldkey = DebuggerScopeKey;
+                oldra = DebuggerRegisterArea;
+                // Establish the active scope before entering the VM.  The
+                // debugger flag is sampled only for the hot-path event; the
+                // register area is kept current even before a client attaches
+                // so a later DAP attach can inspect the running frame.
+                if(TVPDebuggerWantsHook()) {
+                    const tjs_int line =
+                        Block ? Block->SrcPosToLine(
+                                    CodePosToSrcPos(start_ip)) + 1
+                              : -1;
+                    TJSDebuggerHook(
+                        DBGHOOK_PREV_CALL,
+                        Block ? Block->GetName() : nullptr, line, this);
+                }
+                TJSDebuggerGetScopeKey(
+                    DebuggerScopeKey, GetClassName().c_str(), GetName(),
+                    Block ? Block->GetName() : nullptr, start_ip);
+                DebuggerRegisterArea = ra;
+#endif
+
                 // execute
                 ExecuteCode(ra, start_ip, args, numargs, result);
             } catch(...) {
+#if defined(_DEBUG) || defined(KRKRZ_ENABLE_DAP)
+                DebuggerScopeKey = oldkey;
+                DebuggerRegisterArea = oldra;
+#endif
                 ra[-2].Clear(); // at least we must clear the object
                                 // placed at local stack
                 TJSVariantArrayStack->Deallocate(num_alloc, regs);
@@ -1634,10 +1663,10 @@ namespace TJS {
                 throw;
             }
 
-#ifdef _DEBUG
+#if defined(_DEBUG) || defined(KRKRZ_ENABLE_DAP)
             DebuggerScopeKey = oldkey;
             DebuggerRegisterArea = oldra;
-#endif // _DEBUG
+#endif // _DEBUG || KRKRZ_ENABLE_DAP
             ra[-2].Clear(); // at least we must clear the object
                             // placed at local stack
 
@@ -1768,6 +1797,12 @@ namespace TJS {
                          GetShortDescriptionWithClassName().AsStdString(),
                          startip, CodeArea ? CodeArea[0] : -1);
         tjs_int32 *codesave;
+#ifdef KRKRZ_ENABLE_DAP
+        // This flag is shared by the VM body and its enclosing C++ handlers;
+        // keep it at function scope so a VM_THROW notification is not emitted
+        // a second time while the exception crosses the handlers.
+        bool debugger_exception_hooked = false;
+#endif
         try {
             if(!CodeArea) {
                 TJSThrowFrom_tjs_error(TJS_E_INVALIDOBJECT);
@@ -1777,12 +1812,33 @@ namespace TJS {
             if(TJSStackTracerEnabled())
                 TJSStackTracerSetCodePointer(CodeArea, &codesave);
 
+#ifdef KRKRZ_ENABLE_DAP
+            // Keep the per-function flag local so normal execution performs
+            // one relaxed atomic load rather than one load per instruction.
+            const bool is_enable_debugger = TVPDebuggerWantsHook();
+            tjs_int current_debug_line = -1;
+#endif
+
             tTJSVariant *ra = ra_org;
             tTJSVariant *da = DataArea;
 
             bool flag = false;
 
             while(true) {
+#ifdef KRKRZ_ENABLE_DAP
+                if(is_enable_debugger && Block) {
+                    const tjs_int next_debug_line =
+                        Block->SrcPosToLine(
+                            CodePosToSrcPos(static_cast<tjs_int>(code - CodeArea))) +
+                        1;
+                    if(current_debug_line != next_debug_line) {
+                        current_debug_line = next_debug_line;
+                        TJSDebuggerHook(DBGHOOK_PREV_EXE_LINE,
+                                        Block->GetName(), current_debug_line,
+                                        this);
+                    }
+                }
+#endif
                 codesave = code;
                 if(TJSReplayTraceEnabled()) {
                     const std::string replayDesc =
@@ -2239,6 +2295,14 @@ namespace TJS {
                         break;
 
                     case VM_RET:
+#ifdef KRKRZ_ENABLE_DAP
+                        if(is_enable_debugger) {
+                            TJSDebuggerHook(DBGHOOK_PREV_RETURN,
+                                            Block ? Block->GetName() : nullptr,
+                                            current_debug_line, this);
+                            current_debug_line = -1;
+                        }
+#endif
                         return code + 1 - CodeArea;
 
                     case VM_ENTRY:
@@ -2252,9 +2316,29 @@ namespace TJS {
                         break;
 
                     case VM_EXTRY:
+#ifdef KRKRZ_ENABLE_DAP
+                        if(is_enable_debugger) {
+                            TJSDebuggerHook(DBGHOOK_PREV_RETURN,
+                                            Block ? Block->GetName() : nullptr,
+                                            current_debug_line, this);
+                            current_debug_line = -1;
+                        }
+#endif
                         return code + 1 - CodeArea; // same as ret
 
                     case VM_THROW:
+#ifdef KRKRZ_ENABLE_DAP
+                        if(is_enable_debugger) {
+                            tTJSVariant *exception_value =
+                                &TJS_GET_VM_REG(ra, code[1]);
+                            TJSDebuggerHook(
+                                DBGHOOK_PREV_EXCEPT,
+                                Block ? Block->GetName() : nullptr,
+                                current_debug_line, this, exception_value);
+                            debugger_exception_hooked = true;
+                            current_debug_line = -1;
+                        }
+#endif
                         ThrowScriptException(TJS_GET_VM_REG(ra, code[1]), Block,
                                              CodePosToSrcPos(code - CodeArea));
                         code += 2; // actually here not proceed...
@@ -2284,7 +2368,18 @@ namespace TJS {
                         break;
 
                     case VM_DEBUGGER:
+#ifdef KRKRZ_ENABLE_DAP
+                        if(is_enable_debugger) {
+                            TJSDebuggerHook(DBGHOOK_PREV_BREAK,
+                                            Block ? Block->GetName() : nullptr,
+                                            current_debug_line, this);
+                            current_debug_line = -1;
+                        } else {
+                            TJSNativeDebuggerBreak();
+                        }
+#else
                         TJSNativeDebuggerBreak();
+#endif
                         code++;
                         break;
 
@@ -2292,9 +2387,24 @@ namespace TJS {
                         ThrowInvalidVMCode();
                 }
             }
+        // Exceptions that leave the VM through a C++ catch do not always have
+        // a live source register.  Still notify the adapter with the current
+        // context so "uncaught" exception breakpoints remain useful.
+#ifdef KRKRZ_ENABLE_DAP
+#define AETHER_DEBUGGER_EXCEPTION_HOOK()                                      \
+    do {                                                                       \
+        if(TVPDebuggerWantsHook() && !debugger_exception_hooked)              \
+            TJSDebuggerHook(DBGHOOK_PREV_EXCEPT,                               \
+                            Block ? Block->GetName() : nullptr, -1, this,     \
+                            nullptr);                                         \
+    } while(0)
+#else
+#define AETHER_DEBUGGER_EXCEPTION_HOOK() do { } while(0)
+#endif
         } catch(eTJSSilent &) {
             throw;
         } catch(eTJSScriptError &e) {
+            AETHER_DEBUGGER_EXCEPTION_HOOK();
             if(tryCatch &&
                (TJSSceneTraceEnabled() || TJSReplayTraceEnabled())) {
                 const std::string desc =
@@ -2310,6 +2420,7 @@ namespace TJS {
             e.AddTrace(this, codesave - CodeArea);
             throw;
         } catch(eTJS &e) {
+            AETHER_DEBUGGER_EXCEPTION_HOOK();
             if(tryCatch) {
                 if(TJSSceneTraceEnabled() || TJSReplayTraceEnabled()) {
                     const std::string desc =
@@ -2328,6 +2439,7 @@ namespace TJS {
             }
             TJS_eTJSScriptError(e.GetMessage(), this, codesave - CodeArea);
         } catch(exception &e) {
+            AETHER_DEBUGGER_EXCEPTION_HOOK();
             if(tryCatch) {
                 if(TJSSceneTraceEnabled() || TJSReplayTraceEnabled()) {
                     const std::string desc =
@@ -2345,6 +2457,7 @@ namespace TJS {
             }
             TJS_eTJSScriptError(e.what(), this, codesave - CodeArea);
         } catch(const char *text) {
+            AETHER_DEBUGGER_EXCEPTION_HOOK();
             if(tryCatch) {
                 if(TJSSceneTraceEnabled() || TJSReplayTraceEnabled()) {
                     const std::string desc =
@@ -2364,6 +2477,7 @@ namespace TJS {
         }
 
         return codesave - CodeArea;
+#undef AETHER_DEBUGGER_EXCEPTION_HOOK
     }
 
     //---------------------------------------------------------------------------

@@ -46,6 +46,10 @@ public:
     void Release();
 
     const tTVPPrerenderedCharacterItem *Find(tjs_char ch); // serch character
+    // Pre-rendered .tft indexes are UTF-16 code-unit based.  Astral code
+    // points cannot be represented without changing that file format, so
+    // return no item and let the live rasterizer resolve them.
+    const tTVPPrerenderedCharacterItem *Find(tjs_uint32 codepoint);
     void Retrieve(const tTVPPrerenderedCharacterItem *item, tjs_uint8 *buffer,
                   tjs_int bufferpitch);
 };

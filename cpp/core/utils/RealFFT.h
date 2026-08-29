@@ -26,6 +26,17 @@
 
 void rdft(int, int, float *, int *, float *);
 
+// The scalar implementation remains the compatibility baseline.  krkrz's
+// leaf SIMD implementations are exposed only when the current translation
+// unit targets the matching ISA; the runtime caller still checks CPU feature
+// bits before selecting them.
+#if defined(_M_IX86) || defined(_M_X64) || defined(__i386__) || \
+    defined(__x86_64__)
+void rdft_sse(int, int, float *, int *, float *);
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+void rdft_neon(int, int, float *, int *, float *);
+#endif
+
 //---------------------------------------------------------------------------
 
 #endif

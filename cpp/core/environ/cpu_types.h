@@ -21,6 +21,12 @@
 #define TVP_CPU_HAS_SSE2 0x00800000
 #define TVP_CPU_HAS_TSC 0x01000000
 #define TVP_CPU_HAS_NEON 0x02000000
+// Keep the high ISA bits used by krkrz's IA32 detector.  Resampling leaves
+// are compiled in isolated translation units and must never be selected
+// unless the runtime probe has confirmed both the instruction set and OS
+// state support.
+#define TVP_CPU_HAS_AVX 0x40000000
+#define TVP_CPU_HAS_AVX2 0x80000000
 
 #define TVP_CPU_FEATURE_MASK 0xffff0000
 

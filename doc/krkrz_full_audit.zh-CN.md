@@ -1,5 +1,7 @@
 # AetherKiri × krkrz_dev 全量审核矩阵
 
+[English](krkrz_full_audit.md) | [简体中文](krkrz_full_audit.zh-CN.md)
+
 本文记录 `third_party/krkrz_dev` 在 AetherKiri 中的完整源码、构建和 ABI 审核结果。
 它和 [`krkrz_integration.zh-CN.md`](krkrz_integration.zh-CN.md) 的区别是：后者记录
 已经落地的集成契约，本文则覆盖 checkout 中的全部插件、core、external、脚本和工具。
@@ -33,13 +35,15 @@ Storage、Layer/Renderer、Sound host 和 TJS VM；upstream 代码按算法和�
 `layerExAreaAverage`、`layerExRaster`、`layerExLongExposure`、`getSample`、
 `layerExBTOA`、`layerExImage`、`shrinkCopy`。
 
-### 混合复用（6）
+### 混合复用（8）
 
 | 插件 | Aether 保留部分 | upstream 使用部分 |
 | --- | --- | --- |
 | `AlphaMovie` | FFmpeg、工作队列、纹理上传、音频路由、Godot presentation | 编解码行为参考 |
 | `KAGParserEx` | 唯一 KAG parser、tag metadata、编译场景解析 | 语义和兼容边界参考 |
-| `layerExSave` | Layer/Storage/TJS/octet/线程边界 | namespace 隔离的 LodePNG、TLG5 slide |
+| `layerExSave` | Layer/Storage/TJS/octet/线程边界 | namespace 隔离的 LodePNG、TLG5 slide，以及经边界适配的图层工具方法 |
+| `clipfile` | `clip://` Storage、Layer/TJS wrapper、单一 SQLite owner | pinned submodule 的 CLIP parser/writer 与 tiled decode |
+| `krkr_richtext` | Aether FontService/FreeType、ICU/HarfBuzz owner、模块/stream 生命周期 | pinned submodule 的 richtext/Minikin 布局、glyph 渲染和 TJS API |
 | `extNagano` | provider registry 和 fallback | 10 个自包含转场算法 |
 | `layerExVector` | LayerExDraw、字体注册和渲染生命周期 | vector API 语义 |
 | `psdfile` | TJS/Layer/Storage wrapper | nested `psdparse` parser |
@@ -66,12 +70,15 @@ provider；这不是面向用户的运行时开关。
 Aether bridge、私包实现、兼容 surface 或 stub。`fpslimit` 是兼容 no-op；`tftSave` 保留
 脚本接口；`krkrlive2d` 的真实实现位于私有 AetherInternal 包。
 
-### 新功能，暂不接入产品（4）
+### 新功能，暂不接入产品（2）
 
-`clipfile`、`krkr_richtext`、`krkreffekseer`、`krkrthreepp`。
+`krkreffekseer`、`krkrthreepp`。
 
-它们分别需要新的 `.clip` Storage、文本布局/Minikin、Effekseer OpenGL 或 threepp/VRM
-3D 宿主合同。当前只对其中三个插件做 optional 源码存在性校验；`clipfile` 仍是后续适配项。
+Effekseer 和 threepp 分别需要 Effekseer OpenGL、threepp/VRM 3D 宿主合同，当前只做
+optional 源码存在性校验。`krkr_richtext` 的 Minikin/richtext 已通过 Aether
+FontService、ICU/HarfBuzz 和 RAII stream 适配器接入桌面和 Android；iOS/web 因宿主或
+依赖差异在配置阶段跳过。CLIP 的可移植 parser/writer 也已通过 Aether stream/storage
+适配器接入桌面和 Android，web/emscripten 仍因 Storage host 差异跳过。
 
 ### ABI 基础设施（3）
 
@@ -80,7 +87,7 @@ Aether bridge、私包实现、兼容 surface 或 stub。`fpslimit` 是兼容 no
 禁止导入 upstream 的 binder、`v2link`、`tp_stub.cpp`、独立注册表或 standalone CMake；
 这些会产生第二套调用约定、模块注册和全局符号。
 
-上述六组的总数为 `7 + 6 + 16 + 20 + 4 + 3 = 56`，与 checkout 实际目录数一致。
+上述六组的总数为 `7 + 8 + 16 + 20 + 2 + 3 = 56`，与 checkout 实际目录数一致。
 同一份分类已写入 manifest 的 `[plugin_catalog]`，并由
 `tools/plugin_manifest_report.py --strict` 对 checkout 的 56 个目录做精确覆盖检查。
 
@@ -95,10 +102,10 @@ Aether bridge、私包实现、兼容 surface 或 stub。`fpslimit` 是兼容 no
 | `extension` | 2 | 接口思想可参考，所有权在 Aether |
 | `glad` | 6 | upstream OpenGL loader，不用于 Aether Godot/SDL2 host |
 | `msg` | 11 | 消息语言系统按 Aether 生命周期适配 |
-| `sound` | 37 | `MathAlgorithms.cpp`、`RealFFT.cpp` 和 `WaveSegmentQueue.cpp` 已通过 source bridge 使用 submodule 实现；SIMD、phase-vocoder、loop manager 仍按方法 parity 适配 |
-| `tjs2` | 101 | VM、parser、Variant、Dictionary 和 ABI 不替换；debugger/stats 是叶子候选 |
-| `utils` | 62 | Random.cpp、ClipboardIntf.cpp、MiscUtility.cpp、md5.c 已通过 source bridge 复用；Velocity 等做方法级 parity；DAP/REPL 需宿主适配 |
-| `visual` | 212 | Aether 保留 Bitmap/Loader/Renderer/Font owner；TLG 内核、SIMD、FontStream 可适配 |
+| `sound` | 37 | scalar/SIMD MathAlgorithms、RealFFT、WaveSegmentQueue 和 WaveLoopManager 已通过 source bridge 使用 submodule 实现；PhaseVocoder 只分发经过 parity 的叶子，host/allocator/lifecycle 仍在 Aether |
+| `tjs2` | 101 | VM、parser、Variant、Dictionary 和 ABI 不替换；debugger hook/symbol/core 已通过 ABI bridge 接入 |
+| `utils` | 62 | Random.cpp、ClipboardIntf.cpp、MiscUtility.cpp、md5.c、RealFFT 和 DAP transport 已通过 source bridge 复用；REPL file channel 由 Aether adapter 提供 |
+| `visual` | 212 | Aether 保留 Bitmap/Loader/Renderer/Font owner；TLG、Resample SSE2/AVX2、ColorMap/24-bit 转换及 universal-transition 叶子已适配；box-blur、HDA/additive-alpha 变体仍由 Aether 保持精确语义 |
 
 ### 相似但明确不整文件桥接的实现
 
@@ -115,7 +122,7 @@ Aether bridge、私包实现、兼容 surface 或 stub。`fpslimit` 是兼容 no
 | `common/visual/ComplexRect.cpp`、`LayerBitmapIntf.cpp` | 矩形裁剪、Bitmap hierarchy 和 renderer 状态有实质差异；保留 Aether owner |
 | `common/tjs2/tjsInterface.cpp` | 空实现翻译单元，没有可复用业务逻辑 |
 
-因此“未出现在 10 个 source bridge 中”本身也是审核结论，而不是遗漏。后续 upstream
+因此“未出现在当前 source bridge 清单中”本身也是审核结论，而不是遗漏。后续 upstream
 版本变化时，只有先通过同样的 ABI、语义和目标编译检查，才可把这些条目改成桥接。
 
 ### 平台层
@@ -129,7 +136,7 @@ DirectInput、PE resource 和 COM 代码尤其不能直接链接到 macOS/Androi
 | 路径 | 结论 |
 | --- | --- |
 | `src/core/external/elements`、ThorVG | UI/矢量控件，不能和 Aether LayerExDraw 并存为第二 renderer |
-| `src/core/external/glyphware` | 字体 metadata、emoji、fallback 的候选适配源 |
+| `src/core/external/glyphware` | 字体 metadata、emoji、fallback、shaping 的参考输入；Aether FontService 已提供对应的可移植 FreeType/HarfBuzz/FriBidi 适配 |
 | `src/core/external/movie-player`、`pl_mpeg` | 独立播放器或 MPEG1 fallback，Aether 继续使用 FFmpeg |
 | `src/core/external/sound-codecs` | allocator hook/header，不是完整音频管线 |
 | `script/KAG3`、`KAG3_Ham`、`Krkr2Compat`、`Sample`、`test` | 直接作为 fixture/reference，不复制到 runtime |
@@ -164,18 +171,36 @@ Aether Storage registry 和 archive lifecycle。
 ### 音频
 
 Aether 的 [`WaveIntf.cpp`](../cpp/core/sound/WaveIntf.cpp) 已注册 FFmpeg、Opus、RIFF/WAV
-和 Vorbis decoder。`MathAlgorithms.cpp`、`RealFFT.cpp` 和 `WaveSegmentQueue.cpp` 的
-实现已经通过 bridge 直接使用固定 submodule 源码；SSE/NEON、phase-vocoder 和
-`WaveLoopManager` 仍适合 parity 后逐方法适配。upstream 的线程、allocator 和完整
-AudioStream 不能直接替换 Aether 音频管线。
+和 Vorbis decoder。`MathAlgorithms.cpp`、`RealFFT.cpp`、`WaveSegmentQueue.cpp` 和
+`WaveLoopManager.cpp` 的实现已经通过 bridge 直接使用固定 submodule 源码；SSE/NEON、
+phase-vocoder 只分发经过 parity 的叶子。upstream 的线程、allocator 和完整 AudioStream
+不能直接替换 Aether 音频管线；loop manager 只使用适配器提供的短生命周期分配函数。
 
 ### 脚本、字体和调试
 
 - TJS2/KAG parser 保持 Aether owner；KAG3 等 nested script 只作为测试和参考。
-- `FontStream`、`FontVariations`、glyphware metadata/emoji/fallback 可接到 Aether 的
-  FreeType/FontSystem，但不能引入第二套字体 registry 或 renderer。
-- DAP/REPL/alloc stats 需要适配 Aether VM hook、事件循环、线程和 socket 生命周期，当前
-  仍是 optional 开发能力。
+- `FontStream`、`FontVariations`、颜色 glyph、TTC face index、surrogate/codepoint、
+  glyphware metadata/emoji/fallback 已接到 Aether 的共享 FontService；桌面检测到
+  HarfBuzz+FriBidi 时还启用复杂脚本 shaping，但不能引入第二套字体 registry 或 renderer。
+- DAP 已完成桌面 VM hook、线程、socket 和事件循环适配；REPL 的 `-replfile` 安全子集
+  已由 Aether 主线程 adapter 提供。upstream console/icline/socket 前端和 alloc-stats
+  overlay 仍只作参考，不能误报为产品 UI 能力。
+
+### 插件能力补全
+
+- `layerExSave` 已补齐 upstream 可见的 `oozeColor`、`getFingerPrintValue`、
+  `getShrinkVectorOctet`、`octetVectorSum` 和 `saveProvinceImage`。固定 256 色 province
+  palette 与 PNG 编码直接使用 pinned submodule 中 namespace 隔离的 LodePNG，Layer、
+  Storage 和 TJS 生命周期仍由 Aether 管理；`getShrinkVectorOctet` 还修正了 upstream
+  对高度参数为零会除零的问题。
+- `resourceRW` 已提供有界 ICO/CUR、组图标和 `VS_VERSION_INFO` 对象，并保留 Win32
+  原生 PE resource 路径；非 Win32 使用确定性 sidecar。资源类型常量仅在全局缺失时
+  安装，卸载时也只删除自己仍拥有的值。
+- `windowEx` 已补齐 cursor clip、顶层窗口查找、class long、cursor load、virtual-key
+  mapping 和 DPI context 接口；Win32 使用原生 API，其他宿主提供可观察的逻辑语义或
+  明确返回不可用。`systemEx` 同时补齐 OS/known-folder/环境变量/消息处理接口。
+- `gamepad` 使用 SDL 映射控制器/通用 joystick、边沿计数和 rumble；upstream 常量及
+  `GamepadPort`/`Gamepad` 别名只在缺失时安装，不覆盖游戏或 native plugin 的实现。
 
 ## 重复实现与 ABI 边界
 
@@ -191,19 +216,26 @@ upstream，但公共符号和生命周期只能由 Aether 暴露。
 
 当前已经落地：
 
-1. 7 个插件直接 submodule adapter，以及 10 个无宿主状态的 core source bridge（3 个 sound、1 个 visual、6 个 TJS/utility）；
-2. 6 个 hybrid plugin；
-3. Visual/Sound 隔离 parity target；
+1. 7 个插件直接 submodule adapter、CLIP 与 richtext 两个 hybrid adapter，以及 30 个 core source bridge/leaf adapter（sound SIMD/FFT/loop、TLG、Resample、视觉叶子、字体、DAP、TJS/utility）；
+2. 8 个 hybrid plugin；
+3. Visual/Sound 隔离 parity target 与字体、TLG、debugger、REPL、CLIP 契约测试；
 4. 递归 submodule 和 manifest pin 校验（当前 krkrz_dev 共 75 个 nested submodule）；
 5. 84 项 KiriKiri2 兼容参考项，缺失 0。
 
-后续按风险排序：
+剩余工作按风险排序：
 
-1. TLG5/TLG6 内核和 sound DSP 的方法级 parity/adapter；
-2. FontStream/glyphware 的共享缓存和字体 fallback 适配；
-3. DAP/REPL 开发工具适配；
-4. `clipfile`、richtext、Effekseer、threepp 的独立宿主适配；
-5. 为每个入口补充资源、归档、音频、字体和真实游戏回归测试。
+1. macOS arm64 Debug 产品和隔离兼容测试构建都已经完成链接；隔离 CTest 为
+   264/264，直接 Catch2 插件测试为 227/227（3,124 条断言）；Visual parity 为
+   294/294，Sound parity 为 28/28（fail=0）。覆盖了损坏 TLG5/TLG6 的预检与边界、
+   krkrz 压缩 TLG5 回环、BGRA↔RGBA 适配和 x86 SSE2 合成包装，以及 resourceRW、
+   FontService、DAP/REPL、CLIP、gamepad、layer-effect 契约。2026-08-30 已完成
+   全开 macOS Debug 产品构建并通过签名校验。接下来仍需为 `resourceRW`、
+   `krkrsteam`、TLG、Sound DSP、WaveLoopManager、FontStream、DAP、`-replfile` 和
+   CLIP 准备真实宿主/游戏交互回归样例；这些是交互覆盖缺口，不是未解决的构建或
+   符号缺口；
+2. 对仍明确失败关闭的宿主专属接口（`win32ole`、DirectShow/AVI、SWF、Steamworks 截图/DLC/直播）补充调用方可见的错误/能力查询，并在有真实宿主 SDK 时分别验证；`sigcheck` 已有 OpenSSL-backed 可移植校验器，仅在没有密码 provider 时失败；
+3. 为 Effekseer、threepp 评估各自的 OpenGL/VRM SDK 与宿主生命周期，未验证前不链接；
+4. 对 upstream 每次 pin 更新重复 ABI、符号和资源入口审核。
 
 本文件是静态审核矩阵，不把 optional/reference 误报为已接入功能。源码版本变更时，
 必须重新执行递归 submodule 校验、manifest 严格检查、plugin gap audit 和对应 parity

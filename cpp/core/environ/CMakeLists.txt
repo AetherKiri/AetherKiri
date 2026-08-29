@@ -59,10 +59,14 @@ target_link_libraries(${PROJECT_NAME} PUBLIC tjs2 PRIVATE core_base_module core_
 
 find_package(7zip CONFIG REQUIRED)
 find_package(tinyxml2 CONFIG REQUIRED)
-find_package(unofficial-minizip CONFIG REQUIRED)
+if(NOT DEFINED AETHERKIRI_MINIZIP_TARGET OR
+   NOT TARGET "${AETHERKIRI_MINIZIP_TARGET}")
+    include("${CMAKE_SOURCE_DIR}/cmake/AetherKiriDependencyAdapters.cmake")
+    aetherkiri_prepare_minizip()
+endif()
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
         7zip::7zip
-        unofficial::minizip::minizip
+        ${AETHERKIRI_MINIZIP_TARGET}
         tinyxml2::tinyxml2
 )

@@ -10,7 +10,9 @@
 //---------------------------------------------------------------------------
 #include <set>
 #include <algorithm>
+#include <cstdint>
 #include <functional>
+#include <vector>
 
 #include <spdlog/spdlog.h>
 
@@ -37,6 +39,7 @@
 
 #include "FilePathUtil.h"
 #include "Application.h"
+#include "PortableGamepad.h"
 #include "SysInitImpl.h"
 #include "UtilStreams.h"
 
@@ -121,12 +124,118 @@ public:
 
 class tTJSNI_GamepadStub : public tTJSNativeInstance {
 public:
-    tjs_error Construct(tjs_int, tTJSVariant **, iTJSDispatch2 *) override {
+    tjs_error Construct(tjs_int numparams, tTJSVariant **param,
+                        iTJSDispatch2 *) override {
+        // GamepadPort is constructed without arguments.  Gamepad instances
+        // are created by GamepadPort.getController(index), which passes the
+        // stable logical index as the sole constructor argument.
+        if(numparams > 0 && param && param[0] &&
+           param[0]->Type() != tvtVoid) {
+            controllerIndex_ = static_cast<tjs_int>(*param[0]);
+            portObject_ = false;
+        }
         return TJS_S_OK;
     }
 
-    void Invalidate() override {}
+    void Invalidate() override {
+        controllerIndex_ = -1;
+        portObject_ = true;
+        windowHandle_ = 0;
+    }
+
+    [[nodiscard]] bool IsPortObject() const { return portObject_; }
+    [[nodiscard]] tjs_int ControllerIndex() const { return controllerIndex_; }
+    [[nodiscard]] std::intptr_t WindowHandle() const { return windowHandle_; }
+    void SetWindowHandle(std::intptr_t value) { windowHandle_ = value; }
+    bool GetState(AetherKiri::PortableGamepadState &state) const {
+        if(portObject_ || controllerIndex_ < 0)
+            return false;
+        return AetherKiri::PortableGamepadManager::Instance().Snapshot(
+            controllerIndex_, state);
+    }
+    bool SetVibration(float left, float right) {
+        if(portObject_ || controllerIndex_ < 0)
+            return false;
+        leftVibration_ = std::clamp(left, 0.0f, 1.0f);
+        rightVibration_ = std::clamp(right, 0.0f, 1.0f);
+        return AetherKiri::PortableGamepadManager::Instance().SetVibration(
+            controllerIndex_, leftVibration_, rightVibration_);
+    }
+    bool SetLeftVibration(float value) {
+        return SetVibration(value, rightVibration_);
+    }
+    bool SetRightVibration(float value) {
+        return SetVibration(leftVibration_, value);
+    }
+
+private:
+    bool portObject_ = true;
+    tjs_int controllerIndex_ = -1;
+    std::intptr_t windowHandle_ = 0;
+    float leftVibration_ = 0.0f;
+    float rightVibration_ = 0.0f;
 };
+
+static bool TVPCreatePortableGamepadVariant(tjs_int index,
+                                            tTJSVariant *result) {
+    if(!result || index < 0)
+        return false;
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    if(!global)
+        return false;
+
+    bool created = false;
+    tTJSVariant gamepadClass;
+    if(TJS_SUCCEEDED(global->PropGet(0, TJS_W("Gamepad"), nullptr,
+                                     &gamepadClass, global)) &&
+       gamepadClass.Type() == tvtObject) {
+        iTJSDispatch2 *classObject = gamepadClass.AsObjectNoAddRef();
+        if(classObject) {
+            tTJSVariant indexValue(index);
+            tTJSVariant *arguments[] = {&indexValue};
+            iTJSDispatch2 *instance = nullptr;
+            if(TJS_SUCCEEDED(classObject->CreateNew(
+                   0, nullptr, nullptr, &instance, 1, arguments,
+                   classObject)) && instance) {
+                *result = instance;
+                instance->Release();
+                created = true;
+            }
+        }
+    }
+    global->Release();
+    return created;
+}
+
+// Compact declarations for the upstream Gamepad property surface.  The
+// native instance remains the owner of the controller index; these accessors
+// only copy a current snapshot from the shared SDL-backed manager.
+#define TVP_GAMEPAD_REAL_PROPERTY(NAME, FIELD)                                \
+        TJS_BEGIN_NATIVE_PROP_DECL(NAME) {                                    \
+            TJS_BEGIN_NATIVE_PROP_GETTER {                                    \
+                TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);           \
+                AetherKiri::PortableGamepadState state;                       \
+                *result = _this->GetState(state)                               \
+                    ? static_cast<tjs_real>(state.FIELD) : 0.0;               \
+                return TJS_S_OK;                                               \
+            }                                                                   \
+            TJS_END_NATIVE_PROP_GETTER                                         \
+            TJS_DENY_NATIVE_PROP_SETTER                                        \
+        }                                                                       \
+        TJS_END_NATIVE_PROP_DECL(NAME)
+
+#define TVP_GAMEPAD_EDGE_PROPERTY(NAME, INDEX)                                \
+        TJS_BEGIN_NATIVE_PROP_DECL(NAME) {                                    \
+            TJS_BEGIN_NATIVE_PROP_GETTER {                                    \
+                TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);           \
+                AetherKiri::PortableGamepadState state;                       \
+                *result = _this->GetState(state) ? state.edge[INDEX] : 0;      \
+                return TJS_S_OK;                                               \
+            }                                                                   \
+            TJS_END_NATIVE_PROP_GETTER                                         \
+            TJS_DENY_NATIVE_PROP_SETTER                                        \
+        }                                                                       \
+        TJS_END_NATIVE_PROP_DECL(NAME)
 
 class tTJSNI_gfxFireStub : public tTJSNativeInstance {
 public:
@@ -150,76 +259,181 @@ public:
         }
         TJS_END_NATIVE_CONSTRUCTOR_DECL(GamepadPort)
 
-        TJS_BEGIN_NATIVE_METHOD_DECL(update) { return TJS_S_OK; }
+        TJS_BEGIN_NATIVE_METHOD_DECL(update) {
+            TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+            AetherKiri::PortableGamepadManager::Instance().Refresh();
+            if(result)
+                *result = true;
+            return TJS_S_OK;
+        }
         TJS_END_NATIVE_METHOD_DECL(update)
 
         TJS_BEGIN_NATIVE_METHOD_DECL(initialize) {
+            TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+            const std::intptr_t handle =
+                numparams > 0 && param && param[0]
+                    ? static_cast<std::intptr_t>(static_cast<tTVInteger>(*param[0]))
+                    : 0;
+            _this->SetWindowHandle(handle);
+            // The historical method reports successful initialization even
+            // when no controller is connected.  Keep that contract while
+            // the manager records the actual backend/device state.
+            AetherKiri::PortableGamepadManager::Instance().Initialize(handle);
             if(result)
                 *result = 1;
             return TJS_S_OK;
         }
         TJS_END_NATIVE_METHOD_DECL(initialize)
 
-        TJS_BEGIN_NATIVE_METHOD_DECL(refresh) { return TJS_S_OK; }
+        TJS_BEGIN_NATIVE_METHOD_DECL(refresh) {
+            TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+            AetherKiri::PortableGamepadManager::Instance().Refresh();
+            if(result)
+                *result = true;
+            return TJS_S_OK;
+        }
         TJS_END_NATIVE_METHOD_DECL(refresh)
 
-        TJS_BEGIN_NATIVE_METHOD_DECL(resetKeyPressState) { return TJS_S_OK; }
+        TJS_BEGIN_NATIVE_METHOD_DECL(resetKeyPressState) {
+            TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+            AetherKiri::PortableGamepadManager::Instance().ResetEdges(
+                _this->IsPortObject() ? -1 : _this->ControllerIndex());
+            return TJS_S_OK;
+        }
         TJS_END_NATIVE_METHOD_DECL(resetKeyPressState)
 
-        TJS_BEGIN_NATIVE_METHOD_DECL(remove) { return TJS_S_OK; }
+        TJS_BEGIN_NATIVE_METHOD_DECL(remove) {
+            TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+            tjs_int index = _this->ControllerIndex();
+            if(_this->IsPortObject() && numparams > 0 && param && param[0])
+                index = static_cast<tjs_int>(*param[0]);
+            const bool removed =
+                AetherKiri::PortableGamepadManager::Instance().Remove(index);
+            if(result)
+                *result = removed;
+            return TJS_S_OK;
+        }
         TJS_END_NATIVE_METHOD_DECL(remove)
 
-        TJS_BEGIN_NATIVE_METHOD_DECL(rebind) { return TJS_S_OK; }
+        TJS_BEGIN_NATIVE_METHOD_DECL(rebind) {
+            TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+            AetherKiri::PortableGamepadManager::Instance().Refresh();
+            AetherKiri::PortableGamepadState state;
+            const bool valid = _this->IsPortObject()
+                ? AetherKiri::PortableGamepadManager::Instance().Count() > 0
+                : AetherKiri::PortableGamepadManager::Instance().Snapshot(
+                      _this->ControllerIndex(), state);
+            if(result)
+                *result = valid;
+            return TJS_S_OK;
+        }
         TJS_END_NATIVE_METHOD_DECL(rebind)
 
-        TJS_BEGIN_NATIVE_METHOD_DECL(reDetect) { return TJS_S_OK; }
+        TJS_BEGIN_NATIVE_METHOD_DECL(reDetect) {
+            TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+            AetherKiri::PortableGamepadManager::Instance().Refresh();
+            if(result)
+                *result = true;
+            return TJS_S_OK;
+        }
         TJS_END_NATIVE_METHOD_DECL(reDetect)
 
         TJS_BEGIN_NATIVE_METHOD_DECL(createInputDevice) {
-            if(result)
-                *result = 0;
+            TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+            tjs_int index = _this->ControllerIndex();
+            if(_this->IsPortObject() && numparams > 0 && param && param[0])
+                index = static_cast<tjs_int>(*param[0]);
+            AetherKiri::PortableGamepadManager::Instance().Refresh();
+            if(!TVPCreatePortableGamepadVariant(index, result) && result)
+                result->Clear();
             return TJS_S_OK;
         }
         TJS_END_NATIVE_METHOD_DECL(createInputDevice)
 
         TJS_BEGIN_NATIVE_METHOD_DECL(getPadKeyState) {
+            TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+            const tjs_int index = _this->IsPortObject()
+                ? (numparams > 0 && param && param[0]
+                       ? static_cast<tjs_int>(*param[0]) : 0)
+                : _this->ControllerIndex();
+            AetherKiri::PortableGamepadManager::Instance().Refresh();
             if(result)
-                *result = 0;
+                *result = static_cast<tjs_int64>(
+                    AetherKiri::PortableGamepadManager::Instance().KeyState(index));
             return TJS_S_OK;
         }
         TJS_END_NATIVE_METHOD_DECL(getPadKeyState)
 
         TJS_BEGIN_NATIVE_METHOD_DECL(getButtonState) {
+            TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+            const tjs_int index = _this->IsPortObject()
+                ? (numparams > 1 && param && param[0]
+                       ? static_cast<tjs_int>(*param[0]) : 0)
+                : _this->ControllerIndex();
+            const tjs_int button = _this->IsPortObject()
+                ? (numparams > 1 && param && param[1]
+                       ? static_cast<tjs_int>(*param[1]) : -1)
+                : (numparams > 0 && param && param[0]
+                       ? static_cast<tjs_int>(*param[0]) : -1);
+            AetherKiri::PortableGamepadManager::Instance().Refresh();
             if(result)
-                *result = 0;
+                *result = AetherKiri::PortableGamepadManager::Instance().Button(
+                    index, button);
             return TJS_S_OK;
         }
         TJS_END_NATIVE_METHOD_DECL(getButtonState)
 
         TJS_BEGIN_NATIVE_METHOD_DECL(getAxisState) {
+            TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+            const tjs_int index = _this->IsPortObject()
+                ? (numparams > 1 && param && param[0]
+                       ? static_cast<tjs_int>(*param[0]) : 0)
+                : _this->ControllerIndex();
+            const tjs_int axis = _this->IsPortObject()
+                ? (numparams > 1 && param && param[1]
+                       ? static_cast<tjs_int>(*param[1]) : -1)
+                : (numparams > 0 && param && param[0]
+                       ? static_cast<tjs_int>(*param[0]) : -1);
+            AetherKiri::PortableGamepadManager::Instance().Refresh();
             if(result)
-                *result = 0.0;
+                *result = static_cast<tjs_real>(
+                    AetherKiri::PortableGamepadManager::Instance().Axis(index,
+                                                                         axis));
             return TJS_S_OK;
         }
         TJS_END_NATIVE_METHOD_DECL(getAxisState)
 
         TJS_BEGIN_NATIVE_METHOD_DECL(getCount) {
+            TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+            AetherKiri::PortableGamepadManager::Instance().Refresh();
             if(result)
-                *result = 0;
+                *result = AetherKiri::PortableGamepadManager::Instance().Count();
             return TJS_S_OK;
         }
         TJS_END_NATIVE_METHOD_DECL(getCount)
 
         TJS_BEGIN_NATIVE_METHOD_DECL(getController) {
+            TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
             if(result)
                 result->Clear();
+            if(!_this->IsPortObject())
+                return TJS_S_OK;
+            const tjs_int index = numparams > 0 && param && param[0]
+                ? static_cast<tjs_int>(*param[0]) : 0;
+            AetherKiri::PortableGamepadManager::Instance().Refresh();
+            AetherKiri::PortableGamepadState state;
+            if(AetherKiri::PortableGamepadManager::Instance().Snapshot(index,
+                                                                       state))
+                TVPCreatePortableGamepadVariant(index, result);
             return TJS_S_OK;
         }
         TJS_END_NATIVE_METHOD_DECL(getController)
 
         TJS_BEGIN_NATIVE_PROP_DECL(count) {
             TJS_BEGIN_NATIVE_PROP_GETTER {
-                *result = 0;
+                TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+                AetherKiri::PortableGamepadManager::Instance().Refresh();
+                *result = AetherKiri::PortableGamepadManager::Instance().Count();
                 return TJS_S_OK;
             }
             TJS_END_NATIVE_PROP_GETTER
@@ -229,40 +443,64 @@ public:
 
         TJS_BEGIN_NATIVE_PROP_DECL(port) {
             TJS_BEGIN_NATIVE_PROP_GETTER {
-                *result = 0;
+                TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+                *result = _this->IsPortObject() ? 0 : _this->ControllerIndex();
                 return TJS_S_OK;
             }
             TJS_END_NATIVE_PROP_GETTER
-            TJS_BEGIN_NATIVE_PROP_SETTER { return TJS_S_OK; }
+            TJS_BEGIN_NATIVE_PROP_SETTER {
+                TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+                if(param)
+                    _this->SetWindowHandle(static_cast<std::intptr_t>(
+                        static_cast<tTVInteger>(*param)));
+                return TJS_S_OK;
+            }
             TJS_END_NATIVE_PROP_SETTER
         }
         TJS_END_NATIVE_PROP_DECL(port)
 
         TJS_BEGIN_NATIVE_PROP_DECL(portIndex) {
             TJS_BEGIN_NATIVE_PROP_GETTER {
-                *result = 0;
+                TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+                *result = _this->ControllerIndex() < 0
+                    ? 0 : _this->ControllerIndex();
                 return TJS_S_OK;
             }
             TJS_END_NATIVE_PROP_GETTER
-            TJS_BEGIN_NATIVE_PROP_SETTER { return TJS_S_OK; }
+            TJS_BEGIN_NATIVE_PROP_SETTER {
+                TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+                (void)_this;
+                return TJS_S_OK;
+            }
             TJS_END_NATIVE_PROP_SETTER
         }
         TJS_END_NATIVE_PROP_DECL(portIndex)
 
         TJS_BEGIN_NATIVE_PROP_DECL(enabled) {
             TJS_BEGIN_NATIVE_PROP_GETTER {
-                *result = 0;
+                TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+                AetherKiri::PortableGamepadState state;
+                *result = _this->GetState(state) && state.enabled;
                 return TJS_S_OK;
             }
             TJS_END_NATIVE_PROP_GETTER
-            TJS_BEGIN_NATIVE_PROP_SETTER { return TJS_S_OK; }
+            TJS_BEGIN_NATIVE_PROP_SETTER {
+                TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+                if(!_this->IsPortObject() && param) {
+                    (void)AetherKiri::PortableGamepadManager::Instance().SetEnabled(
+                        _this->ControllerIndex(), static_cast<bool>(*param));
+                }
+                return TJS_S_OK;
+            }
             TJS_END_NATIVE_PROP_SETTER
         }
         TJS_END_NATIVE_PROP_DECL(enabled)
 
         TJS_BEGIN_NATIVE_PROP_DECL(connected) {
             TJS_BEGIN_NATIVE_PROP_GETTER {
-                *result = 0;
+                TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+                AetherKiri::PortableGamepadState state;
+                *result = _this->GetState(state) && state.connected;
                 return TJS_S_OK;
             }
             TJS_END_NATIVE_PROP_GETTER
@@ -272,6 +510,24 @@ public:
 
         TJS_BEGIN_NATIVE_PROP_DECL(name) {
             TJS_BEGIN_NATIVE_PROP_GETTER {
+                TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+                AetherKiri::PortableGamepadState state;
+                if(_this->GetState(state)) {
+                    const tjs_int length = TVPUtf8ToWideCharString(
+                        state.name.c_str(),
+                        static_cast<tjs_uint>(state.name.size()),
+                        static_cast<tjs_char *>(nullptr));
+                    if(length > 0) {
+                        std::vector<tjs_char> wide(
+                            static_cast<size_t>(length) + 1, 0);
+                        TVPUtf8ToWideCharString(
+                            state.name.c_str(),
+                            static_cast<tjs_uint>(state.name.size()),
+                            wide.data());
+                        *result = wide.data();
+                        return TJS_S_OK;
+                    }
+                }
                 *result = TJS_W("");
                 return TJS_S_OK;
             }
@@ -282,14 +538,104 @@ public:
 
         TJS_BEGIN_NATIVE_PROP_DECL(HWND) {
             TJS_BEGIN_NATIVE_PROP_GETTER {
-                *result = static_cast<tjs_int64>(0);
+                TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+                *result = static_cast<tjs_int64>(_this->WindowHandle());
                 return TJS_S_OK;
             }
             TJS_END_NATIVE_PROP_GETTER
-            TJS_BEGIN_NATIVE_PROP_SETTER { return TJS_S_OK; }
+            TJS_BEGIN_NATIVE_PROP_SETTER {
+                TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+                if(param)
+                    _this->SetWindowHandle(static_cast<std::intptr_t>(
+                        static_cast<tTVInteger>(*param)));
+                return TJS_S_OK;
+            }
             TJS_END_NATIVE_PROP_SETTER
         }
         TJS_END_NATIVE_PROP_DECL(HWND)
+
+        TJS_BEGIN_NATIVE_PROP_DECL(type) {
+            TJS_BEGIN_NATIVE_PROP_GETTER {
+                TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+                AetherKiri::PortableGamepadState state;
+                *result = _this->GetState(state) ? state.type : 0;
+                return TJS_S_OK;
+            }
+            TJS_END_NATIVE_PROP_GETTER
+            TJS_DENY_NATIVE_PROP_SETTER
+        }
+        TJS_END_NATIVE_PROP_DECL(type)
+
+        TVP_GAMEPAD_REAL_PROPERTY(leftTrigger, leftTrigger)
+        TVP_GAMEPAD_REAL_PROPERTY(rightTrigger, rightTrigger)
+        TVP_GAMEPAD_REAL_PROPERTY(leftThumbStickX, leftThumbStickX)
+        TVP_GAMEPAD_REAL_PROPERTY(leftThumbStickY, leftThumbStickY)
+        TVP_GAMEPAD_REAL_PROPERTY(rightThumbStickX, rightThumbStickX)
+        TVP_GAMEPAD_REAL_PROPERTY(rightThumbStickY, rightThumbStickY)
+
+        TJS_BEGIN_NATIVE_PROP_DECL(leftVibration) {
+            TJS_DENY_NATIVE_PROP_GETTER
+            TJS_BEGIN_NATIVE_PROP_SETTER {
+                TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+                if(param)
+                    _this->SetLeftVibration(
+                        static_cast<float>(static_cast<tTVReal>(*param)));
+                return TJS_S_OK;
+            }
+            TJS_END_NATIVE_PROP_SETTER
+        }
+        TJS_END_NATIVE_PROP_DECL(leftVibration)
+
+        TJS_BEGIN_NATIVE_PROP_DECL(rightVibration) {
+            TJS_DENY_NATIVE_PROP_GETTER
+            TJS_BEGIN_NATIVE_PROP_SETTER {
+                TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+                if(param)
+                    _this->SetRightVibration(
+                        static_cast<float>(static_cast<tTVReal>(*param)));
+                return TJS_S_OK;
+            }
+            TJS_END_NATIVE_PROP_SETTER
+        }
+        TJS_END_NATIVE_PROP_DECL(rightVibration)
+
+        TJS_BEGIN_NATIVE_PROP_DECL(keyState) {
+            TJS_BEGIN_NATIVE_PROP_GETTER {
+                TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_GamepadStub);
+                AetherKiri::PortableGamepadState state;
+                *result = static_cast<tjs_int64>(_this->GetState(state)
+                    ? state.keyState : 0);
+                return TJS_S_OK;
+            }
+            TJS_END_NATIVE_PROP_GETTER
+            TJS_DENY_NATIVE_PROP_SETTER
+        }
+        TJS_END_NATIVE_PROP_DECL(keyState)
+
+        TVP_GAMEPAD_EDGE_PROPERTY(analogLeftUpCount, 0)
+        TVP_GAMEPAD_EDGE_PROPERTY(analogLeftDownCount, 1)
+        TVP_GAMEPAD_EDGE_PROPERTY(analogLeftLeftCount, 2)
+        TVP_GAMEPAD_EDGE_PROPERTY(analogLeftRightCount, 3)
+        TVP_GAMEPAD_EDGE_PROPERTY(analogRightUpCount, 4)
+        TVP_GAMEPAD_EDGE_PROPERTY(analogRightDownCount, 5)
+        TVP_GAMEPAD_EDGE_PROPERTY(analogRightLeftCount, 6)
+        TVP_GAMEPAD_EDGE_PROPERTY(analogRightRightCount, 7)
+        TVP_GAMEPAD_EDGE_PROPERTY(degitalUpCount, 8)
+        TVP_GAMEPAD_EDGE_PROPERTY(degitalDownCount, 9)
+        TVP_GAMEPAD_EDGE_PROPERTY(degitalLeftCount, 10)
+        TVP_GAMEPAD_EDGE_PROPERTY(degitalRightCount, 11)
+        TVP_GAMEPAD_EDGE_PROPERTY(buttonStartCount, 12)
+        TVP_GAMEPAD_EDGE_PROPERTY(buttonBackCount, 13)
+        TVP_GAMEPAD_EDGE_PROPERTY(buttonLeftThumbCount, 14)
+        TVP_GAMEPAD_EDGE_PROPERTY(buttonRightThumbCount, 15)
+        TVP_GAMEPAD_EDGE_PROPERTY(buttonLeftShoulderCount, 16)
+        TVP_GAMEPAD_EDGE_PROPERTY(buttonLeftTriggerCount, 17)
+        TVP_GAMEPAD_EDGE_PROPERTY(buttonRightShoulderCount, 18)
+        TVP_GAMEPAD_EDGE_PROPERTY(buttonRightTriggerCount, 19)
+        TVP_GAMEPAD_EDGE_PROPERTY(buttonACount, 20)
+        TVP_GAMEPAD_EDGE_PROPERTY(buttonBCount, 21)
+        TVP_GAMEPAD_EDGE_PROPERTY(buttonXCount, 22)
+        TVP_GAMEPAD_EDGE_PROPERTY(buttonYCount, 23)
 
         TJS_END_NATIVE_MEMBERS
     }
@@ -299,6 +645,9 @@ protected:
         return new tTJSNI_GamepadStub();
     }
 };
+
+#undef TVP_GAMEPAD_REAL_PROPERTY
+#undef TVP_GAMEPAD_EDGE_PROPERTY
 
 class tTJSNC_gfxFireStub : public tTJSNativeClass {
 public:
@@ -577,32 +926,174 @@ static void TVPUnregisterProxyFsStub() {
 }
 
 // gamepad.dll 未实现时注册 stub，避免 exgamepad.tjs 访问 GamepadPort 报错（逆向见：global["GamepadPort"]/["Gamepad"]，脚本用 SystemConfig.GamepadPort）
+// krkrz publishes the gamepad constants as globals from V2Link.  The
+// portable implementation is registered directly by TVPLoadPlugin when the
+// optional DLL is absent, so it must publish the same constants itself.  Do
+// not overwrite a value supplied by a real/native plug-in (or by a game):
+// this keeps the native implementation the owner whenever it is available.
+static void TVPRegisterGamepadConstants(iTJSDispatch2 *global) {
+    if(!global)
+        return;
+
+    struct Constant {
+        const tjs_char *name;
+        tjs_int64 value;
+    };
+    static constexpr Constant constants[] = {
+        {TJS_W("gpDInput"), 3},
+        {TJS_W("gpFFDInput"), 2},
+        {TJS_W("gpXInput"), 1},
+        {TJS_W("gpButtonDpadUp"), 0x00000001},
+        {TJS_W("gpButtonDpadDown"), 0x00000002},
+        {TJS_W("gpButtonDpadLeft"), 0x00000004},
+        {TJS_W("gpButtonDpadRight"), 0x00000008},
+        {TJS_W("gpButtonStart"), 0x00000010},
+        {TJS_W("gpButtonBack"), 0x00000020},
+        {TJS_W("gpButtonLeftThumb"), 0x00000040},
+        {TJS_W("gpButtonRightThumb"), 0x00000080},
+        {TJS_W("gpButtonLeftShoulder"), 0x00000100},
+        {TJS_W("gpButtonRightShoulder"), 0x00000200},
+        {TJS_W("gpButtonA"), 0x00001000},
+        {TJS_W("gpButtonB"), 0x00002000},
+        {TJS_W("gpButtonX"), 0x00004000},
+        {TJS_W("gpButtonY"), 0x00008000},
+        {TJS_W("gpLeftAxisX"), 0x00010000},
+        {TJS_W("gpLeftAxisY"), 0x00020000},
+        {TJS_W("gpRightAxisX"), 0x00040000},
+        {TJS_W("gpRightAxisY"), 0x00080000},
+        {TJS_W("gpLeftTrigger"), 0x00100000},
+        {TJS_W("gpRightTrigger"), 0x00200000},
+        {TJS_W("gpDIAxisX"), 0},
+        {TJS_W("gpDIAxisY"), 1},
+        {TJS_W("gpDIAxisZ"), 2},
+        {TJS_W("gpDIAxisRotX"), 3},
+        {TJS_W("gpDIAxisRotY"), 4},
+        {TJS_W("gpDIAxisRotZ"), 5},
+        {TJS_W("gpDISlider_0"), 6},
+        {TJS_W("gpDISlider_1"), 7},
+        {TJS_W("gpDIPOV_0"), 8},
+        {TJS_W("gpDIPOV_1"), 9},
+        {TJS_W("gpDIPOV_2"), 10},
+        {TJS_W("gpDIPOV_3"), 11},
+        {TJS_W("gpDIDisable"), 44},
+        {TJS_W("gpTouchNo"), 0},
+        {TJS_W("gpTouchDown"), 1},
+        {TJS_W("gpTouchLiftoff"), 0},
+    };
+
+    for(const Constant &constant : constants) {
+        tTJSVariant existing;
+        bool present = false;
+        try {
+            present = TJS_SUCCEEDED(global->PropGet(
+                TJS_MEMBERMUSTEXIST, constant.name, nullptr, &existing,
+                global));
+        } catch(...) {
+            present = false;
+        }
+        if(present)
+            continue;
+        tTJSVariant value(constant.value);
+        try {
+            global->PropSet(TJS_MEMBERENSURE, constant.name, nullptr, &value,
+                            global);
+        } catch(...) {
+            // A read-only global supplied by a host should not make loading
+            // the otherwise usable portable gamepad fail.
+        }
+    }
+}
+
 static bool TVPRegisterGamepadStub() {
-    iTJSDispatch2 *stub = new tTJSNC_GamepadStub();
-    if(!stub)
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    if(!global)
         return false;
 
-    iTJSDispatch2 *global = TVPGetScriptDispatch();
-    if(!global) {
-        stub->Release();
-        return false;
+    // Never replace a class/object supplied by a real/native plug-in.  Some
+    // older games expose only one of the two aliases, so fill the missing
+    // side from the existing object before creating the portable fallback.
+    auto readMember = [](iTJSDispatch2 *object, const tjs_char *name,
+                         tTJSVariant *value) {
+        if(!object || !name || !value)
+            return false;
+        try {
+            return TJS_SUCCEEDED(object->PropGet(
+                TJS_MEMBERMUSTEXIST | TJS_IGNOREPROP, name, nullptr, value,
+                object));
+        } catch(...) {
+            return false;
+        }
+    };
+    auto setIfMissing = [](iTJSDispatch2 *object, const tjs_char *name,
+                           const tTJSVariant &value) {
+        if(!object || !name)
+            return false;
+        tTJSVariant existing;
+        try {
+            if(TJS_SUCCEEDED(object->PropGet(
+                   TJS_MEMBERMUSTEXIST | TJS_IGNOREPROP, name, nullptr,
+                   &existing, object)))
+                return true;
+            return TJS_SUCCEEDED(object->PropSet(
+                TJS_MEMBERENSURE | TJS_IGNOREPROP, name, nullptr, &value,
+                object));
+        } catch(...) {
+            return false;
+        }
+    };
+
+    tTJSVariant gamepadPort;
+    tTJSVariant gamepad;
+    bool hasPort = readMember(global, TJS_W("GamepadPort"), &gamepadPort);
+    bool hasGamepad = readMember(global, TJS_W("Gamepad"), &gamepad);
+    iTJSDispatch2 *stub = nullptr;
+    bool installedFallback = false;
+
+    if(!hasPort && hasGamepad) {
+        hasPort = setIfMissing(global, TJS_W("GamepadPort"), gamepad);
+        if(hasPort)
+            gamepadPort = gamepad;
+    } else if(!hasGamepad && hasPort) {
+        hasGamepad = setIfMissing(global, TJS_W("Gamepad"), gamepadPort);
+        if(hasGamepad)
+            gamepad = gamepadPort;
+    } else if(!hasPort && !hasGamepad) {
+        stub = new tTJSNC_GamepadStub();
+        if(stub) {
+            tTJSVariant value(stub);
+            hasPort = setIfMissing(global, TJS_W("GamepadPort"), value);
+            hasGamepad = setIfMissing(global, TJS_W("Gamepad"), value);
+            gamepadPort = value;
+            gamepad = value;
+            installedFallback = hasPort || hasGamepad;
+        }
     }
 
-    tTJSVariant val(stub);
-    global->PropSet(TJS_MEMBERENSURE, TJS_W("GamepadPort"), nullptr, &val, global);
-    global->PropSet(TJS_MEMBERENSURE, TJS_W("Gamepad"), nullptr, &val, global);
+    // The constants are independent of the object implementation and are
+    // also installed only when absent, so native gamepad plug-ins retain
+    // ownership of any values they already published.
+    TVPRegisterGamepadConstants(global);
 
     tTJSVariant configVar;
     if(global->PropGet(0, TJS_W("SystemConfig"), nullptr, &configVar, global) == TJS_S_OK &&
        configVar.Type() == tvtObject && configVar.AsObjectNoAddRef()) {
-        configVar.AsObjectNoAddRef()->PropSet(TJS_MEMBERENSURE, TJS_W("GamepadPort"), nullptr, &val,
-                                              configVar.AsObjectNoAddRef());
+        tTJSVariant configPort;
+        if(!readMember(configVar.AsObjectNoAddRef(), TJS_W("GamepadPort"),
+                       &configPort)) {
+            const tTJSVariant *source = hasPort ? &gamepadPort :
+                                      (hasGamepad ? &gamepad : nullptr);
+            if(source)
+                setIfMissing(configVar.AsObjectNoAddRef(),
+                             TJS_W("GamepadPort"), *source);
+        }
     }
 
     global->Release();
-    stub->Release();
-    spdlog::info("Registered GamepadPort/Gamepad stub for missing gamepad.dll");
-    return true;
+    if(stub)
+        stub->Release();
+    if(installedFallback)
+        spdlog::info("Registered GamepadPort/Gamepad stub for missing gamepad.dll");
+    return hasPort || hasGamepad;
 }
 
 static void TVPRegisterGfxFireStub() {
@@ -651,14 +1142,22 @@ void TVPLoadPlugin(const ttstr &name) {
         }
     }
 
+    // gamepad.dll has a real portable SDL-backed implementation in this
+    // binary.  Register it whenever the optional native DLL is absent, not
+    // only in the mock host: real games must be able to discover
+    // GamepadPort/Gamepad on desktop and mobile builds alike.  The adapter
+    // still reports zero devices when SDL has no joystick backend, so this
+    // does not manufacture input state.
+    if(!loaded && normalizedShortName == TJS_W("gamepad.dll")) {
+        loaded = TVPRegisterGamepadStub();
+        if(loaded) {
+            TVPRegisteredPlugins.insert(normalizedShortName);
+            stub = "PortableGamepad";
+        }
+    }
+
     if(!loaded && TJS::TVPIsMockEnabled()) {
-        if(normalizedShortName == TJS_W("gamepad.dll")) {
-            loaded = TVPRegisterGamepadStub();
-            if(loaded) {
-                TVPRegisteredPlugins.insert(normalizedShortName);
-                stub = "GamepadStub";
-            }
-        } else if(normalizedShortName == TJS_W("fontinfo.dll")) {
+        if(normalizedShortName == TJS_W("fontinfo.dll")) {
             TVPRegisterFontInfoStub();
             TVPRegisteredPlugins.insert(normalizedShortName);
             loaded = true;

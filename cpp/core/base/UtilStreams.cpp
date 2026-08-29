@@ -747,8 +747,7 @@ tTVPUnpackArchiveImplLibArchive::_onPassphraseCallback(archive *,
     return psw.c_str();
 }
 
-#if 1
-
+#if defined(AETHERKIRI_HAS_UNRAR)
 #include <raros.hpp>
 #include <dll.hpp>
 
@@ -908,7 +907,7 @@ public:
     }
 };
 
-#endif
+#endif // AETHERKIRI_HAS_UNRAR
 
 int tTVPUnpackArchive::Prepare(const std::string &path,
                                const std::string &_outpath,

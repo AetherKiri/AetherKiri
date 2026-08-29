@@ -3076,13 +3076,13 @@ public:
     EncoderParameters *params;
 
     EncoderParameterGetter() {
-        infos[0] = EncoderInfo("compression", GdipEncoderCompression, -1);
+        infos[0] = EncoderInfo("compression", libgdiplus::GdipEncoderCompression, -1);
         infos[1] = EncoderInfo("scanmethod", GdipEncoderScanMethod, -1);
         infos[2] = EncoderInfo("version", GdipEncoderVersion, -1);
         infos[3] = EncoderInfo("render", GdipEncoderRenderMethod, -1);
-        infos[4] = EncoderInfo("tansform", GdipEncoderTransformation, -1);
-        infos[5] = EncoderInfo("quality", GdipEncoderQuality, -1);
-        infos[6] = EncoderInfo("depth", GdipEncoderColorDepth, 24);
+        infos[4] = EncoderInfo("tansform", libgdiplus::GdipEncoderTransformation, -1);
+        infos[5] = EncoderInfo("quality", libgdiplus::GdipEncoderQuality, -1);
+        infos[6] = EncoderInfo("depth", libgdiplus::GdipEncoderColorDepth, 24);
         params = (EncoderParameters *)malloc(sizeof(EncoderParameters) +
                                              6 * sizeof(EncoderParameter));
     };
@@ -3208,12 +3208,15 @@ tTJSVariant LayerExDraw::getColorRegionRects(ARGB color) {
 
         // 矩形一覧取得
         GpMatrix matrix;
-        int count{};
-        GdipGetRegionScansCount(region, &count, &matrix);
-        if(count > 0) {
+        // GDI+ declares the scan count as INT (including libgdiplus).  Keep
+        // the ABI type instead of the Win32 image-width UINT used above.
+        INT scanCount{};
+        GdipGetRegionScansCount(region, &scanCount, &matrix);
+        if(scanCount > 0) {
+            INT count = scanCount;
             auto *rects = new RectF[count];
             GdipGetRegionScans(region, rects, &count, &matrix);
-            for(int i = 0; i < count; i++) {
+            for(INT i = 0; i < count; i++) {
                 RectF *rect = &rects[i];
                 tTJSVariant x(rect->X);
                 tTJSVariant y(rect->Y);

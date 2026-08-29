@@ -407,11 +407,11 @@ namespace TJS // following is in the namespace
         SourcePosArrayCapa = 0;
         SourcePosArraySize = 0;
 
-#ifdef _DEBUG
+#if defined(_DEBUG) || defined(KRKRZ_ENABLE_DAP)
         DebuggerRegisterArea = nullptr;
         if(Parent)
             Parent->AddRef();
-#endif // _DEBUG
+#endif // _DEBUG || KRKRZ_ENABLE_DAP
 
         if(name) {
             Name = new tjs_char[TJS_strlen(name) + 1];
@@ -488,6 +488,13 @@ namespace TJS // following is in the namespace
             delete[] Name;
             throw;
         }
+#if defined(_DEBUG) || defined(KRKRZ_ENABLE_DAP)
+        // A source function can be recompiled at the same code offset.  Drop
+        // stale entries before this context starts registering locals.
+        TJSDebuggerClearLocalVariable(
+            GetClassName().c_str(), GetName(),
+            Block ? Block->GetName() : nullptr, FunctionRegisterCodePoint);
+#endif
     }
 
     //---------------------------------------------------------------------------
@@ -543,9 +550,9 @@ namespace TJS // following is in the namespace
         SourcePosArrayCapa = srcPosSize;
         SourcePosArraySize = srcPosSize;
 
-#ifdef _DEBUG
+#if defined(_DEBUG) || defined(KRKRZ_ENABLE_DAP)
         DebuggerRegisterArea = nullptr;
-#endif // _DEBUG
+#endif // _DEBUG || KRKRZ_ENABLE_DAP
 
         if(name) {
             Name = new tjs_char[TJS_strlen(name) + 1];
@@ -626,12 +633,12 @@ namespace TJS // following is in the namespace
         if(SourcePosArray)
             TJS_free(SourcePosArray), SourcePosArray = nullptr;
 
-#ifdef _DEBUG
+#if defined(_DEBUG) || defined(KRKRZ_ENABLE_DAP)
         if(Parent) {
             Parent->Release();
             Parent = nullptr;
         }
-#endif // _DEBUG
+#endif // _DEBUG || KRKRZ_ENABLE_DAP
         inherited::Finalize();
     }
 
@@ -757,7 +764,7 @@ namespace TJS // following is in the namespace
         return ret;
     }
 
-#ifdef _DEBUG
+#if defined(_DEBUG) || defined(KRKRZ_ENABLE_DAP)
     //---------------------------------------------------------------------------
     ttstr tTJSInterCodeContext::GetClassName() const {
         ttstr ret;
@@ -806,7 +813,7 @@ namespace TJS // following is in the namespace
 
         return ret;
     }
-#endif // _DEBUG
+#endif // _DEBUG || KRKRZ_ENABLE_DAP
 
     //---------------------------------------------------------------------------
     void tTJSInterCodeContext::OutputWarning(const tjs_char *msg, tjs_int pos) {
@@ -3115,6 +3122,13 @@ namespace TJS // following is in the namespace
             if(init != 0) {
                 // initial value is given
                 tjs_int n = Namespace.Find(name);
+#if defined(_DEBUG) || defined(KRKRZ_ENABLE_DAP)
+                TJSDebuggerAddLocalVariable(
+                    GetClassName().c_str(), GetName(),
+                    Block ? Block->GetName() : nullptr,
+                    FunctionRegisterCodePoint, name,
+                    TJS_TO_VM_REG_ADDR(-n - VariableReserveCount - 1));
+#endif
                 PutCode(VM_CP, LEX_POS);
                 PutCode(TJS_TO_VM_REG_ADDR(-n - VariableReserveCount - 1),
                         LEX_POS);
@@ -3123,6 +3137,13 @@ namespace TJS // following is in the namespace
             {
                 // first initialization
                 tjs_int n = Namespace.Find(name);
+#if defined(_DEBUG) || defined(KRKRZ_ENABLE_DAP)
+                TJSDebuggerAddLocalVariable(
+                    GetClassName().c_str(), GetName(),
+                    Block ? Block->GetName() : nullptr,
+                    FunctionRegisterCodePoint, name,
+                    TJS_TO_VM_REG_ADDR(-n - VariableReserveCount - 1));
+#endif
                 PutCode(VM_CL, LEX_POS);
                 PutCode(TJS_TO_VM_REG_ADDR(-n - VariableReserveCount - 1),
                         LEX_POS);
@@ -3130,6 +3151,10 @@ namespace TJS // following is in the namespace
         } else {
             // create member on this
             tjs_int dp = PutData(tTJSVariant(name));
+#if defined(_DEBUG) || defined(KRKRZ_ENABLE_DAP)
+            TJSDebuggerAddClassVariable(GetSelfClassName().c_str(), name,
+                                        TJS_TO_VM_REG_ADDR(dp));
+#endif
             PutCode(VM_SPDS, LEX_POS);
             PutCode(TJS_TO_VM_REG_ADDR(-1), LEX_POS);
             PutCode(TJS_TO_VM_REG_ADDR(dp), LEX_POS);

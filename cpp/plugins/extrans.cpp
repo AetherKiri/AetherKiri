@@ -39,18 +39,3 @@ NCB_PRE_REGIST_CALLBACK(wuopus_stub);
 #define NCB_MODULE_NAME TJS_W("wuflac.dll")
 static void wuflac_stub() {}
 NCB_PRE_REGIST_CALLBACK(wuflac_stub);
-
-#undef NCB_MODULE_NAME
-#define NCB_MODULE_NAME TJS_W("layerExColor.dll")
-static void layerExColor_stub() {}
-NCB_PRE_REGIST_CALLBACK(layerExColor_stub);
-
-#undef NCB_MODULE_NAME
-#define NCB_MODULE_NAME TJS_W("layerExMosaic.dll")
-static void layerExMosaic_stub() {}
-NCB_PRE_REGIST_CALLBACK(layerExMosaic_stub);
-
-#undef NCB_MODULE_NAME
-#define NCB_MODULE_NAME TJS_W("layerExAVI.dll")
-static void layerExAVI_stub() {}
-NCB_PRE_REGIST_CALLBACK(layerExAVI_stub);

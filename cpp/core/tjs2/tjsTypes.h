@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <stddef.h> // ptrdiff_t
+#include <string>
 
 #if !defined(_WIN32)
 #include <sys/types.h>
@@ -42,6 +43,21 @@ typedef std::int64_t tjs_int64;
 typedef std::uint64_t tjs_uint64;
 
 typedef char16_t tjs_char;
+// krkrz exposes the script-facing UTF-16 value type as `tjs_string`.  Keep
+// the alias in the shared Aether type header so source-level adapters can
+// consume upstream utility/debugger leaves without a second string ABI.
+using tjs_string = std::u16string;
+
+// Keep the COM-style calling-convention marker available to source-level
+// krkrz leaves on every host.  It is empty on non-Windows platforms and is
+// defined as __cdecl by the Windows ABI in the platform headers when needed.
+#ifndef TJS_INTF_METHOD
+#if defined(_WIN32) && defined(_MSC_VER)
+#define TJS_INTF_METHOD __cdecl
+#else
+#define TJS_INTF_METHOD
+#endif
+#endif
 #define TJS_W(X) u##X
 #define TJS_N(X) X
 

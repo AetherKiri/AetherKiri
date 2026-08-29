@@ -11,6 +11,7 @@
 #include "tjsCommHead.h"
 
 #include "GraphicsLoaderIntf.h"
+#include "CharacterSet.h"
 #include "StorageIntf.h"
 #include "MsgIntf.h"
 #include "tjsUtils.h"
@@ -32,7 +33,18 @@
 #include <spdlog/spdlog.h>
 #include <lz4.h>
 
+// The pinned krkrz TLG implementation owns this prediction table.  The
+// bounded preflight below reads it through the same C-linkage symbol as the
+// upstream decoder; no second copy of the table is kept in Aether.
+extern "C" char TVPTLG6GolombBitLengthTable[1024][4];
+
 namespace {
+constexpr tjs_uint64 kMaxTLGMaterializedBytes = 512ULL * 1024ULL * 1024ULL;
+constexpr tjs_uint32 kMaxTLGMetadataChunkBytes = 16U * 1024U * 1024U;
+// Keep attacker-controlled index counts bounded even when the container is
+// syntactically small enough to fit in the materialized input limit.
+constexpr tjs_uint64 kMaxTLGTableEntries = 1'000'000ULL;
+
 bool TVPTLGFormatTraceEnabled() {
     static const bool enabled = [] {
         const char *value = std::getenv("AETHERKIRI_TLG_HEADER_TRACE");
@@ -174,7 +186,9 @@ static bool TVPParseTLGMux(const std::vector<tjs_uint8> &bytes,
     mux.Width = TVPReadTLGUInt32LE(bytes.data() + 12);
     mux.Height = TVPReadTLGUInt32LE(bytes.data() + 16);
     if((mux.Colors != 3 && mux.Colors != 4) || mux.Width == 0 ||
-       mux.Height == 0) {
+       mux.Height == 0 ||
+       static_cast<tjs_uint64>(mux.Width) * mux.Height >
+           kMaxTLGMaterializedBytes / 4) {
         error = "unsupported TLGmux canvas header";
         return false;
     }
@@ -200,7 +214,7 @@ static bool TVPParseTLGMux(const std::vector<tjs_uint8> &bytes,
             const tjs_uint8 *payloadBytes = bytes.data() + payload;
             const tjs_uint32 count = TVPReadTLGUInt32LE(payloadBytes);
             const tjs_uint64 expected = 4ULL + 24ULL * count;
-            if(expected > chunkSize) {
+            if(count > kMaxTLGTableEntries || expected > chunkSize) {
                 error = "truncated TLGmux CMUX index";
                 return false;
             }
@@ -275,6 +289,10 @@ static bool TVPParseTLGMux(const std::vector<tjs_uint8> &bytes,
     mux.DataBase = firstImage - minimumOffset;
 
     for(const auto &slice : mux.Slices) {
+        if(slice.Offset > std::numeric_limits<tjs_uint64>::max() - mux.DataBase) {
+            error = "TLGmux slice offset overflows";
+            return false;
+        }
         const tjs_uint64 imageOffset = mux.DataBase + slice.Offset;
         if(imageOffset < mux.DataBase ||
            !TVPIsTLGQOIHeader(bytes, imageOffset) ||
@@ -305,7 +323,8 @@ static bool TVPDecodeTLGQOI(const std::vector<tjs_uint8> &bytes,
         return false;
     }
     const tjs_uint64 pixelCount = static_cast<tjs_uint64>(width) * height;
-    if(pixelCount > std::numeric_limits<size_t>::max() / 4) {
+    if(pixelCount > kMaxTLGMaterializedBytes / 4 ||
+       pixelCount > std::numeric_limits<size_t>::max() / 4) {
         error = "TLGqoi image is too large";
         return false;
     }
@@ -454,11 +473,29 @@ static bool TVPParseTLGRef(const std::vector<tjs_uint8> &bytes,
         return false;
     }
     // The game stores a BMP/UTF-16LE name and includes its terminating NUL
-    // in the byte count.  TVPStringFromBMPUnicode handles surrogate-free BMP
-    // names and keeps the storage API's native UTF-16 representation.
-    ref.Container = TVPStringFromBMPUnicode(
-        reinterpret_cast<const tjs_uint16 *>(chunk + 16),
-        static_cast<tjs_int>(nameBytes / 2));
+    // in the byte count.  Do not reinterpret the byte buffer as uint16_t:
+    // a QREF chunk is only byte-aligned and that cast is undefined on strict
+    // ARM targets.  Decode explicitly and keep the script's UTF-16 value
+    // type at the ABI boundary.
+    const size_t nameUnits = static_cast<size_t>(nameBytes / 2);
+    if(nameUnits == 0 || chunk[16 + nameBytes - 2] != 0 ||
+       chunk[16 + nameBytes - 1] != 0) {
+        error = "TLGref container name is not NUL terminated";
+        return false;
+    }
+    tjs_string containerName;
+    containerName.reserve(nameUnits - 1);
+    for(size_t index = 0; index + 1 < nameUnits; ++index) {
+        const tjs_uint16 code = static_cast<tjs_uint16>(
+            static_cast<tjs_uint16>(chunk[16 + index * 2]) |
+            (static_cast<tjs_uint16>(chunk[16 + index * 2 + 1]) << 8));
+        if(code == 0) {
+            error = "TLGref container name contains an early NUL";
+            return false;
+        }
+        containerName.push_back(static_cast<tjs_char>(code));
+    }
+    ref.Container = ttstr(containerName);
     if(ref.Container.IsEmpty()) {
         error = "empty TLGref container name";
         return false;
@@ -479,18 +516,27 @@ static bool TVPReadTLGBytes(tTJSBinaryStream *src,
     }
     const tjs_uint64 originalPosition = src->GetPosition();
     const tjs_uint64 size = src->GetSize();
-    if(size == 0 || size > std::numeric_limits<size_t>::max()) {
+    if(size == 0 || size > kMaxTLGMaterializedBytes ||
+       size > std::numeric_limits<size_t>::max()) {
         error = "invalid TLG stream size";
         return false;
     }
     bytes.resize(static_cast<size_t>(size));
     src->SetPosition(0);
-    const tjs_uint read = src->Read(bytes.data(), static_cast<tjs_uint>(size));
-    src->SetPosition(originalPosition);
-    if(read != size) {
-        error = "short TLG stream read";
-        return false;
+    size_t offset = 0;
+    while(offset < bytes.size()) {
+        const size_t remaining = bytes.size() - offset;
+        const tjs_uint want = static_cast<tjs_uint>(std::min<size_t>(
+            remaining, std::numeric_limits<tjs_uint>::max()));
+        const tjs_uint got = src->Read(bytes.data() + offset, want);
+        if(got != want) {
+            src->SetPosition(originalPosition);
+            error = "short TLG stream read";
+            return false;
+        }
+        offset += got;
     }
+    src->SetPosition(originalPosition);
     return true;
 }
 
@@ -535,6 +581,12 @@ static bool TVPDecompressTLGLZ4(const std::vector<tjs_uint8> &bytes,
             error = "invalid TLGqoi LZ4 block";
             return false;
         }
+        if(output.size() > kMaxTLGMaterializedBytes ||
+           static_cast<tjs_uint64>(decompressedSize) >
+               kMaxTLGMaterializedBytes - output.size()) {
+            error = "TLGqoi decompressed data is too large";
+            return false;
+        }
         output.insert(output.end(), block.begin(), block.end());
         previous.swap(block);
     }
@@ -562,7 +614,9 @@ static bool TVPDecodeTLGQOIContainer(const std::vector<tjs_uint8> &bytes,
     width = TVPReadTLGUInt32LE(bytes.data() + 12);
     height = TVPReadTLGUInt32LE(bytes.data() + 16);
     const tjs_uint32 qhdrSize = TVPReadTLGUInt32LE(bytes.data() + 24);
+    const tjs_uint64 canvasPixels = static_cast<tjs_uint64>(width) * height;
     if((colors != 3 && colors != 4) || width == 0 || height == 0 ||
+       canvasPixels > kMaxTLGMaterializedBytes / 4 ||
        qhdrSize < 48 || !TVPHasTLGBytes(bytes, 28, qhdrSize)) {
         error = "unsupported TLGqoi+QHDR canvas";
         return false;
@@ -578,8 +632,18 @@ static bool TVPDecodeTLGQOIContainer(const std::vector<tjs_uint8> &bytes,
         error = "invalid TLGqoi+QHDR band metadata";
         return false;
     }
+    const tjs_uint64 expectedBandCount =
+        (static_cast<tjs_uint64>(height) + bandHeight - 1) / bandHeight;
+    if(bandCount > expectedBandCount || bandCount > kMaxTLGTableEntries) {
+        error = "invalid TLGqoi+QHDR band count";
+        return false;
+    }
 
     const tjs_uint64 qoiStart = 28ULL + qhdrSize + 8;
+    if(qoiStart > bytes.size() || totalQOIBytes > bytes.size() - qoiStart) {
+        error = "TLGqoi+QHDR pixel data is outside the file";
+        return false;
+    }
     const tjs_uint64 dtblOffset = qoiStart + totalQOIBytes;
     if(!TVPHasTLGBytes(bytes, dtblOffset, 8) ||
        std::memcmp(bytes.data() + dtblOffset, "DTBL", 4) != 0) {
@@ -625,7 +689,7 @@ static bool TVPDecodeTLGQOIContainer(const std::vector<tjs_uint8> &bytes,
     const tjs_uint64 rtableLimit = rtablePosition + rtblSize;
     tjs_uint64 rtableCount = 0;
     if(!TVPReadTLGLEB128(bytes, rtablePosition, rtableLimit, rtableCount) ||
-       rtableCount < bandCount) {
+       rtableCount < bandCount || rtableCount > kMaxTLGTableEntries) {
         error = "invalid TLGqoi RTBL table";
         return false;
     }
@@ -660,9 +724,15 @@ static bool TVPDecodeTLGQOIContainer(const std::vector<tjs_uint8> &bytes,
             break;
         const tjs_uint32 currentBandHeight =
             std::min(bandHeight, height - bandTop);
-        const tjs_uint64 interleavedPixels =
-            static_cast<tjs_uint64>(width) * imageCount * currentBandHeight;
-        if(band >= bandDistSizes.size() ||
+        const tjs_uint64 bandPixels =
+            static_cast<tjs_uint64>(width) * currentBandHeight;
+        if(bandPixels == 0 ||
+           imageCount > kMaxTLGMaterializedBytes / 4 / bandPixels) {
+            error = "TLGqoi interleaved band is too large";
+            return false;
+        }
+        const tjs_uint64 interleavedPixels = bandPixels * imageCount;
+        if(band >= bandDistSizes.size() || distributionPosition > bytes.size() ||
            bandDistSizes[band] > bytes.size() - distributionPosition) {
             error = "TLGqoi distribution band is outside the file";
             return false;
@@ -887,7 +957,9 @@ static bool TVPReadTLGSpecialDimensions(tTJSBinaryStream *src,
         width = TVPReadTLGUInt32LE(bytes.data() + 12);
         height = TVPReadTLGUInt32LE(bytes.data() + 16);
         colors = bytes[11];
-        if((colors != 3 && colors != 4) || width == 0 || height == 0) {
+        if((colors != 3 && colors != 4) || width == 0 || height == 0 ||
+           static_cast<tjs_uint64>(width) * height >
+               kMaxTLGMaterializedBytes / 4) {
             error = "invalid TLGqoi dimensions";
             return false;
         }
@@ -926,7 +998,9 @@ static bool TVPReadTLGSpecialDimensions(tTJSBinaryStream *src,
     colors = containerBytes[11];
     width = TVPReadTLGUInt32LE(containerBytes.data() + 12);
     height = TVPReadTLGUInt32LE(containerBytes.data() + 16);
-    if((colors != 3 && colors != 4) || width == 0 || height == 0) {
+    if((colors != 3 && colors != 4) || width == 0 || height == 0 ||
+       static_cast<tjs_uint64>(width) * height >
+           kMaxTLGMaterializedBytes / 4) {
         error = "invalid TLGref target dimensions";
         return false;
     }
@@ -941,18 +1015,27 @@ static bool TVPReadTLGMuxStream(tTJSBinaryStream *src,
     }
     const tjs_uint64 originalPosition = src->GetPosition();
     const tjs_uint64 size = src->GetSize();
-    if(size == 0 || size > std::numeric_limits<size_t>::max()) {
+    if(size == 0 || size > kMaxTLGMaterializedBytes ||
+       size > std::numeric_limits<size_t>::max()) {
         error = "invalid TLG stream size";
         return false;
     }
     std::vector<tjs_uint8> bytes(static_cast<size_t>(size));
     src->SetPosition(0);
-    const tjs_uint read = src->Read(bytes.data(), static_cast<tjs_uint>(size));
-    src->SetPosition(originalPosition);
-    if(read != size) {
-        error = "short TLG stream read";
-        return false;
+    size_t offset = 0;
+    while(offset < bytes.size()) {
+        const size_t remaining = bytes.size() - offset;
+        const tjs_uint want = static_cast<tjs_uint>(std::min<size_t>(
+            remaining, std::numeric_limits<tjs_uint>::max()));
+        const tjs_uint got = src->Read(bytes.data() + offset, want);
+        if(got != want) {
+            src->SetPosition(originalPosition);
+            error = "short TLG stream read";
+            return false;
+        }
+        offset += got;
     }
+    src->SetPosition(originalPosition);
     return TVPParseTLGMux(bytes, mux, error);
 }
 
@@ -975,7 +1058,8 @@ static void TVPLoadTLGMux(void *callbackdata,
 
     const tjs_uint64 canvasPixels = static_cast<tjs_uint64>(mux.Width) *
                                     mux.Height;
-    if(canvasPixels > std::numeric_limits<size_t>::max() / 4)
+    if(canvasPixels > kMaxTLGMaterializedBytes / 4 ||
+       canvasPixels > std::numeric_limits<size_t>::max() / 4)
         TVPThrowTLGMuxError("TLGmux canvas is too large");
     std::vector<tjs_uint8> canvas(static_cast<size_t>(canvasPixels) * 4, 0);
 
@@ -984,10 +1068,13 @@ static void TVPLoadTLGMux(void *callbackdata,
         tjs_uint64 end = mux.Bytes.size();
         for(const auto &candidate : mux.Slices) {
             if(candidate.Offset > slice.Offset) {
-                end = std::min(end, mux.DataBase + candidate.Offset);
+                if(candidate.Offset <=
+                   std::numeric_limits<tjs_uint64>::max() - mux.DataBase)
+                    end = std::min(end, mux.DataBase + candidate.Offset);
             }
         }
-        if(end <= mux.DataBase + slice.Offset || end > mux.Bytes.size())
+        if(slice.Offset > std::numeric_limits<tjs_uint64>::max() - mux.DataBase ||
+           end <= mux.DataBase + slice.Offset || end > mux.Bytes.size())
             TVPThrowTLGMuxError("invalid TLGmux slice bounds");
 
         std::vector<tjs_uint8> rgba;
@@ -1054,7 +1141,9 @@ static bool TVPReadTLGMuxHeader(tTJSBinaryStream *src, tjs_int &width,
     colors = header[11];
     width = static_cast<tjs_int>(TVPReadTLGUInt32LE(header + 12));
     height = static_cast<tjs_int>(TVPReadTLGUInt32LE(header + 16));
-    return colors == 3 || colors == 4;
+    return (colors == 3 || colors == 4) && width > 0 && height > 0 &&
+           static_cast<tjs_uint64>(width) * height <=
+               kMaxTLGMaterializedBytes / 4;
 }
 
 class TLGDecodeTrace {
@@ -1090,6 +1179,12 @@ public:
 } // namespace
 
 static inline void *TLGArenaAlloc(size_t size, int align) {
+    // The decode paths add alignment/padding bytes because the pinned krkrz
+    // leaves use aligned word reads.  Check the addition before handing an
+    // attacker-controlled size to either allocator.
+    if(align <= 0 || size > std::numeric_limits<size_t>::max() -
+                          static_cast<size_t>(align) - 16)
+        return nullptr;
     if(TVPDecodeArenaActive()) {
         void *p = TVPDecodeArenaAlloc(size + align + 16);
         if(p) return p;
@@ -1100,6 +1195,342 @@ static inline void *TLGArenaAlloc(size_t size, int align) {
 static inline void TLGArenaDealloc(void *ptr) {
     if(TVPDecodeArenaActive() && TVPDecodeArenaOwns(ptr)) return;
     TJSAlignedDealloc(ptr);
+}
+
+static void TVPThrowMalformedTLGMetadata(const tjs_char *message) {
+    TVPThrowExceptionMessage(TVPTLGLoadError, message);
+}
+
+// The historical TLG5 decoder is intentionally reused for the actual
+// decompression (including the krkrz/SIMD dispatch), but its original API has
+// no output bound and assumes a trusted stream.  Validate a slide first so a
+// malformed channel cannot make that upstream routine read or write past its
+// caller-owned buffers.  The validator mirrors the ring-buffer state machine
+// and reports both the expected output length and the next ring position.
+static bool TVPValidateTLG5Slide(const tjs_uint8 *input, size_t inputSize,
+                                  size_t outputCapacity, tjs_int initialR,
+                                  size_t &produced, tjs_int &finalR) {
+    if(!input || initialR < 0 || initialR >= 4096)
+        return false;
+    size_t in = 0;
+    produced = 0;
+    int r = initialR;
+    tjs_uint flags = 0;
+    while(in < inputSize) {
+        if(((flags >>= 1) & 0x100) == 0) {
+            if(in >= inputSize)
+                return false;
+            flags = input[in++] | 0xff00;
+            // Keep this condition byte-for-byte compatible with the legacy
+            // fast path (which requires more than eight bytes remaining).
+            if(flags == 0xff00 && r < (4096 - 8) &&
+               inputSize - in > 8) {
+                if(produced > outputCapacity ||
+                   outputCapacity - produced < 8)
+                    return false;
+                produced += 8;
+                r += 8;
+                in += 8;
+                flags = 0;
+                continue;
+            }
+        }
+        if(flags & 1) {
+            if(inputSize - in < 2)
+                return false;
+            const tjs_uint16 in16 = static_cast<tjs_uint16>(input[in]) |
+                                    (static_cast<tjs_uint16>(input[in + 1]) <<
+                                     8);
+            in += 2;
+            tjs_uint mpos = in16 & 0xfff;
+            tjs_uint mlen = (in16 >> 12) + 3;
+            if(mlen == 18) {
+                if(in >= inputSize)
+                    return false;
+                mlen += input[in++];
+            }
+            if(produced > outputCapacity ||
+               static_cast<size_t>(mlen) > outputCapacity - produced)
+                return false;
+            produced += mlen;
+            if((mpos + mlen) < 4096 && (r + mlen) < 4096) {
+                r += static_cast<int>(mlen);
+            } else {
+                for(tjs_uint i = 0; i < mlen; ++i) {
+                    ++r;
+                    r &= 0xfff;
+                    ++mpos;
+                    mpos &= 0xfff;
+                }
+            }
+        } else {
+            if(in >= inputSize || produced >= outputCapacity)
+                return false;
+            ++in;
+            ++produced;
+            r = (r + 1) & 0xfff;
+        }
+    }
+    finalR = r;
+    return true;
+}
+
+// TLG6's historical Golomb decoder receives only a padded byte pointer.  It
+// therefore cannot know the encoded bit length and, for malformed input,
+// can keep scanning zero bits or index its prediction table out of bounds.
+// Parse the same LSB-first grammar with an explicit bit limit before handing
+// the stream to the pinned krkrz routine.  This keeps upstream decoding and
+// SIMD reuse intact while making the Aether boundary safe for untrusted game
+// assets.
+class TLGBoundedBitReader {
+    const tjs_uint8 *data_ = nullptr;
+    size_t byte_length_ = 0;
+    size_t bit_length_ = 0;
+    size_t position_ = 0;
+
+    tjs_uint8 byteAt(size_t index) const {
+        return index < byte_length_ ? data_[index] : 0;
+    }
+
+public:
+    TLGBoundedBitReader(const tjs_uint8 *data, size_t bitLength)
+        : data_(data), byte_length_((bitLength + 7) / 8),
+          bit_length_(bitLength) {}
+
+    size_t position() const { return position_; }
+
+    bool readBit(tjs_uint8 &value) {
+        if(!data_ || position_ >= bit_length_)
+            return false;
+        value = static_cast<tjs_uint8>(
+            (data_[position_ >> 3] >> (position_ & 7)) & 1U);
+        ++position_;
+        return true;
+    }
+
+    // Read up to 32 LSB-first bits without touching bytes beyond the encoded
+    // byte count.  Missing high bits are treated as zero, matching the
+    // decoder's deliberately zero-padded scratch buffer.
+    bool readBits(unsigned count, tjs_uint32 &value) {
+        if(count > 32 || position_ > bit_length_ ||
+           bit_length_ - position_ < count)
+            return false;
+        const size_t byte = position_ >> 3;
+        const unsigned shift = static_cast<unsigned>(position_ & 7);
+        tjs_uint64 word = static_cast<tjs_uint64>(byteAt(byte));
+        word |= static_cast<tjs_uint64>(byteAt(byte + 1)) << 8;
+        word |= static_cast<tjs_uint64>(byteAt(byte + 2)) << 16;
+        word |= static_cast<tjs_uint64>(byteAt(byte + 3)) << 24;
+        word |= static_cast<tjs_uint64>(byteAt(byte + 4)) << 32;
+        if(shift)
+            word >>= shift;
+        if(count == 32)
+            value = static_cast<tjs_uint32>(word);
+        else if(count == 0)
+            value = 0;
+        else
+            value = static_cast<tjs_uint32>(
+                word & ((static_cast<tjs_uint64>(1) << count) - 1U));
+        position_ += count;
+        return true;
+    }
+
+    // Peek the same four-byte window used by TVP_TLG6_FETCH_32BITS.  Bits
+    // beyond the declared stream are zero, but no out-of-range byte is read.
+    tjs_uint32 peekDecoderWord() const {
+        if(position_ > bit_length_)
+            return 0;
+        const size_t byte = position_ >> 3;
+        tjs_uint32 word = static_cast<tjs_uint32>(byteAt(byte));
+        word |= static_cast<tjs_uint32>(byteAt(byte + 1)) << 8;
+        word |= static_cast<tjs_uint32>(byteAt(byte + 2)) << 16;
+        word |= static_cast<tjs_uint32>(byteAt(byte + 3)) << 24;
+        return word >> (position_ & 7);
+    }
+
+    // Decode the gamma code used for zero/non-zero run lengths.  The
+    // upstream routine stores the leading-zero count in an int, so values
+    // requiring 31 or more leading zeros are invalid for its ABI even before
+    // they could fit in a TLG6 block.
+    bool readGamma(tjs_uint64 &value) {
+        unsigned leadingZeros = 0;
+        tjs_uint8 bit = 0;
+        for(;;) {
+            if(!readBit(bit))
+                return false;
+            if(bit)
+                break;
+            if(++leadingZeros > 30)
+                return false;
+        }
+        tjs_uint32 payload = 0;
+        if(!readBits(leadingZeros, payload))
+            return false;
+        value = (static_cast<tjs_uint64>(1) << leadingZeros) | payload;
+        return value != 0;
+    }
+
+    // Read one modified Golomb/Rice value.  Normal values use a unary
+    // quotient; the saver emits an aligned five-byte escape when the unary
+    // prefix would be too long.  The pointer movement intentionally mirrors
+    // the upstream decoder's escape path.
+    bool readGolombCode(int k, tjs_uint64 &m) {
+        if(k < 0 || k > 8 || position_ > bit_length_)
+            return false;
+
+        const tjs_uint32 word = peekDecoderWord();
+        tjs_uint64 quotient = 0;
+        if(word != 0) {
+#if defined(__GNUC__) || defined(__clang__)
+            const unsigned zeroBits = static_cast<unsigned>(
+                __builtin_ctz(static_cast<unsigned>(word)));
+#else
+            unsigned zeroBits = 0;
+            tjs_uint32 probe = word;
+            while((probe & 1U) == 0) {
+                ++zeroBits;
+                probe >>= 1;
+            }
+#endif
+            if(zeroBits >= 32 || bit_length_ - position_ < zeroBits + 1)
+                return false;
+            position_ += zeroBits + 1; // zero prefix plus its terminator
+            quotient = zeroBits;
+        } else {
+            // TVPTLG6DecodeGolombValues_c advances its byte pointer by five
+            // and reads the fifth byte as an eight-bit quotient.  Require the
+            // complete escape payload, including the alignment bytes, to be
+            // inside the declared bit stream.
+            const size_t base = position_ >> 3;
+            if(base > (std::numeric_limits<size_t>::max() / 8) - 5)
+                return false;
+            const size_t escapePosition = (base + 5) * 8;
+            if(escapePosition > bit_length_ ||
+               base + 4 >= byte_length_ ||
+               bit_length_ - escapePosition < static_cast<size_t>(k))
+                return false;
+            quotient = byteAt(base + 4);
+            position_ = escapePosition;
+        }
+
+        tjs_uint32 remainder = 0;
+        if(!readBits(static_cast<unsigned>(k), remainder))
+            return false;
+        m = (quotient << static_cast<unsigned>(k)) | remainder;
+        return true;
+    }
+};
+
+static bool TVPValidateTLG6Golomb(const tjs_uint8 *bitPool,
+                                  tjs_uint32 bitLength,
+                                  tjs_int pixelCount) {
+    if(!bitPool || bitLength == 0 || pixelCount <= 0)
+        return false;
+
+    TLGBoundedBitReader reader(bitPool, static_cast<size_t>(bitLength));
+    tjs_uint8 initial = 0;
+    if(!reader.readBit(initial))
+        return false;
+    bool zeroRun = initial == 0;
+    tjs_int remaining = pixelCount;
+    int n = 3;
+    int a = 0;
+
+    while(remaining > 0) {
+        tjs_uint64 count = 0;
+        if(!reader.readGamma(count) || count >
+                                             static_cast<tjs_uint64>(remaining))
+            return false;
+        if(zeroRun) {
+            remaining -= static_cast<tjs_int>(count);
+            zeroRun = false;
+            continue;
+        }
+
+        for(tjs_uint64 index = 0; index < count; ++index) {
+            if(a < 0 || a >= 1024 || n < 0 || n >= 4)
+                return false;
+            const int k = static_cast<unsigned char>(
+                TVPTLG6GolombBitLengthTable[a][n]);
+            if(k < 0 || k > 8)
+                return false;
+            tjs_uint64 m = 0;
+            if(!reader.readGolombCode(k, m))
+                return false;
+            const tjs_uint64 delta = m >> 1;
+            if(delta > static_cast<tjs_uint64>(std::numeric_limits<int>::max() -
+                                                a))
+                return false;
+            a += static_cast<int>(delta);
+            if(--n < 0) {
+                a >>= 1;
+                n = 3;
+            }
+        }
+        remaining -= static_cast<tjs_int>(count);
+        zeroRun = true;
+    }
+    return reader.position() <= static_cast<size_t>(bitLength);
+}
+
+static bool TVPReadTLGDecimalLength(const std::string &tag, size_t &position,
+                                    size_t &length) {
+    const size_t start = position;
+    length = 0;
+    while(position < tag.size() && tag[position] >= '0' &&
+          tag[position] <= '9') {
+        const size_t digit = static_cast<size_t>(tag[position] - '0');
+        if(length > (std::numeric_limits<size_t>::max() - digit) / 10)
+            return false;
+        length = length * 10 + digit;
+        ++position;
+    }
+    return position != start && position < tag.size() && tag[position] == ':';
+}
+
+static void TVPParseTLGMetadataChunk(
+    const std::string &tag, void *callbackdata,
+    tTVPMetaInfoPushCallback metainfopushcallback) {
+    size_t position = 0;
+    while(position < tag.size()) {
+        size_t nameLength = 0;
+        if(!TVPReadTLGDecimalLength(tag, position, nameLength))
+            TVPThrowMalformedTLGMetadata(
+                (const tjs_char *)TVPTlgMalformedTagMissionColonAfterNameLength);
+        ++position; // ':'
+        if(nameLength > tag.size() - position)
+            TVPThrowMalformedTLGMetadata(TJS_W("TLG metadata name is truncated"));
+        const std::string name = tag.substr(position, nameLength);
+        position += nameLength;
+        if(position >= tag.size() || tag[position] != '=')
+            TVPThrowMalformedTLGMetadata(
+                (const tjs_char *)TVPTlgMalformedTagMissionEqualsAfterName);
+        ++position;
+
+        size_t valueLength = 0;
+        if(!TVPReadTLGDecimalLength(tag, position, valueLength))
+            TVPThrowMalformedTLGMetadata(
+                (const tjs_char *)TVPTlgMalformedTagMissionColonAfterVaueLength);
+        ++position; // ':'
+        if(valueLength > tag.size() - position)
+            TVPThrowMalformedTLGMetadata(TJS_W("TLG metadata value is truncated"));
+        const std::string value = tag.substr(position, valueLength);
+        position += valueLength;
+        if(position >= tag.size() || tag[position] != ',')
+            TVPThrowMalformedTLGMetadata(
+                (const tjs_char *)TVPTlgMalformedTagMissionCommaAfterTag);
+        ++position;
+
+        tjs_string nameUtf16;
+        tjs_string valueUtf16;
+        if(!TVPUtf8ToUtf16(nameUtf16, name) ||
+           !TVPUtf8ToUtf16(valueUtf16, value))
+            TVPThrowMalformedTLGMetadata(
+                TJS_W("TLG metadata is not valid UTF-8"));
+        if(metainfopushcallback)
+            metainfopushcallback(callbackdata, ttstr(nameUtf16),
+                                 ttstr(valueUtf16));
+    }
 }
 
 /*
@@ -1146,8 +1577,23 @@ void TVPLoadTLG5(void *formatdata, void *callbackdata,
     if(colors != 3 && colors != 4)
         TVPThrowExceptionMessage(TVPTLGLoadError,
                                  (const tjs_char *)TVPUnsupportedColorType);
+    if(width <= 0 || height <= 0 || blockheight <= 0 ||
+       static_cast<tjs_uint64>(width) * static_cast<tjs_uint64>(height) >
+           kMaxTLGMaterializedBytes / 4)
+        TVPThrowMalformedTLGMetadata(TJS_W("invalid TLG5 dimensions"));
 
-    int blockcount = (int)((height - 1) / blockheight) + 1;
+    const tjs_uint64 blockcount64 =
+        (static_cast<tjs_uint64>(height) - 1) /
+            static_cast<tjs_uint64>(blockheight) +
+        1;
+    if(blockcount64 > std::numeric_limits<tjs_int>::max())
+        TVPThrowMalformedTLGMetadata(TJS_W("invalid TLG5 block count"));
+    const tjs_uint64 streamSize = src->GetSize();
+    const tjs_uint64 blockTableBytes = blockcount64 * sizeof(tjs_uint32);
+    if(src->GetPosition() > streamSize ||
+       blockTableBytes > streamSize - src->GetPosition())
+        TVPThrowMalformedTLGMetadata(TJS_W("truncated TLG5 block table"));
+    int blockcount = static_cast<int>(blockcount64);
 
     // skip block size section
     src->SetPosition(src->GetPosition() + blockcount * sizeof(tjs_uint32));
@@ -1156,6 +1602,7 @@ void TVPLoadTLG5(void *formatdata, void *callbackdata,
     sizecallback(callbackdata, width, height, colors == 3 ? gpfRGB : gpfRGBA);
 
     tjs_uint8 *inbuf = nullptr;
+    size_t inbufCapacity = 0;
     tjs_uint8 *outbuf[4];
     tjs_uint8 *text = nullptr;
     tjs_int r = 0;
@@ -1163,25 +1610,79 @@ void TVPLoadTLG5(void *formatdata, void *callbackdata,
         outbuf[i] = nullptr;
 
     try {
-        text = (tjs_uint8 *)TLGArenaAlloc(4096 + 32, 4) + 16;
+        void *textStorage = TLGArenaAlloc(4096 + 32, 4);
+        if(!textStorage)
+            TVPThrowMalformedTLGMetadata(TJS_W("insufficient TLG5 workspace"));
+        text = static_cast<tjs_uint8 *>(textStorage) + 16;
         memset(text, 0, 4096);
 
-        inbuf = (tjs_uint8 *)TLGArenaAlloc(blockheight * width + 10 + 16, 4);
+        const size_t blockPixelCapacity =
+            static_cast<size_t>(std::min(blockheight, height)) *
+            static_cast<size_t>(width);
+        if(blockPixelCapacity == 0 ||
+           blockPixelCapacity > kMaxTLGMaterializedBytes - 32)
+            TVPThrowMalformedTLGMetadata(TJS_W("invalid TLG5 block size"));
+        inbufCapacity = blockPixelCapacity + 10 + 16;
+        inbuf = (tjs_uint8 *)TLGArenaAlloc(inbufCapacity, 4);
+        if(!inbuf)
+            TVPThrowMalformedTLGMetadata(TJS_W("insufficient TLG5 workspace"));
         for(tjs_int i = 0; i < colors; i++)
             outbuf[i] =
-                (tjs_uint8 *)TLGArenaAlloc(blockheight * width + 10 + 16, 4);
+                (tjs_uint8 *)TLGArenaAlloc(blockPixelCapacity + 10 + 16, 4);
+        for(tjs_int i = 0; i < colors; i++)
+            if(!outbuf[i])
+                TVPThrowMalformedTLGMetadata(
+                    TJS_W("insufficient TLG5 workspace"));
 
         tjs_uint8 *prevline = nullptr;
         for(tjs_int y_blk = 0; y_blk < height; y_blk += blockheight) {
+            const tjs_int currentBlockHeight =
+                std::min(blockheight, height - y_blk);
+            const tjs_uint64 expectedChannelBytes =
+                static_cast<tjs_uint64>(currentBlockHeight) *
+                static_cast<tjs_uint64>(width);
             // read file and decompress
             for(tjs_int c = 0; c < colors; c++) {
+                if(src->GetPosition() > streamSize ||
+                   streamSize - src->GetPosition() < 5)
+                    TVPThrowMalformedTLGMetadata(
+                        TJS_W("truncated TLG5 channel header"));
                 src->ReadBuffer(mark, 1);
-                tjs_int size;
-                size = src->ReadI32LE();
+                const tjs_uint32 encodedSize = src->ReadI32LE();
+                if(encodedSize == 0 ||
+                   static_cast<tjs_uint64>(encodedSize) >
+                       kMaxTLGMaterializedBytes ||
+                   encodedSize > streamSize - src->GetPosition())
+                    TVPThrowMalformedTLGMetadata(
+                        TJS_W("invalid TLG5 channel size"));
+                if(mark[0] != 0 &&
+                   static_cast<tjs_uint64>(encodedSize) != expectedChannelBytes)
+                    TVPThrowMalformedTLGMetadata(
+                        TJS_W("invalid TLG5 raw channel size"));
+                if(mark[0] == 0 && encodedSize > inbufCapacity) {
+                    TLGArenaDealloc(inbuf);
+                    inbufCapacity = static_cast<size_t>(encodedSize) + 16;
+                    inbuf = (tjs_uint8 *)TLGArenaAlloc(inbufCapacity, 4);
+                    if(!inbuf)
+                        TVPThrowMalformedTLGMetadata(
+                            TJS_W("insufficient TLG5 workspace"));
+                }
+                const tjs_int size = static_cast<tjs_int>(encodedSize);
                 if(mark[0] == 0) {
                     // modified LZSS compressed data
                     src->ReadBuffer(inbuf, size);
+                    size_t produced = 0;
+                    tjs_int validatedR = 0;
+                    if(!TVPValidateTLG5Slide(
+                           inbuf, static_cast<size_t>(size),
+                           blockPixelCapacity, r, produced, validatedR) ||
+                       produced != expectedChannelBytes)
+                        TVPThrowMalformedTLGMetadata(
+                            TJS_W("invalid TLG5 compressed channel"));
                     r = TVPTLG5DecompressSlide(outbuf[c], inbuf, size, text, r);
+                    if(r != validatedR)
+                        TVPThrowMalformedTLGMetadata(
+                            TJS_W("invalid TLG5 compressed channel state"));
                 } else {
                     // raw data
                     src->ReadBuffer(outbuf[c], size);
@@ -1328,9 +1829,21 @@ void TVPLoadTLG6(void *formatdata, void *callbackdata,
     height = src->ReadI32LE();
     trace.SetSize(width, height, colors);
 
+    if(width <= 0 || height <= 0 ||
+       static_cast<tjs_uint64>(width) * static_cast<tjs_uint64>(height) >
+           kMaxTLGMaterializedBytes / 4)
+        TVPThrowMalformedTLGMetadata(TJS_W("invalid TLG6 dimensions"));
+
     tjs_int max_bit_length;
 
     max_bit_length = src->ReadI32LE();
+    if(max_bit_length <= 0 ||
+       static_cast<tjs_uint64>(max_bit_length) >
+           kMaxTLGMaterializedBytes * 8)
+        TVPThrowMalformedTLGMetadata(TJS_W("invalid TLG6 bit length"));
+    const tjs_uint64 streamSize = src->GetSize();
+    if(src->GetPosition() > streamSize)
+        TVPThrowMalformedTLGMetadata(TJS_W("invalid TLG6 stream position"));
 
     // set destination size
     sizecallback(callbackdata, width, height, colors == 3 ? gpfRGB : gpfRGBA);
@@ -1340,6 +1853,32 @@ void TVPLoadTLG6(void *formatdata, void *callbackdata,
     tjs_int y_block_count = (tjs_int)((height - 1) / TVP_TLG6_H_BLOCK_SIZE) + 1;
     tjs_int main_count = width / TVP_TLG6_W_BLOCK_SIZE;
     tjs_int fraction = width - main_count * TVP_TLG6_W_BLOCK_SIZE;
+
+    const tjs_uint64 bitPoolCapacity64 =
+        static_cast<tjs_uint64>(max_bit_length) / 8 + 5;
+    const tjs_uint64 pixelBufferBytes64 =
+        static_cast<tjs_uint64>(width) * TVP_TLG6_H_BLOCK_SIZE *
+            sizeof(tjs_uint32) +
+        1;
+    const tjs_uint64 filterCount64 =
+        static_cast<tjs_uint64>(x_block_count) * y_block_count;
+    const tjs_uint64 zeroLineBytes64 =
+        static_cast<tjs_uint64>(width) * sizeof(tjs_uint32);
+    const tjs_uint64 linePairBytes64 = zeroLineBytes64 * 2;
+    if(bitPoolCapacity64 > kMaxTLGMaterializedBytes ||
+       pixelBufferBytes64 > kMaxTLGMaterializedBytes ||
+       filterCount64 > kMaxTLGMaterializedBytes ||
+       zeroLineBytes64 > kMaxTLGMaterializedBytes ||
+       (palettized && linePairBytes64 > kMaxTLGMaterializedBytes) ||
+       bitPoolCapacity64 > std::numeric_limits<size_t>::max() ||
+       pixelBufferBytes64 > std::numeric_limits<size_t>::max() ||
+       filterCount64 > std::numeric_limits<size_t>::max() - 16 ||
+       zeroLineBytes64 > std::numeric_limits<size_t>::max())
+        TVPThrowMalformedTLGMetadata(TJS_W("TLG6 workspace is too large"));
+    const size_t bitPoolCapacity = static_cast<size_t>(bitPoolCapacity64);
+    const size_t pixelBufferBytes = static_cast<size_t>(pixelBufferBytes64);
+    const size_t filterCount = static_cast<size_t>(filterCount64);
+    const size_t zeroLineBytes = static_cast<size_t>(zeroLineBytes64);
 
     // prepare memory pointers
     tjs_uint8 *bit_pool = nullptr;
@@ -1352,13 +1891,16 @@ void TVPLoadTLG6(void *formatdata, void *callbackdata,
     tjs_uint8 *grayline;
     try {
         // allocate memories
-        bit_pool = (tjs_uint8 *)TLGArenaAlloc(max_bit_length / 8 + 5, 4);
-        pixelbuf = (tjs_uint32 *)TLGArenaAlloc(
-            sizeof(tjs_uint32) * width * TVP_TLG6_H_BLOCK_SIZE + 1, 4);
-        filter_types =
-            (tjs_uint8 *)TLGArenaAlloc(x_block_count * y_block_count + 16, 4);
-        zeroline = (tjs_uint32 *)TLGArenaAlloc(width * sizeof(tjs_uint32), 4);
-        LZSS_text = (tjs_uint8 *)TLGArenaAlloc(4096 + 32, 4) + 16;
+        bit_pool = (tjs_uint8 *)TLGArenaAlloc(bitPoolCapacity, 4);
+        pixelbuf = (tjs_uint32 *)TLGArenaAlloc(pixelBufferBytes, 4);
+        filter_types = (tjs_uint8 *)TLGArenaAlloc(filterCount + 16, 4);
+        zeroline = (tjs_uint32 *)TLGArenaAlloc(zeroLineBytes, 4);
+        void *lzssStorage = TLGArenaAlloc(4096 + 32, 4);
+        if(lzssStorage)
+            LZSS_text = static_cast<tjs_uint8 *>(lzssStorage) + 16;
+        if(!bit_pool || !pixelbuf || !filter_types || !zeroline ||
+           !LZSS_text)
+            TVPThrowMalformedTLGMetadata(TJS_W("insufficient TLG6 workspace"));
 
         // initialize zero line (virtual y=-1 line)
         TVPFillARGB(zeroline, width, colors == 3 ? 0xff000000 : 0x00000000);
@@ -1378,11 +1920,36 @@ void TVPLoadTLG6(void *formatdata, void *callbackdata,
         // TLG5.
         {
             tjs_int inbuf_size = src->ReadI32LE();
-            tjs_uint8 *inbuf = (tjs_uint8 *)TLGArenaAlloc(inbuf_size + 16, 4);
+            const tjs_uint64 inputPosition = src->GetPosition();
+            if(inbuf_size <= 0 || inputPosition > streamSize ||
+               static_cast<tjs_uint64>(inbuf_size) > kMaxTLGMaterializedBytes ||
+               static_cast<tjs_uint64>(inbuf_size) >
+                   streamSize - inputPosition)
+                TVPThrowMalformedTLGMetadata(
+                    TJS_W("invalid TLG6 filter stream size"));
+            const size_t inbufCapacity = static_cast<size_t>(inbuf_size) + 16;
+            tjs_uint8 *inbuf = (tjs_uint8 *)TLGArenaAlloc(inbufCapacity, 4);
+            if(!inbuf)
+                TVPThrowMalformedTLGMetadata(
+                    TJS_W("insufficient TLG6 workspace"));
             try {
                 src->ReadBuffer(inbuf, inbuf_size);
-                TVPTLG5DecompressSlide(filter_types, inbuf, inbuf_size,
-                                       LZSS_text, 0);
+                size_t produced = 0;
+                tjs_int validatedR = 0;
+                if(!TVPValidateTLG5Slide(inbuf, static_cast<size_t>(inbuf_size),
+                                         filterCount, 0, produced, validatedR) ||
+                   produced != filterCount)
+                    TVPThrowMalformedTLGMetadata(
+                        TJS_W("invalid TLG6 filter stream"));
+                const tjs_int result = TVPTLG5DecompressSlide(
+                    filter_types, inbuf, inbuf_size, LZSS_text, 0);
+                if(result != validatedR)
+                    TVPThrowMalformedTLGMetadata(
+                        TJS_W("invalid TLG6 filter stream state"));
+                for(size_t i = 0; i < filterCount; ++i)
+                    if(filter_types[i] > 31)
+                        TVPThrowMalformedTLGMetadata(
+                            TJS_W("invalid TLG6 filter type"));
             } catch(...) {
                 TLGArenaDealloc(inbuf);
                 throw;
@@ -1402,18 +1969,34 @@ void TVPLoadTLG6(void *formatdata, void *callbackdata,
             // decode values
             for(tjs_int c = 0; c < colors; c++) {
                 // read bit length
-                tjs_int bit_length = src->ReadI32LE();
+                if(src->GetPosition() > streamSize ||
+                   streamSize - src->GetPosition() < 4)
+                    TVPThrowMalformedTLGMetadata(
+                        TJS_W("truncated TLG6 entropy header"));
+                const tjs_uint32 encodedBitLength = static_cast<tjs_uint32>(
+                    src->ReadI32LE());
 
                 // get compress method
-                int method = (bit_length >> 30) & 3;
-                bit_length &= 0x3fffffff;
+                const int method = static_cast<int>(encodedBitLength >> 30);
+                const tjs_uint32 bit_length = encodedBitLength & 0x3fffffffU;
+                if(static_cast<tjs_uint64>(bit_length) >
+                   static_cast<tjs_uint64>(max_bit_length))
+                    TVPThrowMalformedTLGMetadata(
+                        TJS_W("TLG6 entropy stream exceeds maximum bit length"));
 
                 // compute byte length
-                tjs_int byte_length = bit_length / 8;
-                if(bit_length % 8)
-                    byte_length++;
+                const tjs_uint64 byte_length64 =
+                    (static_cast<tjs_uint64>(bit_length) + 7) / 8;
+                if(byte_length64 > bitPoolCapacity ||
+                   src->GetPosition() > streamSize ||
+                   byte_length64 > streamSize - src->GetPosition())
+                    TVPThrowMalformedTLGMetadata(
+                        TJS_W("truncated TLG6 entropy stream"));
+                const tjs_uint byte_length =
+                    static_cast<tjs_uint>(byte_length64);
 
                 // read source from input
+                std::memset(bit_pool, 0, bitPoolCapacity);
                 src->ReadBuffer(bit_pool, byte_length);
 
                 // decode values
@@ -1427,6 +2010,10 @@ void TVPLoadTLG6(void *formatdata, void *callbackdata,
 
                 switch(method) {
                     case 0:
+                        if(!TVPValidateTLG6Golomb(bit_pool, bit_length,
+                                                 pixel_count))
+                            TVPThrowMalformedTLGMetadata(
+                                TJS_W("invalid TLG6 Golomb stream"));
                         if(c == 0 && colors != 1)
                             TVPTLG6DecodeGolombValuesForFirst(
                                 (tjs_int8 *)pixelbuf, pixel_count, bit_pool);
@@ -1457,6 +2044,9 @@ void TVPLoadTLG6(void *formatdata, void *callbackdata,
                             sizeof(tjs_uint32) * width, 4);
                         tmpline[1] = (tjs_uint32 *)TLGArenaAlloc(
                             sizeof(tjs_uint32) * width, 4);
+                        if(!tmpline[0] || !tmpline[1])
+                            TVPThrowMalformedTLGMetadata(
+                                TJS_W("insufficient TLG6 workspace"));
                     }
                     curline = tmpline[yy & 1];
                     grayline = (tjs_uint8 *)scanlinecallback(callbackdata, yy);
@@ -1613,105 +2203,51 @@ void TVPLoadTLG(void *formatdata, void *callbackdata,
         // The last ',' cannot be ommited.
         // Each string (name and value) must be encoded in utf-8.
 
-        // read raw data size
-        tjs_uint rawlen = src->ReadI32LE();
+        // read raw data size.  The size is a byte count after the four-byte
+        // length field; validate it before handing the stream to the raw
+        // decoder so malformed SDS files cannot make the metadata seek wrap.
+        const tjs_uint rawlen = src->ReadI32LE();
+        const tjs_uint64 streamSize = src->GetSize();
+        const tjs_uint64 rawStart = src->GetPosition();
+        if(rawlen == 0 || rawlen > kMaxTLGMaterializedBytes ||
+           rawStart > streamSize ||
+           static_cast<tjs_uint64>(rawlen) > streamSize - rawStart)
+            TVPThrowMalformedTLGMetadata(TJS_W("TLG SDS raw payload is truncated"));
+        const tjs_uint64 metadataStart = rawStart + rawlen;
 
         // try to load TLG raw data
         TVPInternalLoadTLG(formatdata, callbackdata, sizecallback,
                            scanlinecallback, metainfopushcallback, src, keyidx,
                            mode);
+        if(src->GetPosition() > metadataStart)
+            TVPThrowMalformedTLGMetadata(TJS_W("TLG SDS raw payload exceeds its declared size"));
 
-        // seek to meta info data point
-        src->Seek(rawlen + 11 + 4, TJS_BS_SEEK_SET);
+        // Seek to the metadata point even when a decoder consumed fewer bytes
+        // than declared (some old encoders pad the raw payload).
+        src->SetPosition(metadataStart);
 
-        // read tag data
-        while(true) {
+        // Read chunked metadata.  Every chunk has an eight-byte header; a
+        // partial trailing header is malformed rather than silently ignored.
+        while(src->GetPosition() < streamSize) {
+            const tjs_uint64 chunkHeader = src->GetPosition();
+            if(streamSize - chunkHeader < 8)
+                TVPThrowMalformedTLGMetadata(TJS_W("TLG SDS metadata header is truncated"));
             char chunkname[4];
-            if(4 != src->Read(chunkname, 4))
-                break;
-            // cannot read more
-            tjs_uint chunksize = src->ReadI32LE();
+            src->ReadBuffer(chunkname, 4);
+            const tjs_uint chunksize = src->ReadI32LE();
+            const tjs_uint64 chunkStart = src->GetPosition();
+            if(chunksize > kMaxTLGMetadataChunkBytes ||
+               chunkStart > streamSize ||
+               static_cast<tjs_uint64>(chunksize) > streamSize - chunkStart)
+                TVPThrowMalformedTLGMetadata(TJS_W("TLG SDS metadata chunk is truncated"));
             if(!memcmp(chunkname, "tags", 4)) {
-                // tag information
-                char *tag = nullptr;
-                char *name = nullptr;
-                char *value = nullptr;
-                try {
-                    tag = new char[chunksize + 1];
-                    src->ReadBuffer(tag, chunksize);
-                    tag[chunksize] = 0;
-                    if(metainfopushcallback) {
-                        const char *tagp = tag;
-                        const char *tagp_lim = tag + chunksize;
-                        while(tagp < tagp_lim) {
-                            tjs_uint namelen = 0;
-                            while(*tagp >= '0' && *tagp <= '9')
-                                namelen = namelen * 10 + *tagp - '0', tagp++;
-                            if(*tagp != ':')
-                                TVPThrowExceptionMessage(
-                                    TVPTLGLoadError,
-                                    (const tjs_char *)
-                                        TVPTlgMalformedTagMissionColonAfterNameLength);
-                            tagp++;
-                            name = new char[namelen + 1];
-                            memcpy(name, tagp, namelen);
-                            name[namelen] = '\0';
-                            tagp += namelen;
-                            if(*tagp != '=')
-                                TVPThrowExceptionMessage(
-                                    TVPTLGLoadError,
-                                    (const tjs_char *)
-                                        TVPTlgMalformedTagMissionEqualsAfterName);
-                            tagp++;
-                            tjs_uint valuelen = 0;
-                            while(*tagp >= '0' && *tagp <= '9')
-                                valuelen = valuelen * 10 + *tagp - '0', tagp++;
-                            if(*tagp != ':')
-                                TVPThrowExceptionMessage(
-                                    TVPTLGLoadError,
-                                    (const tjs_char *)
-                                        TVPTlgMalformedTagMissionColonAfterVaueLength);
-                            tagp++;
-                            value = new char[valuelen + 1];
-                            memcpy(value, tagp, valuelen);
-                            value[valuelen] = '\0';
-                            tagp += valuelen;
-                            if(*tagp != ',')
-                                TVPThrowExceptionMessage(
-                                    TVPTLGLoadError,
-                                    (const tjs_char *)
-                                        TVPTlgMalformedTagMissionCommaAfterTag);
-                            tagp++;
-
-                            // insert into name-value pairs ... TODO:
-                            // utf-8 decode
-                            metainfopushcallback(callbackdata, ttstr(name),
-                                                 ttstr(value));
-
-                            delete[] name, name = nullptr;
-                            delete[] value, value = nullptr;
-                        }
-                    }
-                } catch(...) {
-                    if(tag)
-                        delete[] tag;
-                    if(name)
-                        delete[] name;
-                    if(value)
-                        delete[] value;
-                    throw;
-                }
-
-                if(tag)
-                    delete[] tag;
-                if(name)
-                    delete[] name;
-                if(value)
-                    delete[] value;
-            } else {
-                // skip the chunk
-                src->SetPosition(src->GetPosition() + chunksize);
+                std::string tag(static_cast<size_t>(chunksize), '\0');
+                if(chunksize)
+                    src->ReadBuffer(tag.data(), chunksize);
+                TVPParseTLGMetadataChunk(tag, callbackdata,
+                                         metainfopushcallback);
             }
+            src->SetPosition(chunkStart + chunksize);
         } // while
 
     } else {
@@ -1746,6 +2282,7 @@ void TVPLoadHeaderTLG(void *formatdata, tTJSBinaryStream *src,
     tjs_int width = 0;
     tjs_int height = 0;
     tjs_int colors = 0;
+    bool isTLG6 = false;
     if(!memcmp("TLGmux\0idx\x1a", mark, 11)) {
         src->Seek(0, TJS_BS_SEEK_SET);
         if(!TVPReadTLGMuxHeader(src, width, height, colors))
@@ -1773,7 +2310,13 @@ void TVPLoadHeaderTLG(void *formatdata, tTJSBinaryStream *src,
     // check for TLG0.0 sds
     if(!memcmp("TLG0.0\x00sds\x1a\x00", mark, 11)) {
         // read raw data size
-        tjs_uint rawlen = src->ReadI32LE();
+        const tjs_uint rawlen = src->ReadI32LE();
+        const tjs_uint64 rawStart = src->GetPosition();
+        const tjs_uint64 streamSize = src->GetSize();
+        if(rawlen == 0 || rawlen > kMaxTLGMaterializedBytes ||
+           rawStart > streamSize ||
+           static_cast<tjs_uint64>(rawlen) > streamSize - rawStart)
+            TVPThrowMalformedTLGMetadata(TJS_W("TLG SDS raw payload is truncated"));
         src->ReadBuffer(mark, 11);
         if(!memcmp("TLG5.0\x00raw\x1a\x00", mark, 11)) {
             src->ReadBuffer(mark, 1);
@@ -1781,6 +2324,7 @@ void TVPLoadHeaderTLG(void *formatdata, tTJSBinaryStream *src,
             width = src->ReadI32LE();
             height = src->ReadI32LE();
         } else if(!memcmp("TLG6.0\x00raw\x1a\x00", mark, 11)) {
+            isTLG6 = true;
             src->ReadBuffer(mark, 4);
             colors = mark[0]; // color component count
             width = src->ReadI32LE();
@@ -1796,6 +2340,7 @@ void TVPLoadHeaderTLG(void *formatdata, tTJSBinaryStream *src,
         width = src->ReadI32LE();
         height = src->ReadI32LE();
     } else if(!memcmp("TLG6.0\x00raw\x1a\x00", mark, 11)) {
+        isTLG6 = true;
         src->ReadBuffer(mark, 4);
         colors = mark[0]; // color component count
         width = src->ReadI32LE();
@@ -1805,6 +2350,12 @@ void TVPLoadHeaderTLG(void *formatdata, tTJSBinaryStream *src,
             TVPTLGLoadError, (const tjs_char *)TVPInvalidTlgHeaderOrVersion);
     }
 header_done:
+    if(width <= 0 || height <= 0 ||
+       static_cast<tjs_uint64>(width) * static_cast<tjs_uint64>(height) >
+           kMaxTLGMaterializedBytes / 4 ||
+       (isTLG6 ? (colors != 1 && colors != 3 && colors != 4)
+               : (colors != 3 && colors != 4)))
+        TVPThrowMalformedTLGMetadata(TJS_W("invalid TLG dimensions"));
     tjs_int bpp = colors * 8;
     *dic = TJSCreateDictionaryObject();
     tTJSVariant val(width);

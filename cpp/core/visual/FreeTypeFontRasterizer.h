@@ -15,8 +15,11 @@ class FreeTypeFontRasterizer : public FontRasterizer {
     tjs_int RefCount;
     class tFreeTypeFace *Face; //!< Non-owning current face
     std::vector<class tFreeTypeFace *> FaceFallbacks;
+    std::vector<bool> FaceFallbackEmoji;
     std::unordered_map<std::string, std::unique_ptr<class tFreeTypeFace>>
         FaceCache;
+    std::string CurrentFaceCacheKey;
+    tjs_int EffectiveEmojiMode = TVP_EMOJI_NONE;
     class tTVPNativeBaseBitmap *LastBitmap;
     tTVPFont CurrentFont;
     std::string CurrentExtentCacheFontKey;
@@ -24,7 +27,9 @@ class FreeTypeFontRasterizer : public FontRasterizer {
     void ApplyFallbackFaces();
     void ClearFallbackFaces();
     class tFreeTypeFace *GetOrCreateFace(const ttstr &name,
-                                         tjs_uint32 options);
+                                         tjs_uint32 options,
+                                         tjs_int weight = -1,
+                                         const ttstr &variations = ttstr());
     void ApplyFaceOptions(class tFreeTypeFace *face);
 
 public:
@@ -35,6 +40,8 @@ public:
     void ApplyFont(class tTVPNativeBaseBitmap *bmp, bool force) override;
     void ApplyFont(const struct tTVPFont &font) override;
     void GetTextExtent(tjs_char ch, tjs_int &w, tjs_int &h) override;
+    void GetTextExtent(tjs_uint32 codepoint, tjs_int &w,
+                       tjs_int &h) override;
     tjs_int GetAscentHeight() override;
     tTVPCharacterData *GetBitmap(const tTVPFontAndCharacterData &font,
                                  tjs_int aofsx, tjs_int aofsy) override;

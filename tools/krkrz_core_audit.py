@@ -31,12 +31,72 @@ BRIDGE_WRAPPERS = {
     "common/sound/MathAlgorithms.cpp": Path(
         "cpp/core/utils/MathAlgorithms_Default.cpp"
     ),
+    "common/sound/MathAlgorithms_SSE.cpp": Path(
+        "cpp/core/sound/upstream_bridge/MathAlgorithms_SSE.cpp"
+    ),
+    "common/sound/MathAlgorithms_NEON.cpp": Path(
+        "cpp/core/sound/upstream_bridge/MathAlgorithms_NEON.cpp"
+    ),
+    "common/sound/xmmlib.cpp": Path(
+        "cpp/core/sound/upstream_bridge/xmmlib.cpp"
+    ),
     "common/sound/RealFFT.cpp": Path("cpp/core/utils/upstream_bridge/RealFFT.cpp"),
+    "common/sound/RealFFT_SSE.cpp": Path(
+        "cpp/core/utils/upstream_bridge/RealFFT_SSE.cpp"
+    ),
+    "common/sound/RealFFT_NEON.cpp": Path(
+        "cpp/core/utils/upstream_bridge/RealFFT_NEON.cpp"
+    ),
     "common/sound/WaveSegmentQueue.cpp": Path(
         "cpp/core/sound/upstream_bridge/WaveSegmentQueue.cpp"
     ),
+    "common/sound/WaveLoopManager.cpp": Path(
+        "cpp/core/sound/upstream_bridge/WaveLoopManager.cpp"
+    ),
+    "common/tjs2/tjsDebuggerHook.cpp": Path(
+        "cpp/core/tjs2/upstream_bridge/tjsDebuggerHook.cpp"
+    ),
+    "common/tjs2/tjsDebuggerSymbols.cpp": Path(
+        "cpp/core/tjs2/upstream_bridge/tjsDebuggerSymbols.cpp"
+    ),
+    "common/tjs2/tjsDebuggerCore.cpp": Path(
+        "cpp/core/tjs2/upstream_bridge/tjsDebuggerCore.cpp"
+    ),
     "common/visual/gl/WeightFunctor.cpp": Path(
         "cpp/core/visual/upstream_bridge/WeightFunctor.cpp"
+    ),
+    "common/visual/gl/tlg_sse2.cpp": Path(
+        "cpp/core/visual/upstream_bridge/TLGSIMD.cpp"
+    ),
+    "common/visual/gl/ResampleImageSSE2.cpp": Path(
+        "cpp/core/visual/upstream_bridge/ResampleImageSSE2.cpp"
+    ),
+    "common/visual/gl/ResampleImageAVX2.cpp": Path(
+        "cpp/core/visual/upstream_bridge/ResampleImageAVX2.cpp"
+    ),
+    "common/visual/gl/colormap_sse2.cpp": Path(
+        "cpp/core/visual/upstream_bridge/ColorMapSSE2.cpp"
+    ),
+    "common/visual/gl/colormap_avx2.cpp": Path(
+        "cpp/core/visual/upstream_bridge/ColorMapAVX2.cpp"
+    ),
+    "common/visual/gl/colormap_neon.cpp": Path(
+        "cpp/core/visual/upstream_bridge/ColorMapNEON.cpp"
+    ),
+    "common/visual/gl/pixelformat_sse2.cpp": Path(
+        "cpp/core/visual/upstream_bridge/PixelFormatSSE2.cpp"
+    ),
+    "common/visual/gl/pixelformat_neon.cpp": Path(
+        "cpp/core/visual/upstream_bridge/PixelFormatNEON.cpp"
+    ),
+    "common/visual/gl/univtrans_sse2.cpp": Path(
+        "cpp/core/visual/upstream_bridge/UnivTransSSE2.cpp"
+    ),
+    "common/visual/FontVariations.cpp": Path(
+        "cpp/core/visual/upstream_bridge/FontVariations.cpp"
+    ),
+    "common/utils/DAPServer.cpp": Path(
+        "cpp/core/utils/upstream_bridge/DAPServer.cpp"
     ),
     "common/utils/Random.cpp": Path("cpp/core/utils/upstream_bridge/Random.cpp"),
     "common/utils/ClipboardIntf.cpp": Path(
@@ -59,8 +119,9 @@ BRIDGE_WRAPPERS = {
 # implementations of the same public symbols.
 LEGACY_LOCAL_IMPLEMENTATIONS = {
     "common/sound/MathAlgorithms.cpp": Path("cpp/core/sound/MathAlgorithms.cpp"),
-    "common/sound/RealFFT.cpp": Path("cpp/core/utils/RealFFT_Default.cpp"),
+    "common/sound/xmmlib.cpp": Path("cpp/core/sound/xmmlib.cpp"),
     "common/sound/WaveSegmentQueue.cpp": Path("cpp/core/sound/WaveSegmentQueue.cpp"),
+    "common/sound/WaveLoopManager.cpp": Path("cpp/core/sound/WaveLoopManager.cpp"),
     "common/visual/gl/WeightFunctor.cpp": Path("cpp/core/visual/gl/WeightFunctor.cpp"),
     "common/utils/Random.cpp": Path("cpp/core/utils/Random.cpp"),
     "common/utils/ClipboardIntf.cpp": Path("cpp/core/utils/ClipboardIntf.cpp"),
@@ -75,17 +136,97 @@ BRIDGE_CMAKE_REFERENCES = {
         Path("cpp/core/utils/CMakeLists.txt"),
         "MathAlgorithms_Default.cpp",
     ),
+    "common/sound/MathAlgorithms_SSE.cpp": (
+        Path("cpp/core/sound/CMakeLists.txt"),
+        "AETHER_SOUND_SIMD_SOURCES",
+    ),
+    "common/sound/MathAlgorithms_NEON.cpp": (
+        Path("cpp/core/sound/CMakeLists.txt"),
+        "AETHER_SOUND_SIMD_SOURCES",
+    ),
+    "common/sound/xmmlib.cpp": (
+        Path("cpp/core/sound/CMakeLists.txt"),
+        "AETHER_SOUND_SIMD_SOURCES",
+    ),
     "common/sound/RealFFT.cpp": (
         Path("cpp/core/utils/CMakeLists.txt"),
         "AETHER_REAL_FFT_SOURCE",
+    ),
+    "common/sound/RealFFT_SSE.cpp": (
+        Path("cpp/core/utils/CMakeLists.txt"),
+        "AETHER_REAL_FFT_SIMD_SOURCES",
+    ),
+    "common/sound/RealFFT_NEON.cpp": (
+        Path("cpp/core/utils/CMakeLists.txt"),
+        "AETHER_REAL_FFT_SIMD_SOURCES",
     ),
     "common/sound/WaveSegmentQueue.cpp": (
         Path("cpp/core/sound/CMakeLists.txt"),
         "AETHER_WAVE_SEGMENT_QUEUE_SOURCE",
     ),
+    "common/sound/WaveLoopManager.cpp": (
+        Path("cpp/core/sound/CMakeLists.txt"),
+        "AETHER_WAVE_LOOP_MANAGER_SOURCE",
+    ),
+    "common/tjs2/tjsDebuggerHook.cpp": (
+        Path("cpp/core/tjs2/CMakeLists.txt"),
+        "AETHER_TJS_DEBUGGER_SOURCES",
+    ),
+    "common/tjs2/tjsDebuggerSymbols.cpp": (
+        Path("cpp/core/tjs2/CMakeLists.txt"),
+        "AETHER_TJS_DEBUGGER_SOURCES",
+    ),
+    "common/tjs2/tjsDebuggerCore.cpp": (
+        Path("cpp/core/tjs2/CMakeLists.txt"),
+        "AETHER_TJS_DEBUGGER_CORE_SOURCE",
+    ),
     "common/visual/gl/WeightFunctor.cpp": (
         Path("cpp/core/visual/CMakeLists.txt"),
         "AETHER_WEIGHT_FUNCTOR_SOURCE",
+    ),
+    "common/visual/gl/tlg_sse2.cpp": (
+        Path("cpp/core/visual/CMakeLists.txt"),
+        "AETHER_TLG_SIMD_SOURCE",
+    ),
+    "common/visual/gl/ResampleImageSSE2.cpp": (
+        Path("cpp/core/visual/CMakeLists.txt"),
+        "AETHER_RESAMPLE_SIMD_SOURCES",
+    ),
+    "common/visual/gl/ResampleImageAVX2.cpp": (
+        Path("cpp/core/visual/CMakeLists.txt"),
+        "AETHER_RESAMPLE_SIMD_SOURCES",
+    ),
+    "common/visual/gl/colormap_sse2.cpp": (
+        Path("cpp/core/visual/CMakeLists.txt"),
+        "AETHER_VISUAL_SIMD_LEAF_SOURCES",
+    ),
+    "common/visual/gl/colormap_avx2.cpp": (
+        Path("cpp/core/visual/CMakeLists.txt"),
+        "AETHER_VISUAL_SIMD_LEAF_SOURCES",
+    ),
+    "common/visual/gl/colormap_neon.cpp": (
+        Path("cpp/core/visual/CMakeLists.txt"),
+        "AETHER_VISUAL_SIMD_LEAF_SOURCES",
+    ),
+    "common/visual/gl/pixelformat_sse2.cpp": (
+        Path("cpp/core/visual/CMakeLists.txt"),
+        "AETHER_VISUAL_SIMD_LEAF_SOURCES",
+    ),
+    "common/visual/gl/pixelformat_neon.cpp": (
+        Path("cpp/core/visual/CMakeLists.txt"),
+        "AETHER_VISUAL_SIMD_LEAF_SOURCES",
+    ),
+    "common/visual/gl/univtrans_sse2.cpp": (
+        Path("cpp/core/visual/CMakeLists.txt"),
+        "AETHER_VISUAL_SIMD_LEAF_SOURCES",
+    ),
+    "common/visual/FontVariations.cpp": (
+        Path("cpp/core/visual/CMakeLists.txt"),
+        "AETHER_FONT_VARIATIONS_SOURCE",
+    ),
+    "common/utils/DAPServer.cpp": (
+        Path("cpp/core/utils/CMakeLists.txt"),
+        "AETHER_DAP_SERVER_SOURCE",
     ),
     "common/utils/Random.cpp": (
         Path("cpp/core/utils/CMakeLists.txt"),
@@ -369,9 +510,11 @@ def build_report() -> dict[str, Any]:
         wrapper_text = wrapper_path.read_text(encoding="utf-8", errors="ignore")
         if source not in wrapper_text:
             errors.append(f"bridge wrapper does not name upstream source: {wrapper}")
-        legacy = REPO_ROOT / LEGACY_LOCAL_IMPLEMENTATIONS[source]
-        if legacy.is_file():
-            errors.append(f"legacy duplicate implementation still exists: {legacy}")
+        legacy_relative = LEGACY_LOCAL_IMPLEMENTATIONS.get(source)
+        if legacy_relative is not None:
+            legacy = REPO_ROOT / legacy_relative
+            if legacy.is_file():
+                errors.append(f"legacy duplicate implementation still exists: {legacy}")
         cmake_path, token = BRIDGE_CMAKE_REFERENCES[source]
         cmake_text = (REPO_ROOT / cmake_path).read_text(
             encoding="utf-8", errors="ignore"

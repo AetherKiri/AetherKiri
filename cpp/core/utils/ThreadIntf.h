@@ -28,7 +28,11 @@ enum tTVPThreadPriority {
 };
 //---------------------------------------------------------------------------
 
-#include "ThreadImpl.h"
+// Keep the platform implementation addressable when this header is included
+// through a downstream target (for example tjs2's debugger bridge) that only
+// exports the utils root include directory.  Translation units that add the
+// win32 directory directly continue to accept the same concrete type.
+#include "win32/ThreadImpl.h"
 
 /*[*/
 const tjs_int TVPMaxThreadNum = 8;

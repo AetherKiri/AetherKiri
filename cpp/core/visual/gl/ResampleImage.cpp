@@ -26,20 +26,7 @@
 
 #include "aligned_allocator.h"
 #include "ResampleImageInternal.h"
-
-extern void TVPResampleImageAVX2(const tTVPResampleClipping &clip,
-                                 const tTVPImageCopyFuncBase *blendfunc,
-                                 iTVPBaseBitmap *dest, const tTVPRect &destrect,
-                                 const iTVPBaseBitmap *src,
-                                 const tTVPRect &srcrect,
-                                 tTVPBBStretchType type, tjs_real typeopt);
-
-extern void TVPResampleImageSSE2(const tTVPResampleClipping &clip,
-                                 const tTVPImageCopyFuncBase *blendfunc,
-                                 iTVPBaseBitmap *dest, const tTVPRect &destrect,
-                                 const iTVPBaseBitmap *src,
-                                 const tTVPRect &srcrect,
-                                 tTVPBBStretchType type, tjs_real typeopt);
+#include "../upstream_bridge/ResampleImageSIMD.h"
 
 void tTVPBlendParameter::setFunctionFromParam() {
 #define TVP_BLEND_4(basename) /* blend for 4 types (normal, opacity,           \
@@ -822,15 +809,8 @@ void TVPResampleImage(const tTVPRect &cliprect, iTVPBaseBitmap *dest,
     }
 
     try {
-#if 0
-		tjs_uint32 CpuFeature = TVPGetCPUType();
-		if( (CpuFeature & TVP_CPU_HAS_AVX2) ) {
-			TVPResampleImageAVX2( clip, func, dest, destrect, src, srcrect, type, typeopt );
-		} else if( (CpuFeature & TVP_CPU_HAS_SSE2) ) {
-			TVPResampleImageSSE2( clip, func, dest, destrect, src, srcrect, type, typeopt );
-		} else
-#endif
-        {
+        if(!TVPResampleImageSIMD(clip, func, dest, destrect, src, srcrect,
+                                 type, typeopt)) {
             // Cバージョンは固定小数点版なし。遅くなる。
             switch(type) {
                 case stLinear:
