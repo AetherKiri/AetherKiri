@@ -110,6 +110,13 @@ Aether 的 CTest harness 直接从 submodule 执行；这验证了脚本兼容�
 5. 私有 AetherInternal hook 由 `AETHERKIRI_INTERNAL_KRKR2_PLUGIN` 保护；公开构建
    必须能仅依靠兼容 stub 和可移植 data-pack loader 完成链接。
 
+## 媒体回归证据
+
+Aether 继续拥有完整图像加载入口，krkrz 算法叶子只在这条边界后复用。TLGref adapter
+同时接受 QREF 的两种 `nameBytes` 约定（包含或不包含 UTF-16 结尾 NUL）。真实 macOS
+arm64 Debug 的 DRACU-RIOT 回放探针已通过 QREF → TLGqoi/QHDR 解码 `ev114ab.tlg` 并呈现美羽
+回想画面；没有占位图，也没有 TLG 解码警告。
+
 ## Core：Visual SIMD、Sound DSP 与 DAP
 
 upstream core 有复用价值，但不是 Aether core 的直接替代品。manifest 的 core
@@ -269,10 +276,11 @@ cmake --build <build-dir> --target krkr2plugin --parallel
 ctest --test-dir <build-dir> --output-on-failure
 ```
 
-当前 pinned checkout 已通过完整门禁：CTest 264/264，直接 Catch2 插件测试
-227/227（3,124 条断言），Visual parity 294/294，Sound parity 28/28 且失败数为 0。
+当前 pinned checkout 已通过完整门禁：CTest 266/266，直接 Catch2 插件测试
+229/229 个用例（所有实际执行的断言均通过），Visual parity 294/294，Sound parity 28/28 且失败数为 0。
 2026-08-30 已重新构建全开 macOS arm64 Debug 产品，并通过 deep code signature
-校验。
+校验；同时用真实游戏资源走通 DRACU-RIOT 鉴赏模式 → 剧情回想 → 美羽回想，
+引擎帧中已出现真实 CG，日志没有 TLG 占位警告。
 
 如需聚焦检查 upstream core 算法，可启用隔离的 parity executable。它们只编译
 upstream visual/sound 测试源码，绝不链接 `krkr2core`：

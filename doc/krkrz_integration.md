@@ -124,6 +124,15 @@ injecting the upstream KAG runtime into the product.
    `AETHERKIRI_INTERNAL_KRKR2_PLUGIN`; public builds must remain linkable with
    the compatibility stubs and portable data-pack loaders.
 
+## Media regression evidence
+
+Aether remains the owner of the complete image-loader route, while krkrz
+algorithm leaves are consumed behind that boundary.  The TLGref adapter
+accepts QREF names whose `nameBytes` either includes or excludes the UTF-16
+terminating NUL.  A macOS arm64 Debug DRACU-RIOT replay probe decoded
+`ev114ab.tlg` through QREF → TLGqoi/QHDR and rendered the Miu replay frame;
+there was no placeholder image or TLG decode warning.
+
 ## Core: visual SIMD, sound DSP, and DAP
 
 The upstream core is useful, but it is not a drop-in replacement for Aether's
@@ -323,10 +332,13 @@ cmake --build <build-dir> --target krkr2plugin --parallel
 ctest --test-dir <build-dir> --output-on-failure
 ```
 
-The current pinned checkout has passed the complete gate: 264/264 CTest
-cases, 227/227 direct Catch2 plugin cases (3,124 assertions), visual parity
+The current pinned checkout has passed the complete gate: 266/266 CTest
+cases, 229/229 direct Catch2 plugin cases (all executed assertions passed), visual parity
 294/294, and sound parity 28/28 with zero failures.  The all-on macOS arm64
-Debug product was rebuilt and deep-code-signature verified on 2026-08-30.
+Debug product was rebuilt and deep-code-signature verified on 2026-08-30.  The
+DRACU-RIOT gallery → story-replay → Miu replay path was exercised against the
+real game assets; the captured engine frame contained the decoded CG and no
+TLG placeholder warning.
 
 For a focused review of the upstream core algorithms, enable the isolated
 parity executables. They compile only the upstream visual/sound test sources

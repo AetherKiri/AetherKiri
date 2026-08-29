@@ -738,120 +738,6 @@ extern void TVPDoSaveSystemVariables() {
     }
 }
 
-class GenericMockObjectLocal : public tTJSDispatch {
-    tjs_uint RefCount;
-public:
-    GenericMockObjectLocal() : RefCount(1) {}
-    ~GenericMockObjectLocal() override {}
-
-    tjs_uint AddRef() override { return ++RefCount; }
-    tjs_uint Release() override {
-        if (--RefCount == 0) {
-            delete this;
-            return 0;
-        }
-        return RefCount;
-    }
-
-    tjs_error FuncCall(tjs_uint32 flag, const tjs_char *membername,
-                       tjs_uint32 *hint, tTJSVariant *result,
-                       tjs_int numparams, tTJSVariant **param,
-                       iTJSDispatch2 *objthis) override {
-        if (result) {
-            this->AddRef();
-            *result = tTJSVariant(this, this);
-        }
-        return TJS_S_OK;
-    }
-
-    tjs_error PropGet(tjs_uint32 flag, const tjs_char *membername,
-                      tjs_uint32 *hint, tTJSVariant *result,
-                      iTJSDispatch2 *objthis) override {
-        if (result) {
-            if (membername) {
-                if (!TJS_strcmp(membername, TJS_W("count")) || !TJS_strcmp(membername, TJS_W("length")) ||
-                    !TJS_strcmp(membername, TJS_W("left")) || !TJS_strcmp(membername, TJS_W("top")) ||
-                    !TJS_strcmp(membername, TJS_W("x")) || !TJS_strcmp(membername, TJS_W("y")) ||
-                    !TJS_strcmp(membername, TJS_W("opacity")) || !TJS_strcmp(membername, TJS_W("visible"))) {
-                    *result = tTJSVariant((tjs_int)0);
-                    return TJS_S_OK;
-                }
-                if (!TJS_strcmp(membername, TJS_W("width")) || !TJS_strcmp(membername, TJS_W("height")) ||
-                    !TJS_strcmp(membername, TJS_W("imageWidth")) || !TJS_strcmp(membername, TJS_W("imageHeight"))) {
-                    *result = tTJSVariant((tjs_int)100);
-                    return TJS_S_OK;
-                }
-                if (!TJS_strcmp(membername, TJS_W("fps")) || !TJS_strcmp(membername, TJS_W("frame")) ||
-                    !TJS_strcmp(membername, TJS_W("totalFrame")) || !TJS_strcmp(membername, TJS_W("totalTime")) ||
-                    !TJS_strcmp(membername, TJS_W("rate"))) {
-                    *result = tTJSVariant((tjs_int)30);
-                    return TJS_S_OK;
-                }
-            }
-            this->AddRef();
-            *result = tTJSVariant(this, this);
-        }
-        return TJS_S_OK;
-    }
-
-    tjs_error PropSet(tjs_uint32 flag, const tjs_char *membername,
-                      tjs_uint32 *hint, const tTJSVariant *param,
-                      iTJSDispatch2 *objthis) override {
-        return TJS_S_OK;
-    }
-
-    tjs_error CreateNew(tjs_uint32 flag, const tjs_char *membername,
-                        tjs_uint32 *hint, iTJSDispatch2 **result,
-                        tjs_int numparams, tTJSVariant **param,
-                        iTJSDispatch2 *objthis) override {
-        if (result) {
-            this->AddRef();
-            *result = this;
-        }
-        return TJS_S_OK;
-    }
-
-    tjs_error GetCount(tjs_int *result, const tjs_char *membername,
-                       tjs_uint32 *hint, iTJSDispatch2 *objthis) override {
-        if (result) *result = 0;
-        return TJS_S_OK;
-    }
-
-    tjs_error EnumMembers(tjs_uint32 flag, tTJSVariantClosure *callback,
-                          iTJSDispatch2 *objthis) override {
-        return TJS_S_OK;
-    }
-
-    tjs_error DeleteMember(tjs_uint32 flag, const tjs_char *membername,
-                           tjs_uint32 *hint, iTJSDispatch2 *objthis) override {
-        return TJS_S_OK;
-    }
-
-    tjs_error Invalidate(tjs_uint32 flag, const tjs_char *membername,
-                         tjs_uint32 *hint, iTJSDispatch2 *objthis) override {
-        return TJS_S_OK;
-    }
-
-    tjs_error IsValid(tjs_uint32 flag, const tjs_char *membername,
-                      tjs_uint32 *hint, iTJSDispatch2 *objthis) override {
-        return TJS_S_TRUE;
-    }
-
-    tjs_error IsInstanceOf(tjs_uint32 flag, const tjs_char *membername,
-                           tjs_uint32 *hint, const tjs_char *classname,
-                           iTJSDispatch2 *objthis) override {
-        return TJS_S_TRUE;
-    }
-
-    tjs_error Operation(tjs_uint32 flag, const tjs_char *membername,
-                        tjs_uint32 *hint, tTJSVariant *result,
-                        const tTJSVariant *param,
-                        iTJSDispatch2 *objthis) override {
-        if (result) *result = tTJSVariant();
-        return TJS_S_OK;
-    }
-};
-
 class StaticGlobalMockFuncLocal : public tTJSDispatch {
     ttstr Name;
 public:
@@ -863,9 +749,10 @@ public:
                        tjs_int numparams, tTJSVariant **param,
                        iTJSDispatch2 *objthis) override {
         if (result) {
-            static iTJSDispatch2* dummy = new GenericMockObjectLocal();
-            dummy->AddRef();
-            *result = tTJSVariant(dummy, dummy);
+            iTJSDispatch2 *mock = TVPGetGlobalMockObject();
+            if(mock)
+                mock->AddRef();
+            *result = tTJSVariant(mock, mock);
         }
         return TJS_S_OK;
     }
@@ -936,11 +823,17 @@ static void TVPRegisterStartupCompatGlobals() {
     TVPRegisterCompatFunction(global, TJS_W("AddAlias"), true);
     TVPRegisterCompatFunction(global, TJS_W("loadResolutionInfo"));
 
-    iTJSDispatch2 *kirikiriz = new GenericMockObjectLocal();
-    tTJSVariant kirikirizVal(kirikiriz, kirikiriz);
-    global->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP, TJS_W("kirikiriz"),
-                    nullptr, &kirikirizVal, global);
-    kirikiriz->Release();
+    // Use the shared mock sentinel for all startup compatibility globals so
+    // numeric probes follow the same neutral-value contract as void-to-object
+    // conversions elsewhere in TJS.
+    iTJSDispatch2 *kirikiriz = TVPGetGlobalMockObject();
+    if(kirikiriz) {
+        kirikiriz->AddRef();
+        tTJSVariant kirikirizVal(kirikiriz, kirikiriz);
+        global->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                        TJS_W("kirikiriz"), nullptr, &kirikirizVal, global);
+        kirikiriz->Release();
+    }
 
     iTJSDispatch2 *shortcutMap = TJSCreateArrayObject();
     if(shortcutMap) {

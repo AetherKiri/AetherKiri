@@ -130,7 +130,12 @@ are not copied into the runtime.
 * **TLG:** Aether keeps TLGmux/TLGref/TLGqoi, QHDR/metadata, LZ4 bands,
   arena/mmap, virtual streams, and diagnostics.  Upstream decompression,
   color-composition, and SIMD leaves are reused; the complete upstream
-  `LoadTLG.cpp` is not substituted.
+  `LoadTLG.cpp` is not substituted.  The TLGref adapter accepts both QREF
+  writer conventions (a `nameBytes` count that includes the UTF-16 NUL and
+  the convention used by DRACU-RIOT, which counts code units and stores the
+  NUL immediately after the declared span).  A macOS arm64 Debug replay probe
+  decoded `ev114ab.tlg` through QREF → TLGqoi/QHDR and rendered the Miu replay
+  frame without a placeholder.
 * **Storage:** XP3, Cx, ZIP/7z/TAR, libarchive, unrar, zstd, minizip, mmap,
   prefetch, and media registration remain one Aether registry.  Upstream
   BinaryStream/StorageCache logic is absorbed only where the lifecycle fits.
@@ -185,14 +190,17 @@ Remaining items are validation or genuinely host-owned contracts, not hidden
 duplicate implementations:
 
 1. The macOS arm64 Debug product and the isolated compatibility test build link
-   successfully.  The isolated CTest run is 264/264, and the direct Catch2
-   plugin run is 227/227 (3,124 assertions).  Visual parity is 294/294 and
+   successfully.  The isolated CTest run is 266/266, and the direct Catch2
+   plugin run is 229/229 test cases with all executed assertions passing.
+   Visual parity is 294/294 and
    sound parity is 28/28 (fail=0).  Coverage includes malformed TLG5/TLG6
    preflight and bounds, a compressed krkrz TLG5 round trip, the BGRA↔RGBA
    adapter and x86 SSE2 composition wrapper, plus resourceRW, FontService,
    DAP/REPL, CLIP, gamepad, and layer-effect contracts.  The all-on macOS
-   Debug product was built and codesigned on 2026-08-30.  Continue real
-   host/game regression samples for resourceRW, Steam, TLG/DSP,
+   Debug product was built and codesigned on 2026-08-30.  The DRACU-RIOT
+   gallery → story-replay → Miu replay flow was also exercised against the
+   actual game assets; `ev114ab.tlg` decoded to a non-placeholder frame.
+   Remaining real-host samples are limited to resourceRW, Steam, Sound DSP,
    WaveLoopManager, FontStream, DAP, `-replfile`, and CLIP; these are
    interactive coverage gaps, not unresolved build or symbol gaps.
 2. Keep `win32ole`, DirectShow/AVI, SWF, and Steamworks

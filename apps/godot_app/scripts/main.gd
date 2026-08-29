@@ -28,6 +28,9 @@ const IAP_COFFEE_PRODUCT_ID := "com.aether.coffee"
 const ANDROID_COFFEE_URL := "https://qr.alipay.com/fkx108053gol728ayzhec90"
 const IAP_POLL_INTERVAL_SEC := 0.12
 const IAP_DETAIL_AUTHORIZATION_TTL_MS := 30000
+const SECRET_UNLOCK_TAP_TARGET := 20
+const SECRET_UNLOCK_TAP_WINDOW_MSEC := 6000
+const SECRET_UNLOCK_COFFEE_SEC := 30 * 24 * 60 * 60
 const LEGAL_AGREEMENT_VERSION := "2026-07-27.4"
 const IOS_STATEMENT_VERSION := "2026-08-04"
 const LEGAL_AGREEMENT_ZH_HANS := "res://legal/privacy_disclaimer_zh_hans.txt"
@@ -262,6 +265,12 @@ const UI_TEXT := {
         "support.coffee.thanks_title": "感谢支持",
         "support.coffee.thanks": "谢谢你的支持！",
         "support.coffee.open_failed": "无法打开浏览器，请稍后重试。",
+        "secret.unlock.title": "内部解锁",
+        "secret.unlock.body": "请输入解锁密码",
+        "secret.unlock.placeholder": "密码",
+        "secret.unlock.confirm": "确认",
+        "secret.unlock.failed": "密码不正确，请重试。",
+        "secret.unlock.success": "内购已解锁，内测功能有效期至：%s",
         "iap.artemis_unavailable": "此视觉小说兼容正在测试中，请等待后续支持",
         "iap.status.purchased": "已购买",
         "iap.status.not_purchased": "未购买",
@@ -523,6 +532,12 @@ const UI_TEXT := {
         "support.coffee.thanks_title": "感謝支持",
         "support.coffee.thanks": "謝謝你的支持！",
         "support.coffee.open_failed": "無法開啟瀏覽器，請稍後再試。",
+        "secret.unlock.title": "內部解鎖",
+        "secret.unlock.body": "請輸入解鎖密碼",
+        "secret.unlock.placeholder": "密碼",
+        "secret.unlock.confirm": "確認",
+        "secret.unlock.failed": "密碼不正確，請再試一次。",
+        "secret.unlock.success": "內購已解鎖，測試功能有效期限至：%s",
         "iap.artemis_unavailable": "此視覺小說的相容支援仍在測試中，請等待後續支援",
         "iap.status.purchased": "已購買",
         "iap.status.not_purchased": "尚未購買",
@@ -784,6 +799,12 @@ const UI_TEXT := {
         "support.coffee.thanks_title": "Thank You",
         "support.coffee.thanks": "Thank you for your support!",
         "support.coffee.open_failed": "Unable to open the browser. Please try again later.",
+        "secret.unlock.title": "Secret Unlock",
+        "secret.unlock.body": "Enter the unlock passphrase",
+        "secret.unlock.placeholder": "Passphrase",
+        "secret.unlock.confirm": "Confirm",
+        "secret.unlock.failed": "Incorrect passphrase. Please try again.",
+        "secret.unlock.success": "Purchases unlocked; beta feature access expires: %s",
         "iap.artemis_unavailable": "Compatibility for this visual novel is still being tested. Please wait for a future update.",
         "iap.status.purchased": "Purchased",
         "iap.status.not_purchased": "Not purchased",
@@ -1045,6 +1066,12 @@ const UI_TEXT := {
         "support.coffee.thanks_title": "ご支援ありがとうございます",
         "support.coffee.thanks": "ご支援ありがとうございます！",
         "support.coffee.open_failed": "ブラウザを開けませんでした。後でもう一度お試しください。",
+        "secret.unlock.title": "シークレット解錠",
+        "secret.unlock.body": "解錠パスフレーズを入力してください",
+        "secret.unlock.placeholder": "パスフレーズ",
+        "secret.unlock.confirm": "確認",
+        "secret.unlock.failed": "パスフレーズが正しくありません。もう一度お試しください。",
+        "secret.unlock.success": "課金が解錠されました。ベータ機能の有効期限：%s",
         "iap.artemis_unavailable": "このビジュアルノベルの互換対応はテスト中です。今後の対応をお待ちください。",
         "iap.status.purchased": "購入済み",
         "iap.status.not_purchased": "未購入",
@@ -1306,6 +1333,12 @@ const UI_TEXT := {
         "support.coffee.thanks_title": "후원해 주셔서 감사합니다",
         "support.coffee.thanks": "후원해 주셔서 감사합니다!",
         "support.coffee.open_failed": "브라우저를 열 수 없습니다. 나중에 다시 시도해 주세요.",
+        "secret.unlock.title": "시크릿 잠금 해제",
+        "secret.unlock.body": "잠금 해제 암호를 입력하세요",
+        "secret.unlock.placeholder": "암호",
+        "secret.unlock.confirm": "확인",
+        "secret.unlock.failed": "암호가 올바르지 않습니다. 다시 시도해 주세요.",
+        "secret.unlock.success": "인앱 구매가 잠금 해제되었습니다. 베타 기능 만료일: %s",
         "iap.artemis_unavailable": "이 비주얼 노벨의 호환성은 아직 테스트 중입니다. 추후 지원을 기다려 주세요.",
         "iap.status.purchased": "구입 완료",
         "iap.status.not_purchased": "구입하지 않음",
@@ -1604,6 +1637,10 @@ var legal_accepted_at := 0
 var ios_statement_accepted_version := ""
 var ios_statement_accepted_at := 0
 var legal_gate_completed := false
+var secret_iap_unlocked := false
+var secret_coffee_until_unix := 0
+var secret_version_tap_count := 0
+var secret_version_last_tap_msec := 0
 var iap_state := {}
 var iap_coffee_state := {}
 var iap_last_revision := -1
@@ -3091,6 +3128,8 @@ func _load_shell_settings() -> void:
     legal_accepted_at = int(cfg.get_value("legal", "accepted_at", 0))
     ios_statement_accepted_version = String(cfg.get_value("legal", "ios_statement_accepted_version", ""))
     ios_statement_accepted_at = int(cfg.get_value("legal", "ios_statement_accepted_at", 0))
+    secret_iap_unlocked = bool(cfg.get_value("unlock", "secret_iap_unlocked", false))
+    secret_coffee_until_unix = int(cfg.get_value("unlock", "secret_coffee_until_unix", 0))
 
 func _configure_runtime_diagnostics() -> void:
     diagnostics_enabled = _runtime_flag("AETHERKIRI_DIAGNOSTICS")
@@ -3145,6 +3184,8 @@ func _save_shell_settings() -> void:
     cfg.set_value("legal", "accepted_at", legal_accepted_at)
     cfg.set_value("legal", "ios_statement_accepted_version", ios_statement_accepted_version)
     cfg.set_value("legal", "ios_statement_accepted_at", ios_statement_accepted_at)
+    cfg.set_value("unlock", "secret_iap_unlocked", secret_iap_unlocked)
+    cfg.set_value("unlock", "secret_coffee_until_unix", secret_coffee_until_unix)
     cfg.save(SETTINGS_FILE)
     ProjectSettings.set_setting(SETTINGS_KEY, selected_backend)
     _apply_engine_options()
@@ -4572,10 +4613,12 @@ func _rebuild_settings_view() -> void:
             _t("settings.ios_statement_open"),
             _show_ios_additional_statement
         ))
-    _add_settings_row(about_group, _settings_value_row(
+    var version_row := _settings_value_row(
         _t("settings.version"),
         _application_version_text()
-    ))
+    )
+    _attach_secret_version_tap(version_row)
+    _add_settings_row(about_group, version_row)
 
     if animate_page:
         ui_motion.reveal(top)
@@ -5849,7 +5892,7 @@ func _settings_iap_product_row() -> Control:
     status.add_theme_color_override("font_color", ui_tokens.accent)
     labels.add_child(status)
 
-    var entitled := bool(iap_state.get("entitled", false))
+    var entitled := bool(iap_state.get("entitled", false)) or _secret_iap_unlock_active()
     var product_ready := String(iap_state.get("product_state", "idle")) == "ready"
     var price := String(iap_state.get("display_price", ""))
     var action_text := _t("iap.status.purchased") if entitled else _t("iap.buy")
@@ -5865,7 +5908,7 @@ func _settings_iap_product_row() -> Control:
     return margin
 
 func _iap_product_status_text() -> String:
-    if bool(iap_state.get("entitled", false)):
+    if bool(iap_state.get("entitled", false)) or _secret_iap_unlock_active():
         return _t("iap.status.purchased")
     var product_state := String(iap_state.get("product_state", "idle"))
     if product_state in ["idle", "loading"]:
@@ -5939,12 +5982,167 @@ func _iap_coffee_status_text() -> String:
     )).strip_edges()
     if bool(iap_coffee_state.get("entitled", false)) and not expiration.is_empty():
         return _t("iap.coffee.active_until", [expiration])
+    if _secret_coffee_active():
+        return _t("iap.coffee.active_until", [_secret_coffee_expiry_text()])
     var product_state := String(iap_coffee_state.get("product_state", "idle"))
     if product_state in ["idle", "loading"]:
         return _t("iap.status.loading")
     if product_state != "ready":
         return _t("iap.status.unavailable")
     return _t("iap.coffee.inactive")
+
+func _secret_iap_unlock_active() -> bool:
+    return secret_iap_unlocked
+
+func _secret_coffee_active() -> bool:
+    return secret_coffee_until_unix > int(Time.get_unix_time_from_system())
+
+func _secret_coffee_expiry_text() -> String:
+    if secret_coffee_until_unix <= 0:
+        return ""
+    var expiry := Time.get_datetime_dict_from_unix_time(secret_coffee_until_unix)
+    return "%04d-%02d-%02d %02d:%02d" % [
+        int(expiry.get("year", 0)),
+        int(expiry.get("month", 1)),
+        int(expiry.get("day", 1)),
+        int(expiry.get("hour", 0)),
+        int(expiry.get("minute", 0)),
+    ]
+
+func _attach_secret_version_tap(row: Control) -> void:
+    row.gui_input.connect(func(event: InputEvent):
+        if event is InputEventMouseButton \
+                and event.pressed \
+                and event.button_index == MOUSE_BUTTON_LEFT:
+            _register_secret_version_tap()
+    )
+
+func _register_secret_version_tap() -> void:
+    var now := Time.get_ticks_msec()
+    if now - secret_version_last_tap_msec > SECRET_UNLOCK_TAP_WINDOW_MSEC:
+        secret_version_tap_count = 0
+    secret_version_last_tap_msec = now
+    secret_version_tap_count += 1
+    if secret_version_tap_count >= SECRET_UNLOCK_TAP_TARGET:
+        secret_version_tap_count = 0
+        _show_secret_unlock_dialog()
+
+func _verify_secret_unlock(candidate: String) -> bool:
+    if candidate.is_empty():
+        return false
+    if player == null or not player.has_method("verify_unlock_secret"):
+        return false
+    return bool(player.verify_unlock_secret(candidate))
+
+func _apply_secret_unlock() -> void:
+    var now := int(Time.get_unix_time_from_system())
+    secret_iap_unlocked = true
+    secret_coffee_until_unix = maxi(secret_coffee_until_unix, now) + SECRET_UNLOCK_COFFEE_SEC
+    _persist_secret_unlock_state()
+    if is_instance_valid(settings_view) and settings_view.visible:
+        _rebuild_settings_view()
+
+func _persist_secret_unlock_state() -> void:
+    # Merge into the settings file without saving unrelated in-progress drafts.
+    var cfg := ConfigFile.new()
+    cfg.load(SETTINGS_FILE)
+    cfg.set_value("unlock", "secret_iap_unlocked", secret_iap_unlocked)
+    cfg.set_value("unlock", "secret_coffee_until_unix", secret_coffee_until_unix)
+    cfg.save(SETTINGS_FILE)
+
+func _show_secret_unlock_dialog() -> void:
+    modal_layer.visible = true
+    modal_layer.move_to_front()
+    for child in modal_layer.get_children():
+        child.queue_free()
+    var dim := ColorRect.new()
+    dim.color = Color(0, 0, 0, 0.52)
+    dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+    dim.mouse_filter = Control.MOUSE_FILTER_STOP
+    modal_layer.add_child(dim)
+    var width := 560.0
+    if is_inside_tree():
+        width = minf(width, get_viewport_rect().size.x * 0.92)
+    var height := 380.0
+    var dialog := PanelContainer.new()
+    dialog.anchor_left = 0.5
+    dialog.anchor_top = 0.5
+    dialog.anchor_right = 0.5
+    dialog.anchor_bottom = 0.5
+    dialog.position = Vector2(-width * 0.5, -height * 0.5)
+    dialog.size = Vector2(width, height)
+    dialog.add_theme_stylebox_override(
+        "panel",
+        _panel_style(22, color_card, Color(0, 0, 0, 0.06), 1)
+    )
+    modal_layer.add_child(dialog)
+    var box := VBoxContainer.new()
+    box.add_theme_constant_override("separation", 20)
+    dialog.add_child(box)
+    var title := Label.new()
+    title.text = _t("secret.unlock.title")
+    title.add_theme_font_size_override("font_size", 30)
+    title.add_theme_color_override("font_color", color_text)
+    box.add_child(title)
+    var body := Label.new()
+    body.text = _t("secret.unlock.body")
+    body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    body.add_theme_font_size_override("font_size", 20)
+    body.add_theme_color_override("font_color", color_text)
+    box.add_child(body)
+    var input := LineEdit.new()
+    input.secret = true
+    input.max_length = 64
+    input.placeholder_text = _t("secret.unlock.placeholder")
+    input.custom_minimum_size = Vector2(0, 62)
+    input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    input.add_theme_font_size_override("font_size", 22)
+    box.add_child(input)
+    var error_label := Label.new()
+    error_label.text = _t("secret.unlock.failed")
+    error_label.visible = false
+    error_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    error_label.add_theme_font_size_override("font_size", 16)
+    error_label.add_theme_color_override("font_color", Color(0.94, 0.35, 0.32))
+    box.add_child(error_label)
+    var buttons := HBoxContainer.new()
+    buttons.alignment = BoxContainer.ALIGNMENT_END
+    buttons.add_theme_constant_override("separation", 14)
+    buttons.custom_minimum_size = Vector2(0, 62)
+    box.add_child(buttons)
+    var cancel := Button.new()
+    cancel.text = _t("dialog.cancel")
+    cancel.flat = true
+    cancel.custom_minimum_size = Vector2(130, 60)
+    cancel.add_theme_font_size_override("font_size", 20)
+    cancel.add_theme_color_override("font_color", color_text)
+    cancel.pressed.connect(func():
+        modal_layer.visible = false
+    )
+    buttons.add_child(cancel)
+    var confirm := _pill_button(_t("secret.unlock.confirm"))
+    confirm.custom_minimum_size = Vector2(180, 60)
+    confirm.pressed.connect(func(): _submit_secret_unlock(input, error_label))
+    buttons.add_child(confirm)
+    input.text_submitted.connect(func(_text: String):
+        _submit_secret_unlock(input, error_label)
+    )
+    if input.is_inside_tree():
+        input.call_deferred("grab_focus")
+
+func _submit_secret_unlock(input: LineEdit, error_label: Label) -> void:
+    var candidate := input.text if is_instance_valid(input) else ""
+    if _verify_secret_unlock(candidate):
+        modal_layer.visible = false
+        _apply_secret_unlock()
+        _show_system_alert(
+            _t("secret.unlock.success", [_secret_coffee_expiry_text()]),
+            _t("secret.unlock.title")
+        )
+        return
+    input.text = ""
+    if is_instance_valid(error_label):
+        error_label.visible = true
 
 func _apple_select(width: float = 220.0):
     var select = AetherSelect.new()
@@ -7156,8 +7354,9 @@ func _iap_supported_platform() -> bool:
 
 func _iap_enforcement_enabled() -> bool:
     # Local/debug artifacts are for compatibility and UI testing. Catalog
-    # enforcement is enabled only in Release/TestFlight/App Store builds.
-    return _iap_supported_platform() and not OS.is_debug_build()
+    # enforcement is enabled only in Release/TestFlight/App Store builds. A
+    # verified secret unlock removes the catalog limit for this installation.
+    return _iap_supported_platform() and not OS.is_debug_build() and not secret_iap_unlocked
 
 func _initialize_iap() -> void:
     if not _iap_supported_platform() or player == null:
@@ -9781,7 +9980,7 @@ func _complete_artemis_beta_check() -> void:
         return
     var pending_game: Dictionary = iap_pending_beta_game.duplicate(true)
     iap_pending_beta_game.clear()
-    if not bool(iap_coffee_state.get("entitled", false)):
+    if not bool(iap_coffee_state.get("entitled", false)) and not _secret_coffee_active():
         _deny_artemis_beta_launch()
         return
     selected_game = pending_game

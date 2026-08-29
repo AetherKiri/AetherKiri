@@ -468,24 +468,29 @@ static bool TVPParseTLGRef(const std::vector<tjs_uint8> &bytes,
     ref.Index = TVPReadTLGUInt32LE(chunk + 4);
     ref.Count = TVPReadTLGUInt32LE(chunk + 8);
     const tjs_uint32 nameBytes = TVPReadTLGUInt32LE(chunk + 12);
-    if((nameBytes & 1) != 0 || nameBytes > chunkSize - 16 || nameBytes < 2) {
+    if((nameBytes & 1) != 0 || nameBytes > chunkSize - 16 || nameBytes == 0) {
         error = "invalid TLGref container name";
         return false;
     }
-    // The game stores a BMP/UTF-16LE name and includes its terminating NUL
-    // in the byte count.  Do not reinterpret the byte buffer as uint16_t:
-    // a QREF chunk is only byte-aligned and that cast is undefined on strict
-    // ARM targets.  Decode explicitly and keep the script's UTF-16 value
-    // type at the ABI boundary.
-    const size_t nameUnits = static_cast<size_t>(nameBytes / 2);
-    if(nameUnits == 0 || chunk[16 + nameBytes - 2] != 0 ||
-       chunk[16 + nameBytes - 1] != 0) {
-        error = "TLGref container name is not NUL terminated";
+    // QREF writers in the wild use both conventions for the UTF-16LE name:
+    // some count the terminating NUL in nameBytes, while the game assets
+    // used by current KiriKiri builds count only the code units and append
+    // the terminator outside that field.  Accept either form.  Do not cast
+    // the byte buffer to uint16_t: a QREF chunk is only byte-aligned and that
+    // would be undefined on strict ARM targets.
+    const size_t declaredUnits = static_cast<size_t>(nameBytes / 2);
+    const bool hasDeclaredTerminator =
+        declaredUnits > 0 && chunk[16 + nameBytes - 2] == 0 &&
+        chunk[16 + nameBytes - 1] == 0;
+    const size_t nameUnits =
+        hasDeclaredTerminator ? declaredUnits - 1 : declaredUnits;
+    if(nameUnits == 0) {
+        error = "empty TLGref container name";
         return false;
     }
     tjs_string containerName;
-    containerName.reserve(nameUnits - 1);
-    for(size_t index = 0; index + 1 < nameUnits; ++index) {
+    containerName.reserve(nameUnits);
+    for(size_t index = 0; index < nameUnits; ++index) {
         const tjs_uint16 code = static_cast<tjs_uint16>(
             static_cast<tjs_uint16>(chunk[16 + index * 2]) |
             (static_cast<tjs_uint16>(chunk[16 + index * 2 + 1]) << 8));

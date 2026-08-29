@@ -171,6 +171,14 @@ namespace TJS {
     extern void TVPSetMockEnabled(bool enabled);
     extern tTJSVariantClosure_S& TVPGetGlobalMockClosure_S();
 
+    // The compatibility mock is a deliberate stand-in for an optional
+    // object/property that a title probes before its plug-in is available.
+    // Keep ordinary TJS objects strict, but allow this one sentinel to take
+    // the numeric-neutral value used by the original engine.  This avoids
+    // turning a missing optional property into a startup failure while still
+    // surfacing accidental arithmetic on real objects.
+    extern bool TVPIsGlobalMockObject(iTJSDispatch2 *object);
+
 /*[*/
 //---------------------------------------------------------------------------
 // tTJSVariantClosure
@@ -871,6 +879,9 @@ namespace TJS {
                 case tvtObject:
                     if(!Object.Object && !Object.ObjThis)
                         return 0;
+                    if(TVPIsGlobalMockObject(Object.Object) ||
+                       TVPIsGlobalMockObject(Object.ObjThis))
+                        return 0;
                     TJSThrowVariantConvertError(*this, tvtInteger);
                 case tvtString:
                     return String ? String->ToInteger() : 0;
@@ -892,6 +903,11 @@ namespace TJS {
                     return;
                 case tvtObject:
                     if(!Object.Object && !Object.ObjThis) {
+                        targ = (tjs_int)0;
+                        return;
+                    }
+                    if(TVPIsGlobalMockObject(Object.Object) ||
+                       TVPIsGlobalMockObject(Object.ObjThis)) {
                         targ = (tjs_int)0;
                         return;
                     }
@@ -953,6 +969,9 @@ namespace TJS {
                     return 0;
                 case tvtObject:
                     if(!Object.Object && !Object.ObjThis)
+                        return 0;
+                    if(TVPIsGlobalMockObject(Object.Object) ||
+                       TVPIsGlobalMockObject(Object.ObjThis))
                         return 0;
                     TJSThrowVariantConvertError(*this, tvtReal);
                 case tvtString:

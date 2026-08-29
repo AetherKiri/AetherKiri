@@ -17,7 +17,6 @@
 #include "tjsUtils.h"
 #include "tjs.h"
 
-#include <spdlog/spdlog.h>
 #include "tjsDebug.h"
 namespace TJS {
 
@@ -98,6 +97,11 @@ iTJSDispatch2* TVPGetGlobalMockObject() {
     if (!g_MockEnabled) return nullptr;
     static iTJSDispatch2* g_GlobalMockObject = new GenericMockObjectForVariant();
     return g_GlobalMockObject;
+}
+
+bool TVPIsGlobalMockObject(iTJSDispatch2 *object) {
+    return TVPIsMockEnabled() && object != nullptr &&
+           object == TVPGetGlobalMockObject();
 }
 
 tTJSVariantClosure_S& TVPGetGlobalMockClosure_S() {

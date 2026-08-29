@@ -63,8 +63,8 @@ void TVPCauseAtInstallExtensionClass(iTJSDispatch2 *global) {
             global->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP, i->Name, nullptr,
                             &val, global);
         }
-        delete TVPAtClassInstallInfos;
-        TVPAtClassInstallInfos = nullptr;
     }
 }
+
+void TVPResetAtInstallExtensionClass() { TVPAtInstallClass = false; }
 //---------------------------------------------------------------------------

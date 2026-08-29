@@ -2047,7 +2047,7 @@ struct MenuItemEx {
         iTJSDispatch2 *global = TVPGetScriptDispatch(), *mi;
         if(global) {
             if(TJS_FAILED(global->PropGet(TJS_IGNOREPROP, TJS_W("MenuItem"),
-                                           0, &val, global)) ||
+                                           0, &val, obj)) ||
                val.Type() != tvtObject || !val.AsObjectNoAddRef()) {
                 val.Clear();
                 mi = obj;
@@ -2058,7 +2058,8 @@ struct MenuItemEx {
         } else
             mi = obj;
         if(!mi || TJS_FAILED(mi->PropGet(TJS_IGNOREPROP, TJS_W("HMENU"),
-                                         0, &val, mi)))
+                                         0, &val, obj)) ||
+           (val.Type() != tvtInteger && val.Type() != tvtReal))
             return nullptr;
         return (HMENU)(tjs_int64)(val);
     }

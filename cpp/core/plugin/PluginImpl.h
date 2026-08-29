@@ -186,6 +186,12 @@ const ttstr &TVPGetPluginLoadMode();
 bool TVPIsKrkrsdl3PluginLoadMode();
 bool TVPIsAetherAllPluginLoadMode();
 
+// Rebuild the in-process plug-in registry after an embedded TJS restart.
+// This is intentionally separate from tvpLoadPlugins(), which also scans the
+// executable's plugin directories and is only appropriate during application
+// startup.
+void TVPLoadInternalPlugins();
+void TVPLoadPlugin(const ttstr &name);
 void tvpLoadPlugins();
 void TVPUnloadInternalPlugins();
 

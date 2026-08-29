@@ -160,6 +160,10 @@ upstream 的 [`LoadTLG.cpp`](../third_party/krkrz_dev/src/core/common/visual/Loa
 
 因此只复用 upstream 的解压、颜色合成和 SSE2 内核；文件头路由、特殊格式、metadata、
 虚拟流和错误处理必须留在 Aether。不能用 upstream 整个 `LoadTLG.cpp` 替换 Aether 版本。
+TLGref adapter 同时接受两种 QREF 写法：`nameBytes` 包含 UTF-16 结尾 NUL，或像
+DRACU-RIOT 资源那样只计名字 code unit、把 NUL 紧跟在声明范围之后。2026-08-30 的
+macOS arm64 Debug 回放探针已经通过 QREF → TLGqoi/QHDR 解码 `ev114ab.tlg`，美羽回想
+画面不再是占位图。
 
 ### 存储和归档
 
@@ -225,14 +229,15 @@ upstream，但公共符号和生命周期只能由 Aether 暴露。
 剩余工作按风险排序：
 
 1. macOS arm64 Debug 产品和隔离兼容测试构建都已经完成链接；隔离 CTest 为
-   264/264，直接 Catch2 插件测试为 227/227（3,124 条断言）；Visual parity 为
+   266/266，直接 Catch2 插件测试为 229/229 个用例且所有实际执行的断言均通过；Visual parity 为
    294/294，Sound parity 为 28/28（fail=0）。覆盖了损坏 TLG5/TLG6 的预检与边界、
    krkrz 压缩 TLG5 回环、BGRA↔RGBA 适配和 x86 SSE2 合成包装，以及 resourceRW、
    FontService、DAP/REPL、CLIP、gamepad、layer-effect 契约。2026-08-30 已完成
-   全开 macOS Debug 产品构建并通过签名校验。接下来仍需为 `resourceRW`、
-   `krkrsteam`、TLG、Sound DSP、WaveLoopManager、FontStream、DAP、`-replfile` 和
-   CLIP 准备真实宿主/游戏交互回归样例；这些是交互覆盖缺口，不是未解决的构建或
-   符号缺口；
+   全开 macOS Debug 产品构建并通过签名校验；同时用真实 DRACU-RIOT 资源完成了
+   鉴赏模式 → 剧情回想 → 美羽回想流程，`ev114ab.tlg` 已解码为真实画面而非占位图。
+   目前剩余的真实宿主样例仅是 `resourceRW`、`krkrsteam`、Sound DSP、
+   WaveLoopManager、FontStream、DAP、`-replfile` 和 CLIP；这些是交互覆盖缺口，
+   不是未解决的构建或符号缺口；
 2. 对仍明确失败关闭的宿主专属接口（`win32ole`、DirectShow/AVI、SWF、Steamworks 截图/DLC/直播）补充调用方可见的错误/能力查询，并在有真实宿主 SDK 时分别验证；`sigcheck` 已有 OpenSSL-backed 可移植校验器，仅在没有密码 provider 时失败；
 3. 为 Effekseer、threepp 评估各自的 OpenGL/VRM SDK 与宿主生命周期，未验证前不链接；
 4. 对 upstream 每次 pin 更新重复 ABI、符号和资源入口审核。

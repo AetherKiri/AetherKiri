@@ -1023,6 +1023,15 @@ tjs_error ScriptsAdd::safeEvalStorage(tTJSVariant *result, tjs_int numparams,
     tTJSVariant temp;
     TVPExecuteExpression(buffer, shortname, 0, context, &temp);
     if(result) {
+        // A missing/empty save-data expression is a valid `void` result.  The
+        // compatibility layer intentionally exposes a mock object when a
+        // void value is coerced to an object by legacy plug-ins, but that
+        // coercion must not change this probe's sentinel semantics: callers
+        // use `=== void` to decide whether to create a fresh Dictionary.
+        if(temp.Type() == tvtVoid) {
+            result->Clear();
+            return TJS_S_OK;
+        }
         tTJSVariantClosure clo;
         clo = temp.AsObjectClosureNoAddRef();
         if(clo.Object) {

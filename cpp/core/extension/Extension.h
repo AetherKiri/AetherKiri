@@ -30,3 +30,9 @@ TVPCreateNativeClass_ClassFoo,TJS_W("Window,Layer"));
 登録時依存クラスを3番目に指定可能ですが、現在のところ無視されています。
 */
 extern void TVPCauseAtInstallExtensionClass(iTJSDispatch2 *global);
+
+// Aether can restart the embedded TJS VM after a recoverable startup-script
+// failure.  Extension registrations are process-static, but their class
+// objects belong to each VM, so the installation guard must be reset before
+// constructing the replacement engine.
+extern void TVPResetAtInstallExtensionClass();

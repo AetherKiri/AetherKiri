@@ -151,6 +151,37 @@ static bool shouldPreferCP932ForStandMetadata(const ttstr &name) {
     return suffix == TJS_W("_info.txt");
 }
 
+static std::optional<std::size_t> findEmbeddedBmpTextOffset(
+    const std::vector<std::uint8_t> &raw) {
+    // Some older KiriKiri save systems append saveStruct output to a BMP
+    // thumbnail and then read the combined file as a text stream.  The BMP
+    // file-size field marks the end of the image; only honor it when the tail
+    // starts with a real KiriKiri text signature so ordinary bitmaps and
+    // arbitrary trailing metadata keep their normal behavior.
+    if(raw.size() < 14 || raw[0] != 'B' || raw[1] != 'M')
+        return std::nullopt;
+
+    const std::size_t imageSize = static_cast<std::size_t>(raw[2]) |
+        (static_cast<std::size_t>(raw[3]) << 8) |
+        (static_cast<std::size_t>(raw[4]) << 16) |
+        (static_cast<std::size_t>(raw[5]) << 24);
+    if(imageSize < 14 || imageSize >= raw.size())
+        return std::nullopt;
+
+    const std::size_t remaining = raw.size() - imageSize;
+    const auto *tail = raw.data() + imageSize;
+    const bool utf16Bom = remaining >= 2 &&
+        ((tail[0] == 0xff && tail[1] == 0xfe) ||
+         (tail[0] == 0xfe && tail[1] == 0xff));
+    const bool utf8Bom = remaining >= 3 && tail[0] == 0xef &&
+        tail[1] == 0xbb && tail[2] == 0xbf;
+    const bool kirikiriCipher = remaining >= 3 && tail[0] == 0xfe &&
+        tail[1] == 0xfe && tail[2] <= 2;
+    if(!utf16Bom && !utf8Bom && !kirikiriCipher)
+        return std::nullopt;
+    return imageSize;
+}
+
 std::string checkTextEncoding(const void *buf, size_t size,
                               std::uint8_t &bomSize) {
     auto raw = static_cast<const unsigned char *>(buf);
@@ -241,6 +272,16 @@ public:
         std::vector<std::uint8_t> raw(size);
         if(size != 0)
             _stream->ReadBuffer(raw.data(), static_cast<tjs_uint>(size));
+
+        if(ofs == 0) {
+            if(const auto embeddedOffset = findEmbeddedBmpTextOffset(raw)) {
+                raw.erase(raw.begin(), raw.begin() + *embeddedOffset);
+                size = raw.size();
+                spdlog::debug(
+                    "Text stream selected embedded BMP payload: {} offset={} bytes={}",
+                    name.AsStdString(), *embeddedOffset, size);
+            }
+        }
 
         // ---------- 检查是否加密/压缩 ----------
         if(size >= 3 && raw[0] == 0xFE && raw[1] == 0xFE) {

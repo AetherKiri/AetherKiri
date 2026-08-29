@@ -44,21 +44,7 @@ static const char TVP_GPU_COMPAT_SCRIPT[] =
     "try { Plugins.link(\"krkrgles.dll\"); } catch(e) { }\n"
     "try { Plugins.link(\"krkrlive2d.dll\"); } catch(e) { }\n"
     "try { Window.OGLDrawDevice = OGLDrawDevice; } catch(e) { }\n"
-    "try { Window.GLESAdaptor = GLESAdaptor; } catch(e) { }\n"
-    "function KAGWindow_createDrawDevice() {\n"
-    "    var dd = null;\n"
-    "    try { dd = new OGLDrawDevice(); } catch(e) { try { dd = new GLESAdaptor(); } catch(e2) { dd = null; } }\n"
-    "    try { if(dd !== null) dd.setScreenSize(this.width, this.height); } catch(e) { }\n"
-    "    try { this.gpuDrawDevice = dd; } catch(e) { }\n"
-    "    try { this.OGLDrawDevice = dd; } catch(e) { }\n"
-    "    try { this.GLESAdaptor = dd; } catch(e) { }\n"
-    "    try { return new global.Window.BasicDrawDevice(); } catch(e) { }\n"
-    "    try { return new global.Window.PassThroughDrawDevice(); } catch(e) { }\n"
-    "    return null;\n"
-    "}\n"
-    "try { KAGWindow.KAGWindow_createDrawDevice = KAGWindow_createDrawDevice; } catch(e) { }\n"
-    "try { KAGWindow.prototype.KAGWindow_createDrawDevice = KAGWindow_createDrawDevice; } catch(e) { }\n"
-    "try { KAGWindow_createDrawDevice = KAGWindow_createDrawDevice; } catch(e) { }\n";
+    "try { Window.GLESAdaptor = GLESAdaptor; } catch(e) { }\n";
 static const char TVP_D3DEMOTE_COMPAT_PREFIX[] =
     "// AetherKiri D3DEmote/motion.tjs compatibility bridge.\n"
     "try { Plugins.link(\"emoteplayer.dll\"); } catch(e) { }\n";
