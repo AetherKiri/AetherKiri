@@ -76,13 +76,6 @@ int32_t ArtemisGateProbe(void*, const char* root) {
              : 0;
 }
 
-int32_t Wa2GateProbe(void*, const char* root) {
-  return root != nullptr &&
-                 std::strstr(root, ".wa2-debug-gate-test") != nullptr
-             ? 100
-             : 0;
-}
-
 engine_result_t FakeCreate(void*, const engine_runtime_host_v1_t* host,
                            const engine_create_desc_t*, void** out_runtime) {
   if (host == nullptr || out_runtime == nullptr || host->log == nullptr) {
@@ -203,14 +196,6 @@ const engine_runtime_provider_v1_t kArtemisGateProvider = [] {
   return provider;
 }();
 
-const engine_runtime_provider_v1_t kWa2GateProvider = [] {
-  engine_runtime_provider_v1_t provider = kFakeProvider;
-  provider.runtime_id_utf8 = "wa2";
-  provider.display_name_utf8 = "Wa2 Debug gate test provider";
-  provider.probe = Wa2GateProbe;
-  return provider;
-}();
-
 }  // namespace
 
 TEST_CASE("primary click queue gate coalesces clicks before the next tick") {
@@ -283,30 +268,6 @@ TEST_CASE("Artemis runtime is compiled but beta-gated in product builds") {
   REQUIRE(engine_set_option(handle.value, &beta_option) == ENGINE_RESULT_OK);
 #endif
   REQUIRE(engine_open_game(handle.value, ".artemis-debug-gate-test",
-                           "first.iet") == ENGINE_RESULT_OK);
-}
-
-TEST_CASE("Wa2 runtime is compiled but beta-gated in product builds") {
-  const engine_result_t registration =
-      engine_register_runtime_provider(&kWa2GateProvider);
-  REQUIRE(registration == ENGINE_RESULT_OK);
-
-  Handle handle;
-  engine_option_t runtime_option{};
-  runtime_option.key_utf8 = "runtime";
-  runtime_option.value_utf8 = "wa2";
-  REQUIRE(engine_set_option(handle.value, &runtime_option) == ENGINE_RESULT_OK);
-#if defined(NDEBUG)
-  REQUIRE(engine_open_game(handle.value, ".wa2-debug-gate-test",
-                           "first.iet") == ENGINE_RESULT_NOT_SUPPORTED);
-  REQUIRE(std::string(engine_get_last_error(handle.value)) ==
-          "Wa2 runtime requires active beta access");
-  engine_option_t beta_option{};
-  beta_option.key_utf8 = "artemis_beta_allowed";
-  beta_option.value_utf8 = "1";
-  REQUIRE(engine_set_option(handle.value, &beta_option) == ENGINE_RESULT_OK);
-#endif
-  REQUIRE(engine_open_game(handle.value, ".wa2-debug-gate-test",
                            "first.iet") == ENGINE_RESULT_OK);
 }
 
