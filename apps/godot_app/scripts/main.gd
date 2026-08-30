@@ -10010,9 +10010,8 @@ func _start_selected_game_after_iap() -> void:
         _deny_artemis_beta_launch()
 
 func _runtime_requires_beta_access(runtime_kind: String) -> bool:
-    # ONS support follows the same Apple release policy as Artemis: unrestricted
-    # in Debug and Android builds, and gated by an active coffee entitlement on
-    # iOS and macOS distribution builds.
+    # ONS follows the same Apple release policy as Artemis. Provider-backed
+    # runtimes such as WA2 are checked separately by their runtime probe.
     return runtime_kind == RUNTIME_ONSCRIPTER
 
 func _beta_access_enforcement_enabled(platform_name: String = "") -> bool:
