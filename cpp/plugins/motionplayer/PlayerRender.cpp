@@ -1873,7 +1873,8 @@ namespace {
         motion::detail::PlayerRuntime &runtime,
         const std::string &motionPath,
         tjs_int canvasWidth,
-        tjs_int canvasHeight) {
+        tjs_int canvasHeight,
+        double frameTick) {
         if(!isYuzuPresentationMotion(motionPath) ||
            canvasWidth <= 0 || canvasHeight <= 0 ||
            runtime.preparedRenderItems.empty()) {
@@ -1888,6 +1889,48 @@ namespace {
             isYuzuStartupLogoMotion(motionPath);
 
         if(isTitleMotion) {
+            const auto loweredMotionPath = renderDebugLowercase(motionPath);
+            const auto filenameOffset = loweredMotionPath.find_last_of("/\\");
+            const auto motionFilename =
+                filenameOffset == std::string::npos
+                    ? loweredMotionPath
+                    : loweredMotionPath.substr(filenameOffset + 1);
+            const bool isUnevaluatedBaseTitleFrame =
+                frameTick <= 0.0001 &&
+                (motionFilename == "title_bg.mtn" ||
+                 motionFilename == "title_bg.psb");
+            if(isUnevaluatedBaseTitleFrame) {
+                // KAG creates and draws a Motion player immediately after
+                // play("title"), before the first progress callback.  At that
+                // point the nested char_move tree still contains its default
+                // persistent layers at full opacity, so the completed title
+                // card flashes once before the authored character entrance
+                // animation is evaluated.  Keep only the full-canvas white
+                // transition utility for this unevaluated frame.  Publishing
+                // even bg1/bg2 here makes the title background appear before
+                // the animation and then disappear behind its white flash.
+                // The first progressed frame publishes the authored scene.
+                int suppressed = 0;
+                for(auto &entry : runtime.preparedRenderItems) {
+                    if(!entry.drawFlag || entry.skipFlag0 || entry.skipFlag1 ||
+                       entry.opacity <= 0) {
+                        continue;
+                    }
+                    if(!isYuzuTitleWhiteUtilityLayer(
+                           motionPath, entry.nodeLabel, entry.sourceKey)) {
+                        entry.skipFlag0 = true;
+                        ++suppressed;
+                    }
+                }
+                if(suppressed > 0 && LOGGER &&
+                   shouldDebugTitleRender(motionPath) &&
+                   markRenderDebugLogged(
+                       "yuzu-title-unevaluated-frame:" + motionPath)) {
+                    LOGGER->info(
+                        "motion title unevaluated composition suppressed: motion={} suppressed={}",
+                        motionPath, suppressed);
+                }
+            }
             const bool hasSyntheticIntroLayer = std::any_of(
                 runtime.preparedRenderItems.begin(),
                 runtime.preparedRenderItems.end(),
@@ -11620,7 +11663,7 @@ namespace motion {
         applyPreparedRenderItemTranslateOffsets();
         adjustPreparedRenderItemsForYuzuPresentation(
             *_runtime, motionPath, adaptor->getWidth(),
-            adaptor->getHeight());
+            adaptor->getHeight(), _clampedEvalTime);
         adjustPreparedRenderItemsForCenteredGameMotion(
             *_runtime, motionPath, adaptor->getWidth(),
             adaptor->getHeight(),
