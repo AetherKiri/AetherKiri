@@ -40,6 +40,7 @@ void TVPInitWindowOptions();
 #include "CharacterData.h"
 #include "PrerenderedFont.h"
 #include "FontBaseline.h"
+#include "FontVariations.h"
 #include "FontSystem.h"
 #include "FreeType.h"
 #include "FreeTypeFontRasterizer.h"
@@ -246,6 +247,10 @@ void TVPSetFontCacheForLowMem() {
 }
 //---------------------------------------------------------------------------
 void TVPClearFontCache() { TVPFontCache.Clear(); }
+void TVPInvalidateFontOptions() {
+    ++TVPGlobalFontStateMagic;
+    TVPClearFontCache();
+}
 //---------------------------------------------------------------------------
 struct tTVPClearFontCacheCallback : public tTVPCompactEventCallbackIntf {
     void OnCompact(tjs_int level) override {
@@ -782,6 +787,8 @@ void tTVPNativeBaseBitmap::ApplyFont() {
         // compute font hash
         FontHash = tTJSHashFunc<ttstr>::Make(Font.Face);
         FontHash ^= Font.Height ^ Font.Flags ^ Font.Angle;
+        FontHash ^= static_cast<tjs_uint32>(Font.Weight);
+        FontHash ^= tTJSHashFunc<ttstr>::Make(Font.Variations);
     } else {
         GetCurrentRasterizer()->ApplyFont(this, false);
     }

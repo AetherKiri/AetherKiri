@@ -4,6 +4,7 @@
 #include "../LayerBitmapIntf.h"
 #include "MsgIntf.h"
 #include "tjsHashSearch.h"
+#include "ThreadIntf.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -140,17 +141,23 @@ private:
 class ScopedUploadTiming final {
 public:
     ScopedUploadTiming(bool active, size_t bytes)
-        : enabled_(active && RenderTimingEnabled()), bytes_(bytes), start_(
-              enabled_ ? std::chrono::steady_clock::now()
-                       : std::chrono::steady_clock::time_point()) {}
+        : active_(active), detailed_(active && RenderTimingEnabled()),
+          bytes_(bytes), start_(
+              active_ ? std::chrono::steady_clock::now()
+                      : std::chrono::steady_clock::time_point()) {}
 
     void Succeeded() { success_ = true; }
 
     ~ScopedUploadTiming() {
-        if (!enabled_) return;
+        if(!active_)
+            return;
         const auto elapsed = std::chrono::steady_clock::now() - start_;
         const uint64_t elapsed_ns = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count());
+        TVPRecordVisualUpload(elapsed_ns, static_cast<uint64_t>(bytes_),
+                              success_);
+        if(!detailed_)
+            return;
         std::lock_guard<std::mutex> lock(g_method_stats_mutex);
         ++g_upload_count;
         if (success_) ++g_upload_success_count;
@@ -160,7 +167,30 @@ public:
     }
 
 private:
-    bool enabled_ = false;
+    bool active_ = false;
+    bool detailed_ = false;
+    bool success_ = false;
+    size_t bytes_ = 0;
+    std::chrono::steady_clock::time_point start_;
+};
+
+class ScopedReadbackTiming final {
+public:
+    explicit ScopedReadbackTiming(size_t bytes)
+        : bytes_(bytes), start_(std::chrono::steady_clock::now()) {}
+
+    void Succeeded() { success_ = true; }
+
+    ~ScopedReadbackTiming() {
+        const auto elapsed = std::chrono::steady_clock::now() - start_;
+        TVPRecordVisualReadback(
+            static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed)
+                    .count()),
+            static_cast<uint64_t>(bytes_), success_);
+    }
+
+private:
     bool success_ = false;
     size_t bytes_ = 0;
     std::chrono::steady_clock::time_point start_;
@@ -718,6 +748,8 @@ void GodotTexture2D::EnsureCpuReadable() {
         return;
     }
     if (!gpu_dirty_ && !pixels_.empty()) return;
+    ScopedReadbackTiming readback_timing(static_cast<size_t>(Width) *
+                                         static_cast<size_t>(Height) * 4u);
     EnsureCpuStorage();
     const auto *bridge = TVPGodotGpuBridgeGet();
     if (format_ == TVPTextureFormat::Gray && bridge != nullptr &&
@@ -736,6 +768,7 @@ void GodotTexture2D::EnsureCpuReadable() {
                 }
             }
             gpu_dirty_ = false;
+            readback_timing.Succeeded();
         }
         return;
     }
@@ -743,6 +776,7 @@ void GodotTexture2D::EnsureCpuReadable() {
         bridge->read_rgba(gpu_handle_, pixels_.data(), pixels_.size(),
                           static_cast<uint32_t>(pitch_))) {
         gpu_dirty_ = false;
+        readback_timing.Succeeded();
     }
 }
 

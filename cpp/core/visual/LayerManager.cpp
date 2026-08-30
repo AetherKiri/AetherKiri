@@ -32,6 +32,7 @@
 #include "WindowIntf.h"
 #include "EngineLoop.h"
 #include "RenderManager.h"
+#include "ThreadIntf.h"
 #include "spdlog/spdlog.h"
 
 #include <cctype>
@@ -2222,15 +2223,38 @@ void tTVPLayerManager::PrimaryMouseWheel(tjs_uint32 shift, tjs_int delta,
 }
 //---------------------------------------------------------------------------
 void tTVPLayerManager::AddUpdateRegion(const tTVPComplexRect &rects) {
+    std::uint64_t pixels = 0;
+    auto input = rects.GetIterator();
+    while(input.Step()) {
+        const tTVPRect rect(*input);
+        if(rect.right > rect.left && rect.bottom > rect.top) {
+            pixels += static_cast<std::uint64_t>(rect.right - rect.left) *
+                static_cast<std::uint64_t>(rect.bottom - rect.top);
+        }
+    }
+    TVPRecordVisualDirtyRegion(static_cast<std::uint64_t>(rects.GetCount()),
+                               pixels);
     UpdateRegion.Or(rects);
-    if(UpdateRegion.GetCount() > TVP_UPDATE_UNITE_LIMIT)
+    if(UpdateRegion.GetCount() > TVP_UPDATE_UNITE_LIMIT) {
+        TVPRecordVisualDirtyUnite();
         UpdateRegion.Unite();
+    }
     NotifyWindowInvalidation();
 }
 //---------------------------------------------------------------------------
 void tTVPLayerManager::AddUpdateRegion(const tTVPRect &rect) {
     // the window is invalidated;
+    const std::uint64_t pixels =
+        rect.right > rect.left && rect.bottom > rect.top
+        ? static_cast<std::uint64_t>(rect.right - rect.left) *
+            static_cast<std::uint64_t>(rect.bottom - rect.top)
+        : 0;
+    TVPRecordVisualDirtyRegion(1, pixels);
     UpdateRegion.Or(rect);
+    if(UpdateRegion.GetCount() > TVP_UPDATE_UNITE_LIMIT) {
+        TVPRecordVisualDirtyUnite();
+        UpdateRegion.Unite();
+    }
     NotifyWindowInvalidation();
 }
 //---------------------------------------------------------------------------

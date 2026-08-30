@@ -25,12 +25,67 @@
 #include "DebugIntf.h"
 #include "ConfigManager/LocaleConfigManager.h"
 #include "Platform.h"
+#include "ThreadIntf.h"
+#include "tjsDictionary.h"
+#include "ScreenCapture.h"
 
 #include <fmt/format.h>
 #include <cstdlib>
 #include <spdlog/spdlog.h>
 
 extern bool TVPStartupSuccess;
+
+namespace {
+
+    void TVPSetVisualStat(iTJSDispatch2 *dictionary, const tjs_char *name,
+                          std::uint64_t value) {
+        tTJSVariant variant(static_cast<tjs_int64>(value));
+        if(TJS_FAILED(dictionary->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                                          name, nullptr, &variant,
+                                          dictionary))) {
+            TVPThrowInternalError;
+        }
+    }
+
+    iTJSDispatch2 *TVPCreateVisualRenderStatsDictionary() {
+        const auto stats = TVPGetVisualRenderStats();
+        iTJSDispatch2 *dictionary = TJSCreateDictionaryObject();
+#define TVP_SET_RENDER_STAT(name)                                              \
+    TVPSetVisualStat(dictionary, TJS_W(#name), stats.name)
+        TVP_SET_RENDER_STAT(update_count);
+        TVP_SET_RENDER_STAT(update_ns);
+        TVP_SET_RENDER_STAT(show_count);
+        TVP_SET_RENDER_STAT(show_ns);
+        TVP_SET_RENDER_STAT(complete_window_count);
+        TVP_SET_RENDER_STAT(complete_window_ns);
+        TVP_SET_RENDER_STAT(layer_draw_count);
+        TVP_SET_RENDER_STAT(layer_draw_ns);
+        TVP_SET_RENDER_STAT(before_completion_count);
+        TVP_SET_RENDER_STAT(before_completion_ns);
+        TVP_SET_RENDER_STAT(after_completion_count);
+        TVP_SET_RENDER_STAT(after_completion_ns);
+        TVP_SET_RENDER_STAT(dirty_rect_count);
+        TVP_SET_RENDER_STAT(dirty_pixels);
+        TVP_SET_RENDER_STAT(dirty_unite_count);
+        TVP_SET_RENDER_STAT(upload_count);
+        TVP_SET_RENDER_STAT(upload_success_count);
+        TVP_SET_RENDER_STAT(upload_bytes);
+        TVP_SET_RENDER_STAT(upload_ns);
+        TVP_SET_RENDER_STAT(readback_count);
+        TVP_SET_RENDER_STAT(readback_success_count);
+        TVP_SET_RENDER_STAT(readback_bytes);
+        TVP_SET_RENDER_STAT(readback_ns);
+        TVP_SET_RENDER_STAT(video_queued_count);
+        TVP_SET_RENDER_STAT(video_presented_count);
+        TVP_SET_RENDER_STAT(video_dropped_count);
+        TVP_SET_RENDER_STAT(video_converted_pixels);
+        TVP_SET_RENDER_STAT(video_convert_ns);
+        TVP_SET_RENDER_STAT(video_fallback_convert_count);
+#undef TVP_SET_RENDER_STAT
+        return dictionary;
+    }
+
+} // namespace
 
 //---------------------------------------------------------------------------
 // TVPFireOnApplicationActivateEvent
@@ -462,6 +517,85 @@ TJS_END_NATIVE_PROP_GETTER
 TJS_DENY_NATIVE_PROP_SETTER
 }
 TJS_END_NATIVE_STATIC_PROP_DECL(processorNum)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_PROP_DECL(visualRenderStats){ TJS_BEGIN_NATIVE_PROP_GETTER{
+    iTJSDispatch2 *dictionary = TVPCreateVisualRenderStatsDictionary();
+*result = tTJSVariant(dictionary, dictionary);
+dictionary->Release();
+return TJS_S_OK;
+}
+TJS_END_NATIVE_PROP_GETTER
+
+TJS_DENY_NATIVE_PROP_SETTER
+}
+TJS_END_NATIVE_STATIC_PROP_DECL(visualRenderStats)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ resetVisualRenderStats) {
+    TVPResetVisualRenderStats();
+    if(result)
+        result->Clear();
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ resetVisualRenderStats)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ captureScreen) {
+    if(numparams < 1)
+        return TJS_E_BADPARAMCOUNT;
+    const ttstr path(*param[0]);
+    if(path.IsEmpty())
+        return TJS_E_INVALIDPARAM;
+    const int x = numparams > 1 ? static_cast<tjs_int>(*param[1]) : 0;
+    const int y = numparams > 2 ? static_cast<tjs_int>(*param[2]) : 0;
+    const int width = numparams > 3 ? static_cast<tjs_int>(*param[3]) : 0;
+    const int height = numparams > 4 ? static_cast<tjs_int>(*param[4]) : 0;
+    TVPRequestScreenCapture(path, x, y, width, height);
+    if(result)
+        *result = 1;
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ captureScreen)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_PROP_DECL(screenCapturePending){ TJS_BEGIN_NATIVE_PROP_GETTER{
+        *result = static_cast<tjs_int>(TVPHasPendingScreenCapture());
+return TJS_S_OK;
+}
+TJS_END_NATIVE_PROP_GETTER
+
+TJS_DENY_NATIVE_PROP_SETTER
+}
+TJS_END_NATIVE_STATIC_PROP_DECL(screenCapturePending)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_PROP_DECL(lastScreenCapture){
+    TJS_BEGIN_NATIVE_PROP_GETTER{ ttstr path;
+int width = 0;
+int height = 0;
+bool success = false;
+if(!TVPGetLastScreenCapture(path, width, height, success)) {
+    result->Clear();
+    return TJS_S_OK;
+}
+iTJSDispatch2 *dictionary = TJSCreateDictionaryObject();
+tTJSVariant value(path);
+dictionary->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP, TJS_W("path"), nullptr,
+                    &value, dictionary);
+value = width;
+dictionary->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP, TJS_W("width"), nullptr,
+                    &value, dictionary);
+value = height;
+dictionary->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP, TJS_W("height"), nullptr,
+                    &value, dictionary);
+value = static_cast<tjs_int>(success);
+dictionary->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP, TJS_W("success"),
+                    nullptr, &value, dictionary);
+*result = tTJSVariant(dictionary, dictionary);
+dictionary->Release();
+return TJS_S_OK;
+}
+TJS_END_NATIVE_PROP_GETTER
+
+TJS_DENY_NATIVE_PROP_SETTER
+}
+TJS_END_NATIVE_STATIC_PROP_DECL(lastScreenCapture)
 //----------------------------------------------------------------------
 TJS_BEGIN_NATIVE_PROP_DECL(exeBits){ TJS_BEGIN_NATIVE_PROP_GETTER{
 #ifdef TJS_64BIT_OS

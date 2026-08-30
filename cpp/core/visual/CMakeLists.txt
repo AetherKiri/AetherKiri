@@ -8,6 +8,7 @@ set(VISUAL_SOURCE_FILES
     ${VISUAL_PATH}/MenuItemIntf.cpp
     ${VISUAL_PATH}/SaveTLG5.cpp
     ${VISUAL_PATH}/FontSystem.cpp
+    ${VISUAL_PATH}/FontVariations.cpp
     ${VISUAL_PATH}/tvpps.inc
     ${VISUAL_PATH}/LoadPVRv3.cpp
     ${VISUAL_PATH}/RectItf.cpp
@@ -18,6 +19,7 @@ set(VISUAL_SOURCE_FILES
     ${VISUAL_PATH}/LoadJPEG.cpp
     ${VISUAL_PATH}/GraphicsLoaderIntf.cpp
     ${VISUAL_PATH}/SaveTLG6.cpp
+    ${VISUAL_PATH}/ScreenCapture.cpp
     ${VISUAL_PATH}/FreeType.cpp
     ${VISUAL_PATH}/LoadJXR.cpp
     ${VISUAL_PATH}/ImageFunction.cpp
@@ -42,6 +44,7 @@ set(VISUAL_SOURCE_FILES
     ${VISUAL_PATH}/gl/blend_function.cpp
     ${VISUAL_PATH}/gl/ResampleImage.cpp
     ${VISUAL_PATH}/gl/WeightFunctor.cpp
+    ${VISUAL_PATH}/gl/UpstreamSIMDDispatch.cpp
 
     ${VISUAL_PATH}/ogl/etcpak.cpp
     ${VISUAL_PATH}/ogl/PVRTDecompress.cpp
@@ -91,11 +94,26 @@ if(NOT WEB AND NOT EMSCRIPTEN AND
     target_sources(${PROJECT_NAME} PRIVATE
         ${VISUAL_PATH}/gl/ResampleImageSSE2_upstream.cpp
         ${VISUAL_PATH}/gl/ResampleImageAVX2_upstream.cpp
+        ${VISUAL_PATH}/gl/UpstreamX86SIMDUtil.cpp
+        ${VISUAL_PATH}/gl/UpstreamX86SIMDUtilAVX2.cpp
+        ${VISUAL_PATH}/gl/UpstreamColorMapSSE2.cpp
+        ${VISUAL_PATH}/gl/UpstreamColorMapAVX2.cpp
+        ${VISUAL_PATH}/gl/UpstreamUnivTransSSE2.cpp
+        ${VISUAL_PATH}/gl/UpstreamAdjustColorSSE2.cpp
+        ${VISUAL_PATH}/gl/UpstreamPixelFormatSSE2.cpp
+        ${VISUAL_PATH}/gl/UpstreamTLGSSE2.cpp
+        ${VISUAL_PATH}/gl/UpstreamBoxBlurSSE2.cpp
     )
-    target_compile_definitions(${PROJECT_NAME} PRIVATE AETHER_ENABLE_RESAMPLE_X86_SIMD=1)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+        AETHER_ENABLE_RESAMPLE_X86_SIMD=1
+        AETHER_ENABLE_VISUAL_X86_SIMD=1)
+    target_include_directories(${PROJECT_NAME} PRIVATE
+        ${CMAKE_SOURCE_DIR}/third_party/krkrz_dev/src/core/common/visual/IA32)
     if(MSVC)
         set_source_files_properties(
             ${VISUAL_PATH}/gl/ResampleImageAVX2_upstream.cpp
+            ${VISUAL_PATH}/gl/UpstreamX86SIMDUtilAVX2.cpp
+            ${VISUAL_PATH}/gl/UpstreamColorMapAVX2.cpp
             PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
         set_source_files_properties(
             ${VISUAL_PATH}/gl/ResampleImageSSE2_upstream.cpp
@@ -103,11 +121,35 @@ if(NOT WEB AND NOT EMSCRIPTEN AND
     else()
         set_source_files_properties(
             ${VISUAL_PATH}/gl/ResampleImageAVX2_upstream.cpp
+            ${VISUAL_PATH}/gl/UpstreamX86SIMDUtilAVX2.cpp
+            ${VISUAL_PATH}/gl/UpstreamColorMapAVX2.cpp
             PROPERTIES COMPILE_OPTIONS "-mavx2")
         set_source_files_properties(
             ${VISUAL_PATH}/gl/ResampleImageSSE2_upstream.cpp
             PROPERTIES COMPILE_OPTIONS "-mssse3")
+        set_source_files_properties(
+            ${VISUAL_PATH}/gl/UpstreamPixelFormatSSE2.cpp
+            PROPERTIES COMPILE_OPTIONS "-mssse3")
+        set_source_files_properties(
+            ${VISUAL_PATH}/gl/UpstreamColorMapSSE2.cpp
+            ${VISUAL_PATH}/gl/UpstreamX86SIMDUtil.cpp
+            ${VISUAL_PATH}/gl/UpstreamUnivTransSSE2.cpp
+            ${VISUAL_PATH}/gl/UpstreamAdjustColorSSE2.cpp
+            ${VISUAL_PATH}/gl/UpstreamTLGSSE2.cpp
+            ${VISUAL_PATH}/gl/UpstreamBoxBlurSSE2.cpp
+            PROPERTIES COMPILE_OPTIONS "-msse2")
     endif()
+elseif(NOT WEB AND NOT EMSCRIPTEN AND
+       _aether_visual_arch MATCHES "aarch64|arm64")
+    target_sources(${PROJECT_NAME} PRIVATE
+        ${VISUAL_PATH}/gl/UpstreamColorMapNEON.cpp
+        ${VISUAL_PATH}/gl/UpstreamAdjustColorNEON.cpp
+        ${VISUAL_PATH}/gl/UpstreamPixelFormatNEON.cpp
+    )
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+        AETHER_ENABLE_VISUAL_ARM_SIMD=1)
+    target_include_directories(${PROJECT_NAME} PRIVATE
+        ${CMAKE_SOURCE_DIR}/third_party/krkrz_dev/src/core/common/visual/IA32)
 endif()
 
 target_link_libraries(${PROJECT_NAME} PRIVATE libbpg)

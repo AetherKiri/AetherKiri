@@ -17,6 +17,7 @@
 #include "WindowIntf.h"
 #include "DebugIntf.h"
 #include "ThreadIntf.h"
+#include "ScreenCapture.h"
 
 #include "TickCount.h"
 #include <assert.h>
@@ -404,6 +405,9 @@ void tTVPPassThroughDrawDevice::Show() {
         if(form && !Managers.empty()) {
             iTVPBaseBitmap *buf = Managers.back()->GetDrawBuffer();
             if(buf) {
+                tTVPScreenCaptureRequest capture;
+                if(TVPTakeScreenCaptureRequest(capture))
+                    TVPSaveScreenCapture(capture, buf);
                 form->UpdateDrawBuffer(buf->GetTexture());
             }
         }

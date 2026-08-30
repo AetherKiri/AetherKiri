@@ -19,6 +19,7 @@
 #include "LayerManager.h"
 #include "WindowIntf.h"
 #include "DebugIntf.h"
+#include "ThreadIntf.h"
 #include "spdlog/spdlog.h"
 #if defined(KRKR_ENABLE_GPU_BRIDGE)
 #include "krkr_egl_context.h"
@@ -718,6 +719,7 @@ void tTVPDrawDevice::RequestInvalidation(const tTVPRect &rect) {
 
 //---------------------------------------------------------------------------
 void tTVPDrawDevice::Update() {
+    tTVPVisualPhaseTimer timer(tTVPVisualRenderPhase::DrawDeviceUpdate);
     // すべての layer manager の UpdateToDrawDevice を呼ぶ
     for(auto &Manager : Managers) {
         Manager->UpdateToDrawDevice();

@@ -24,6 +24,7 @@
 #include "LayerManager.h"
 #include "BasicDrawDevice.h"
 #include "EventImpl.h"
+#include "ThreadIntf.h"
 
 #include "Application.h"
 
@@ -674,8 +675,10 @@ void tTJSNI_BaseWindow::UpdateContent() {
         // is called from event dispatcher
         DrawDevice->Update();
 
-        if(!WaitVSync)
+        if(!WaitVSync) {
+            tTVPVisualPhaseTimer timer(tTVPVisualRenderPhase::DrawDeviceShow);
             DrawDevice->Show();
+        }
 
         EndUpdate();
     }
@@ -683,8 +686,10 @@ void tTJSNI_BaseWindow::UpdateContent() {
 //---------------------------------------------------------------------------
 void tTJSNI_BaseWindow::DeliverDrawDeviceShow() {
     // call DrawDevice->Show, at VBlank
-    if(DrawDevice)
+    if(DrawDevice) {
+        tTVPVisualPhaseTimer timer(tTVPVisualRenderPhase::DrawDeviceShow);
         DrawDevice->Show();
+    }
 }
 //---------------------------------------------------------------------------
 void tTJSNI_BaseWindow::BeginUpdate(const tTVPComplexRect &rects) {

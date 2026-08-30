@@ -18,16 +18,19 @@
 // tTVPFont definition
 //---------------------------------------------------------------------------
 struct tTVPFont {
-    tjs_int Height; // height of text
-    tjs_uint32 Flags;
-    tjs_int Angle; // rotation angle ( in tenths of degrees ) 0 ..
-                   // 1800 .. 3600
+    tjs_int Height = 0; // height of text
+    tjs_uint32 Flags = 0;
+    tjs_int Angle = 0; // rotation angle ( in tenths of degrees ) 0 ..
+                       // 1800 .. 3600
 
     ttstr Face; // font name
+    tjs_int Weight = -1; // OpenType wght axis; -1 keeps the face default
+    ttstr Variations; // normalized OpenType axis list, e.g. "wdth=87.5"
 
     bool operator==(const tTVPFont &rhs) const {
         return Height == rhs.Height && Flags == rhs.Flags &&
-            Angle == rhs.Angle && Face == rhs.Face;
+            Angle == rhs.Angle && Face == rhs.Face && Weight == rhs.Weight &&
+            Variations == rhs.Variations;
     }
     bool operator!=(const tTVPFont &rhs) const { return !(operator==(rhs)); }
 };

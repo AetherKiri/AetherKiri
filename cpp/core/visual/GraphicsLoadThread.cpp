@@ -14,12 +14,17 @@
 #include "BitmapBitsAlloc.h"
 #include "LayerIntf.h"
 #include "TVPDecodeArena.h"
+#include "BitmapInfomation.h"
+#include "Application.h"
+#include "DebugIntf.h"
+
+#include <memory>
 
 tTVPTmpBitmapImage::tTVPTmpBitmapImage() : MetaInfo(nullptr) {}
 tTVPTmpBitmapImage::~tTVPTmpBitmapImage() {
-    if(bmp) {
-        delete bmp;
-        bmp = nullptr;
+    if(buffer) {
+        tTVPBitmapBitsAlloc::Free(buffer);
+        buffer = nullptr;
     }
     if(MetaInfo) {
         delete MetaInfo;
@@ -27,7 +32,7 @@ tTVPTmpBitmapImage::~tTVPTmpBitmapImage() {
     }
 }
 tTVPImageLoadCommand::tTVPImageLoadCommand() :
-    owner_(nullptr), bmp_(nullptr), dest_(nullptr) {}
+    owner_(nullptr), bmp_(nullptr), dest_(nullptr), prefetch_only_(false) {}
 tTVPImageLoadCommand::~tTVPImageLoadCommand() {
     if(owner_) {
         owner_->Release();
@@ -44,31 +49,36 @@ static int TVPLoadGraphicAsync_SizeCallback(void *callbackdata, tjs_uint w,
                                             tjs_uint h,
                                             tTVPGraphicPixelFormat fmt) {
     auto *img = (tTVPTmpBitmapImage *)callbackdata;
-    if(!img->bmp) {
-        img->bmp = new tTVPBitmap(w, h, 32);
-    } else if(img->bmp->GetWidth() != w || img->bmp->GetHeight() != h) {
-        img->bmp->Release();
-        img->bmp = new tTVPBitmap(w, h, 32);
+    if(img->buffer) {
+        tTVPBitmapBitsAlloc::Free(img->buffer);
+        img->buffer = nullptr;
     }
+    img->width = w;
+    img->height = h;
+    BitmapInfomation info(w, h, 32);
+    img->pitch = info.GetPitchBytes();
+    img->buffer = static_cast<tjs_uint32 *>(
+        tTVPBitmapBitsAlloc::Alloc(info.GetImageSize(), w, h));
     switch(fmt) {
         case gpfLuminance:
         case gpfRGB:
-            img->bmp->IsOpaque = true;
+            img->opaque = true;
             break;
         case gpfPalette:
         case gpfRGBA:
-            img->bmp->IsOpaque = false;
+            img->opaque = false;
             break;
     }
-    return img->bmp->GetPitch();
+    return img->pitch;
 }
 //---------------------------------------------------------------------------
 static void *TVPLoadGraphicAsync_ScanLineCallback(void *callbackdata,
                                                   tjs_int y) {
     auto *img = (tTVPTmpBitmapImage *)callbackdata;
     if(y >= 0) {
-        if(y < (tjs_int)img->bmp->GetHeight()) {
-            return img->bmp->GetScanLine(y);
+        if(y < (tjs_int)img->height && img->buffer) {
+            return reinterpret_cast<tjs_uint8 *>(img->buffer) +
+                (img->height - static_cast<tjs_uint32>(y) - 1) * img->pitch;
         } else {
             return nullptr;
         }
@@ -140,63 +150,101 @@ void tTVPAsyncImageLoader::HandleLoadedImage() {
             }
         }
         if(cmd != nullptr) {
-            cmd->bmp_->SetLoading(false);
-            if(cmd->result_.length() > 0) {
-                // error
-                tTJSVariant param[4];
-                param[0] = tTJSVariant((iTJSDispatch2 *)nullptr,
-                                       (iTJSDispatch2 *)nullptr);
-                param[1] = 1; // true async
-                param[2] = 1; // true error
-                param[3] = cmd->result_; // error_mes
-                static ttstr eventname(TJS_W("onLoaded"));
-                if(cmd->owner_ &&
-                   cmd->owner_->IsValid(0, nullptr, nullptr, cmd->owner_) ==
-                       TJS_S_TRUE) {
-                    TVPPostEvent(cmd->owner_, cmd->owner_, eventname, 0,
-                                 TVP_EPT_IMMEDIATE, 4, param);
-                }
+            std::unique_ptr<tTVPImageLoadCommand> command(cmd);
+            const ttstr path(cmd->path_);
+            const bool prefetch = cmd->prefetch_only_;
+            try {
+                if(cmd->bmp_)
+                    cmd->bmp_->SetLoading(false);
+                if(cmd->result_.length() > 0) {
+                    if(!prefetch) {
+                        tTJSVariant param[4];
+                        param[0] = tTJSVariant((iTJSDispatch2 *)nullptr,
+                                               (iTJSDispatch2 *)nullptr);
+                        param[1] = 1;
+                        param[2] = 1;
+                        param[3] = cmd->result_.c_str();
+                        static ttstr eventname(TJS_W("onLoaded"));
+                        if(cmd->owner_ &&
+                           cmd->owner_->IsValid(0, nullptr, nullptr,
+                                                cmd->owner_) == TJS_S_TRUE) {
+                            TVPPostEvent(cmd->owner_, cmd->owner_, eventname, 0,
+                                         TVP_EPT_IMMEDIATE, 4, param);
+                        }
+                    }
 
-                if(cmd->dest_->MetaInfo) {
-                    delete cmd->dest_->MetaInfo;
-                    cmd->dest_->MetaInfo = nullptr;
-                }
-            } else {
-                iTJSDispatch2 *metainfo =
-                    TVPMetaInfoPairsToDictionary(cmd->dest_->MetaInfo);
-
-                cmd->bmp_->SetSizeAndImageBuffer(cmd->dest_->bmp);
-                // 読込み完了時にもキャッシュチェック(非同期なので完了前に読み込まれている可能性あり)
-                if(TVPHasImageCache(cmd->path_, glmNormal, 0, 0, TVP_clNone) ==
-                   false) {
-                    TVPPushGraphicCache(cmd->path_, cmd->dest_->bmp,
-                                        cmd->dest_->MetaInfo);
-                    cmd->dest_->MetaInfo = nullptr;
+                    if(cmd->dest_->MetaInfo) {
+                        delete cmd->dest_->MetaInfo;
+                        cmd->dest_->MetaInfo = nullptr;
+                    }
                 } else {
-                    delete cmd->dest_->MetaInfo;
-                    cmd->dest_->MetaInfo = nullptr;
-                }
-                cmd->dest_->bmp->Release();
-                cmd->dest_->bmp = nullptr;
+                    iTJSDispatch2 *metainfo = prefetch
+                        ? nullptr
+                        : TVPMetaInfoPairsToDictionary(cmd->dest_->MetaInfo);
+                    const auto release_bitmap = [](tTVPBitmap *bitmap) {
+                        if(bitmap)
+                            bitmap->Release();
+                    };
+                    std::unique_ptr<tTVPBitmap, decltype(release_bitmap)>
+                        decoded(new tTVPBitmap(cmd->dest_->width,
+                                               cmd->dest_->height, 32,
+                                               cmd->dest_->buffer),
+                                release_bitmap);
+                    decoded->IsOpaque = cmd->dest_->opaque;
+                    cmd->dest_->buffer = nullptr;
 
-                tTJSVariant param[4];
-                param[0] = tTJSVariant(metainfo, metainfo);
-                if(metainfo)
-                    metainfo->Release();
-                param[1] = 1; // true async
-                param[2] = 0; // false error
-                param[3] = TJS_W(""); // error_mes
-                static ttstr eventname(TJS_W("onLoaded"));
-                if(cmd->owner_ &&
-                   cmd->owner_->IsValid(0, nullptr, nullptr, cmd->owner_) ==
-                       TJS_S_TRUE) {
-                    TVPPostEvent(cmd->owner_, cmd->owner_, eventname, 0,
-                                 TVP_EPT_IMMEDIATE, 4, param);
+                    try {
+                        if(!TVPHasImageCache(path, glmNormal, 0, 0,
+                                             TVP_clNone)) {
+                            auto *cache_meta = cmd->dest_->MetaInfo;
+                            cmd->dest_->MetaInfo = nullptr;
+                            TVPPushGraphicCache(path, decoded.get(),
+                                                cache_meta);
+                        } else {
+                            delete cmd->dest_->MetaInfo;
+                            cmd->dest_->MetaInfo = nullptr;
+                        }
+                        if(!prefetch && cmd->bmp_)
+                            cmd->bmp_->SetSizeAndImageBuffer(decoded.get());
+                    } catch(...) {
+                        if(metainfo)
+                            metainfo->Release();
+                        throw;
+                    }
+                    if(!prefetch) {
+                        tTJSVariant param[4];
+                        param[0] = tTJSVariant(metainfo, metainfo);
+                        if(metainfo)
+                            metainfo->Release();
+                        param[1] = 1;
+                        param[2] = 0;
+                        param[3] = TJS_W("");
+                        static ttstr eventname(TJS_W("onLoaded"));
+                        if(cmd->owner_ &&
+                           cmd->owner_->IsValid(0, nullptr, nullptr,
+                                                cmd->owner_) == TJS_S_TRUE) {
+                            TVPPostEvent(cmd->owner_, cmd->owner_, eventname, 0,
+                                         TVP_EPT_IMMEDIATE, 4, param);
+                        }
+                    }
                 }
+            } catch(...) {
+                if(prefetch) {
+                    FinishPrefetch(cmd->path_);
+                    TVPAddImportantLog(TJS_W("Image prefetch failed: ") + path);
+                    continue;
+                }
+                throw;
             }
-            delete cmd;
+            if(prefetch)
+                FinishPrefetch(cmd->path_);
         }
     } while(loading);
+}
+
+void tTVPAsyncImageLoader::FinishPrefetch(const std::string &path) {
+    tTJSCriticalSectionHolder cs(InFlightCS);
+    InFlightTable.erase(path);
 }
 //---------------------------------------------------------------------------
 
@@ -252,9 +300,9 @@ void tTVPAsyncImageLoader::PushLoadQueue(iTJSDispatch2 *owner,
     if(owner)
         owner->AddRef();
     cmd->bmp_ = bmp;
-    cmd->path_ = nname;
+    cmd->path_ = nname.AsStdString();
     cmd->dest_ = new tTVPTmpBitmapImage();
-    cmd->result_.Clear();
+    cmd->result_.clear();
     {
         // キューをロックしてプッシュ
         tTJSCriticalSectionHolder cs(CommandQueueCS);
@@ -262,6 +310,61 @@ void tTVPAsyncImageLoader::PushLoadQueue(iTJSDispatch2 *owner,
     }
     // 追加したことをイベントで通知
     PushCommandQueueEvent.Set();
+}
+
+void tTVPAsyncImageLoader::PrefetchRequest(const ttstr &name) {
+    ttstr nname = TVPNormalizeStorageName(name);
+    if(TVPHasImageCache(nname, glmNormal, 0, 0, TVP_clNone))
+        return;
+
+    const std::string key = nname.AsStdString();
+    {
+        tTJSCriticalSectionHolder cs(InFlightCS);
+        if(!InFlightTable.insert(key).second)
+            return;
+    }
+
+    ttstr ext = TVPExtractStorageExt(nname);
+    if(ext.IsEmpty() || !TVPGetGraphicLoadHandler(ext)) {
+        FinishPrefetch(key);
+        return;
+    }
+
+    auto *cmd = new tTVPImageLoadCommand();
+    cmd->path_ = key;
+    cmd->dest_ = new tTVPTmpBitmapImage();
+    cmd->prefetch_only_ = true;
+    {
+        tTJSCriticalSectionHolder cs(CommandQueueCS);
+        CommandQueue.push(cmd);
+    }
+    PushCommandQueueEvent.Set();
+}
+
+void tTVPAsyncImageLoader::FlushPrefetchQueue() {
+    std::queue<tTVPImageLoadCommand *> kept;
+    std::vector<tTVPImageLoadCommand *> dropped;
+    {
+        tTJSCriticalSectionHolder cs(CommandQueueCS);
+        while(!CommandQueue.empty()) {
+            auto *cmd = CommandQueue.front();
+            CommandQueue.pop();
+            if(cmd->prefetch_only_)
+                dropped.push_back(cmd);
+            else
+                kept.push(cmd);
+        }
+        CommandQueue.swap(kept);
+    }
+    for(auto *cmd : dropped) {
+        FinishPrefetch(cmd->path_);
+        delete cmd;
+    }
+}
+
+bool tTVPAsyncImageLoader::IsAnyInFlight() {
+    tTJSCriticalSectionHolder cs(InFlightCS);
+    return !InFlightTable.empty();
 }
 void tTVPAsyncImageLoader::LoadingThread() {
     while(!GetTerminated()) {
@@ -296,9 +399,9 @@ void tTVPAsyncImageLoader::LoadingThread() {
 }
 tTVPGraphicHandlerType *TVPGuessGraphicLoadHandler(ttstr &name);
 void tTVPAsyncImageLoader::LoadImageFromCommand(tTVPImageLoadCommand *cmd) {
-    ttstr ext = TVPExtractStorageExt(cmd->path_);
-    tTVPGraphicHandlerType *handler = nullptr;
     ttstr name(cmd->path_);
+    ttstr ext = TVPExtractStorageExt(name);
+    tTVPGraphicHandlerType *handler = nullptr;
     if(ext.IsEmpty()) {
         // missing extension
         handler = TVPGuessGraphicLoadHandler(name);
@@ -317,6 +420,11 @@ void tTVPAsyncImageLoader::LoadImageFromCommand(tTVPImageLoadCommand *cmd) {
                           TVPLoadGraphicAsync_ScanLineCallback,
                           TVPLoadGraphicAsync_MetaInfoPushCallback,
                           holder.Get(), -1, glmNormal);
+            if(!cmd->dest_->buffer || cmd->dest_->width == 0 ||
+               cmd->dest_->height == 0) {
+                cmd->result_ =
+                    TVPFormatMessage(TVPImageLoadError, name).AsStdString();
+            }
 #if defined(__APPLE__) || defined(__linux__) || defined(__ANDROID__)
             TVPDecodeArena::Instance().End();
 #endif
@@ -324,10 +432,27 @@ void tTVPAsyncImageLoader::LoadImageFromCommand(tTVPImageLoadCommand *cmd) {
 #if defined(__APPLE__) || defined(__linux__) || defined(__ANDROID__)
             TVPDecodeArena::Instance().End();
 #endif
-            cmd->result_ = TVPFormatMessage(TVPImageLoadError, cmd->path_);
+            cmd->result_ =
+                TVPFormatMessage(TVPImageLoadError, name).AsStdString();
         }
     } else {
         // error
-        cmd->result_ = TVPFormatMessage(TVPUnknownGraphicFormat, cmd->path_);
+        cmd->result_ =
+            TVPFormatMessage(TVPUnknownGraphicFormat, name).AsStdString();
     }
+}
+
+void TVPRequestImagePrefetch(const ttstr &name) {
+    if(Application && Application->GetAsyncImageLoader())
+        Application->GetAsyncImageLoader()->PrefetchRequest(name);
+}
+
+void TVPFlushImagePrefetchQueue() {
+    if(Application && Application->GetAsyncImageLoader())
+        Application->GetAsyncImageLoader()->FlushPrefetchQueue();
+}
+
+bool TVPIsImagePrefetchLoading() {
+    return Application && Application->GetAsyncImageLoader() &&
+        Application->GetAsyncImageLoader()->IsAnyInFlight();
 }

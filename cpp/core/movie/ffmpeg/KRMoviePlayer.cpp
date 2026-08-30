@@ -13,7 +13,9 @@ extern "C" {
 #include "WindowImpl.h"
 #include "VideoOvlImpl.h"
 #include "LayerIntf.h"
+#include "ThreadIntf.h"
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -255,10 +257,10 @@ void TVPMoviePlayer::GetEnableVideoStreamNum(long *num) {
 
 int TVPMoviePlayer::WaitForBuffer(volatile std::atomic_bool &bStop,
                                   int timeout) {
+    std::unique_lock<std::mutex> lk(m_mtxPicture);
     int remainBuf = MAX_BUFFER_COUNT - m_usedPicture;
     if(remainBuf > 0)
         return remainBuf;
-    std::unique_lock<std::mutex> lk(m_mtxPicture);
     while(!bStop && MAX_BUFFER_COUNT <= m_usedPicture && timeout > 0) {
         timeout -= 10;
         m_condPicture.wait_for(lk, std::chrono::milliseconds(10));
@@ -268,6 +270,8 @@ int TVPMoviePlayer::WaitForBuffer(volatile std::atomic_bool &bStop,
 
 void TVPMoviePlayer::Flush() {
     std::unique_lock<std::mutex> lk(m_mtxPicture);
+    if(m_usedPicture > 0)
+        TVPRecordVisualVideoDropped(static_cast<std::uint64_t>(m_usedPicture));
     for(int i = 0; i < MAX_BUFFER_COUNT; ++i) {
         m_picture[i].Clear();
     }
@@ -299,22 +303,34 @@ int TVPMoviePlayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
 
     const double pts = pic.pts / DVD_TIME_BASE;
     const double maxSubmitFps = VideoSubmitMaxFps();
-    if(maxSubmitFps > 0.0 && m_lastQueuedPicturePts >= 0.0 &&
-       pts - m_lastQueuedPicturePts < (1.0 / maxSubmitFps)) {
+    int usedPicture = 0;
+    double lastQueuedPicturePts = -1.0;
+    {
+        std::lock_guard<std::mutex> lk(m_mtxPicture);
+        usedPicture = m_usedPicture;
+        lastQueuedPicturePts = m_lastQueuedPicturePts;
+    }
+    if(maxSubmitFps > 0.0 && lastQueuedPicturePts >= 0.0 &&
+       pts - lastQueuedPicturePts < (1.0 / maxSubmitFps)) {
+        TVPRecordVisualVideoDropped();
         if(VideoTraceEnabled())
             spdlog::info("MoviePlayer AddVideoPicture throttle pts={} last={} used={}",
-                         pts, m_lastQueuedPicturePts, m_usedPicture);
-        return MAX_BUFFER_COUNT - m_usedPicture;
+                         pts, lastQueuedPicturePts, usedPicture);
+        return MAX_BUFFER_COUNT - usedPicture;
     }
 
-    if(m_usedPicture >= MAX_BUFFER_COUNT) {
+    if(usedPicture >= MAX_BUFFER_COUNT) {
         std::unique_lock<std::mutex> lk(m_mtxPicture);
-        m_condPicture.wait(lk);
+        m_condPicture.wait_for(lk, std::chrono::milliseconds(10), [this]() {
+            return m_usedPicture < MAX_BUFFER_COUNT;
+        });
+        usedPicture = m_usedPicture;
     }
-    if(m_usedPicture >= MAX_BUFFER_COUNT) {
+    if(usedPicture >= MAX_BUFFER_COUNT) {
+        TVPRecordVisualVideoDropped();
         if(VideoTraceEnabled())
             spdlog::info("MoviePlayer AddVideoPicture full pts={} used={}", pts,
-                         m_usedPicture);
+                         usedPicture);
         return -1;
     }
 
@@ -331,6 +347,7 @@ int TVPMoviePlayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
     uint8_t *dstData[4] = {data, nullptr, nullptr, nullptr};
     int dstLineSize[4] = {width * 4, 0, 0, 0};
 
+    const auto convertStarted = std::chrono::steady_clock::now();
     img_convert_ctx = sws_getCachedContext(
         img_convert_ctx, srcWidth, srcHeight, AV_PIX_FMT_YUV420P, width, height,
         AV_PIX_FMT_RGBA, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
@@ -339,13 +356,27 @@ int TVPMoviePlayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
         processed = sws_scale(img_convert_ctx, pic.data, pic.iLineSize, 0,
                               srcHeight, dstData, dstLineSize);
     }
-    if(processed <= 0) {
+    const bool usedFallback = processed <= 0;
+    if(usedFallback) {
         std::memset(data, 0, static_cast<size_t>(width) * height * 4);
         ConvertYuv420ToRgba(pic, data, width, height, dstLineSize[0]);
     }
+    const auto convertElapsed =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - convertStarted)
+            .count();
+    TVPRecordVisualVideoConvert(static_cast<std::uint64_t>(convertElapsed),
+                                static_cast<std::uint64_t>(width) *
+                                    static_cast<std::uint64_t>(height),
+                                usedFallback);
 
     {
         std::lock_guard<std::mutex> lk(m_mtxPicture);
+        if(m_usedPicture >= MAX_BUFFER_COUNT) {
+            TJSAlignedDealloc(data);
+            TVPRecordVisualVideoDropped();
+            return -1;
+        }
         BitmapPicture &picbuf =
             m_picture[(m_curPicture + m_usedPicture) & (MAX_BUFFER_COUNT - 1)];
         picbuf.Clear();
@@ -355,6 +386,7 @@ int TVPMoviePlayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
         picbuf.pts = pts;
         ++m_usedPicture;
         m_lastQueuedPicturePts = pts;
+        TVPRecordVisualVideoQueued();
         if(VideoTraceEnabled())
             spdlog::info("MoviePlayer AddVideoPicture queued pts={} size={}x{} used={} visible={}",
                          pts, width, height, m_usedPicture,
@@ -386,6 +418,7 @@ void VideoPresentOverlay::ClearNode() {
 // Replace VideoPresentOverlay::PresentPicture with stub
 void VideoPresentOverlay::PresentPicture(float dt) {
     BitmapPicture pic;
+    std::uint64_t consumedPictures = 0;
     m_curpts = m_pPlayer->GetClock() / DVD_TIME_BASE;
     {
         std::unique_lock<std::mutex> lk(m_mtxPicture);
@@ -397,6 +430,7 @@ void VideoPresentOverlay::PresentPicture(float dt) {
         }
         do {
             pic.MoveFrom(m_picture[m_curPicture]);
+            ++consumedPictures;
             --m_usedPicture;
             if(++m_curPicture >= MAX_BUFFER_COUNT)
                 m_curPicture = 0;
@@ -404,14 +438,18 @@ void VideoPresentOverlay::PresentPicture(float dt) {
         assert(m_usedPicture >= 0);
         m_condPicture.notify_all();
     }
+    if(consumedPictures > 1)
+        TVPRecordVisualVideoDropped(consumedPictures - 1);
     FrameMove();
     if(!pic.rgba) {
+        TVPRecordVisualVideoDropped();
         if(VideoTraceEnabled())
             spdlog::info("MoviePlayer PresentPicture skip no_rgba pts={}",
                          pic.pts);
         return;
     }
     if(!Visible) {
+        TVPRecordVisualVideoDropped();
         if(VideoTraceEnabled())
             spdlog::info("MoviePlayer PresentPicture skip invisible pts={} size={}x{}",
                          pic.pts, pic.width, pic.height);
@@ -427,6 +465,7 @@ void VideoPresentOverlay::PresentPicture(float dt) {
                                    static_cast<uint32_t>(pic.height),
                                    static_cast<uint32_t>(pic.width * 4),
                                    dest)) {
+        TVPRecordVisualVideoPresented();
         if(VideoTraceEnabled())
             spdlog::info("MoviePlayer PresentPicture submitted_host pts={} src={}x{} dest={}x{}+{}+{} curpts={}",
                          pic.pts, pic.width, pic.height, dest.get_width(),
@@ -439,6 +478,7 @@ void VideoPresentOverlay::PresentPicture(float dt) {
         window = overlay->GetOwnerWindow();
     }
     if(!window || !window->GetDrawDevice()) {
+        TVPRecordVisualVideoDropped();
         if(VideoTraceEnabled())
             spdlog::info("MoviePlayer PresentPicture skip no_window window={}",
                          window ? "yes" : "no");
@@ -446,6 +486,7 @@ void VideoPresentOverlay::PresentPicture(float dt) {
     }
     tTJSNI_BaseLayer *primary = window->GetDrawDevice()->GetPrimaryLayer();
     if(!primary) {
+        TVPRecordVisualVideoDropped();
         if(VideoTraceEnabled())
             spdlog::info("MoviePlayer PresentPicture skip no_primary primary=no");
         return;
@@ -457,12 +498,14 @@ void VideoPresentOverlay::PresentPicture(float dt) {
             primary->SetHasImage(true);
             target = primary->GetMainImage();
         } catch(...) {
+            TVPRecordVisualVideoDropped();
             if(VideoTraceEnabled())
                 spdlog::info("MoviePlayer PresentPicture skip no_primary_image primary=yes");
             return;
         }
     }
     if(!target) {
+        TVPRecordVisualVideoDropped();
         if(VideoTraceEnabled())
             spdlog::info("MoviePlayer PresentPicture skip no_primary_image primary=yes");
         return;
@@ -489,6 +532,7 @@ void VideoPresentOverlay::PresentPicture(float dt) {
         primary->SetImageSize(required_width, required_height);
         target = primary->GetMainImage();
         if(!target) {
+            TVPRecordVisualVideoDropped();
             if(VideoTraceEnabled())
                 spdlog::info("MoviePlayer PresentPicture skip resized_primary_image");
             return;
@@ -499,6 +543,7 @@ void VideoPresentOverlay::PresentPicture(float dt) {
     target->StretchBlt(clip, dest, m_frameBitmap, src, bmCopy, 255, false,
                        stLinear);
     primary->Update(dest);
+    TVPRecordVisualVideoPresented();
     if(VideoTraceEnabled())
         spdlog::info("MoviePlayer PresentPicture drew pts={} src={}x{} dest={}x{}+{}+{} curpts={}",
                      pic.pts, pic.width, pic.height, dest.get_width(),
@@ -506,11 +551,11 @@ void VideoPresentOverlay::PresentPicture(float dt) {
 }
 
 void VideoPresentOverlay::OnContinuousCallback(tjs_uint64 tick) {
-    if(!m_usedPicture)
-        return;
     double curpts = m_pPlayer->GetClock() / DVD_TIME_BASE;
     {
         std::lock_guard<std::mutex> lk(m_mtxPicture);
+        if(!m_usedPicture)
+            return;
         BitmapPicture &picbuf = m_picture[m_curPicture];
         if(picbuf.pts > curpts)
             return;

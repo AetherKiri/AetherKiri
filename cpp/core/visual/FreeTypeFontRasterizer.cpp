@@ -14,6 +14,7 @@
 #include "MsgIntf.h"
 #include "FontSystem.h"
 #include "FontImpl.h"
+#include "FontVariations.h"
 #include <complex>
 #include <mutex>
 #include <string>
@@ -56,14 +57,16 @@ constexpr std::size_t TVPGlyphExtentCacheLimit = 32768;
 void FreeTypeFontRasterizer::ApplyFaceOptions(tFreeTypeFace *face) {
     if(!face)
         return;
+    const tjs_uint32 variable_styles = face->ApplyVariations(CurrentFont);
     face->SetHeight(CurrentFont.Height < 0 ? -CurrentFont.Height
                                            : CurrentFont.Height);
-    if(CurrentFont.Flags & TVP_TF_ITALIC) {
+    if((CurrentFont.Flags & TVP_TF_ITALIC) &&
+       !(variable_styles & TVP_TF_ITALIC)) {
         face->SetOption(TVP_TF_ITALIC);
     } else {
         face->ClearOption(TVP_TF_ITALIC);
     }
-    if(CurrentFont.Flags & TVP_TF_BOLD) {
+    if((CurrentFont.Flags & TVP_TF_BOLD) && !(variable_styles & TVP_TF_BOLD)) {
         face->SetOption(TVP_TF_BOLD);
     } else {
         face->ClearOption(TVP_TF_BOLD);
@@ -175,41 +178,16 @@ void FreeTypeFontRasterizer::ApplyFont(const tTVPFont &font) {
     opt |= (font.Flags & TVP_TF_UNDERLINE) ? TVP_TF_UNDERLINE : 0;
     opt |= (font.Flags & TVP_TF_STRIKEOUT) ? TVP_TF_STRIKEOUT : 0;
     opt |= (font.Flags & TVP_TF_FONTFILE) ? TVP_FACE_OPTIONS_FILE : 0;
-    bool recreate = false;
     if(Face) {
         if(Face->GetFontName() != stdname) {
             ClearFallbackFaces();
             Face = GetOrCreateFace(stdname, opt);
-            recreate = true;
         }
     } else {
         Face = GetOrCreateFace(stdname, opt);
         ClearFallbackFaces();
-        recreate = true;
     }
-    Face->SetHeight(font.Height < 0 ? -font.Height : font.Height);
-    if(recreate == false) {
-        if(font.Flags & TVP_TF_ITALIC) {
-            Face->SetOption(TVP_TF_ITALIC);
-        } else {
-            Face->ClearOption(TVP_TF_ITALIC);
-        }
-        if(font.Flags & TVP_TF_BOLD) {
-            Face->SetOption(TVP_TF_BOLD);
-        } else {
-            Face->ClearOption(TVP_TF_BOLD);
-        }
-        if(font.Flags & TVP_TF_UNDERLINE) {
-            Face->SetOption(TVP_TF_UNDERLINE);
-        } else {
-            Face->ClearOption(TVP_TF_UNDERLINE);
-        }
-        if(font.Flags & TVP_TF_STRIKEOUT) {
-            Face->SetOption(TVP_TF_STRIKEOUT);
-        } else {
-            Face->ClearOption(TVP_TF_STRIKEOUT);
-        }
-    }
+    ApplyFaceOptions(Face);
     for(auto *fallback : FaceFallbacks) {
         ApplyFaceOptions(fallback);
     }
@@ -218,6 +196,9 @@ void FreeTypeFontRasterizer::ApplyFont(const tTVPFont &font) {
     CurrentExtentCacheFontKey = resolved_face.AsStdString() + "|" +
                                 std::to_string(height) + "|" +
                                 std::to_string(font.Flags) + "|" +
+                                std::to_string(font.Weight) + "|" +
+                                font.Variations.AsStdString() + "|" +
+                                std::to_string(TVPFontDefaultUseVarStyle) + "|" +
                                 std::to_string(TVPFontNames.GetCount());
     LastBitmap = nullptr;
 }

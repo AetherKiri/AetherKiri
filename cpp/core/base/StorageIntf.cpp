@@ -30,6 +30,7 @@
 #include "ncbind.hpp"
 #include "UtilStreams.h"
 #include "impl/ArchiveAutoPathOrder.h"
+#include "GraphicsLoadThread.h"
 #include "spdlog/spdlog.h"
 
 #define TVP_DEFAULT_ARCHIVE_CACHE_NUM 128
@@ -2340,6 +2341,38 @@ TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ isExistentStorageNoSearchNoNormalize
     return TJS_S_OK;
 }
 TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ isExistentStorageNoSearchNoNormalize)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ requestImagePrefetch) {
+    if(numparams < 1)
+        return TJS_E_BADPARAMCOUNT;
+    const ttstr path(*param[0]);
+    if(path.IsEmpty())
+        return TJS_E_INVALIDPARAM;
+    TVPRequestImagePrefetch(path);
+    if(result)
+        result->Clear();
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ requestImagePrefetch)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ flushImagePrefetch) {
+    TVPFlushImagePrefetchQueue();
+    if(result)
+        result->Clear();
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ flushImagePrefetch)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_PROP_DECL(isImagePrefetchLoading) {
+    TJS_BEGIN_NATIVE_PROP_GETTER {
+        *result = static_cast<tjs_int>(TVPIsImagePrefetchLoading());
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_PROP_GETTER
+
+    TJS_DENY_NATIVE_PROP_SETTER
+}
+TJS_END_NATIVE_STATIC_PROP_DECL(isImagePrefetchLoading)
 //----------------------------------------------------------------------
 TJS_BEGIN_NATIVE_PROP_DECL(archiveUniqueKey) {
     TJS_BEGIN_NATIVE_PROP_GETTER {

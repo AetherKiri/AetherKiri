@@ -947,6 +947,10 @@ public:
     ttstr GetFontFace() const;
     void SetFontHeight(tjs_int height);
     tjs_int GetFontHeight() const;
+    void SetFontWeight(tjs_int weight);
+    tjs_int GetFontWeight() const;
+    void SetFontVariations(const ttstr &variations);
+    ttstr GetFontVariations() const;
     void SetFontAngle(tjs_int angle);
     tjs_int GetFontAngle() const;
     void SetFontBold(bool b);
@@ -1215,6 +1219,10 @@ public:
     ttstr GetFontFace() const;
     void SetFontHeight(tjs_int height);
     tjs_int GetFontHeight() const;
+    void SetFontWeight(tjs_int weight);
+    tjs_int GetFontWeight() const;
+    void SetFontVariations(const ttstr &variations);
+    ttstr GetFontVariations() const;
     void SetFontAngle(tjs_int angle);
     tjs_int GetFontAngle() const;
     void SetFontBold(bool b);

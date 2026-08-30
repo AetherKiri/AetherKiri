@@ -62,8 +62,10 @@
 #include "RenderManager.h"
 #include "godot/GodotRenderManager.h"
 #include "FontImpl.h"
+#include "FontVariations.h"
 #include "LayerCompletionCoordinates.h"
 #include "PimgCompositeBounds.h"
+#include "ThreadIntf.h"
 #include "../../plugins/psbfile/PSBMedia.h"
 
 extern void TVPSetFontRasterizer(tjs_int index);
@@ -11026,6 +11028,30 @@ void tTJSNI_BaseLayer::SetFontHeight(tjs_int height) {
 tjs_int tTJSNI_BaseLayer::GetFontHeight() const { return Font.Height; }
 
 //---------------------------------------------------------------------------
+void tTJSNI_BaseLayer::SetFontWeight(tjs_int weight) {
+    if(weight < 0)
+        weight = -1;
+    else
+        weight = std::max<tjs_int>(1, std::min<tjs_int>(1000, weight));
+    if(Font.Weight != weight) {
+        Font.Weight = weight;
+        FontChanged = true;
+    }
+}
+
+tjs_int tTJSNI_BaseLayer::GetFontWeight() const { return Font.Weight; }
+
+void tTJSNI_BaseLayer::SetFontVariations(const ttstr &variations) {
+    const ttstr normalized = TVPNormalizeFontVariations(variations);
+    if(Font.Variations != normalized) {
+        Font.Variations = normalized;
+        FontChanged = true;
+    }
+}
+
+ttstr tTJSNI_BaseLayer::GetFontVariations() const { return Font.Variations; }
+
+//---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::SetFontAngle(tjs_int angle) {
     if(Font.Angle != angle) {
         angle = angle % 3600;
@@ -12754,6 +12780,7 @@ void tTJSNI_BaseLayer::DrawCompleted(const tTVPRect &destrect,
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::InternalComplete2(tTVPComplexRect &updateregion,
                                          tTVPDrawable *drawable) {
+    tTVPVisualPhaseTimer timer(tTVPVisualRenderPhase::LayerDraw);
     //--- querying phase
 
     // search ltOpaque, not to draw region behind them.
@@ -12869,6 +12896,7 @@ void tTJSNI_BaseLayer::InternalComplete2(tTVPComplexRect &updateregion,
 void tTJSNI_BaseLayer::InternalComplete2_GPU(tTVPRect updateregion,
                                              tTVPDrawable *drawable,
                                              bool localDestination) {
+    tTVPVisualPhaseTimer timer(tTVPVisualRenderPhase::LayerDraw);
     if(Manager)
         Manager->QueryUpdateExcludeRect();
     const auto coordinates =
@@ -12891,7 +12919,11 @@ void tTJSNI_BaseLayer::InternalComplete2_GPU(tTVPRect updateregion,
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::InternalComplete(tTVPComplexRect &updateregion,
                                         tTVPDrawable *drawable) {
-    BeforeCompletion();
+    {
+        tTVPVisualPhaseTimer timer(
+            tTVPVisualRenderPhase::LayerBeforeCompletion);
+        BeforeCompletion();
+    }
 
     // at this point, final update region (in this completion) is
     // determined
@@ -12904,11 +12936,16 @@ void tTJSNI_BaseLayer::InternalComplete(tTVPComplexRect &updateregion,
     }
 
     InCompletion = false;
-    AfterCompletion();
+    {
+        tTVPVisualPhaseTimer timer(tTVPVisualRenderPhase::LayerAfterCompletion);
+        AfterCompletion();
+    }
 }
 
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::CompleteForWindow(tTVPDrawable *drawable) {
+    tTVPVisualPhaseTimer completeTimer(
+        tTVPVisualRenderPhase::LayerCompleteWindow);
     const bool profileCompletion = layerCompletionProfileEnabled() &&
         !g_layerCompletionProfile.active;
     if(profileCompletion) {
@@ -12918,7 +12955,11 @@ void tTJSNI_BaseLayer::CompleteForWindow(tTVPDrawable *drawable) {
         g_layerCompletionProfile.completionCalls = ++completionCallCounter;
         g_layerCompletionProfile.started = std::chrono::steady_clock::now();
     }
-    BeforeCompletion();
+    {
+        tTVPVisualPhaseTimer timer(
+            tTVPVisualRenderPhase::LayerBeforeCompletion);
+        BeforeCompletion();
+    }
     if(profileCompletion) {
         const double beforeMs = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() -
@@ -12995,7 +13036,10 @@ void tTJSNI_BaseLayer::CompleteForWindow(tTVPDrawable *drawable) {
         Manager->GetLayerTreeOwner()->EndBitmapCompletion(Manager);
 
     InCompletion = false;
-    AfterCompletion();
+    {
+        tTVPVisualPhaseTimer timer(tTVPVisualRenderPhase::LayerAfterCompletion);
+        AfterCompletion();
+    }
 }
 
 //---------------------------------------------------------------------------
@@ -17588,6 +17632,34 @@ tjs_int tTJSNI_Font::GetFontHeight() const {
 }
 
 //---------------------------------------------------------------------------
+void tTJSNI_Font::SetFontWeight(tjs_int weight) {
+    if(Layer) {
+        Layer->SetFontWeight(weight);
+    } else {
+        if(weight < 0)
+            weight = -1;
+        else
+            weight = std::max<tjs_int>(1, std::min<tjs_int>(1000, weight));
+        Font.Weight = weight;
+    }
+}
+
+tjs_int tTJSNI_Font::GetFontWeight() const {
+    return Layer ? Layer->GetFontWeight() : Font.Weight;
+}
+
+void tTJSNI_Font::SetFontVariations(const ttstr &variations) {
+    if(Layer)
+        Layer->SetFontVariations(variations);
+    else
+        Font.Variations = TVPNormalizeFontVariations(variations);
+}
+
+ttstr tTJSNI_Font::GetFontVariations() const {
+    return Layer ? Layer->GetFontVariations() : Font.Variations;
+}
+
+//---------------------------------------------------------------------------
 void tTJSNI_Font::SetFontAngle(tjs_int angle) {
     if(Layer)
         Layer->SetFontAngle(angle);
@@ -18107,6 +18179,48 @@ TJS_END_NATIVE_PROP_SETTER
 }
 TJS_END_NATIVE_PROP_DECL(height)
 //----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_PROP_DECL(weight){ TJS_BEGIN_NATIVE_PROP_GETTER{
+    TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
+                            /*var. type*/ tTJSNI_Font);
+const tjs_int weight = _this->GetFontWeight();
+if(weight < 0)
+    result->Clear();
+else
+    *result = weight;
+return TJS_S_OK;
+}
+TJS_END_NATIVE_PROP_GETTER
+
+TJS_BEGIN_NATIVE_PROP_SETTER {
+    TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
+                            /*var. type*/ tTJSNI_Font);
+    _this->SetFontWeight(
+        param->Type() == tvtVoid ? -1 : static_cast<tjs_int>(*param));
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_PROP_SETTER
+}
+TJS_END_NATIVE_PROP_DECL(weight)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_PROP_DECL(variations){ TJS_BEGIN_NATIVE_PROP_GETTER{
+    TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
+                            /*var. type*/ tTJSNI_Font);
+*result = _this->GetFontVariations();
+return TJS_S_OK;
+}
+TJS_END_NATIVE_PROP_GETTER
+
+TJS_BEGIN_NATIVE_PROP_SETTER {
+    TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
+                            /*var. type*/ tTJSNI_Font);
+    _this->SetFontVariations(param->Type() == tvtVoid ? ttstr()
+                                                      : ttstr(*param));
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_PROP_SETTER
+}
+TJS_END_NATIVE_PROP_DECL(variations)
+//----------------------------------------------------------------------
 TJS_BEGIN_NATIVE_PROP_DECL(bold){ TJS_BEGIN_NATIVE_PROP_GETTER{
     TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
                             /*var. type*/ tTJSNI_Font);
@@ -18230,6 +18344,24 @@ TJS_BEGIN_NATIVE_PROP_SETTER {
 TJS_END_NATIVE_PROP_SETTER
 }
 TJS_END_NATIVE_STATIC_PROP_DECL(rasterizer)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_PROP_DECL(defaultUseVarStyle){ TJS_BEGIN_NATIVE_PROP_GETTER{
+        *result = static_cast<tjs_int>(TVPFontDefaultUseVarStyle);
+return TJS_S_OK;
+}
+TJS_END_NATIVE_PROP_GETTER
+
+TJS_BEGIN_NATIVE_PROP_SETTER {
+    const bool enabled = static_cast<tjs_int>(*param) != 0;
+    if(TVPFontDefaultUseVarStyle != enabled) {
+        TVPFontDefaultUseVarStyle = enabled;
+        TVPInvalidateFontOptions();
+    }
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_PROP_SETTER
+}
+TJS_END_NATIVE_STATIC_PROP_DECL(defaultUseVarStyle)
 //----------------------------------------------------------------------
 TJS_BEGIN_NATIVE_PROP_DECL(defaultFaceName){
     TJS_BEGIN_NATIVE_PROP_GETTER{ *result = TVPGetDefaultFontName();

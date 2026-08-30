@@ -1671,6 +1671,7 @@ static void TVPCheckGraphicCacheLimit() {
 }
 //---------------------------------------------------------------------------
 void TVPClearGraphicCache() {
+    TVPFlushImagePrefetchQueue();
     TVPGraphicCache.Clear();
     TVPGraphicCacheTotalBytes = 0;
 }
@@ -2440,22 +2441,6 @@ private:
     }
 };
 
-class tBitmapForAsyncTouch : public tTJSNI_Bitmap {
-    typedef tTJSNI_Bitmap inherit;
-
-public:
-    tBitmapForAsyncTouch() { Construct(0, nullptr, nullptr); }
-    void SetLoading(bool load) override {
-        inherit::SetLoading(load);
-        if(!load) {
-            ::Application->PostUserMessage([this]() {
-                Invalidate();
-                Destruct();
-            });
-        }
-    }
-};
-
 //---------------------------------------------------------------------------
 // TVPTouchImages
 //---------------------------------------------------------------------------
@@ -2506,8 +2491,7 @@ void TVPTouchImages(const std::vector<ttstr> &storages, tjs_int64 limit,
                     continue;
                 }
             }
-            Application->GetAsyncImageLoader()->PushLoadQueue(
-                nullptr, new tBitmapForAsyncTouch(), nname);
+            Application->GetAsyncImageLoader()->PrefetchRequest(nname);
         }
         return;
     }

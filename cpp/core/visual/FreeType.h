@@ -79,6 +79,9 @@ public:
 
     tjs_int GetHeight() { return Height; }
     void SetHeight(int height);
+    // Apply OpenType variation axes. The returned style bits are represented
+    // by the variable font and must not also be synthesized by FreeType.
+    tjs_uint32 ApplyVariations(const struct tTVPFont &font);
 
     void SetOption(tjs_uint32 opt) { Options |= opt; }
     void ClearOption(tjs_uint32 opt) { Options &= ~opt; }

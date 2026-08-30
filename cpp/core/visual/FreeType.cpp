@@ -14,6 +14,8 @@
 #include "tjsCommHead.h"
 #include "FreeType.h"
 #include "FontBaseline.h"
+#include "FontVariations.h"
+#include "tvpfontstruc.h"
 // #include "NativeFreeTypeFace.h"
 // #include "uni_cp932.h"
 // #include "cp932_uni.h"
@@ -33,6 +35,7 @@
 #include FT_TRUETYPE_UNPATENTED_H
 #include FT_SYNTHESIS_H
 #include FT_BITMAP_H
+#include FT_MULTIPLE_MASTERS_H
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif
@@ -409,6 +412,77 @@ void tFreeTypeFace::SetHeight(int height) {
     if(err) {
         // TODO: Error ハンドリング
     }
+}
+
+tjs_uint32 tFreeTypeFace::ApplyVariations(const tTVPFont &font) {
+    if(!FTFace || !FT_HAS_MULTIPLE_MASTERS(FTFace))
+        return 0;
+
+    FT_MM_Var *variation = nullptr;
+    if(FT_Get_MM_Var(FTFace, &variation) != 0 || !variation)
+        return 0;
+
+    std::vector<FT_Fixed> coordinates(variation->num_axis);
+    for(FT_UInt index = 0; index < variation->num_axis; ++index)
+        coordinates[index] = variation->axis[index].def;
+
+    std::vector<tTVPFontAxisCoord> requested;
+    TVPFontGetEffectiveVarCoords(font, requested);
+    const auto find_axis = [&](tjs_uint32 tag) -> FT_UInt {
+        for(FT_UInt index = 0; index < variation->num_axis; ++index) {
+            if(static_cast<tjs_uint32>(variation->axis[index].tag) == tag)
+                return index;
+        }
+        return variation->num_axis;
+    };
+    const auto has_requested = [&](tjs_uint32 tag) {
+        return std::any_of(
+            requested.begin(), requested.end(),
+            [tag](const auto &coord) { return coord.first == tag; });
+    };
+    const auto set_value = [&](FT_UInt index, float value) {
+        if(index >= variation->num_axis)
+            return;
+        const auto fixed = static_cast<FT_Fixed>(
+            std::llround(static_cast<double>(value) * 65536.0));
+        coordinates[index] =
+            std::max(variation->axis[index].minimum,
+                     std::min(variation->axis[index].maximum, fixed));
+    };
+
+    for(const auto &coord : requested)
+        set_value(find_axis(coord.first), coord.second);
+
+    tjs_uint32 mapped_styles = 0;
+    if(TVPFontDefaultUseVarStyle && (font.Flags & TVP_TF_BOLD)) {
+        const tjs_uint32 tag = TVPFontVarPackTag("wght", 4);
+        const FT_UInt axis = find_axis(tag);
+        if(axis < variation->num_axis) {
+            if(!has_requested(tag))
+                set_value(axis, 700.0f);
+            mapped_styles |= TVP_TF_BOLD;
+        }
+    }
+    if(TVPFontDefaultUseVarStyle && (font.Flags & TVP_TF_ITALIC)) {
+        const tjs_uint32 italic_tag = TVPFontVarPackTag("ital", 4);
+        const tjs_uint32 slant_tag = TVPFontVarPackTag("slnt", 4);
+        const FT_UInt italic_axis = find_axis(italic_tag);
+        const FT_UInt slant_axis = find_axis(slant_tag);
+        if(italic_axis < variation->num_axis) {
+            if(!has_requested(italic_tag))
+                set_value(italic_axis, 1.0f);
+            mapped_styles |= TVP_TF_ITALIC;
+        } else if(slant_axis < variation->num_axis) {
+            if(!has_requested(slant_tag))
+                set_value(slant_axis, -10.0f);
+            mapped_styles |= TVP_TF_ITALIC;
+        }
+    }
+
+    const FT_Error error = FT_Set_Var_Design_Coordinates(
+        FTFace, variation->num_axis, coordinates.data());
+    FT_Done_MM_Var(FreeTypeLibrary, variation);
+    return error == 0 ? mapped_styles : 0;
 }
 //---------------------------------------------------------------------------
 

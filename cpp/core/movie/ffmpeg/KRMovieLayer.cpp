@@ -3,6 +3,7 @@
 #include "LayerBitmapIntf.h"
 #include "Application.h"
 #include "VideoOvlImpl.h"
+#include "ThreadIntf.h"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -87,15 +88,19 @@ tTVPBaseTexture *VideoPresentLayer::GetFrontBuffer() {
     }
     FrameMove();
     if(!pic.data[0] || pic.width <= 0 || pic.height <= 0) {
+        TVPRecordVisualVideoDropped();
         return nullptr;
     }
     std::lock_guard<std::mutex> videoLock(m_mtxVideoBuffer);
-    if(!m_videoBufferActive || !m_BmpBits[0] || !m_BmpBits[1])
+    if(!m_videoBufferActive || !m_BmpBits[0] || !m_BmpBits[1]) {
+        TVPRecordVisualVideoDropped();
         return nullptr;
+    }
     int n = m_nCurBmpBuff;
     m_nCurBmpBuff = !m_nCurBmpBuff;
     m_BmpBits[n]->Update(pic.data[0], pic.width * 4, 0, 0, pic.width,
                          pic.height);
+    TVPRecordVisualVideoPresented();
     return m_BmpBits[n];
 }
 
@@ -210,6 +215,7 @@ int VideoPresentLayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
     }
     if(maxSubmitFps > 0.0 && lastQueuedPicturePts >= 0.0 &&
        pts - lastQueuedPicturePts < (1.0 / maxSubmitFps)) {
+        TVPRecordVisualVideoDropped();
         return MAX_BUFFER_COUNT - usedPicture;
     }
 
@@ -220,8 +226,10 @@ int VideoPresentLayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
             [this]() { return m_usedPicture < MAX_BUFFER_COUNT; });
         usedPicture = m_usedPicture;
     }
-    if(usedPicture >= MAX_BUFFER_COUNT)
+    if(usedPicture >= MAX_BUFFER_COUNT) {
+        TVPRecordVisualVideoDropped();
         return -1;
+    }
 
     int srcWidth = pic.iWidth;
     int srcHeight = pic.iHeight;
@@ -235,6 +243,7 @@ int VideoPresentLayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
     uint8_t *dstData[4] = {data, nullptr, nullptr, nullptr};
     int dstLineSize[4] = {width * 4, 0, 0, 0};
 
+    const auto convertStarted = std::chrono::steady_clock::now();
     img_convert_ctx = sws_getCachedContext(
         img_convert_ctx, srcWidth, srcHeight, AV_PIX_FMT_YUV420P, width, height,
         AV_PIX_FMT_RGBA, /*sws_flags*/ SWS_FAST_BILINEAR, nullptr, nullptr,
@@ -244,19 +253,30 @@ int VideoPresentLayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
         processed = sws_scale(img_convert_ctx, pic.data, pic.iLineSize, 0,
                               srcHeight, dstData, dstLineSize);
     }
-    if(processed <= 0) {
+    const bool usedFallback = processed <= 0;
+    if(usedFallback) {
         std::memset(data, 0, static_cast<size_t>(width) * height * 4);
         ConvertYuv420ToRgba(pic, data, width, height, dstLineSize[0]);
     }
+    const auto convertElapsed =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - convertStarted)
+            .count();
+    TVPRecordVisualVideoConvert(static_cast<std::uint64_t>(convertElapsed),
+                                static_cast<std::uint64_t>(width) *
+                                    static_cast<std::uint64_t>(height),
+                                usedFallback);
     {
         std::lock_guard<std::mutex> videoLock(m_mtxVideoBuffer);
         if(!m_videoBufferActive || !m_BmpBits[0] || !m_BmpBits[1]) {
             TJSAlignedDealloc(data);
+            TVPRecordVisualVideoDropped();
             return -1;
         }
         std::lock_guard<std::mutex> lk(m_mtxPicture);
         if(m_usedPicture >= MAX_BUFFER_COUNT) {
             TJSAlignedDealloc(data);
+            TVPRecordVisualVideoDropped();
             return -1;
         }
         BitmapPicture &picbuf =
@@ -268,6 +288,7 @@ int VideoPresentLayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
         picbuf.pts = pts;
         ++m_usedPicture;
         m_lastQueuedPicturePts = pts;
+        TVPRecordVisualVideoQueued();
         return MAX_BUFFER_COUNT - m_usedPicture;
     }
 }

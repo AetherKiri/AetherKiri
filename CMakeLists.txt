@@ -176,6 +176,11 @@ option(AETHER_USE_KRKRZ_OPTIONAL_PLUGINS
        "Validate experimental krkrz_dev plugin sources without linking them" OFF)
 option(AETHER_BUILD_KRKRZ_CORE_PARITY
        "Build isolated krkrz_dev visual/sound SIMD parity executables" OFF)
+if(AETHER_BUILD_KRKRZ_CORE_PARITY AND NOT ENABLE_TESTS)
+    enable_testing()
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/AetherKrkrzCoreParity.cmake")
+    aether_krkrz_add_core_parity_targets()
+endif()
 
 if(MSVC)
     add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/EHsc>" "/MP" "/utf-8")

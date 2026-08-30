@@ -26,6 +26,7 @@
 
 extern void TVPGL_C_Init();
 #include "simd/tvpgl_simd_init.h"
+#include "gl/UpstreamSIMDDispatch.h"
 extern "C" {
 /*-----------------------------------------------------------------*/
 unsigned char TVPDivTable[256 * 256];
@@ -14146,6 +14147,7 @@ TVP_GL_FUNC_DECL(void, TVPInitTVPGL, ()) {
     TVPGL_C_Init();
     if(TVPShouldUseHighwaySIMD()) {
         TVPGL_SIMD_Init();  // Highway SIMD override
+        TVPInitUpstreamVisualSIMD();
     }
 }
 

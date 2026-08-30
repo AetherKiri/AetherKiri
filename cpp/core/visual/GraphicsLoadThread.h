@@ -3,6 +3,7 @@
 #define __GRAPHICS_LOAD_THREAD_H__
 
 #include <queue>
+#include <set>
 #include <vector>
 #include "ThreadIntf.h"
 #include "NativeEventQueue.h"
@@ -11,7 +12,11 @@
 // BaseBitmap
 // を使うとリエントラントではないので、別の構造体に独自にロードする必要がある
 struct tTVPTmpBitmapImage {
-    class tTVPBitmap *bmp = nullptr;
+    tjs_uint32 width = 0;
+    tjs_uint32 height = 0;
+    tjs_int pitch = 0;
+    tjs_uint32 *buffer = nullptr;
+    bool opaque = false;
     std::vector<tTVPGraphicMetaInfoPair> *MetaInfo;
     tTVPTmpBitmapImage();
     ~tTVPTmpBitmapImage();
@@ -21,9 +26,12 @@ struct tTVPTmpBitmapImage {
 struct tTVPImageLoadCommand {
     iTJSDispatch2 *owner_; // send to event
     class tTJSNI_Bitmap *bmp_; // set bitmap image
-    ttstr path_;
+    // Commands cross the main/worker boundary. ttstr uses a shared COW buffer
+    // whose reference count is not atomic, so keep independent strings here.
+    std::string path_;
     tTVPTmpBitmapImage *dest_;
-    ttstr result_;
+    std::string result_;
+    bool prefetch_only_;
     tTVPImageLoadCommand();
     ~tTVPImageLoadCommand();
 };
@@ -33,6 +41,8 @@ class tTVPAsyncImageLoader : public tTVPThread {
     tTJSCriticalSection CommandQueueCS;
     /** 読込み済み画像キュー用CS */
     tTJSCriticalSection ImageQueueCS;
+    /** Prefetch 進行中タスクテーブル用CS */
+    tTJSCriticalSection InFlightCS;
 
     /** ロード完了後メインスレッドで処理するためのメッセージキュー */
     NativeEventQueue<tTVPAsyncImageLoader> EventQueue;
@@ -43,6 +53,7 @@ class tTVPAsyncImageLoader : public tTVPThread {
     std::queue<tTVPImageLoadCommand *> CommandQueue;
     /** 読込み完了画像キュー */
     std::queue<tTVPImageLoadCommand *> LoadedQueue;
+    std::set<std::string> InFlightTable;
 
 private:
     /**
@@ -53,6 +64,7 @@ private:
      * 読込み完了した画像をメインスレッドでBitmapへ格納して、イベント通知する
      */
     void HandleLoadedImage();
+    void FinishPrefetch(const std::string &path);
 
 public:
     /**
@@ -101,6 +113,19 @@ public:
      */
     void LoadRequest(iTJSDispatch2 *owner, tTJSNI_Bitmap *bmp,
                      const ttstr &name);
+
+    /** Decode an image on the worker and populate the graphic cache on main. */
+    void PrefetchRequest(const ttstr &name);
+
+    /** Drop queued prefetch work; a command already decoding is allowed to
+     * finish. */
+    void FlushPrefetchQueue();
+
+    bool IsAnyInFlight();
 };
+
+void TVPRequestImagePrefetch(const ttstr &name);
+void TVPFlushImagePrefetchQueue();
+bool TVPIsImagePrefetchLoading();
 
 #endif // __GRAPHICS_LOAD_THREAD_H__
