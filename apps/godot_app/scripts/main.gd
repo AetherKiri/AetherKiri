@@ -1660,6 +1660,10 @@ var iap_pending_operation_kind := ""
 var iap_pending_operation_product_id := ""
 var iap_pending_beta_check_id := 0
 var iap_pending_beta_game := {}
+# Set once the coffee beta check passes for a pending launch. Minori launches
+# recreate the engine handle while switching runtime hosts, so the grant is
+# re-asserted after the switch inside _start_selected_game_after_entitlements.
+var beta_launch_granted := false
 var iap_settings_refresh_pending := false
 var android_video_import_notice_shown := false
 var android_storage_permission_request_active := false
@@ -10012,10 +10016,10 @@ func _start_selected_game_after_iap() -> void:
         _deny_artemis_beta_launch()
 
 func _runtime_requires_beta_access(runtime_kind: String) -> bool:
-    # ONS support follows the same Apple release policy as Artemis: unrestricted
-    # in Debug and Android builds, and gated by an active coffee entitlement on
-    # iOS and macOS distribution builds.
-    return runtime_kind == RUNTIME_ONSCRIPTER
+    # ONS and Minori support follow the same Apple release policy as Artemis:
+    # unrestricted in Debug and Android builds, and gated by an active coffee
+    # entitlement in iOS and macOS distribution builds.
+    return runtime_kind == RUNTIME_ONSCRIPTER or runtime_kind == RUNTIME_MINORI
 
 func _beta_access_enforcement_enabled(platform_name: String = "") -> bool:
     var effective_platform := platform_name if not platform_name.is_empty() else OS.get_name()
@@ -10039,6 +10043,7 @@ func _complete_artemis_beta_check() -> void:
         _deny_artemis_beta_launch()
         return
     selected_game = pending_game
+    beta_launch_granted = true
     if (
         _game_runtime_kind(String(selected_game.get("path", "")))
         == RUNTIME_KIRIKIRI
@@ -10050,6 +10055,7 @@ func _complete_artemis_beta_check() -> void:
 func _deny_artemis_beta_launch() -> void:
     iap_pending_beta_check_id = 0
     iap_pending_beta_game.clear()
+    beta_launch_granted = false
     if player != null and player.has_method("set_engine_option"):
         player.set_engine_option("artemis_beta_allowed", "0")
     _show_system_alert(
@@ -10068,6 +10074,15 @@ func _start_selected_game_after_entitlements() -> void:
     active_runtime_kind = _game_runtime_kind(library_path)
     if not _switch_runtime_player(active_runtime_kind):
         return
+    if (
+        beta_launch_granted
+        and active_runtime_kind == RUNTIME_MINORI
+        and player.has_method("set_engine_option")
+    ):
+        # Switching to the Minori host recreates the engine handle, which
+        # drops engine options. Re-assert the verified coffee beta grant so
+        # the native provider gate lets open_game through.
+        player.set_engine_option("artemis_beta_allowed", "1")
     var raw_launch_file := String(selected_game.get(GameLaunchEntry.FIELD, "")).strip_edges()
     if not raw_launch_file.is_empty() and not GameLaunchEntry.is_supported_file(raw_launch_file):
         _show_system_alert(
