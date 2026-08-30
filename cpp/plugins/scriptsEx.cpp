@@ -1243,8 +1243,10 @@ NCB_ATTACH_FUNCTION(rehash, Scripts, TJSDoRehash);
 namespace {
 
 void registerScriptsCompat() {
+#ifdef AETHERKIRI_INTERNAL_KRKR2_PLUGIN
     TVPRegisterDataPackCompatPluginAnchor();
     TVPRegisterSliceLayerCompat();
+#endif
 }
 
 } // namespace

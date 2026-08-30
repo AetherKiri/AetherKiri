@@ -1588,9 +1588,11 @@ static bool TVPStorageNameLooksLegacySaveThumbnail(const ttstr &name) {
     return path.find("savedata") != std::string::npos;
 }
 
-static ttstr TVPFindLegacySaveThumbnail(const ttstr &normalized) {
-    if(!TVPStorageNameLooksLegacySaveThumbnail(normalized))
+ttstr TVPFindLegacySaveThumbnail(const ttstr &name) {
+    if(!TVPStorageNameLooksLegacySaveThumbnail(name))
         return {};
+
+    const ttstr normalized = TVPNormalizeStorageName(name);
 
     const ttstr ext = TVPExtractStorageExt(normalized);
     if(ext.IsEmpty())

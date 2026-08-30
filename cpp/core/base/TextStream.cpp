@@ -19,6 +19,7 @@
 #include "tjsError.h"
 #include "CharacterSet.h"
 #include "BinaryStream.h"
+#include "StorageIntf.h"
 
 // Legacy KiriKiri scripts without a BOM are traditionally encoded as CP932.
 // UTF-8 remains auto-detected before this fallback is used.
@@ -166,6 +167,49 @@ static std::optional<size_t> findEmbeddedBmpTextOffset(
     return imageSize;
 }
 
+static bool selectLegacyBmpTextPayload(const ttstr &requested,
+                                       std::vector<std::uint8_t> &raw) {
+    ttstr legacy;
+    try {
+        legacy = TVPFindLegacySaveThumbnail(requested);
+    } catch(...) {
+        return false;
+    }
+    if(legacy.IsEmpty())
+        return false;
+
+    try {
+        std::unique_ptr<tTJSBinaryStream> stream(
+            TVPCreateStream(legacy, TJS_BS_READ));
+        const auto streamSize = stream->GetSize();
+        if(streamSize == 0 ||
+           streamSize > static_cast<tjs_uint64>(
+                            std::numeric_limits<size_t>::max())) {
+            return false;
+        }
+
+        std::vector<std::uint8_t> candidate(
+            static_cast<size_t>(streamSize));
+        stream->ReadBuffer(candidate.data(), candidate.size());
+        const auto embeddedOffset = findEmbeddedBmpTextOffset(candidate);
+        if(!embeddedOffset)
+            return false;
+
+        candidate.erase(candidate.begin(),
+                        candidate.begin() + *embeddedOffset);
+        raw = std::move(candidate);
+        spdlog::debug(
+            "Text stream selected legacy compound BMP payload: requested={} source={} offset={} bytes={}",
+            requested.AsStdString(), legacy.AsStdString(), *embeddedOffset,
+            raw.size());
+        return true;
+    } catch(...) {
+        // The requested stream still exists and remains the authoritative
+        // fallback if the legacy sidecar disappears between lookup and open.
+        return false;
+    }
+}
+
 static std::uint64_t readLe64(const std::uint8_t *bytes) {
     std::uint64_t value = 0;
     for(int i = 0; i < 8; i++)
@@ -264,6 +308,8 @@ public:
                 spdlog::debug(
                     "Text stream selected embedded BMP payload: {} offset={} bytes={}",
                     name.AsStdString(), *embeddedOffset, size);
+            } else if(selectLegacyBmpTextPayload(name, raw)) {
+                size = raw.size();
             }
         }
 
