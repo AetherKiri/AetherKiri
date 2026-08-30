@@ -64,12 +64,36 @@
 #include <android/log.h>
 #endif
 
+#include <algorithm>
 #include <atomic>
 #include <cstdlib>
 #include <utility>
 #include <vector>
 
 namespace {
+
+std::vector<tTVPPostStartupScriptHook> &TVPGetPostStartupScriptHooks() {
+    static std::vector<tTVPPostStartupScriptHook> hooks;
+    return hooks;
+}
+
+void TVPRunPostStartupScriptHooks() {
+    // A hook may register itself again while refreshing. Iterate over a copy
+    // so registration cannot invalidate this pass.
+    const auto hooks = TVPGetPostStartupScriptHooks();
+    for(const auto hook : hooks) {
+        if(!hook)
+            continue;
+        try {
+            hook();
+        } catch(const TJS::eTJS &e) {
+            spdlog::warn("Post-startup script hook failed: {}",
+                         e.GetMessage().AsStdString());
+        } catch(...) {
+            spdlog::warn("Post-startup script hook failed");
+        }
+    }
+}
 
 // Monotonically records actual entries into the engine's storage executor.
 // Script-side loader wrappers can use this to detect that they returned
@@ -81,6 +105,14 @@ tjs_uint64 TVPGetStorageExecutionSerial() {
 }
 
 } // namespace
+
+void TVPRegisterPostStartupScriptHook(tTVPPostStartupScriptHook hook) {
+    auto &hooks = TVPGetPostStartupScriptHooks();
+    if(!hook ||
+       std::find(hooks.begin(), hooks.end(), hook) != hooks.end())
+        return;
+    hooks.push_back(hook);
+}
 
 //---------------------------------------------------------------------------
 // Script system initialization script
@@ -4180,6 +4212,7 @@ void TVPExecuteStartupScript() {
         } catch(...) {
         }
         TVPInstallKagLoadContractGuard();
+        TVPRunPostStartupScriptHooks();
 
     }
     TJS_CONVERT_TO_TJS_EXCEPTION
