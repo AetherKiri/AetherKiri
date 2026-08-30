@@ -70,6 +70,7 @@ void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #include "base/SysInitIntf.h"
 #include "base/impl/SysInitImpl.h"
 #include "visual/GraphicsLoaderIntf.h"
+#include "visual/ScreenCapture.h"
 #if defined(KRKR_ENABLE_GPU_BRIDGE)
 #include "visual/ogl/ogl_common.h"
 #include "visual/ogl/krkr_egl_context.h"
@@ -2191,6 +2192,8 @@ engine_result_t engine_destroy(engine_handle_t handle) {
       TVPResetEventsForHostSession();
       TVPResetWindowRegistryForHostSession();
       TVPClearGraphicCache();
+      TVPResetCacheConfigurationForHostSession();
+      TVPResetScreenCaptureForHostSession();
       TVPClearScnearioCache();
       TVPClearArchiveCache();
       TVPHostResetForGameSession();

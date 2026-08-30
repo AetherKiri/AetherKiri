@@ -340,6 +340,15 @@ protected:
 extern tTJSNativeClass *TVPCreateNativeClass_Storages();
 //---------------------------------------------------------------------------
 
+void TVPAddDecodeTargetExtension(const ttstr &extension);
+void TVPRemoveDecodeTargetExtension(const ttstr &extension);
+bool TVPIsDecodeTargetExtension(const ttstr &extension);
+ttstr TVPResolveCachePath(const ttstr &name);
+void TVPPinCache(const ttstr &name);
+void TVPUnpinCache(const ttstr &name);
+bool TVPIsCachePathPinned(const ttstr &normalized_name);
+void TVPResetCacheConfigurationForHostSession();
+
 class tTVPStorageMedia : public iTVPStorageMedia {
 protected:
     tjs_int refCount;

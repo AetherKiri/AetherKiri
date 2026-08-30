@@ -1514,6 +1514,7 @@ public:
 private:
     tjs_int RefCount;
     tjs_uint Size;
+    bool Pinned = false;
 
 public:
     tTVPGraphicImageData() {
@@ -1630,6 +1631,10 @@ public:
     }
 
     tjs_uint GetSize() const { return Size; }
+    tjs_int GetWidth() const { return Width; }
+    tjs_int GetHeight() const { return Height; }
+    bool IsPinned() const { return Pinned; }
+    void SetPinned(bool pinned) { Pinned = pinned; }
 
     void AddRef() { RefCount++; }
     void Release() {
@@ -1650,51 +1655,214 @@ tTVPGraphicCache TVPGraphicCache;
 static bool TVPGraphicCacheEnabled = false;
 static tjs_uint64 TVPGraphicCacheLimit = 0;
 static tjs_uint64 TVPGraphicCacheTotalBytes = 0;
+static tTJSCriticalSection TVPGraphicCacheCS;
 tjs_uint64 TVPGraphicCacheSystemLimit =
     0; // maximum possible value of  TVPGraphicCacheLimit
 //---------------------------------------------------------------------------
-tjs_uint64 TVPGetGraphicCacheTotalBytes() { return TVPGraphicCacheTotalBytes; }
+tjs_uint64 TVPGetGraphicCacheTotalBytes() {
+    tTJSCriticalSectionHolder cs(TVPGraphicCacheCS);
+    return TVPGraphicCacheTotalBytes;
+}
 //---------------------------------------------------------------------------
-static void TVPCheckGraphicCacheLimit() {
+static void TVPCheckGraphicCacheLimitLocked() {
     while(TVPGraphicCacheTotalBytes > TVPGraphicCacheLimit) {
-        // chop last graphics
-        tTVPGraphicCache::tIterator i;
-        i = TVPGraphicCache.GetLast();
+        tTVPGraphicCache::tIterator i = TVPGraphicCache.GetLast();
+        while(!i.IsNull() &&
+              i.GetValue().GetObjectNoAddRef()->IsPinned())
+            i--;
         if(!i.IsNull()) {
-            tjs_uint size = i.GetValue().GetObjectNoAddRef()->GetSize();
+            const tTVPGraphicsSearchData key = i.GetKey();
+            const tjs_uint size =
+                i.GetValue().GetObjectNoAddRef()->GetSize();
             TVPGraphicCacheTotalBytes -= size;
-            TVPGraphicCache.ChopLast(1);
+            TVPGraphicCache.Delete(key);
         } else {
             break;
         }
     }
 }
+
+static bool TVPAddGraphicCacheEntryLocked(
+    const tTVPGraphicsSearchData &searchdata, tjs_uint32 hash,
+    tTVPGraphicImageData *data) {
+    if(!TVPGraphicCacheEnabled || !data)
+        return false;
+    if(TVPGraphicCache.FindAndTouchWithHash(searchdata, hash))
+        return true;
+
+    const tjs_uint datasize = data->GetSize();
+    TVPGraphicCacheTotalBytes += datasize;
+    tTVPGraphicImageHolder holder(data);
+    TVPGraphicCache.AddWithHash(searchdata, hash, holder);
+    TVPCheckGraphicCacheLimitLocked();
+    return true;
+}
 //---------------------------------------------------------------------------
 void TVPClearGraphicCache() {
     TVPFlushImagePrefetchQueue();
+    tTJSCriticalSectionHolder cs(TVPGraphicCacheCS);
     TVPGraphicCache.Clear();
     TVPGraphicCacheTotalBytes = 0;
 }
+
+static void TVPUninitGraphicCache() {
+    // The Application object (and its loader) may already be gone during
+    // static shutdown, so the at-exit path must not flush through it.
+    tTJSCriticalSectionHolder cs(TVPGraphicCacheCS);
+    TVPGraphicCache.Clear();
+    TVPGraphicCacheTotalBytes = 0;
+}
+
+void TVPClearGraphicCacheEntry(const ttstr &normalized_name) {
+    tTJSCriticalSectionHolder cs(TVPGraphicCacheCS);
+    std::vector<tTVPGraphicsSearchData> matches;
+    for(tTVPGraphicCache::tIterator i = TVPGraphicCache.GetFirst();
+        !i.IsNull(); i++) {
+        if(i.GetKey().Name == normalized_name)
+            matches.push_back(i.GetKey());
+    }
+    for(const auto &key : matches) {
+        if(auto *entry = TVPGraphicCache.Find(key)) {
+            const tjs_uint size =
+                entry->GetObjectNoAddRef()->GetSize();
+            TVPGraphicCacheTotalBytes =
+                TVPGraphicCacheTotalBytes >= size
+                ? TVPGraphicCacheTotalBytes - size
+                : 0;
+            TVPGraphicCache.Delete(key);
+        }
+    }
+}
+
+void TVPClearTransientGraphicCache() {
+    tTJSCriticalSectionHolder cs(TVPGraphicCacheCS);
+    std::vector<tTVPGraphicsSearchData> matches;
+    for(tTVPGraphicCache::tIterator i = TVPGraphicCache.GetFirst();
+        !i.IsNull(); i++) {
+        if(!i.GetValue().GetObjectNoAddRef()->IsPinned())
+            matches.push_back(i.GetKey());
+    }
+    for(const auto &key : matches) {
+        if(auto *entry = TVPGraphicCache.Find(key)) {
+            const tjs_uint size =
+                entry->GetObjectNoAddRef()->GetSize();
+            TVPGraphicCacheTotalBytes =
+                TVPGraphicCacheTotalBytes >= size
+                ? TVPGraphicCacheTotalBytes - size
+                : 0;
+            TVPGraphicCache.Delete(key);
+        }
+    }
+}
+
+void TVPSetGraphicCacheEntryPinned(const ttstr &normalized_name,
+                                   bool pinned) {
+    tTJSCriticalSectionHolder cs(TVPGraphicCacheCS);
+    for(tTVPGraphicCache::tIterator i = TVPGraphicCache.GetFirst();
+        !i.IsNull(); i++) {
+        if(i.GetKey().Name == normalized_name)
+            i.GetValue().GetObjectNoAddRef()->SetPinned(pinned);
+    }
+}
+
+void TVPGetGraphicCacheEntries(
+    std::vector<TVPGraphicCacheEntryInfo> &out) {
+    out.clear();
+    tTJSCriticalSectionHolder cs(TVPGraphicCacheCS);
+    for(tTVPGraphicCache::tIterator i = TVPGraphicCache.GetFirst();
+        !i.IsNull(); i++) {
+        const auto &key = i.GetKey();
+        const auto *data = i.GetValue().GetObjectNoAddRef();
+        TVPGraphicCacheEntryInfo entry;
+        entry.name = key.Name;
+        entry.keyidx = key.KeyIdx;
+        entry.mode = key.Mode;
+        entry.dw = key.DesW;
+        entry.dh = key.DesH;
+        if(data) {
+            entry.width = static_cast<tjs_uint>(data->GetWidth());
+            entry.height = static_cast<tjs_uint>(data->GetHeight());
+            entry.bytes = data->GetSize();
+            entry.pinned = data->IsPinned();
+        }
+        out.push_back(entry);
+    }
+}
+
+void TVPDumpImageCacheList() {
+    std::vector<TVPGraphicCacheEntryInfo> entries;
+    TVPGetGraphicCacheEntries(entries);
+    ttstr summary(TJS_W("ImageCache: entries="));
+    summary += ttstr(static_cast<tjs_int>(entries.size()));
+    summary += TJS_W(" bytes=");
+    tjs_uint64 total = 0;
+    tjs_int pinned = 0;
+    for(const auto &entry : entries) {
+        total += entry.bytes;
+        if(entry.pinned)
+            ++pinned;
+    }
+    summary += ttstr(static_cast<tjs_int64>(total));
+    summary += TJS_W(" pinned=");
+    summary += ttstr(pinned);
+    TVPAddImportantLog(summary);
+    for(const auto &entry : entries) {
+        ttstr line(entry.pinned ? TJS_W("  [pin] ") : TJS_W("        "));
+        line += entry.name;
+        line += TJS_W(" size=");
+        line += ttstr(static_cast<tjs_int>(entry.width));
+        line += TJS_W("x");
+        line += ttstr(static_cast<tjs_int>(entry.height));
+        line += TJS_W(" bytes=");
+        line += ttstr(static_cast<tjs_int>(entry.bytes));
+        if(entry.keyidx != TVP_clNone || entry.mode != glmNormal || entry.dw ||
+           entry.dh) {
+            line += TJS_W(" keyidx=");
+            line += ttstr(entry.keyidx);
+            line += TJS_W(" mode=");
+            line += ttstr(static_cast<tjs_int>(entry.mode));
+            line += TJS_W(" desired=");
+            line += ttstr(static_cast<tjs_int>(entry.dw));
+            line += TJS_W("x");
+            line += ttstr(static_cast<tjs_int>(entry.dh));
+        }
+        TVPAddImportantLog(line);
+    }
+}
 static tTVPAtExit TVPUninitMessageLoad(TVP_ATEXIT_PRI_RELEASE,
-                                       TVPClearGraphicCache);
+                                       TVPUninitGraphicCache);
 //---------------------------------------------------------------------------
 struct tTVPClearGraphicCacheCallback : public tTVPCompactEventCallbackIntf {
     void OnCompact(tjs_int level) override {
-        if(level >= TVP_COMPACT_LEVEL_MINIMIZE) {
-            TVPCheckGraphicCacheLimit();
+        if(level >= TVP_COMPACT_LEVEL_MAX)
+            TVPClearGraphicCache();
+        else if(level >= TVP_COMPACT_LEVEL_MINIMIZE) {
+            TVPFlushImagePrefetchQueue();
+            TVPClearTransientGraphicCache();
         }
     }
 } static TVPClearGraphicCacheCallback;
-static bool TVPClearGraphicCacheCallbackInit = false;
+static std::once_flag TVPClearGraphicCacheCallbackInit;
+
+void TVPEnsureGraphicCacheCompactHook() {
+    std::call_once(TVPClearGraphicCacheCallbackInit, [] {
+        TVPAddCompactEventHook(&TVPClearGraphicCacheCallback);
+    });
+}
 //---------------------------------------------------------------------------
-void TVPPushGraphicCache(const ttstr &nname, tTVPBitmap *bmp,
-                         std::vector<tTVPGraphicMetaInfoPair> *meta) {
+static bool TVPPushGraphicCacheInternal(
+    const ttstr &nname, tTVPBitmap *bmp,
+    std::vector<tTVPGraphicMetaInfoPair> *meta, bool generation_gated,
+    std::uint64_t prefetch_generation) {
+    tTJSCriticalSectionHolder cs(TVPGraphicCacheCS);
+    if(generation_gated &&
+       !TVPIsImagePrefetchGenerationCurrent(prefetch_generation)) {
+        delete meta;
+        return false;
+    }
     if(TVPGraphicCacheEnabled) {
         // graphic compact initialization
-        if(!TVPClearGraphicCacheCallbackInit) {
-            TVPAddCompactEventHook(&TVPClearGraphicCacheCallback);
-            TVPClearGraphicCacheCallbackInit = true;
-        }
+        TVPEnsureGraphicCacheCompactHook();
 
         tTVPGraphicImageData *data = nullptr;
         try {
@@ -1713,16 +1881,10 @@ void TVPPushGraphicCache(const ttstr &nname, tTVPBitmap *bmp,
             data->AssignBitmap(bmp);
             data->ProvinceName = TJS_W("");
             data->MetaInfo = meta;
+            data->SetPinned(TVPIsCachePathPinned(nname));
             meta = nullptr;
 
-            // push into hash table
-            tjs_uint datasize = data->GetSize();
-            TVPGraphicCacheTotalBytes += datasize;
-            tTVPGraphicImageHolder holder(data);
-            TVPGraphicCache.AddWithHash(searchdata, hash, holder);
-
-            // check size limit after adding new entry
-            TVPCheckGraphicCacheLimit();
+            TVPAddGraphicCacheEntryLocked(searchdata, hash, data);
         } catch(...) {
             if(meta)
                 delete meta;
@@ -1732,10 +1894,24 @@ void TVPPushGraphicCache(const ttstr &nname, tTVPBitmap *bmp,
         }
         if(data)
             data->Release();
+        return true;
     } else {
-        if(meta)
-            delete meta;
+        delete meta;
+        return false;
     }
+}
+
+void TVPPushGraphicCache(const ttstr &nname, tTVPBitmap *bmp,
+                         std::vector<tTVPGraphicMetaInfoPair> *meta) {
+    TVPPushGraphicCacheInternal(nname, bmp, meta, false, 0);
+}
+
+bool TVPTryPushGraphicCache(
+    const ttstr &normalized_name, tTVPBitmap *bitmap,
+    std::vector<tTVPGraphicMetaInfoPair> *meta,
+    std::uint64_t prefetch_generation) {
+    return TVPPushGraphicCacheInternal(normalized_name, bitmap, meta, true,
+                                       prefetch_generation);
 }
 //---------------------------------------------------------------------------
 bool TVPCheckImageCache(const ttstr &nname, tTVPBaseBitmap *dest,
@@ -1743,6 +1919,7 @@ bool TVPCheckImageCache(const ttstr &nname, tTVPBaseBitmap *dest,
                         tjs_int32 keyidx, iTJSDispatch2 **metainfo) {
     tjs_uint32 hash;
     tTVPGraphicsSearchData searchdata;
+    tTJSCriticalSectionHolder cs(TVPGraphicCacheCS);
     if(TVPGraphicCacheEnabled) {
         searchdata.Name = nname;
         searchdata.KeyIdx = keyidx;
@@ -1771,6 +1948,7 @@ bool TVPHasImageCache(const ttstr &nname, tTVPGraphicLoadMode mode, tjs_uint dw,
                       tjs_uint dh, tjs_int32 keyidx) {
     tjs_uint32 hash;
     tTVPGraphicsSearchData searchdata;
+    tTJSCriticalSectionHolder cs(TVPGraphicCacheCS);
     if(TVPGraphicCacheEnabled) {
         searchdata.Name = nname;
         searchdata.KeyIdx = keyidx;
@@ -1792,10 +1970,7 @@ bool TVPHasImageCache(const ttstr &nname, tTVPGraphicLoadMode mode, tjs_uint dw,
 tTVPGraphicHandlerType *TVPFindGraphicLoadHandler(ttstr &_name, ttstr *maskname,
                                                   ttstr *provincename) {
     // graphic compact initialization
-    if(!TVPClearGraphicCacheCallbackInit) {
-        TVPAddCompactEventHook(&TVPClearGraphicCacheCallback);
-        TVPClearGraphicCacheCallbackInit = true;
-    }
+    TVPEnsureGraphicCacheCompactHook();
 
     // search according with its extension
     tjs_int namelen = _name.GetLen();
@@ -2041,24 +2216,24 @@ TVPInternalLoadTexture(const ttstr &_name,
 
 void TVPLoadGraphicProvince(tTVPBaseBitmap *dest, const ttstr &name,
                             tjs_int keyidx, tjs_uint desw, tjs_uint desh) {
-    tjs_uint32 hash;
-    ttstr nname = TVPNormalizeStorageName(name);
+    ttstr nname = TVPResolveCachePath(name);
     tTVPGraphicsSearchData searchdata;
-    if(TVPGraphicCacheEnabled) {
-        searchdata.Name = nname;
-        searchdata.KeyIdx = keyidx;
-        searchdata.Mode = glmPalettized;
-        searchdata.DesW = desw;
-        searchdata.DesH = desh;
-
-        hash = tTVPGraphicCache::MakeHash(searchdata);
-
-        tTVPGraphicImageHolder *ptr =
-            TVPGraphicCache.FindAndTouchWithHash(searchdata, hash);
-        if(ptr) {
-            // found in cache
-            ptr->GetObjectNoAddRef()->AssignToBitmap(dest);
-            return;
+    searchdata.Name = nname;
+    searchdata.KeyIdx = keyidx;
+    searchdata.Mode = glmPalettized;
+    searchdata.DesW = desw;
+    searchdata.DesH = desh;
+    const tjs_uint32 hash = tTVPGraphicCache::MakeHash(searchdata);
+    {
+        tTJSCriticalSectionHolder cs(TVPGraphicCacheCS);
+        if(TVPGraphicCacheEnabled) {
+            tTVPGraphicImageHolder *ptr =
+                TVPGraphicCache.FindAndTouchWithHash(searchdata, hash);
+            if(ptr) {
+                // found in cache
+                ptr->GetObjectNoAddRef()->AssignToBitmap(dest);
+                return;
+            }
         }
     }
     // not found
@@ -2072,24 +2247,19 @@ void TVPLoadGraphicProvince(tTVPBaseBitmap *dest, const ttstr &name,
         tTVPBitmap *bmp = TVPInternalLoadBitmap(nname, keyidx, desw, desh, &mi,
                                                 glmPalettized, &pn);
         dest->AssignBitmap(bmp);
-        if(TVPGraphicCacheEnabled) {
-            data = new tTVPGraphicImageData();
-            data->AssignBitmap(bmp);
-            data->ProvinceName = pn;
-            data->MetaInfo = mi; // now mi is managed under tTVPGraphicImageData
-            mi = nullptr;
+        {
+            tTJSCriticalSectionHolder cs(TVPGraphicCacheCS);
+            if(TVPGraphicCacheEnabled) {
+                data = new tTVPGraphicImageData();
+                data->AssignBitmap(bmp);
+                data->ProvinceName = pn;
+                data->MetaInfo =
+                    mi; // now mi is managed under tTVPGraphicImageData
+                data->SetPinned(TVPIsCachePathPinned(nname));
+                mi = nullptr;
 
-            // check size limit
-            TVPCheckGraphicCacheLimit();
-
-            // push into hash table
-            tjs_uint datasize = data->GetSize();
-            //			if(datasize < TVPGraphicCacheLimit)
-            //			{
-            TVPGraphicCacheTotalBytes += datasize;
-            tTVPGraphicImageHolder holder(data);
-            TVPGraphicCache.AddWithHash(searchdata, hash, holder);
-            //			}
+                TVPAddGraphicCacheEntryLocked(searchdata, hash, data);
+            }
         }
         bmp->Release();
     } catch(...) {
@@ -2113,31 +2283,50 @@ int TVPLoadGraphic(iTVPBaseBitmap *dest, const ttstr &name, tjs_int32 keyidx,
                    tjs_uint desw, tjs_uint desh, tTVPGraphicLoadMode mode,
                    ttstr *provincename, iTJSDispatch2 **metainfo) {
     // loading with cache management
-    ttstr nname = TVPNormalizeStorageName(name);
-    tjs_uint32 hash;
+    ttstr nname = TVPResolveCachePath(name);
     tTVPGraphicsSearchData searchdata;
+    searchdata.Name = nname;
+    searchdata.KeyIdx = keyidx;
+    searchdata.Mode = mode;
+    searchdata.DesW = desw;
+    searchdata.DesH = desh;
+    const tjs_uint32 hash = tTVPGraphicCache::MakeHash(searchdata);
 
-    if(TVPGraphicCacheEnabled) {
-        searchdata.Name = nname;
-        searchdata.KeyIdx = keyidx;
-        searchdata.Mode = mode;
-        searchdata.DesW = desw;
-        searchdata.DesH = desh;
+    {
+        tTJSCriticalSectionHolder cs(TVPGraphicCacheCS);
+        if(TVPGraphicCacheEnabled) {
+            tTVPGraphicImageHolder *ptr =
+                TVPGraphicCache.FindAndTouchWithHash(searchdata, hash);
+            if(ptr) {
+                // found in cache
+                if(dest)
+                    ptr->GetObjectNoAddRef()->AssignToTexture(dest);
+                if(provincename)
+                    *provincename = ptr->GetObjectNoAddRef()->ProvinceName;
+                if(metainfo)
+                    *metainfo = TVPMetaInfoPairsToDictionary(
+                        ptr->GetObjectNoAddRef()->MetaInfo);
+                return ptr->GetObjectNoAddRef()->GetSize();
+            }
+        }
+    }
 
-        hash = tTVPGraphicCache::MakeHash(searchdata);
-
-        tTVPGraphicImageHolder *ptr =
-            TVPGraphicCache.FindAndTouchWithHash(searchdata, hash);
-        if(ptr) {
-            // found in cache
-            if(dest)
-                ptr->GetObjectNoAddRef()->AssignToTexture(dest);
-            if(provincename)
-                *provincename = ptr->GetObjectNoAddRef()->ProvinceName;
-            if(metainfo)
-                *metainfo = TVPMetaInfoPairsToDictionary(
-                    ptr->GetObjectNoAddRef()->MetaInfo);
-            return ptr->GetObjectNoAddRef()->GetSize();
+    if(keyidx == TVP_clNone && mode == glmNormal && desw == 0 && desh == 0) {
+        TVPWaitForImagePrefetch(nname, 10 * 1000);
+        tTJSCriticalSectionHolder cs(TVPGraphicCacheCS);
+        if(TVPGraphicCacheEnabled) {
+            if(auto *ptr =
+                   TVPGraphicCache.FindAndTouchWithHash(searchdata, hash)) {
+                if(dest)
+                    ptr->GetObjectNoAddRef()->AssignToTexture(dest);
+                if(provincename)
+                    *provincename =
+                        ptr->GetObjectNoAddRef()->ProvinceName;
+                if(metainfo)
+                    *metainfo = TVPMetaInfoPairsToDictionary(
+                        ptr->GetObjectNoAddRef()->MetaInfo);
+                return ptr->GetObjectNoAddRef()->GetSize();
+            }
         }
     }
 
@@ -2187,7 +2376,12 @@ int TVPLoadGraphic(iTVPBaseBitmap *dest, const ttstr &name, tjs_int32 keyidx,
         if(metainfo)
             *metainfo = TVPMetaInfoPairsToDictionary(mi);
 
-        if(TVPGraphicCacheEnabled) {
+        bool cache_enabled = false;
+        {
+            tTJSCriticalSectionHolder cs(TVPGraphicCacheCS);
+            cache_enabled = TVPGraphicCacheEnabled;
+        }
+        if(cache_enabled) {
             data = new tTVPGraphicImageData();
             if(texture) {
                 data->AssignTexture(texture);
@@ -2199,19 +2393,15 @@ int TVPLoadGraphic(iTVPBaseBitmap *dest, const ttstr &name, tjs_int32 keyidx,
             }
             data->ProvinceName = pn;
             data->MetaInfo = mi; // now mi is managed under tTVPGraphicImageData
+            data->SetPinned(TVPIsCachePathPinned(nname));
             mi = nullptr;
 
-            // check size limit
-            TVPCheckGraphicCacheLimit();
-
-            // push into hash table
-            tjs_uint datasize = data->GetSize();
-            //			if(datasize < TVPGraphicCacheLimit)
-            //			{
-            TVPGraphicCacheTotalBytes += datasize;
-            tTVPGraphicImageHolder holder(data);
-            TVPGraphicCache.AddWithHash(searchdata, hash, holder);
-            //			}
+            {
+                tTJSCriticalSectionHolder cs(TVPGraphicCacheCS);
+                if(TVPGraphicCacheEnabled) {
+                    TVPAddGraphicCacheEntryLocked(searchdata, hash, data);
+                }
+            }
         } else if(dest) {
             tTVPGraphicImageData data;
             if(texture) {
@@ -2343,10 +2533,13 @@ private:
     unsigned int loadOneGraph(const tItem &item) {
         // TODO move cache operation to main thread
         tjs_uint32 hash = tTVPGraphicCache::MakeHash(item.searchdata);
-        tTVPGraphicImageHolder *ptr =
-            TVPGraphicCache.FindAndTouchWithHash(item.searchdata, hash);
-        if(ptr) {
-            return ptr->GetObjectNoAddRef()->GetSize(); // already in cache
+        {
+            tTJSCriticalSectionHolder cs(TVPGraphicCacheCS);
+            tTVPGraphicImageHolder *ptr =
+                TVPGraphicCache.FindAndTouchWithHash(item.searchdata, hash);
+            if(ptr) {
+                return ptr->GetObjectNoAddRef()->GetSize(); // already in cache
+            }
         }
 #ifdef _DEBUG
         TVPAddLog(TJS_W("Touching Image: ") + item.main.filename);
@@ -2412,16 +2605,13 @@ private:
             data->AssignBitmap(bmp);
             data->ProvinceName = item.provincename;
             data->MetaInfo = mi; // now mi is managed under tTVPGraphicImageData
+            data->SetPinned(TVPIsCachePathPinned(item.searchdata.Name));
             mi = nullptr;
 
-            // check size limit
-            TVPCheckGraphicCacheLimit();
-
-            // push into hash table
-            tjs_uint datasize = data->GetSize();
-            TVPGraphicCacheTotalBytes += datasize;
-            tTVPGraphicImageHolder holder(data);
-            TVPGraphicCache.AddWithHash(item.searchdata, hash, holder);
+            {
+                tTJSCriticalSectionHolder cs(TVPGraphicCacheCS);
+                TVPAddGraphicCacheEntryLocked(item.searchdata, hash, data);
+            }
             ret = bmp->GetWidth() * bmp->GetHeight() * bmp->GetBPP() / 8;
             bmp->Release();
         } catch(...) {
@@ -2453,42 +2643,50 @@ void TVPTouchImages(const std::vector<ttstr> &storages, tjs_int64 limit,
     // (univ.trans rule graphics nor province image may not work
     // properly)
 
-    if(!TVPGraphicCacheLimit || !TVPGraphicCacheEnabled)
-        return;
+    tjs_uint64 cache_limit = 0;
+    {
+        tTJSCriticalSectionHolder cs(TVPGraphicCacheCS);
+        if(!TVPGraphicCacheLimit || !TVPGraphicCacheEnabled)
+            return;
+        cache_limit = TVPGraphicCacheLimit;
+    }
 
     tjs_uint64 limitbytes;
     if(limit >= 0) {
-        if((tjs_uint64)limit > TVPGraphicCacheLimit || limit == 0)
-            limitbytes = TVPGraphicCacheLimit;
+        if((tjs_uint64)limit > cache_limit || limit == 0)
+            limitbytes = cache_limit;
         else
             limitbytes = limit;
     } else {
         // negative value of limit indicates remaining bytes after
         // loading
-        if((tjs_uint64)-limit >= TVPGraphicCacheLimit)
+        if((tjs_uint64)-limit >= cache_limit)
             return;
-        limitbytes = TVPGraphicCacheLimit + limit;
+        limitbytes = cache_limit + limit;
     }
     if(/*!timeout &&*/ storages.size() /* > 1*/) { // using async touching for
                                                    // multi images
         for(const ttstr &name : storages) {
-            ttstr nname = TVPNormalizeStorageName(name);
+            ttstr nname = TVPResolveCachePath(name);
             tjs_uint32 hash;
             tTVPGraphicsSearchData searchdata;
-            if(TVPGraphicCacheEnabled) {
-                searchdata.Name = nname;
-                searchdata.KeyIdx = TVP_clNone;
-                searchdata.Mode = glmNormal;
-                searchdata.DesW = 0;
-                searchdata.DesH = 0;
+            {
+                tTJSCriticalSectionHolder cs(TVPGraphicCacheCS);
+                if(TVPGraphicCacheEnabled) {
+                    searchdata.Name = nname;
+                    searchdata.KeyIdx = TVP_clNone;
+                    searchdata.Mode = glmNormal;
+                    searchdata.DesW = 0;
+                    searchdata.DesH = 0;
 
-                hash = tTVPGraphicCache::MakeHash(searchdata);
+                    hash = tTVPGraphicCache::MakeHash(searchdata);
 
-                tTVPGraphicImageHolder *ptr =
-                    TVPGraphicCache.FindAndTouchWithHash(searchdata, hash);
-                if(ptr) {
-                    // found in cache
-                    continue;
+                    tTVPGraphicImageHolder *ptr =
+                        TVPGraphicCache.FindAndTouchWithHash(searchdata, hash);
+                    if(ptr) {
+                        // found in cache
+                        continue;
+                    }
                 }
             }
             Application->GetAsyncImageLoader()->PrefetchRequest(nname);
@@ -2636,7 +2834,7 @@ void TVPTouchImages(const std::vector<ttstr> &storages, tjs_int64 limit,
     count--;
     for(; count >= 0; count--) {
         tTVPGraphicsSearchData searchdata;
-        searchdata.Name = TVPNormalizeStorageName(storages[count]);
+        searchdata.Name = TVPResolveCachePath(storages[count]);
         searchdata.KeyIdx = TVP_clNone;
         searchdata.Mode = glmNormal;
         searchdata.DesW = 0;
@@ -2644,6 +2842,7 @@ void TVPTouchImages(const std::vector<ttstr> &storages, tjs_int64 limit,
 
         tjs_uint32 hash = tTVPGraphicCache::MakeHash(searchdata);
 
+        tTJSCriticalSectionHolder cs(TVPGraphicCacheCS);
         TVPGraphicCache.FindAndTouchWithHash(searchdata, hash);
     }
 
@@ -2659,6 +2858,7 @@ void TVPTouchImages(const std::vector<ttstr> &storages, tjs_int64 limit,
 // TVPSetGraphicCacheLimit
 //---------------------------------------------------------------------------
 void TVPSetGraphicCacheLimit(tjs_uint64 limit) {
+    tTJSCriticalSectionHolder cs(TVPGraphicCacheCS);
     // set limit of graphic cache by total bytes.
     if(limit == 0) {
         TVPGraphicCacheLimit = limit;
@@ -2676,8 +2876,11 @@ void TVPSetGraphicCacheLimit(tjs_uint64 limit) {
     if(TVPGraphicCacheLimit > 256 * 1024 * 1024)
         TVPGraphicCacheLimit = 256 * 1024 * 1024;
 
-    TVPCheckGraphicCacheLimit();
+    TVPCheckGraphicCacheLimitLocked();
 }
 //---------------------------------------------------------------------------
-tjs_uint64 TVPGetGraphicCacheLimit() { return TVPGraphicCacheLimit; }
+tjs_uint64 TVPGetGraphicCacheLimit() {
+    tTJSCriticalSectionHolder cs(TVPGraphicCacheCS);
+    return TVPGraphicCacheLimit;
+}
 //---------------------------------------------------------------------------

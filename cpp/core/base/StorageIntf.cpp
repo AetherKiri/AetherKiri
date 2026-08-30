@@ -17,6 +17,7 @@
 #include <stdexcept>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include "StorageIntf.h"
 #include "tjsUtils.h"
@@ -31,12 +32,87 @@
 #include "UtilStreams.h"
 #include "impl/ArchiveAutoPathOrder.h"
 #include "GraphicsLoadThread.h"
+#include "GraphicsLoaderIntf.h"
 #include "spdlog/spdlog.h"
 
 #define TVP_DEFAULT_ARCHIVE_CACHE_NUM 128
 #define TVP_DEFAULT_AUTOPATH_CACHE_NUM 256
 static constexpr tjs_int TVP_MAX_STORAGE_NAME_LENGTH = 1 << 20;
 static const tjs_char *TVP_AUTOPATH_CACHE_MISS_MARKER = TJS_W("\x01");
+
+namespace {
+std::mutex TVPDecodeCacheConfigMutex;
+std::set<ttstr> TVPDecodeTargetExtensions;
+std::set<ttstr> TVPPinnedDecodeCachePaths;
+
+ttstr TVPNormalizeCacheExtension(const ttstr &extension) {
+    ttstr normalized(extension);
+    if(!normalized.IsEmpty() && normalized[0] != TJS_W('.'))
+        normalized = TJS_W(".") + normalized;
+    normalized.ToLowerCase();
+    return normalized;
+}
+} // namespace
+
+void TVPAddDecodeTargetExtension(const ttstr &extension) {
+    const ttstr normalized = TVPNormalizeCacheExtension(extension);
+    if(normalized.IsEmpty())
+        return;
+    std::lock_guard<std::mutex> lock(TVPDecodeCacheConfigMutex);
+    TVPDecodeTargetExtensions.insert(normalized);
+}
+
+void TVPRemoveDecodeTargetExtension(const ttstr &extension) {
+    const ttstr normalized = TVPNormalizeCacheExtension(extension);
+    std::lock_guard<std::mutex> lock(TVPDecodeCacheConfigMutex);
+    TVPDecodeTargetExtensions.erase(normalized);
+}
+
+bool TVPIsDecodeTargetExtension(const ttstr &extension) {
+    const ttstr normalized = TVPNormalizeCacheExtension(extension);
+    std::lock_guard<std::mutex> lock(TVPDecodeCacheConfigMutex);
+    return TVPDecodeTargetExtensions.find(normalized) !=
+        TVPDecodeTargetExtensions.end();
+}
+
+ttstr TVPResolveCachePath(const ttstr &name) {
+    const ttstr placed = TVPGetPlacedPath(name);
+    return placed.IsEmpty() ? TVPNormalizeStorageName(name) : placed;
+}
+
+bool TVPIsCachePathPinned(const ttstr &normalized_name) {
+    std::lock_guard<std::mutex> lock(TVPDecodeCacheConfigMutex);
+    return TVPPinnedDecodeCachePaths.find(normalized_name) !=
+        TVPPinnedDecodeCachePaths.end();
+}
+
+void TVPResetCacheConfigurationForHostSession() {
+    std::lock_guard<std::mutex> lock(TVPDecodeCacheConfigMutex);
+    TVPDecodeTargetExtensions.clear();
+    TVPPinnedDecodeCachePaths.clear();
+}
+
+void TVPPinCache(const ttstr &name) {
+    const ttstr normalized = TVPResolveCachePath(name);
+    {
+        std::lock_guard<std::mutex> lock(TVPDecodeCacheConfigMutex);
+        TVPPinnedDecodeCachePaths.insert(normalized);
+    }
+    TVPSetGraphicCacheEntryPinned(normalized, true);
+    const ttstr extension = TVPExtractStorageExt(normalized);
+    if(TVPIsDecodeTargetExtension(extension) ||
+       TVPGetGraphicLoadHandler(extension))
+        TVPRequestImagePrefetch(normalized);
+}
+
+void TVPUnpinCache(const ttstr &name) {
+    const ttstr normalized = TVPResolveCachePath(name);
+    {
+        std::lock_guard<std::mutex> lock(TVPDecodeCacheConfigMutex);
+        TVPPinnedDecodeCachePaths.erase(normalized);
+    }
+    TVPSetGraphicCacheEntryPinned(normalized, false);
+}
 static const char TVP_GFX_EFFECT_COMPAT_SCRIPT[] =
     "// AetherKiri gfxEffect.dll compatibility placeholder.\n"
     "try { Plugins.link(\"gfxEffect.dll\"); } catch(e) { }\n";
@@ -2342,6 +2418,295 @@ TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ isExistentStorageNoSearchNoNormalize
 }
 TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ isExistentStorageNoSearchNoNormalize)
 //----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ addCacheTargetExtension) {
+    if(numparams < 1)
+        return TJS_E_BADPARAMCOUNT;
+    const ttstr extension(*param[0]);
+    if(extension.IsEmpty())
+        return TJS_E_INVALIDPARAM;
+    // Aether has no separate raw-file cache. Keep the krkrz API useful by
+    // registering the extension with the decoded-image cache.
+    TVPAddDecodeTargetExtension(extension);
+    if(result)
+        result->Clear();
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ addCacheTargetExtension)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ addDecodeTargetExtension) {
+    if(numparams < 1)
+        return TJS_E_BADPARAMCOUNT;
+    const ttstr extension(*param[0]);
+    if(extension.IsEmpty())
+        return TJS_E_INVALIDPARAM;
+    TVPAddDecodeTargetExtension(extension);
+    if(result)
+        result->Clear();
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ addDecodeTargetExtension)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ removeDecodeTargetExtension) {
+    if(numparams < 1)
+        return TJS_E_BADPARAMCOUNT;
+    TVPRemoveDecodeTargetExtension(ttstr(*param[0]));
+    if(result)
+        result->Clear();
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ removeDecodeTargetExtension)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ requestCache) {
+    if(numparams < 1)
+        return TJS_E_BADPARAMCOUNT;
+    const ttstr path(*param[0]);
+    if(path.IsEmpty())
+        return TJS_E_INVALIDPARAM;
+    const ttstr normalized = TVPResolveCachePath(path);
+    if(TVPIsDecodeTargetExtension(TVPExtractStorageExt(normalized)))
+        TVPRequestImagePrefetch(normalized);
+    if(result)
+        result->Clear();
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ requestCache)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ requestFastCache) {
+    if(numparams < 1)
+        return TJS_E_BADPARAMCOUNT;
+    const ttstr path(*param[0]);
+    if(path.IsEmpty())
+        return TJS_E_INVALIDPARAM;
+    const ttstr normalized = TVPResolveCachePath(path);
+    if(TVPIsDecodeTargetExtension(TVPExtractStorageExt(normalized)))
+        TVPRequestImagePrefetch(normalized);
+    if(result)
+        result->Clear();
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ requestFastCache)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ requestCacheFast) {
+    if(numparams < 1)
+        return TJS_E_BADPARAMCOUNT;
+    const ttstr path(*param[0]);
+    if(path.IsEmpty())
+        return TJS_E_INVALIDPARAM;
+    const ttstr normalized = TVPResolveCachePath(path);
+    if(TVPIsDecodeTargetExtension(TVPExtractStorageExt(normalized)))
+        TVPRequestImagePrefetch(normalized);
+    if(result)
+        result->Clear();
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ requestCacheFast)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ clearCache) {
+    TVPFlushImagePrefetchQueue();
+    if(numparams < 1 || param[0]->Type() == tvtVoid ||
+       ttstr(*param[0]).IsEmpty()) {
+        TVPClearTransientGraphicCache();
+    } else {
+        TVPClearGraphicCacheEntry(TVPResolveCachePath(ttstr(*param[0])));
+    }
+    if(result)
+        result->Clear();
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ clearCache)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ clearFastCache) {
+    TVPFlushImagePrefetchQueue();
+    if(numparams < 1 || param[0]->Type() == tvtVoid ||
+       ttstr(*param[0]).IsEmpty()) {
+        TVPClearTransientGraphicCache();
+    } else {
+        TVPClearGraphicCacheEntry(TVPResolveCachePath(ttstr(*param[0])));
+    }
+    if(result)
+        result->Clear();
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ clearFastCache)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ clearAllCaches) {
+    TVPFlushImagePrefetchQueue();
+    TVPClearGraphicCache();
+    if(result)
+        result->Clear();
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ clearAllCaches)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ clearTransientCaches) {
+    TVPFlushImagePrefetchQueue();
+    TVPClearTransientGraphicCache();
+    if(result)
+        result->Clear();
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ clearTransientCaches)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ pinCache) {
+    if(numparams < 1)
+        return TJS_E_BADPARAMCOUNT;
+    TVPPinCache(ttstr(*param[0]));
+    if(result)
+        result->Clear();
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ pinCache)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ unpinCache) {
+    if(numparams < 1)
+        return TJS_E_BADPARAMCOUNT;
+    TVPUnpinCache(ttstr(*param[0]));
+    if(result)
+        result->Clear();
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ unpinCache)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ isCachePinned) {
+    if(numparams < 1)
+        return TJS_E_BADPARAMCOUNT;
+    if(result)
+        *result = static_cast<tjs_int>(
+            TVPIsCachePathPinned(TVPResolveCachePath(ttstr(*param[0]))));
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ isCachePinned)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ getFileCacheList) {
+    if(result) {
+        iTJSDispatch2 *array = TJSCreateArrayObject();
+        *result = tTJSVariant(array, array);
+        array->Release();
+    }
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ getFileCacheList)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ getImageCacheList) {
+    if(!result)
+        return TJS_S_OK;
+    std::vector<TVPGraphicCacheEntryInfo> entries;
+    TVPGetGraphicCacheEntries(entries);
+    iTJSDispatch2 *array = TJSCreateArrayObject();
+    try {
+        tjs_int index = 0;
+        for(const auto &entry : entries) {
+            iTJSDispatch2 *dictionary = TJSCreateDictionaryObject();
+            try {
+                tTJSVariant value(entry.name);
+                dictionary->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                                    TJS_W("path"), nullptr, &value,
+                                    dictionary);
+                value = static_cast<tjs_int>(entry.keyidx);
+                dictionary->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                                    TJS_W("keyidx"), nullptr, &value,
+                                    dictionary);
+                value = static_cast<tjs_int>(entry.mode);
+                dictionary->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                                    TJS_W("mode"), nullptr, &value,
+                                    dictionary);
+                value = static_cast<tjs_int>(entry.dw);
+                dictionary->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                                    TJS_W("dw"), nullptr, &value,
+                                    dictionary);
+                value = static_cast<tjs_int>(entry.dh);
+                dictionary->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                                    TJS_W("dh"), nullptr, &value,
+                                    dictionary);
+                value = static_cast<tjs_int64>(entry.bytes);
+                dictionary->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                                    TJS_W("bytes"), nullptr, &value,
+                                    dictionary);
+                value = static_cast<tjs_int>(entry.width);
+                dictionary->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                                    TJS_W("width"), nullptr, &value,
+                                    dictionary);
+                value = static_cast<tjs_int>(entry.height);
+                dictionary->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                                    TJS_W("height"), nullptr, &value,
+                                    dictionary);
+                value = static_cast<tjs_int>(entry.pinned);
+                dictionary->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                                    TJS_W("pinned"), nullptr, &value,
+                                    dictionary);
+                tTJSVariant item(dictionary, dictionary);
+                array->PropSetByNum(TJS_MEMBERENSURE, index++, &item, array);
+            } catch(...) {
+                dictionary->Release();
+                throw;
+            }
+            dictionary->Release();
+        }
+        *result = tTJSVariant(array, array);
+    } catch(...) {
+        array->Release();
+        throw;
+    }
+    array->Release();
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ getImageCacheList)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ dumpFileCacheList) {
+    TVPAddImportantLog(
+        TJS_W("FileCache: unavailable (Aether uses the storage stream layer; ")
+        TJS_W("decoded images are listed by dumpImageCacheList)"));
+    if(result)
+        result->Clear();
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ dumpFileCacheList)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ dumpImageCacheList) {
+    TVPDumpImageCacheList();
+    if(result)
+        result->Clear();
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ dumpImageCacheList)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ clearOldCache) {
+    // There is no independent age-tracked raw-file cache in Aether. Keep the
+    // upstream script API available without evicting decoded images whose
+    // entries do not carry equivalent last-access timestamps.
+    if(result)
+        result->Clear();
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ clearOldCache)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ setCacheMaxSize) {
+    if(numparams < 1)
+        return TJS_E_BADPARAMCOUNT;
+    const tjs_int64 requested = static_cast<tjs_int64>(*param[0]);
+    TVPSetGraphicCacheLimit(requested > 0
+                               ? static_cast<tjs_uint64>(requested)
+                               : 0);
+    if(result)
+        result->Clear();
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ setCacheMaxSize)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ isCacheLoading) {
+    if(result)
+        *result = static_cast<tjs_int>(TVPIsImagePrefetchLoading());
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ isCacheLoading)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ isFastCacheLoading) {
+    if(result)
+        *result = static_cast<tjs_int>(TVPIsImagePrefetchLoading());
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ isFastCacheLoading)
+//----------------------------------------------------------------------
 TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ requestImagePrefetch) {
     if(numparams < 1)
         return TJS_E_BADPARAMCOUNT;
@@ -2363,7 +2728,14 @@ TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ flushImagePrefetch) {
 }
 TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ flushImagePrefetch)
 //----------------------------------------------------------------------
-TJS_BEGIN_NATIVE_PROP_DECL(isImagePrefetchLoading) {
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ isImagePrefetchLoading) {
+    if(result)
+        *result = static_cast<tjs_int>(TVPIsImagePrefetchLoading());
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ isImagePrefetchLoading)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_PROP_DECL(imagePrefetchLoading) {
     TJS_BEGIN_NATIVE_PROP_GETTER {
         *result = static_cast<tjs_int>(TVPIsImagePrefetchLoading());
         return TJS_S_OK;
@@ -2372,7 +2744,7 @@ TJS_BEGIN_NATIVE_PROP_DECL(isImagePrefetchLoading) {
 
     TJS_DENY_NATIVE_PROP_SETTER
 }
-TJS_END_NATIVE_STATIC_PROP_DECL(isImagePrefetchLoading)
+TJS_END_NATIVE_STATIC_PROP_DECL(imagePrefetchLoading)
 //----------------------------------------------------------------------
 TJS_BEGIN_NATIVE_PROP_DECL(archiveUniqueKey) {
     TJS_BEGIN_NATIVE_PROP_GETTER {

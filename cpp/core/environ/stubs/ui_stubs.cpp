@@ -73,6 +73,7 @@ uint32_t g_host_surface_width = 1920;
 uint32_t g_host_surface_height = 1080;
 bool g_host_prefer_gpu_frame = true;
 std::atomic_bool g_host_publish_raw_source_frame{false};
+std::atomic_bool g_host_force_cpu_frame_once{false};
 tTJSNI_Window *g_host_window_owner = nullptr;
 std::vector<tTJSNI_Window *> g_host_window_owners;
 
@@ -768,7 +769,17 @@ extern "C" void TVPHostSetSurfaceSize(uint32_t width, uint32_t height) {
     g_host_surface_height = height;
 }
 
+extern "C" void TVPHostPrepareScreenCaptureFrame() {
+    g_host_force_cpu_frame_once.store(true, std::memory_order_release);
+}
+
+extern "C" void TVPHostRequestScreenCaptureUpdate() {
+    if(g_host_window_owner)
+        g_host_window_owner->RequestUpdate();
+}
+
 extern "C" void TVPHostResetForGameSession() {
+    g_host_force_cpu_frame_once.store(false, std::memory_order_release);
     {
         std::lock_guard<std::mutex> lock(g_host_frame_mutex);
         g_host_frame_rgba.clear();
@@ -1071,6 +1082,9 @@ public:
         const tjs_uint tw = tex->GetWidth();
         const tjs_uint th = tex->GetHeight();
         if(tw == 0 || th == 0) return;
+        const bool force_cpu_frame =
+            g_host_force_cpu_frame_once.exchange(false,
+                                                  std::memory_order_acq_rel);
 
         tjs_int surface_w = 0;
         tjs_int surface_h = 0;
@@ -1078,7 +1092,8 @@ public:
                            surface_w, surface_h);
         tTVPRect surface_rect(0, 0, surface_w, surface_h);
 
-        if(g_host_prefer_gpu_frame && !HasHostVideoOverlayFrame()) {
+        if(!force_cpu_frame && g_host_prefer_gpu_frame &&
+           !HasHostVideoOverlayFrame()) {
         if(auto *godot_tex = dynamic_cast<GodotTexture2D *>(tex);
            godot_tex != nullptr && godot_tex->EnsureGpuHandle() &&
            godot_tex->UploadCpuToGpu(false)) {
@@ -1127,6 +1142,9 @@ public:
         const tjs_uint tw = tex->GetWidth();
         const tjs_uint th = tex->GetHeight();
         if (tw == 0 || th == 0) return;
+        const bool force_cpu_frame =
+            g_host_force_cpu_frame_once.exchange(false,
+                                                  std::memory_order_acq_rel);
 
         tjs_int surface_w = 0;
         tjs_int surface_h = 0;
@@ -1153,7 +1171,8 @@ public:
         }
 
         if (auto *godot_tex = dynamic_cast<GodotTexture2D *>(tex)) {
-            if (g_host_prefer_gpu_frame && !HasHostVideoOverlayFrame() &&
+            if (!force_cpu_frame && g_host_prefer_gpu_frame &&
+                !HasHostVideoOverlayFrame() &&
                 godot_tex->EnsureGpuHandle() &&
                 godot_tex->UploadCpuToGpu(false)) {
                 const bool publish_raw_source =

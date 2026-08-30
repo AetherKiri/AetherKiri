@@ -16,6 +16,7 @@ struct tTVPScreenCaptureRequest {
 void TVPRequestScreenCapture(const ttstr &path, int x, int y, int width,
                              int height);
 bool TVPHasPendingScreenCapture();
+void TVPPrepareScreenCaptureFrame();
 bool TVPTakeScreenCaptureRequest(tTVPScreenCaptureRequest &request);
 bool TVPSaveScreenCapture(const tTVPScreenCaptureRequest &request,
                           const iTVPBaseBitmap *source);
@@ -23,5 +24,6 @@ void TVPSetScreenCaptureResult(const ttstr &path, int width, int height,
                                bool success);
 bool TVPGetLastScreenCapture(ttstr &path, int &width, int &height,
                              bool &success);
+void TVPResetScreenCaptureForHostSession();
 
 #endif

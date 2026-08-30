@@ -405,10 +405,13 @@ void tTVPPassThroughDrawDevice::Show() {
         if(form && !Managers.empty()) {
             iTVPBaseBitmap *buf = Managers.back()->GetDrawBuffer();
             if(buf) {
+                const bool capture_pending = TVPHasPendingScreenCapture();
+                if(capture_pending)
+                    TVPPrepareScreenCaptureFrame();
+                form->UpdateDrawBuffer(buf->GetTexture());
                 tTVPScreenCaptureRequest capture;
                 if(TVPTakeScreenCaptureRequest(capture))
                     TVPSaveScreenCapture(capture, buf);
-                form->UpdateDrawBuffer(buf->GetTexture());
             }
         }
     }

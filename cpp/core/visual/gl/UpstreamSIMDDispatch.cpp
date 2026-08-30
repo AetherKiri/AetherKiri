@@ -76,20 +76,6 @@ extern void TVPDoBoxBlurAvg32_sse2_c(tjs_uint32 *, tjs_uint32 *,
 extern void TVPDoBoxBlurAvg32_d_sse2_c(tjs_uint32 *, tjs_uint32 *,
                                        const tjs_uint32 *, const tjs_uint32 *,
                                        tjs_int, tjs_int);
-extern tjs_int TVPTLG5DecompressSlide_sse2_c(tjs_uint8 *, const tjs_uint8 *,
-                                             tjs_int, tjs_uint8 *, tjs_int);
-extern void TVPTLG5ComposeColors3To4_sse2_c(tjs_uint8 *, const tjs_uint8 *,
-                                            tjs_uint8 *const *, tjs_int);
-extern void TVPTLG5ComposeColors4To4_sse2_c(tjs_uint8 *, const tjs_uint8 *,
-                                            tjs_uint8 *const *, tjs_int);
-extern void TVPTLG6DecodeLineGeneric_sse2_c(tjs_uint32 *, tjs_uint32 *, tjs_int,
-                                            tjs_int, tjs_int, tjs_uint8 *,
-                                            tjs_int, tjs_uint32 *, tjs_uint32,
-                                            tjs_int, tjs_int);
-extern void TVPTLG6DecodeLine_sse2_c(tjs_uint32 *, tjs_uint32 *, tjs_int,
-                                     tjs_int, tjs_uint8 *, tjs_int,
-                                     tjs_uint32 *, tjs_uint32, tjs_int,
-                                     tjs_int);
 #endif
 
 #if defined(AETHER_ENABLE_VISUAL_ARM_SIMD)
@@ -160,13 +146,6 @@ void TVPInitUpstreamVisualSIMD() {
         TVPDoBoxBlurAvg16_d = TVPDoBoxBlurAvg16_d_sse2_c;
         TVPDoBoxBlurAvg32 = TVPDoBoxBlurAvg32_sse2_c;
         TVPDoBoxBlurAvg32_d = TVPDoBoxBlurAvg32_d_sse2_c;
-        TVPTLG5DecompressSlide = TVPTLG5DecompressSlide_sse2_c;
-        TVPTLG5ComposeColors3To4 = TVPTLG5ComposeColors3To4_sse2_c;
-        TVPTLG5ComposeColors4To4 = TVPTLG5ComposeColors4To4_sse2_c;
-#if defined(TJS_64BIT_OS)
-        TVPTLG6DecodeLineGeneric = TVPTLG6DecodeLineGeneric_sse2_c;
-        TVPTLG6DecodeLine = TVPTLG6DecodeLine_sse2_c;
-#endif
     }
     if(TVPHasCPUFeature(TVPCPUFeature::SSSE3)) {
         TVPConvert24BitTo32Bit = TVPConvert24BitTo32Bit_ssse3_c;

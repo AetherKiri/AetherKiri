@@ -18,6 +18,7 @@
 #include "Application.h"
 #include "DebugIntf.h"
 
+#include <chrono>
 #include <memory>
 
 tTVPTmpBitmapImage::tTVPTmpBitmapImage() : MetaInfo(nullptr) {}
@@ -104,6 +105,18 @@ tTVPAsyncImageLoader::tTVPAsyncImageLoader() :
 tTVPAsyncImageLoader::~tTVPAsyncImageLoader() {
     ExitRequest();
     WaitFor();
+    {
+        tTJSCriticalSectionHolder cs(InFlightCS);
+        for(auto &item : InFlightTable) {
+            auto &entry = item.second;
+            {
+                std::lock_guard<std::mutex> lock(entry->mutex);
+                entry->done = true;
+            }
+            entry->complete.notify_all();
+        }
+        InFlightTable.clear();
+    }
     EventQueue.Deallocate();
     while(!CommandQueue.empty()) {
         tTVPImageLoadCommand *cmd = CommandQueue.front();
@@ -152,25 +165,22 @@ void tTVPAsyncImageLoader::HandleLoadedImage() {
         if(cmd != nullptr) {
             std::unique_ptr<tTVPImageLoadCommand> command(cmd);
             const ttstr path(cmd->path_);
-            const bool prefetch = cmd->prefetch_only_;
             try {
                 if(cmd->bmp_)
                     cmd->bmp_->SetLoading(false);
                 if(cmd->result_.length() > 0) {
-                    if(!prefetch) {
-                        tTJSVariant param[4];
-                        param[0] = tTJSVariant((iTJSDispatch2 *)nullptr,
-                                               (iTJSDispatch2 *)nullptr);
-                        param[1] = 1;
-                        param[2] = 1;
-                        param[3] = cmd->result_.c_str();
-                        static ttstr eventname(TJS_W("onLoaded"));
-                        if(cmd->owner_ &&
-                           cmd->owner_->IsValid(0, nullptr, nullptr,
-                                                cmd->owner_) == TJS_S_TRUE) {
-                            TVPPostEvent(cmd->owner_, cmd->owner_, eventname, 0,
-                                         TVP_EPT_IMMEDIATE, 4, param);
-                        }
+                    tTJSVariant param[4];
+                    param[0] = tTJSVariant((iTJSDispatch2 *)nullptr,
+                                           (iTJSDispatch2 *)nullptr);
+                    param[1] = 1;
+                    param[2] = 1;
+                    param[3] = cmd->result_.c_str();
+                    static ttstr eventname(TJS_W("onLoaded"));
+                    if(cmd->owner_ &&
+                       cmd->owner_->IsValid(0, nullptr, nullptr,
+                                            cmd->owner_) == TJS_S_TRUE) {
+                        TVPPostEvent(cmd->owner_, cmd->owner_, eventname, 0,
+                                     TVP_EPT_IMMEDIATE, 4, param);
                     }
 
                     if(cmd->dest_->MetaInfo) {
@@ -178,9 +188,8 @@ void tTVPAsyncImageLoader::HandleLoadedImage() {
                         cmd->dest_->MetaInfo = nullptr;
                     }
                 } else {
-                    iTJSDispatch2 *metainfo = prefetch
-                        ? nullptr
-                        : TVPMetaInfoPairsToDictionary(cmd->dest_->MetaInfo);
+                    iTJSDispatch2 *metainfo =
+                        TVPMetaInfoPairsToDictionary(cmd->dest_->MetaInfo);
                     const auto release_bitmap = [](tTVPBitmap *bitmap) {
                         if(bitmap)
                             bitmap->Release();
@@ -204,47 +213,83 @@ void tTVPAsyncImageLoader::HandleLoadedImage() {
                             delete cmd->dest_->MetaInfo;
                             cmd->dest_->MetaInfo = nullptr;
                         }
-                        if(!prefetch && cmd->bmp_)
+                        if(cmd->bmp_)
                             cmd->bmp_->SetSizeAndImageBuffer(decoded.get());
                     } catch(...) {
                         if(metainfo)
                             metainfo->Release();
                         throw;
                     }
-                    if(!prefetch) {
-                        tTJSVariant param[4];
-                        param[0] = tTJSVariant(metainfo, metainfo);
-                        if(metainfo)
-                            metainfo->Release();
-                        param[1] = 1;
-                        param[2] = 0;
-                        param[3] = TJS_W("");
-                        static ttstr eventname(TJS_W("onLoaded"));
-                        if(cmd->owner_ &&
-                           cmd->owner_->IsValid(0, nullptr, nullptr,
-                                                cmd->owner_) == TJS_S_TRUE) {
-                            TVPPostEvent(cmd->owner_, cmd->owner_, eventname, 0,
-                                         TVP_EPT_IMMEDIATE, 4, param);
-                        }
+                    tTJSVariant param[4];
+                    param[0] = tTJSVariant(metainfo, metainfo);
+                    if(metainfo)
+                        metainfo->Release();
+                    param[1] = 1;
+                    param[2] = 0;
+                    param[3] = TJS_W("");
+                    static ttstr eventname(TJS_W("onLoaded"));
+                    if(cmd->owner_ &&
+                       cmd->owner_->IsValid(0, nullptr, nullptr,
+                                            cmd->owner_) == TJS_S_TRUE) {
+                        TVPPostEvent(cmd->owner_, cmd->owner_, eventname, 0,
+                                     TVP_EPT_IMMEDIATE, 4, param);
                     }
                 }
-            } catch(...) {
-                if(prefetch) {
-                    FinishPrefetch(cmd->path_);
-                    TVPAddImportantLog(TJS_W("Image prefetch failed: ") + path);
-                    continue;
-                }
-                throw;
-            }
-            if(prefetch)
-                FinishPrefetch(cmd->path_);
+            } catch(...) { throw; }
         }
     } while(loading);
 }
 
-void tTVPAsyncImageLoader::FinishPrefetch(const std::string &path) {
-    tTJSCriticalSectionHolder cs(InFlightCS);
-    InFlightTable.erase(path);
+void tTVPAsyncImageLoader::FinishInFlight(const std::string &path) {
+    std::shared_ptr<tTVPImagePrefetchInFlight> entry;
+    {
+        tTJSCriticalSectionHolder cs(InFlightCS);
+        auto found = InFlightTable.find(path);
+        if(found == InFlightTable.end())
+            return;
+        entry = found->second;
+        InFlightTable.erase(found);
+    }
+    {
+        std::lock_guard<std::mutex> lock(entry->mutex);
+        entry->done = true;
+    }
+    entry->complete.notify_all();
+}
+
+void tTVPAsyncImageLoader::FinalizePrefetchOnWorker(
+    tTVPImageLoadCommand *cmd) {
+    const ttstr path(cmd->path_);
+    const bool cancelled = !IsPrefetchGenerationCurrent(
+        cmd->prefetch_generation_);
+    if(!cancelled && cmd->result_.empty() && cmd->dest_ &&
+       cmd->dest_->buffer) {
+        try {
+            const auto release_bitmap = [](tTVPBitmap *bitmap) {
+                if(bitmap)
+                    bitmap->Release();
+            };
+            std::unique_ptr<tTVPBitmap, decltype(release_bitmap)> decoded(
+                new tTVPBitmap(cmd->dest_->width, cmd->dest_->height, 32,
+                               cmd->dest_->buffer),
+                release_bitmap);
+            decoded->IsOpaque = cmd->dest_->opaque;
+            cmd->dest_->buffer = nullptr;
+            if(!TVPHasImageCache(path, glmNormal, 0, 0, TVP_clNone)) {
+                auto *cache_meta = cmd->dest_->MetaInfo;
+                cmd->dest_->MetaInfo = nullptr;
+                TVPTryPushGraphicCache(path, decoded.get(), cache_meta,
+                                       cmd->prefetch_generation_);
+            }
+        } catch(...) {
+            TVPAddImportantLog(TJS_W("Image prefetch finalize failed: ") +
+                               path);
+        }
+    } else if(!cancelled) {
+        TVPAddImportantLog(TJS_W("Image prefetch failed: ") + path);
+    }
+    FinishInFlight(cmd->path_);
+    delete cmd;
 }
 //---------------------------------------------------------------------------
 
@@ -255,7 +300,7 @@ void tTVPAsyncImageLoader::LoadRequest(iTJSDispatch2 *owner, tTJSNI_Bitmap *bmp,
     // tTVPBaseBitmap* dest = new tTVPBaseBitmap( 32, 32, 32 );
     tTVPBaseBitmap dest(TVPGetInitialBitmap());
     iTJSDispatch2 *metainfo = nullptr;
-    ttstr nname = TVPNormalizeStorageName(name);
+    ttstr nname = TVPResolveCachePath(name);
     if(TVPCheckImageCache(nname, &dest, glmNormal, 0, 0, TVP_clNone,
                           &metainfo)) {
         // キャッシュ内に発見、即座に読込みを完了する
@@ -313,20 +358,25 @@ void tTVPAsyncImageLoader::PushLoadQueue(iTJSDispatch2 *owner,
 }
 
 void tTVPAsyncImageLoader::PrefetchRequest(const ttstr &name) {
-    ttstr nname = TVPNormalizeStorageName(name);
+    if(TVPGetGraphicCacheLimit() == 0)
+        return;
+    TVPEnsureGraphicCacheCompactHook();
+    ttstr nname = TVPResolveCachePath(name);
     if(TVPHasImageCache(nname, glmNormal, 0, 0, TVP_clNone))
         return;
 
     const std::string key = nname.AsStdString();
     {
         tTJSCriticalSectionHolder cs(InFlightCS);
-        if(!InFlightTable.insert(key).second)
+        if(InFlightTable.find(key) != InFlightTable.end())
             return;
+        InFlightTable.emplace(
+            key, std::make_shared<tTVPImagePrefetchInFlight>());
     }
 
     ttstr ext = TVPExtractStorageExt(nname);
     if(ext.IsEmpty() || !TVPGetGraphicLoadHandler(ext)) {
-        FinishPrefetch(key);
+        FinishInFlight(key);
         return;
     }
 
@@ -334,6 +384,8 @@ void tTVPAsyncImageLoader::PrefetchRequest(const ttstr &name) {
     cmd->path_ = key;
     cmd->dest_ = new tTVPTmpBitmapImage();
     cmd->prefetch_only_ = true;
+    cmd->prefetch_generation_ =
+        PrefetchGeneration.load(std::memory_order_acquire);
     {
         tTJSCriticalSectionHolder cs(CommandQueueCS);
         CommandQueue.push(cmd);
@@ -342,6 +394,7 @@ void tTVPAsyncImageLoader::PrefetchRequest(const ttstr &name) {
 }
 
 void tTVPAsyncImageLoader::FlushPrefetchQueue() {
+    PrefetchGeneration.fetch_add(1, std::memory_order_acq_rel);
     std::queue<tTVPImageLoadCommand *> kept;
     std::vector<tTVPImageLoadCommand *> dropped;
     {
@@ -357,7 +410,7 @@ void tTVPAsyncImageLoader::FlushPrefetchQueue() {
         CommandQueue.swap(kept);
     }
     for(auto *cmd : dropped) {
-        FinishPrefetch(cmd->path_);
+        FinishInFlight(cmd->path_);
         delete cmd;
     }
 }
@@ -387,12 +440,16 @@ void tTVPAsyncImageLoader::LoadingThread() {
             if(cmd) {
                 loading = true;
                 LoadImageFromCommand(cmd);
-                { // Lock
-                    tTJSCriticalSectionHolder cs(ImageQueueCS);
-                    LoadedQueue.push(cmd);
+                if(cmd->prefetch_only_) {
+                    FinalizePrefetchOnWorker(cmd);
+                } else {
+                    { // Lock
+                        tTJSCriticalSectionHolder cs(ImageQueueCS);
+                        LoadedQueue.push(cmd);
+                    }
+                    // Send to message
+                    SendToLoadFinish();
                 }
-                // Send to message
-                SendToLoadFinish();
             }
         } while(loading && !GetTerminated());
     }
@@ -455,4 +512,40 @@ void TVPFlushImagePrefetchQueue() {
 bool TVPIsImagePrefetchLoading() {
     return Application && Application->GetAsyncImageLoader() &&
         Application->GetAsyncImageLoader()->IsAnyInFlight();
+}
+
+bool tTVPAsyncImageLoader::IsPrefetchGenerationCurrent(
+    std::uint64_t generation) const {
+    return PrefetchGeneration.load(std::memory_order_acquire) == generation;
+}
+
+bool TVPIsImagePrefetchGenerationCurrent(std::uint64_t generation) {
+    return Application && Application->GetAsyncImageLoader() &&
+        Application->GetAsyncImageLoader()->IsPrefetchGenerationCurrent(
+            generation);
+}
+
+std::shared_ptr<tTVPImagePrefetchInFlight>
+tTVPAsyncImageLoader::FindInFlight(const ttstr &normalized_name) {
+    tTJSCriticalSectionHolder cs(InFlightCS);
+    auto found = InFlightTable.find(normalized_name.AsStdString());
+    return found == InFlightTable.end() ? nullptr : found->second;
+}
+
+bool TVPWaitForImagePrefetch(const ttstr &normalized_name,
+                             tjs_int timeout_ms) {
+    if(!Application || !Application->GetAsyncImageLoader())
+        return false;
+    auto entry =
+        Application->GetAsyncImageLoader()->FindInFlight(normalized_name);
+    if(!entry)
+        return false;
+    std::unique_lock<std::mutex> lock(entry->mutex);
+    if(timeout_ms <= 0) {
+        entry->complete.wait(lock, [&entry] { return entry->done; });
+        return true;
+    }
+    return entry->complete.wait_for(
+        lock, std::chrono::milliseconds(timeout_ms),
+        [&entry] { return entry->done; });
 }

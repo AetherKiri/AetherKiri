@@ -79,9 +79,35 @@ function(aether_krkrz_add_core_parity_targets)
             "${_core_root}/common/visual/gl/x86simdutilAVX2.cpp"
             "${_core_root}/common/visual/IA32/detect_cpu.cpp"
             "${_core_root}/common/visual/IA32/tvpgl_ia32_intf.c")
+        add_executable(aether_krkrz_visual_benchmark
+            "${CMAKE_SOURCE_DIR}/tests/krkrz_simd_benchmark.cpp"
+            "${_core_root}/common/visual/tvpgl.c"
+            "${_core_root}/common/visual/gl/blend_function.cpp"
+            "${_core_root}/common/visual/cpu_detect.cpp"
+            "${_core_root}/common/visual/gl/blend_function_sse2.cpp"
+            "${_core_root}/common/visual/gl/blend_function_avx2.cpp"
+            "${_core_root}/common/visual/gl/adjust_color_sse2.cpp"
+            "${_core_root}/common/visual/gl/boxblur_sse2.cpp"
+            "${_core_root}/common/visual/gl/colorfill_sse2.cpp"
+            "${_core_root}/common/visual/gl/colorfill_avx2.cpp"
+            "${_core_root}/common/visual/gl/colormap_sse2.cpp"
+            "${_core_root}/common/visual/gl/colormap_avx2.cpp"
+            "${_core_root}/common/visual/gl/pixelformat_sse2.cpp"
+            "${_core_root}/common/visual/gl/tlg_sse2.cpp"
+            "${_core_root}/common/visual/gl/univtrans_sse2.cpp"
+            "${_core_root}/common/visual/gl/x86simdutil.cpp"
+            "${_core_root}/common/visual/gl/x86simdutilAVX2.cpp"
+            "${_core_root}/common/visual/IA32/detect_cpu.cpp"
+            "${_core_root}/common/visual/IA32/tvpgl_ia32_intf.c")
         target_include_directories(aether_krkrz_visual_parity PRIVATE
             ${_common_includes})
+        target_include_directories(aether_krkrz_visual_benchmark PRIVATE
+            ${_common_includes})
         target_compile_definitions(aether_krkrz_visual_parity PRIVATE
+            ${_common_definitions}
+            KRKRZ_STANDALONE_TEST
+            KRKRZ_TEST_HAS_X86)
+        target_compile_definitions(aether_krkrz_visual_benchmark PRIVATE
             ${_common_definitions}
             KRKRZ_STANDALONE_TEST
             KRKRZ_TEST_HAS_X86)
@@ -134,9 +160,25 @@ function(aether_krkrz_add_core_parity_targets)
             "${_core_root}/common/visual/gl/colormap_neon.cpp"
             "${_core_root}/common/visual/gl/colorfill_neon.cpp"
             "${_core_root}/common/visual/gl/pixelformat_neon.cpp")
+        add_executable(aether_krkrz_visual_benchmark
+            "${CMAKE_SOURCE_DIR}/tests/krkrz_simd_benchmark.cpp"
+            "${_core_root}/common/visual/tvpgl.c"
+            "${_core_root}/common/visual/gl/blend_function.cpp"
+            "${_core_root}/common/visual/cpu_detect.cpp"
+            "${_core_root}/common/visual/gl/blend_function_neon.cpp"
+            "${_core_root}/common/visual/gl/adjust_color_neon.cpp"
+            "${_core_root}/common/visual/gl/colormap_neon.cpp"
+            "${_core_root}/common/visual/gl/colorfill_neon.cpp"
+            "${_core_root}/common/visual/gl/pixelformat_neon.cpp")
         target_include_directories(aether_krkrz_visual_parity PRIVATE
             ${_common_includes})
+        target_include_directories(aether_krkrz_visual_benchmark PRIVATE
+            ${_common_includes})
         target_compile_definitions(aether_krkrz_visual_parity PRIVATE
+            ${_common_definitions}
+            KRKRZ_STANDALONE_TEST
+            KRKRZ_TEST_HAS_NEON)
+        target_compile_definitions(aether_krkrz_visual_benchmark PRIVATE
             ${_common_definitions}
             KRKRZ_STANDALONE_TEST
             KRKRZ_TEST_HAS_NEON)
@@ -155,10 +197,14 @@ function(aether_krkrz_add_core_parity_targets)
 
     if(UNIX AND NOT APPLE)
         target_link_libraries(aether_krkrz_visual_parity PRIVATE m)
+        target_link_libraries(aether_krkrz_visual_benchmark PRIVATE m)
         target_link_libraries(aether_krkrz_sound_parity PRIVATE m)
     endif()
     add_test(NAME aether_krkrz_visual_parity
         COMMAND aether_krkrz_visual_parity)
+    # Timings are informational; the executable fails only on parity errors.
+    add_test(NAME aether_krkrz_visual_benchmark
+        COMMAND aether_krkrz_visual_benchmark)
     add_test(NAME aether_krkrz_sound_parity
         COMMAND aether_krkrz_sound_parity)
 endfunction()

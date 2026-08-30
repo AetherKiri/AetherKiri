@@ -85,6 +85,18 @@ namespace {
         return dictionary;
     }
 
+    iTJSDispatch2 *TVPCreateKrkrzRenderStatsDictionary() {
+        const auto stats = TVPGetVisualRenderStats();
+        iTJSDispatch2 *dictionary = TJSCreateDictionaryObject();
+        TVPSetVisualStat(dictionary, TJS_W("texUploadUs"),
+                         stats.upload_ns / 1000);
+        TVPSetVisualStat(dictionary, TJS_W("texUploads"), stats.upload_count);
+        TVPSetVisualStat(dictionary, TJS_W("texUploadBytes"),
+                         stats.upload_bytes);
+        TVPSetVisualStat(dictionary, TJS_W("frames"), stats.update_count);
+        return dictionary;
+    }
+
 } // namespace
 
 //---------------------------------------------------------------------------
@@ -530,6 +542,19 @@ TJS_DENY_NATIVE_PROP_SETTER
 }
 TJS_END_NATIVE_STATIC_PROP_DECL(visualRenderStats)
 //----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_PROP_DECL(renderStats) {
+    TJS_BEGIN_NATIVE_PROP_GETTER {
+        iTJSDispatch2 *dictionary = TVPCreateKrkrzRenderStatsDictionary();
+        *result = tTJSVariant(dictionary, dictionary);
+        dictionary->Release();
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_PROP_GETTER
+
+    TJS_DENY_NATIVE_PROP_SETTER
+}
+TJS_END_NATIVE_STATIC_PROP_DECL(renderStats)
+//----------------------------------------------------------------------
 TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ resetVisualRenderStats) {
     TVPResetVisualRenderStats();
     if(result)
@@ -537,6 +562,14 @@ TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ resetVisualRenderStats) {
     return TJS_S_OK;
 }
 TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ resetVisualRenderStats)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ renderStatsReset) {
+    TVPResetVisualRenderStats();
+    if(result)
+        *result = 1;
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ renderStatsReset)
 //----------------------------------------------------------------------
 TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ captureScreen) {
     if(numparams < 1)
@@ -550,7 +583,7 @@ TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ captureScreen) {
     const int height = numparams > 4 ? static_cast<tjs_int>(*param[4]) : 0;
     TVPRequestScreenCapture(path, x, y, width, height);
     if(result)
-        *result = 1;
+        *result = path;
     return TJS_S_OK;
 }
 TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ captureScreen)

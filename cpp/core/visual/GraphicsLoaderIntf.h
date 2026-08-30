@@ -12,6 +12,8 @@
 #ifndef GraphicsLoaderIntfH
 #define GraphicsLoaderIntfH
 
+#include <cstdint>
+
 // Name of the graphic currently being handed to a format handler.  This is
 // primarily useful to format-specific diagnostics (for example TLG virtual
 // storage adapters); callers must treat the returned value as a snapshot.
@@ -310,6 +312,26 @@ extern tjs_uint64 TVPGraphicCacheSystemLimit;
 TJS_EXP_FUNC_DEF(void, TVPClearGraphicCache, ());
 // clear graphic cache
 
+extern void TVPClearGraphicCacheEntry(const ttstr &normalized_name);
+extern void TVPClearTransientGraphicCache();
+extern void TVPSetGraphicCacheEntryPinned(const ttstr &normalized_name,
+                                          bool pinned);
+
+struct TVPGraphicCacheEntryInfo {
+    ttstr name;
+    tjs_int32 keyidx = 0;
+    tTVPGraphicLoadMode mode = glmNormal;
+    tjs_uint dw = 0;
+    tjs_uint dh = 0;
+    tjs_uint width = 0;
+    tjs_uint height = 0;
+    tjs_uint bytes = 0;
+    bool pinned = false;
+};
+extern void
+TVPGetGraphicCacheEntries(std::vector<TVPGraphicCacheEntryInfo> &out);
+extern void TVPDumpImageCacheList();
+extern void TVPEnsureGraphicCacheCompactHook();
 extern void TVPTouchImages(const std::vector<ttstr> &storages, tjs_int64 limit,
                            tjs_uint64 timeout);
 
@@ -482,6 +504,10 @@ extern iTJSDispatch2 *
 TVPMetaInfoPairsToDictionary(std::vector<tTVPGraphicMetaInfoPair> *vec);
 extern void TVPPushGraphicCache(const ttstr &nname, class tTVPBitmap *bmp,
                                 std::vector<tTVPGraphicMetaInfoPair> *meta);
+extern bool TVPTryPushGraphicCache(
+    const ttstr &normalized_name, class tTVPBitmap *bitmap,
+    std::vector<tTVPGraphicMetaInfoPair> *meta,
+    std::uint64_t prefetch_generation);
 extern tTVPGraphicHandlerType *TVPGetGraphicLoadHandler(const ttstr &ext);
 extern bool TVPCheckImageCache(const ttstr &nname, tTVPBaseBitmap *dest,
                                tTVPGraphicLoadMode mode, tjs_uint dw,

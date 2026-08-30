@@ -101,7 +101,6 @@ if(NOT WEB AND NOT EMSCRIPTEN AND
         ${VISUAL_PATH}/gl/UpstreamUnivTransSSE2.cpp
         ${VISUAL_PATH}/gl/UpstreamAdjustColorSSE2.cpp
         ${VISUAL_PATH}/gl/UpstreamPixelFormatSSE2.cpp
-        ${VISUAL_PATH}/gl/UpstreamTLGSSE2.cpp
         ${VISUAL_PATH}/gl/UpstreamBoxBlurSSE2.cpp
     )
     target_compile_definitions(${PROJECT_NAME} PRIVATE
@@ -135,7 +134,6 @@ if(NOT WEB AND NOT EMSCRIPTEN AND
             ${VISUAL_PATH}/gl/UpstreamX86SIMDUtil.cpp
             ${VISUAL_PATH}/gl/UpstreamUnivTransSSE2.cpp
             ${VISUAL_PATH}/gl/UpstreamAdjustColorSSE2.cpp
-            ${VISUAL_PATH}/gl/UpstreamTLGSSE2.cpp
             ${VISUAL_PATH}/gl/UpstreamBoxBlurSSE2.cpp
             PROPERTIES COMPILE_OPTIONS "-msse2")
     endif()

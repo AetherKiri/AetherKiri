@@ -2,8 +2,13 @@
 #ifndef __GRAPHICS_LOAD_THREAD_H__
 #define __GRAPHICS_LOAD_THREAD_H__
 
+#include <atomic>
+#include <condition_variable>
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <mutex>
 #include <queue>
-#include <set>
 #include <vector>
 #include "ThreadIntf.h"
 #include "NativeEventQueue.h"
@@ -32,8 +37,15 @@ struct tTVPImageLoadCommand {
     tTVPTmpBitmapImage *dest_;
     std::string result_;
     bool prefetch_only_;
+    std::uint64_t prefetch_generation_ = 0;
     tTVPImageLoadCommand();
     ~tTVPImageLoadCommand();
+};
+
+struct tTVPImagePrefetchInFlight {
+    std::mutex mutex;
+    std::condition_variable complete;
+    bool done = false;
 };
 
 class tTVPAsyncImageLoader : public tTVPThread {
@@ -53,7 +65,9 @@ class tTVPAsyncImageLoader : public tTVPThread {
     std::queue<tTVPImageLoadCommand *> CommandQueue;
     /** 読込み完了画像キュー */
     std::queue<tTVPImageLoadCommand *> LoadedQueue;
-    std::set<std::string> InFlightTable;
+    std::map<std::string, std::shared_ptr<tTVPImagePrefetchInFlight>>
+        InFlightTable;
+    std::atomic<std::uint64_t> PrefetchGeneration{ 1 };
 
 private:
     /**
@@ -64,7 +78,8 @@ private:
      * 読込み完了した画像をメインスレッドでBitmapへ格納して、イベント通知する
      */
     void HandleLoadedImage();
-    void FinishPrefetch(const std::string &path);
+    void FinalizePrefetchOnWorker(tTVPImageLoadCommand *cmd);
+    void FinishInFlight(const std::string &path);
 
 public:
     /**
@@ -122,10 +137,16 @@ public:
     void FlushPrefetchQueue();
 
     bool IsAnyInFlight();
+    bool IsPrefetchGenerationCurrent(std::uint64_t generation) const;
+    std::shared_ptr<tTVPImagePrefetchInFlight>
+    FindInFlight(const ttstr &normalized_name);
 };
 
 void TVPRequestImagePrefetch(const ttstr &name);
 void TVPFlushImagePrefetchQueue();
 bool TVPIsImagePrefetchLoading();
+bool TVPIsImagePrefetchGenerationCurrent(std::uint64_t generation);
+bool TVPWaitForImagePrefetch(const ttstr &normalized_name,
+                             tjs_int timeout_ms);
 
 #endif // __GRAPHICS_LOAD_THREAD_H__
