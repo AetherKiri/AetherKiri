@@ -7,6 +7,8 @@ typedef krkr::PixelFormat CCPixelFormat;
 #include "tvpgl.h"
 #include <assert.h>
 #include <algorithm>
+#include <array>
+#include <cstdlib>
 #include "ThreadIntf.h"
 #include "argb.h"
 extern "C" {
@@ -1660,6 +1662,10 @@ public:
         if(h > src_clip_h) h = src_clip_h;
         if(w <= 0 || h <= 0) return;
 
+        // Alpha-on-alpha composition touches the shared texture row accessors
+        // (which may perform a GPU readback/dirty transition).  Keep this
+        // family serialized; splitting it into OpenMP tasks adds scheduling
+        // overhead and does not reduce the measured long-tail frame time.
         if(THREAD_FACTOR == 52) {
             this->PartialFill(_tar, _src, sx, sy, dx, dy, w, h);
             return;
@@ -2796,6 +2802,34 @@ static int TVPCvResizeInterpolation(tTVPBBStretchType type, int sw, int sh,
     return cv::INTER_LINEAR;
 }
 
+static const std::array<uint8_t, 256 * 256> &TVPUnpremultiplyTable() {
+    static const auto table = [] {
+        std::array<uint8_t, 256 * 256> values{};
+        for(unsigned int a = 1; a < 256; ++a) {
+            for(unsigned int color = 0; color < 256; ++color) {
+                values[(a << 8) | color] = static_cast<uint8_t>(std::min(
+                    255u, (color * 255u + a / 2u) / a));
+            }
+        }
+        return values;
+    }();
+    return table;
+}
+
+static const std::array<uint8_t, 256 * 256> &TVPPremultiplyTable() {
+    static const auto table = [] {
+        std::array<uint8_t, 256 * 256> values{};
+        for(unsigned int a = 0; a < 256; ++a) {
+            for(unsigned int color = 0; color < 256; ++color) {
+                values[(a << 8) | color] = static_cast<uint8_t>(
+                    (color * a + 127u) / 255u);
+            }
+        }
+        return values;
+    }();
+    return table;
+}
+
 static void TVPResizeRgbaForLayerSampling(const cv::Mat &src_img,
                                           cv::Mat &dst_img,
                                           const cv::Size &dsize,
@@ -2805,34 +2839,52 @@ static void TVPResizeRgbaForLayerSampling(const cv::Mat &src_img,
         return;
     }
 
-    cv::Mat premul(src_img.rows, src_img.cols, CV_32FC4);
+    // Keep the premultiplied working image in 8-bit RGBA.  The previous
+    // float32 staging image used ~16 bytes/pixel and paid three float
+    // multiplies for every source texel before OpenCV could resize it.  The
+    // source and destination are both 8-bit RGBA, so integer premultiplication
+    // preserves the same alpha-edge semantics while allowing OpenCV's fast
+    // 8-bit INTER_AREA path to do the reduction.
+    // Resize is invoked synchronously by the software compositor.  Reuse the
+    // two large staging buffers on the calling thread so a sequence of motion
+    // frames does not repeatedly allocate/free multi-megapixel Mats.  TLS
+    // keeps this safe if a platform drives more than one render thread.
+    static thread_local cv::Mat premul;
+    static thread_local cv::Mat resized;
+    const auto &premultiply = TVPPremultiplyTable();
+    premul.create(src_img.rows, src_img.cols, CV_8UC4);
     for (int y = 0; y < src_img.rows; ++y) {
         const uint8_t *src = src_img.ptr<uint8_t>(y);
-        cv::Vec4f *dst = premul.ptr<cv::Vec4f>(y);
+        uint8_t *dst = premul.ptr<uint8_t>(y);
         for (int x = 0; x < src_img.cols; ++x) {
-            const float a = src[x * 4 + 3] * (1.0f / 255.0f);
-            dst[x][0] = src[x * 4 + 0] * (1.0f / 255.0f) * a;
-            dst[x][1] = src[x * 4 + 1] * (1.0f / 255.0f) * a;
-            dst[x][2] = src[x * 4 + 2] * (1.0f / 255.0f) * a;
-            dst[x][3] = a;
+            const unsigned int a = src[x * 4 + 3];
+            const size_t base = static_cast<size_t>(a) << 8;
+            dst[x * 4 + 0] = premultiply[base | src[x * 4 + 0]];
+            dst[x * 4 + 1] = premultiply[base | src[x * 4 + 1]];
+            dst[x * 4 + 2] = premultiply[base | src[x * 4 + 2]];
+            dst[x * 4 + 3] = static_cast<uint8_t>(a);
         }
     }
 
-    cv::Mat resized;
+    resized.create(dsize.height, dsize.width, CV_8UC4);
     cv::resize(premul, resized, dsize, 0, 0, interpolation);
+    const auto &unpremultiply = TVPUnpremultiplyTable();
     for (int y = 0; y < resized.rows; ++y) {
-        const cv::Vec4f *src = resized.ptr<cv::Vec4f>(y);
+        const uint8_t *src = resized.ptr<uint8_t>(y);
         uint8_t *dst = dst_img.ptr<uint8_t>(y);
         for (int x = 0; x < resized.cols; ++x) {
-            const float a = std::max(0.0f, std::min(1.0f, src[x][3]));
-            const float inv_a = a > 0.00001f ? 1.0f / a : 0.0f;
-            const float r = std::max(0.0f, std::min(1.0f, src[x][0] * inv_a));
-            const float g = std::max(0.0f, std::min(1.0f, src[x][1] * inv_a));
-            const float b = std::max(0.0f, std::min(1.0f, src[x][2] * inv_a));
-            dst[x * 4 + 0] = static_cast<uint8_t>(r * 255.0f + 0.5f);
-            dst[x * 4 + 1] = static_cast<uint8_t>(g * 255.0f + 0.5f);
-            dst[x * 4 + 2] = static_cast<uint8_t>(b * 255.0f + 0.5f);
-            dst[x * 4 + 3] = static_cast<uint8_t>(a * 255.0f + 0.5f);
+            const unsigned int a = src[x * 4 + 3];
+            if(a == 0) {
+                dst[x * 4 + 0] = 0;
+                dst[x * 4 + 1] = 0;
+                dst[x * 4 + 2] = 0;
+            } else {
+                const size_t base = static_cast<size_t>(a) << 8;
+                dst[x * 4 + 0] = unpremultiply[base | src[x * 4 + 0]];
+                dst[x * 4 + 1] = unpremultiply[base | src[x * 4 + 1]];
+                dst[x * 4 + 2] = unpremultiply[base | src[x * 4 + 2]];
+            }
+            dst[x * 4 + 3] = static_cast<uint8_t>(a);
         }
     }
 }
@@ -3279,6 +3331,105 @@ public:
             dw = rctar.get_width();
             dh = rctar.get_height();
             if(sh == 0 || sw == 0 || dh == 0 || dw == 0) {
+                return;
+            }
+
+            // AffineSourceBMPBase uses a tiny opaque neutral-color bitmap as
+            // a mask for some environment transitions.  Scaling that bitmap
+            // to the full 2560x1440 surface used to allocate a temporary
+            // image and then walk every destination pixel through
+            // AlphaBlend_d, even though the result is simply a solid copy.
+            // Restrict this shortcut to the actual AlphaBlend_d method with
+            // opacity 255; other blend modes and opacity values retain the
+            // exact legacy path.
+            bool canFillUniformOpaque =
+                method != nullptr && method->GetName() == "AlphaBlend_d" &&
+                static_cast<tTVPRenderMethod_BltAndOpa<
+                    52, TVPAlphaBlend_d, TVPAlphaBlend_do> *>(method)->opa ==
+                    255;
+            if(canFillUniformOpaque) {
+                const int sourceLeft = std::max(0, rcsrc.left);
+                const int sourceTop = std::max(0, rcsrc.top);
+                const int sourceRight =
+                    std::min<int>(src->GetWidth(), rcsrc.right);
+                const int sourceBottom =
+                    std::min<int>(src->GetHeight(), rcsrc.bottom);
+                const int sourceWidth = sourceRight - sourceLeft;
+                const int sourceHeight = sourceBottom - sourceTop;
+                const auto *sourcePixels = static_cast<const tjs_uint8 *>(
+                    src->GetPixelData());
+                const int sourcePitch = src->GetPitch();
+                if(sourcePixels != nullptr && sourcePitch > 0 &&
+                   sourceWidth > 0 && sourceHeight > 0) {
+                    tjs_uint32 uniformPixel = 0;
+                    bool uniform = true;
+                    bool first = true;
+                    for(int y = sourceTop; y < sourceBottom && uniform; ++y) {
+                        const auto *row = sourcePixels + y * sourcePitch;
+                        for(int x = sourceLeft; x < sourceRight; ++x) {
+                            tjs_uint32 pixel = 0;
+                            std::memcpy(&pixel, row + x * 4, sizeof(pixel));
+                            if(first) {
+                                uniformPixel = pixel;
+                                first = false;
+                            } else if(pixel != uniformPixel) {
+                                uniform = false;
+                                break;
+                            }
+                        }
+                    }
+                    if(uniform && !first) {
+                        if((uniformPixel >> 24) == 0) {
+                            return;
+                        }
+                        if((uniformPixel >> 24) == 255) {
+                            const int targetWidth = rctar.get_width();
+                            for(int y = rctar.top; y < rctar.bottom; ++y) {
+                                auto *row = static_cast<tjs_uint32 *>(
+                                    tar->GetScanLineForWrite(y));
+                                if(row != nullptr) {
+                                    TVPFillARGB(row + rctar.left, targetWidth,
+                                                uniformPixel);
+                                }
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
+
+            // A plain Copy stretch does not need an intermediate OpenCV
+            // image.  Feed the axis-aligned rectangle directly to the same
+            // fixed-point sampler used by the affine renderer.  This avoids
+            // a multi-megapixel resize allocation plus a second full-frame
+            // copy during the frequent environment-layer updates.
+            if(method != nullptr && method->GetName() == "Copy") {
+                TAffuncFunc affineloop = GetStretchFunction(
+                    static_cast<tTVPRenderMethod_Software *>(method));
+                const tTVPPointD firstTriangle[3] = {
+                    {static_cast<double>(rctar.left),
+                     static_cast<double>(rctar.top)},
+                    {static_cast<double>(rctar.right),
+                     static_cast<double>(rctar.top)},
+                    {static_cast<double>(rctar.left),
+                     static_cast<double>(rctar.bottom)},
+                };
+                const tTVPPointD secondTriangle[3] = {
+                    {static_cast<double>(rctar.right),
+                     static_cast<double>(rctar.top)},
+                    {static_cast<double>(rctar.left),
+                     static_cast<double>(rctar.bottom)},
+                    {static_cast<double>(rctar.right),
+                     static_cast<double>(rctar.bottom)},
+                };
+                // InternalAffineBlt rasterizes one triangle at a time.  A
+                // rectangle therefore needs both its LT/RT/LB and
+                // RT/LB/RB halves; drawing only one leaves a diagonal
+                // untouched wedge in scaled backgrounds and SD CGs.
+                InternalAffineBlt(rctar, rcsrc, rcsrc, src, tar,
+                                  firstTriangle, true, affineloop);
+                InternalAffineBlt(rctar, rcsrc, rcsrc, src, tar,
+                                  secondTriangle, false, affineloop);
                 return;
             }
 

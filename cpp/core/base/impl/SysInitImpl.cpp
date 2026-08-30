@@ -328,6 +328,15 @@ void TVPAfterSystemInit() {
         _val = IndividualConfigManager::GetInstance()->GetValue<std::string>(
             "renderer", "opengl");
     }
+    // The Godot backend keeps decoded textures in GPU resources. On Apple
+    // targets the legacy platform cache controller is not present, so the
+    // computed graphic-cache budget otherwise remains unused and every
+    // repeated TLG request rebuilds a texture and uploads it again. Enable
+    // the normal memory-derived budget for this backend; other renderers
+    // retain their historical cache policy.
+    if(_val == "godot_native" && TVPGetGraphicCacheLimit() == 0) {
+        TVPSetGraphicCacheLimit(static_cast<tjs_uint64>(-1));
+    }
     if(_val != "software") {
         TVPGraphicSplitOperationType = gsotNone;
     } else {

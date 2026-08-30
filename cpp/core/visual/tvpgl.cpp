@@ -2472,96 +2472,68 @@ TVP_GL_FUNC_DECL(void, TVPLinTransAlphaBlend_HDA_o_c,
     }
 }
 
+static inline void TVPAlphaBlendDPixel(tjs_uint32 *dest, tjs_uint32 s) {
+    /*
+     * Transparent texels are common in the large character sprites used by
+     * affine scene draws.  The table implementation below produces the
+     * unchanged destination for source alpha == 0, so avoid the table lookups
+     * and channel arithmetic altogether in that case.
+     */
+    // Keep these cases identical to TVPAlphaBlend_d_c.  E-mote atlases are
+    // mostly transparent or opaque texels; avoiding the table lookups here
+    // is important because affine draws visit the same pixels one at a time.
+    if(s <= 0x00ffffffu) return;
+    if(s >= 0xff000000u) {
+        *dest = s;
+        return;
+    }
+
+    tjs_uint32 d = *dest;
+    if(d <= 0x00ffffffu) {
+        *dest = s;
+        return;
+    }
+    const tjs_uint32 addr = ((s >> 16) & 0xff00) + (d >> 24);
+    tjs_uint32 destalpha = TVPNegativeMulTable[addr] << 24;
+    tjs_uint32 sopa = TVPOpacityOnOpacityTable[addr];
+    tjs_uint32 d1 = d & 0xff00ff;
+    d1 = (d1 + (((s & 0xff00ff) - d1) * sopa >> 8)) & 0xff00ff;
+    d &= 0xff00;
+    s &= 0xff00;
+    *dest = d1 + ((d + ((s - d) * sopa >> 8)) & 0xff00) + destalpha;
+}
+
 /*export*/
 TVP_GL_FUNC_DECL(void, TVPLinTransAlphaBlend_d_c,
                  (tjs_uint32 * dest, tjs_int len, const tjs_uint32 *src,
                   tjs_int sx, tjs_int sy, tjs_int stepx, tjs_int stepy,
                   tjs_int srcpitch)) {
-    tjs_uint32 d1, s, d, sopa, addr, destalpha;
-    if(len > 0) {
-        int lu_n = (len + (4 - 1)) / 4;
-        switch(len % 4) {
-            case 0:
-                do {
-                    {
-                        s = *((const tjs_uint32 *)((const tjs_uint8 *)src +
-                                                   (sy >> 16) * srcpitch) +
-                              (sx >> 16));
-                        sx += stepx;
-                        sy += stepy;
-                        d = *dest;
-                        addr = ((s >> 16) & 0xff00) + (d >> 24);
-                        destalpha = TVPNegativeMulTable[addr] << 24;
-                        sopa = TVPOpacityOnOpacityTable[addr];
-                        d1 = d & 0xff00ff;
-                        d1 = (d1 + (((s & 0xff00ff) - d1) * sopa >> 8)) &
-                            0xff00ff;
-                        d &= 0xff00;
-                        s &= 0xff00;
-                        *dest = d1 + ((d + ((s - d) * sopa >> 8)) & 0xff00) +
-                            destalpha;
-                        dest++;
-                    };
-                    case 3: {
-                        s = *((const tjs_uint32 *)((const tjs_uint8 *)src +
-                                                   (sy >> 16) * srcpitch) +
-                              (sx >> 16));
-                        sx += stepx;
-                        sy += stepy;
-                        d = *dest;
-                        addr = ((s >> 16) & 0xff00) + (d >> 24);
-                        destalpha = TVPNegativeMulTable[addr] << 24;
-                        sopa = TVPOpacityOnOpacityTable[addr];
-                        d1 = d & 0xff00ff;
-                        d1 = (d1 + (((s & 0xff00ff) - d1) * sopa >> 8)) &
-                            0xff00ff;
-                        d &= 0xff00;
-                        s &= 0xff00;
-                        *dest = d1 + ((d + ((s - d) * sopa >> 8)) & 0xff00) +
-                            destalpha;
-                        dest++;
-                    };
-                    case 2: {
-                        s = *((const tjs_uint32 *)((const tjs_uint8 *)src +
-                                                   (sy >> 16) * srcpitch) +
-                              (sx >> 16));
-                        sx += stepx;
-                        sy += stepy;
-                        d = *dest;
-                        addr = ((s >> 16) & 0xff00) + (d >> 24);
-                        destalpha = TVPNegativeMulTable[addr] << 24;
-                        sopa = TVPOpacityOnOpacityTable[addr];
-                        d1 = d & 0xff00ff;
-                        d1 = (d1 + (((s & 0xff00ff) - d1) * sopa >> 8)) &
-                            0xff00ff;
-                        d &= 0xff00;
-                        s &= 0xff00;
-                        *dest = d1 + ((d + ((s - d) * sopa >> 8)) & 0xff00) +
-                            destalpha;
-                        dest++;
-                    };
-                    case 1: {
-                        s = *((const tjs_uint32 *)((const tjs_uint8 *)src +
-                                                   (sy >> 16) * srcpitch) +
-                              (sx >> 16));
-                        sx += stepx;
-                        sy += stepy;
-                        d = *dest;
-                        addr = ((s >> 16) & 0xff00) + (d >> 24);
-                        destalpha = TVPNegativeMulTable[addr] << 24;
-                        sopa = TVPOpacityOnOpacityTable[addr];
-                        d1 = d & 0xff00ff;
-                        d1 = (d1 + (((s & 0xff00ff) - d1) * sopa >> 8)) &
-                            0xff00ff;
-                        d &= 0xff00;
-                        s &= 0xff00;
-                        *dest = d1 + ((d + ((s - d) * sopa >> 8)) & 0xff00) +
-                            destalpha;
-                        dest++;
-                    };
-                } while(--lu_n);
-        }
+    if(len <= 0) return;
+
+    /* Keep the four-pixel unroll used by the original routine. */
+#define TVP_LIN_TRANS_ALPHA_BLEND_D_STEP()                                     \
+    do {                                                                        \
+        tjs_uint32 s =                                                         \
+            *((const tjs_uint32 *)((const tjs_uint8 *)src +                    \
+                                   (sy >> 16) * srcpitch) + (sx >> 16));       \
+        sx += stepx;                                                           \
+        sy += stepy;                                                           \
+        TVPAlphaBlendDPixel(dest, s);                                          \
+        dest++;                                                                \
+    } while(0)
+
+    while(len >= 4) {
+        TVP_LIN_TRANS_ALPHA_BLEND_D_STEP();
+        TVP_LIN_TRANS_ALPHA_BLEND_D_STEP();
+        TVP_LIN_TRANS_ALPHA_BLEND_D_STEP();
+        TVP_LIN_TRANS_ALPHA_BLEND_D_STEP();
+        len -= 4;
     }
+    while(len-- > 0) {
+        TVP_LIN_TRANS_ALPHA_BLEND_D_STEP();
+    }
+
+#undef TVP_LIN_TRANS_ALPHA_BLEND_D_STEP
 }
 
 /*export*/

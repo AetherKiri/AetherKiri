@@ -455,6 +455,10 @@ static tTJSVariant convertPSBLazy(const std::shared_ptr<PSB::IPSBValue> &val) {
 static tjs_error getRoot(tTJSVariant *r, tjs_int n, tTJSVariant **p,
                          iTJSDispatch2 *obj) {
     auto *self = ncbInstanceAdaptor<PSB::PSBFile>::GetNativeInstance(obj);
+    if(self->hasCompatRoot()) {
+        *r = self->getCompatRoot();
+        return TJS_S_OK;
+    }
     const auto &root = self->getRootValue();
     if(root) {
         // Gallery scripts inspect and copy small PIMG roots as real

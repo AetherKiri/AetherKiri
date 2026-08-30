@@ -58,6 +58,28 @@ namespace {
                 std::chrono::steady_clock::now().time_since_epoch()).count());
     }
 
+    std::uint64_t motionRasterThrottleIntervalUs() {
+        static const std::uint64_t intervalUs = [] {
+            // A 30 Hz publish cap keeps the authored transition clock and
+            // input processing at the host tick rate while preventing an
+            // expensive non-emote full-canvas raster from running twice
+            // before the previous surface can be presented.  Set the value
+            // to 0 for strict legacy every-tick rendering.
+            const char *value =
+                std::getenv("AETHERKIRI_MOTION_RASTER_THROTTLE_MS");
+            if(!value || !*value) return std::uint64_t{33333};
+            char *end = nullptr;
+            const double milliseconds = std::strtod(value, &end);
+            if(end == value || !std::isfinite(milliseconds) ||
+               milliseconds <= 0.0) {
+                return std::uint64_t{0};
+            }
+            const double clamped = std::min(milliseconds, 1000.0);
+            return static_cast<std::uint64_t>(clamped * 1000.0);
+        }();
+        return intervalUs;
+    }
+
     struct BgraReadbackStats {
         int minimumX = 0;
         int minimumY = 0;
@@ -533,10 +555,16 @@ namespace {
         tjs_int canvasWidth,
         tjs_int canvasHeight,
         std::size_t commandSignature) {
+        (void)frame;
+        // `commandSignature` already contains every pixel-affecting value
+        // emitted by buildRenderCommands: source identity, opacity/tint,
+        // clip, and the evaluated world/local geometry.  The timeline frame
+        // number itself is metadata only. Requiring it here misses the common
+        // case where several adjacent ticks hold the same pose and makes the
+        // second page replay the full AlphaBlend_d composition unnecessarily.
         return entry.motion == motionPath &&
             entry.canvasWidth == canvasWidth &&
             entry.canvasHeight == canvasHeight &&
-            std::fabs(entry.frame - frame) < 0.0001 &&
             entry.commandSignature == commandSignature;
     }
 
@@ -1845,7 +1873,8 @@ namespace {
         motion::detail::PlayerRuntime &runtime,
         const std::string &motionPath,
         tjs_int canvasWidth,
-        tjs_int canvasHeight) {
+        tjs_int canvasHeight,
+        double frameTick) {
         if(!isYuzuPresentationMotion(motionPath) ||
            canvasWidth <= 0 || canvasHeight <= 0 ||
            runtime.preparedRenderItems.empty()) {
@@ -1860,6 +1889,48 @@ namespace {
             isYuzuStartupLogoMotion(motionPath);
 
         if(isTitleMotion) {
+            const auto loweredMotionPath = renderDebugLowercase(motionPath);
+            const auto filenameOffset = loweredMotionPath.find_last_of("/\\");
+            const auto motionFilename =
+                filenameOffset == std::string::npos
+                    ? loweredMotionPath
+                    : loweredMotionPath.substr(filenameOffset + 1);
+            const bool isUnevaluatedBaseTitleFrame =
+                frameTick <= 0.0001 &&
+                (motionFilename == "title_bg.mtn" ||
+                 motionFilename == "title_bg.psb");
+            if(isUnevaluatedBaseTitleFrame) {
+                // KAG creates and draws a Motion player immediately after
+                // play("title"), before the first progress callback.  At that
+                // point the nested char_move tree still contains its default
+                // persistent layers at full opacity, so the completed title
+                // card flashes once before the authored character entrance
+                // animation is evaluated.  Keep only the full-canvas white
+                // transition utility for this unevaluated frame.  Publishing
+                // even bg1/bg2 here makes the title background appear before
+                // the animation and then disappear behind its white flash.
+                // The first progressed frame publishes the authored scene.
+                int suppressed = 0;
+                for(auto &entry : runtime.preparedRenderItems) {
+                    if(!entry.drawFlag || entry.skipFlag0 || entry.skipFlag1 ||
+                       entry.opacity <= 0) {
+                        continue;
+                    }
+                    if(!isYuzuTitleWhiteUtilityLayer(
+                           motionPath, entry.nodeLabel, entry.sourceKey)) {
+                        entry.skipFlag0 = true;
+                        ++suppressed;
+                    }
+                }
+                if(suppressed > 0 && LOGGER &&
+                   shouldDebugTitleRender(motionPath) &&
+                   markRenderDebugLogged(
+                       "yuzu-title-unevaluated-frame:" + motionPath)) {
+                    LOGGER->info(
+                        "motion title unevaluated composition suppressed: motion={} suppressed={}",
+                        motionPath, suppressed);
+                }
+            }
             const bool hasSyntheticIntroLayer = std::any_of(
                 runtime.preparedRenderItems.begin(),
                 runtime.preparedRenderItems.end(),
@@ -8680,6 +8751,100 @@ namespace motion {
         TVPGodotGpuBatchScope gpuBatch(
             _runtime->isEmoteMode && _runtime->renderCommands.size() > 1);
 
+        // The same evaluated command list can be submitted through
+        // renderToLayer, SeparateLayerAdaptor, and D3DAdaptor during a KAG
+        // page exchange.  Those routes converge here after their target has
+        // been prepared, so this is the earliest common point where a
+        // completed frame can be shared without replaying the full
+        // AlphaBlend_d/Copy sequence.  Keep the source texture alive through
+        // the short reuse window; the normal copy-on-write path detaches a
+        // target before its next clear.
+        const auto frameSignature =
+            renderCommandReuseSignature(_runtime->renderCommands, _maskMode);
+        const int frameCanvasWidth = renderLayer->GetWidth() > 0
+            ? static_cast<int>(renderLayer->GetWidth())
+            : static_cast<int>(renderLayer->GetImageWidth());
+        const int frameCanvasHeight = renderLayer->GetHeight() > 0
+            ? static_cast<int>(renderLayer->GetHeight())
+            : static_cast<int>(renderLayer->GetImageHeight());
+        const bool frameCacheEnabled =
+            frameCanvasWidth > 0 && frameCanvasHeight > 0 &&
+            !_runtime->renderCommands.empty();
+        if(frameCacheEnabled && motionRenderProfileEnabled() && LOGGER &&
+           std::getenv("AETHERKIRI_MOTION_FRAME_CACHE_TRACE")) {
+            LOGGER->info(
+                "motion execute frame cache probe: motion={} frame={:.2f} target={} canvas={}x{} signature={:016x} enabled={}",
+                motionPath, _clampedEvalTime,
+                static_cast<const void *>(renderLayerObject),
+                frameCanvasWidth, frameCanvasHeight, frameSignature,
+                frameCacheEnabled ? 1 : 0);
+        }
+        if(frameCacheEnabled) {
+            auto &entry = _runtime->emoteRenderFrameCache;
+            const auto nowUs = motionRenderProfileNowUs();
+            const bool entryFresh =
+                entry.storedUs != 0 && nowUs >= entry.storedUs &&
+                nowUs - entry.storedUs <= kGlobalPresentationReuseTtlUs;
+            if(entryFresh && entry.bitmap &&
+               entry.motion == motionPath &&
+               entry.canvasWidth == frameCanvasWidth &&
+               entry.canvasHeight == frameCanvasHeight &&
+               entry.commandSignature == frameSignature &&
+               entry.bitmap->GetWidth() ==
+                   static_cast<tjs_uint>(frameCanvasWidth) &&
+               entry.bitmap->GetHeight() ==
+                   static_cast<tjs_uint>(frameCanvasHeight)) {
+                renderLayer->AssignMainImageWithUpdate(entry.bitmap.get());
+                renderLayer->SetSize(frameCanvasWidth, frameCanvasHeight);
+                renderLayer->SetClip(0, 0, frameCanvasWidth,
+                                     frameCanvasHeight);
+                ++_runtime->emoteRenderFrameReuseSkips;
+                if(motionRenderProfileEnabled() && LOGGER) {
+                    LOGGER->info(
+                        "motion frame render reuse: motion={} frame={:.2f} target={} canvas={}x{} signature={:016x} skips={} age_us={}",
+                        motionPath, _clampedEvalTime,
+                        static_cast<const void *>(renderLayerObject),
+                        frameCanvasWidth, frameCanvasHeight, frameSignature,
+                        _runtime->emoteRenderFrameReuseSkips,
+                        nowUs - entry.storedUs);
+                }
+                return gpuBatch.finish();
+            }
+
+            auto &globalCache = globalPresentationRenderCache();
+            auto sourceIt = findGlobalPresentationRenderSource(
+                globalCache, renderLayerObject, motionPath,
+                _clampedEvalTime, frameCanvasWidth, frameCanvasHeight,
+                frameSignature, nowUs);
+            if(sourceIt != globalCache.end() &&
+               copyGlobalPresentationRender(
+                   renderLayerObject, false, frameCanvasWidth,
+                   frameCanvasHeight, sourceIt->second)) {
+                if(!skipUpdate) {
+                    renderLayer->Update(false);
+                }
+                ++_runtime->emoteRenderFrameReuseSkips;
+                if(motionRenderProfileEnabled() && LOGGER) {
+                    LOGGER->info(
+                        "motion global frame render reuse: motion={} frame={:.2f} target={} source={} canvas={}x{} signature={:016x} skips={} age_us={}",
+                        motionPath, _clampedEvalTime,
+                        static_cast<const void *>(renderLayerObject),
+                        static_cast<const void *>(sourceIt->first),
+                        frameCanvasWidth, frameCanvasHeight, frameSignature,
+                        _runtime->emoteRenderFrameReuseSkips,
+                        nowUs >= sourceIt->second.storedUs
+                            ? nowUs - sourceIt->second.storedUs
+                            : 0);
+                }
+                globalCache[renderLayerObject] =
+                    makeGlobalPresentationRenderCacheEntry(
+                        renderLayerObject, motionPath, _clampedEvalTime,
+                        frameCanvasWidth, frameCanvasHeight, frameSignature,
+                        nowUs);
+                return gpuBatch.finish();
+            }
+        }
+
         struct RenderProfileStats {
             int baseHits = 0;
             int baseMisses = 0;
@@ -11072,6 +11237,40 @@ namespace motion {
                 cache.erase(oldest);
             }
         }
+
+        if(frameCacheEnabled) {
+            auto *renderedImage = renderLayer->GetMainImage();
+            if(renderedImage &&
+               renderedImage->GetWidth() >=
+                   static_cast<tjs_uint>(frameCanvasWidth) &&
+               renderedImage->GetHeight() >=
+                   static_cast<tjs_uint>(frameCanvasHeight)) {
+                auto &entry = _runtime->emoteRenderFrameCache;
+                if(!entry.bitmap ||
+                   entry.bitmap->GetWidth() !=
+                       static_cast<tjs_uint>(frameCanvasWidth) ||
+                   entry.bitmap->GetHeight() !=
+                       static_cast<tjs_uint>(frameCanvasHeight)) {
+                    entry.bitmap = std::make_shared<tTVPBaseBitmap>(
+                        static_cast<tjs_uint>(frameCanvasWidth),
+                        static_cast<tjs_uint>(frameCanvasHeight), 32);
+                }
+                entry.bitmap->CopyRect(
+                    0, 0, renderedImage,
+                    tTVPRect(0, 0, frameCanvasWidth, frameCanvasHeight));
+                entry.motion = motionPath;
+                entry.frame = _clampedEvalTime;
+                entry.canvasWidth = frameCanvasWidth;
+                entry.canvasHeight = frameCanvasHeight;
+                entry.commandSignature = frameSignature;
+                entry.storedUs = motionRenderProfileNowUs();
+                globalPresentationRenderCache()[renderLayerObject] =
+                    makeGlobalPresentationRenderCacheEntry(
+                        renderLayerObject, motionPath, _clampedEvalTime,
+                        frameCanvasWidth, frameCanvasHeight, frameSignature,
+                        entry.storedUs);
+            }
+        }
         if(profileEnabled && LOGGER) {
             size_t materializedPreparedEntries = 0;
             for(const auto &entry : materializedKeysBySource) {
@@ -11464,7 +11663,7 @@ namespace motion {
         applyPreparedRenderItemTranslateOffsets();
         adjustPreparedRenderItemsForYuzuPresentation(
             *_runtime, motionPath, adaptor->getWidth(),
-            adaptor->getHeight());
+            adaptor->getHeight(), _clampedEvalTime);
         adjustPreparedRenderItemsForCenteredGameMotion(
             *_runtime, motionPath, adaptor->getWidth(),
             adaptor->getHeight(),
@@ -12395,6 +12594,35 @@ namespace motion {
             return false;
         }
 
+        // AffineSourceMotion's non-emote path is a CPU full-canvas raster.
+        // Its timer can run at 60 Hz even when the previous raster already
+        // consumed the whole frame budget. Reuse the last completed surface
+        // for a short, configurable interval; progress/evaluation still runs
+        // every tick, so the motion clock and input remain responsive while
+        // presentation is bounded at 30 Hz by default.
+        const std::uint64_t rasterThrottleUs =
+            motionRasterThrottleIntervalUs();
+        const std::uint64_t rasterNowUs = motionRenderProfileNowUs();
+        const bool sameRasterTarget =
+            _runtime->lastMotionRasterTarget.Type() == tvtObject &&
+            _runtime->lastMotionRasterTarget.AsObjectNoAddRef() ==
+                resolvedLayerObject &&
+            _runtime->lastMotionRasterMotion == motionPath &&
+            _runtime->lastMotionRasterWidth == canvasWidth &&
+            _runtime->lastMotionRasterHeight == canvasHeight &&
+            _runtime->lastMotionRasterPublishUs != 0 &&
+            rasterNowUs >= _runtime->lastMotionRasterPublishUs &&
+            rasterNowUs - _runtime->lastMotionRasterPublishUs <
+                rasterThrottleUs;
+        auto *cachedRasterLayer = resolveNativeLayer(renderLayerObject);
+        if(!_runtime->isEmoteMode && !skipUpdate && rasterThrottleUs != 0 &&
+           sameRasterTarget && cachedRasterLayer &&
+           cachedRasterLayer->GetHasImage()) {
+            _runtime->lastCanvas =
+                tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+            return true;
+        }
+
         if(renderLayerObject != resolvedLayerObject) {
             if(!prepareLayerForRender(renderLayerObject, canvasWidth,
                                       canvasHeight, 0x00000000)) {
@@ -12416,8 +12644,165 @@ namespace motion {
         }
 
         buildRenderCommands(canvasWidth, canvasHeight);
+
+        // A KAG page exchange can ask the same motion to draw the exact same
+        // evaluated frame into both the outgoing and incoming page.  The
+        // command list is target-independent, so running all direct
+        // AlphaBlend_d/Copy operations twice only duplicates the expensive
+        // full-canvas composition.  Keep one short-lived, texture-sharing
+        // frame result and publish it to the second target without replaying
+        // the command list.  It applies to renderToLayer's ordinary and
+        // internal work-layer paths; SLA/D3D callers have their own
+        // presentation lifetimes.
+        const bool canReuseRenderedFrame =
+            !_runtime->renderCommands.empty();
+        const auto frameSignature = canReuseRenderedFrame
+            ? renderCommandReuseSignature(_runtime->renderCommands, _maskMode)
+            : 0u;
+        if(canReuseRenderedFrame && motionRenderProfileEnabled() && LOGGER &&
+           std::getenv("AETHERKIRI_MOTION_FRAME_CACHE_TRACE")) {
+            LOGGER->info(
+                "motion frame cache probe: motion={} frame={:.2f} target={} renderLayer={} needsInternal={} canvas={}x{} signature={:016x}",
+                motionPath, _clampedEvalTime,
+                static_cast<const void *>(resolvedLayerObject),
+                static_cast<const void *>(renderLayerObject),
+                _needsInternalAssignImages ? 1 : 0,
+                canvasWidth, canvasHeight, frameSignature);
+        }
+        if(canReuseRenderedFrame) {
+            auto &entry = _runtime->emoteRenderFrameCache;
+            const auto nowUs = motionRenderProfileNowUs();
+            const bool entryFresh =
+                entry.storedUs != 0 && nowUs >= entry.storedUs &&
+                nowUs - entry.storedUs <= kGlobalPresentationReuseTtlUs;
+            if(entryFresh && entry.bitmap &&
+               entry.motion == motionPath &&
+               entry.canvasWidth == canvasWidth &&
+               entry.canvasHeight == canvasHeight &&
+               entry.commandSignature == frameSignature &&
+               entry.bitmap->GetWidth() ==
+                   static_cast<tjs_uint>(canvasWidth) &&
+               entry.bitmap->GetHeight() ==
+                   static_cast<tjs_uint>(canvasHeight)) {
+                auto *cachedLayer = resolveNativeLayer(renderLayerObject);
+                if(cachedLayer) {
+                    cachedLayer->AssignMainImageWithUpdate(entry.bitmap.get());
+                    cachedLayer->SetSize(canvasWidth, canvasHeight);
+                    cachedLayer->SetClip(0, 0, canvasWidth, canvasHeight);
+                    if(_needsInternalAssignImages && !skipUpdate) {
+                        if(!updateLayerAfterDraw(resolvedLayerObject)) {
+                            return false;
+                        }
+                    } else if(!skipUpdate) {
+                        cachedLayer->Update(false);
+                    }
+                    _runtime->lastCanvas =
+                        tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+                    ++_runtime->emoteRenderFrameReuseSkips;
+                    if(motionRenderProfileEnabled() && LOGGER) {
+                        LOGGER->info(
+                            "motion frame render reuse: motion={} frame={:.2f} target={} canvas={}x{} signature={:016x} skips={} age_us={}",
+                            motionPath, _clampedEvalTime,
+                            static_cast<const void *>(renderLayerObject),
+                            canvasWidth, canvasHeight, frameSignature,
+                            _runtime->emoteRenderFrameReuseSkips,
+                            nowUs - entry.storedUs);
+                    }
+                    return true;
+                }
+            }
+
+            // Page cloning can create a second Player object, so the
+            // per-player cache above cannot see the first page's completed
+            // surface.  Share the same short-lived result process-wide by
+            // command signature.  The helper validates the source Layer
+            // before use and falls back to a normal render when the source
+            // page has already been released.
+            auto &globalCache = globalPresentationRenderCache();
+            auto sourceIt = findGlobalPresentationRenderSource(
+                globalCache, renderLayerObject, motionPath,
+                _clampedEvalTime, canvasWidth, canvasHeight, frameSignature,
+                nowUs);
+            if(sourceIt != globalCache.end() &&
+               copyGlobalPresentationRender(
+                   renderLayerObject, false, canvasWidth, canvasHeight,
+                   sourceIt->second)) {
+                auto *cachedLayer = resolveNativeLayer(renderLayerObject);
+                if(cachedLayer && _needsInternalAssignImages && !skipUpdate) {
+                    if(!updateLayerAfterDraw(resolvedLayerObject)) {
+                        return false;
+                    }
+                } else if(cachedLayer && !skipUpdate) {
+                    cachedLayer->Update(false);
+                }
+                _runtime->lastCanvas =
+                    tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+                ++_runtime->emoteRenderFrameReuseSkips;
+                if(motionRenderProfileEnabled() && LOGGER) {
+                    LOGGER->info(
+                        "motion global frame render reuse: motion={} frame={:.2f} target={} source={} canvas={}x{} signature={:016x} skips={} age_us={}",
+                        motionPath, _clampedEvalTime,
+                        static_cast<const void *>(renderLayerObject),
+                        static_cast<const void *>(sourceIt->first),
+                        canvasWidth, canvasHeight, frameSignature,
+                        _runtime->emoteRenderFrameReuseSkips,
+                        nowUs >= sourceIt->second.storedUs
+                            ? nowUs - sourceIt->second.storedUs
+                            : 0);
+                }
+                globalCache[renderLayerObject] =
+                    makeGlobalPresentationRenderCacheEntry(
+                        renderLayerObject, motionPath, _clampedEvalTime,
+                        canvasWidth, canvasHeight, frameSignature, nowUs);
+                return true;
+            }
+        }
         if(!executeLayerRenderCommands(renderLayerObject, true)) {
             return false;
+        }
+
+        if(canReuseRenderedFrame) {
+            auto *renderedLayer = resolveNativeLayer(renderLayerObject);
+            auto *renderedImage = renderedLayer
+                ? renderedLayer->GetMainImage()
+                : nullptr;
+            if(renderedImage &&
+               renderedImage->GetWidth() ==
+                   static_cast<tjs_uint>(canvasWidth) &&
+               renderedImage->GetHeight() ==
+                   static_cast<tjs_uint>(canvasHeight)) {
+                auto &entry = _runtime->emoteRenderFrameCache;
+                if(!entry.bitmap ||
+                   entry.bitmap->GetWidth() !=
+                       static_cast<tjs_uint>(canvasWidth) ||
+                   entry.bitmap->GetHeight() !=
+                       static_cast<tjs_uint>(canvasHeight)) {
+                    entry.bitmap = std::make_shared<tTVPBaseBitmap>(
+                        static_cast<tjs_uint>(canvasWidth),
+                        static_cast<tjs_uint>(canvasHeight), 32);
+                }
+                // Full-size CopyRect aliases the texture on the Godot
+                // backend.  The next prepareLayerForRender() call detaches
+                // its copy-on-write target before clearing it, so this cache
+                // remains immutable while another page is rendered.
+                entry.bitmap->CopyRect(
+                    0, 0, renderedImage,
+                    tTVPRect(0, 0, canvasWidth, canvasHeight));
+                entry.motion = motionPath;
+                entry.frame = _clampedEvalTime;
+                entry.canvasWidth = canvasWidth;
+                entry.canvasHeight = canvasHeight;
+                entry.commandSignature = frameSignature;
+                entry.storedUs = motionRenderProfileNowUs();
+            }
+
+            if(renderedLayer && renderedImage) {
+                const auto storedUs = motionRenderProfileNowUs();
+                globalPresentationRenderCache()[renderLayerObject] =
+                    makeGlobalPresentationRenderCacheEntry(
+                        renderLayerObject, motionPath, _clampedEvalTime,
+                        canvasWidth, canvasHeight, frameSignature, storedUs);
+            }
         }
 
         if(!skipUpdate) {
@@ -12438,6 +12823,14 @@ namespace motion {
 
         _runtime->lastCanvas =
             tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+        if(!_runtime->isEmoteMode && !skipUpdate) {
+            _runtime->lastMotionRasterTarget =
+                tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+            _runtime->lastMotionRasterMotion = motionPath;
+            _runtime->lastMotionRasterWidth = canvasWidth;
+            _runtime->lastMotionRasterHeight = canvasHeight;
+            _runtime->lastMotionRasterPublishUs = motionRenderProfileNowUs();
+        }
         detail::logoChainTraceSummary(
             motionPath, "renderToLayer", _clampedEvalTime,
             skipUpdate ? "skipUpdate=1" : "skipUpdate=0");

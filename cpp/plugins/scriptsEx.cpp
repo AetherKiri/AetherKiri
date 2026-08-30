@@ -1239,6 +1239,7 @@ NCB_ATTACH_CLASS(ScriptsAdd, Scripts) {
 
 NCB_ATTACH_FUNCTION(rehash, Scripts, TJSDoRehash);
 
+#ifdef AETHERKIRI_INTERNAL_KRKR2_PLUGIN
 namespace {
 
 void registerScriptsCompat() {
@@ -1252,5 +1253,6 @@ void registerScriptsCompat() {
 
 NCB_PRE_REGIST_CALLBACK(registerScriptsCompat);
 NCB_POST_REGIST_CALLBACK(registerScriptsCompat);
+#endif
 
 extern "C" void TVPRegisterScriptsExPluginAnchor() {}

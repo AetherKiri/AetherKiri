@@ -115,6 +115,10 @@ void RegisterAetherInternalFrameEffects();
 void UnregisterAetherInternalFrameEffects();
 #endif
 
+#if defined(AETHERKIRI_INTERNAL_UNLOCK_GATE)
+int32_t AetherInternalVerifyUnlockSecret(const char *candidate_utf8);
+#endif
+
 namespace {
 
 #if defined(__ANDROID__)
@@ -1202,6 +1206,8 @@ struct GodotGpuPipelineState {
     RID fill_source_texture;
     RID alpha_blend_a_shader;
     RID alpha_blend_a_pipeline;
+    RID alpha_convert_shader;
+    RID alpha_convert_pipeline;
     RID blend2_shader;
     RID blend2_pipeline;
     RID blend3_shader;
@@ -1323,10 +1329,16 @@ void ForceOpaqueAlpha(PackedByteArray &data, uint32_t stride_bytes,
     if (pixels == nullptr) {
         return;
     }
+    // Operate on complete pixels instead of touching the alpha byte through a
+    // byte-stride loop.  The frame is RGBA8888 and the host surface is always
+    // 32-bit aligned, so this preserves the exact result while allowing the
+    // compiler to vectorize the large 2560x1440 pass.
+    constexpr uint32_t kOpaqueAlpha = 0xff000000u;
     for (uint32_t y = 0; y < height; ++y) {
-        uint8_t *row = pixels + static_cast<size_t>(y) * stride_bytes;
+        auto *row = reinterpret_cast<uint32_t *>(
+            pixels + static_cast<size_t>(y) * stride_bytes);
         for (uint32_t x = 0; x < width; ++x) {
-            row[x * 4u + 3u] = 0xffu;
+            row[x] |= kOpaqueAlpha;
         }
     }
 }
@@ -1881,6 +1893,34 @@ uint ps_sub_blend(uint d, uint s, uint opa) {
     return (d & 0xff000000u) | r | (g << 8) | (b << 16);
 }
 
+uint soft_light_channel(uint source, uint destination) {
+    float s = float(source) / 255.0;
+    float d = float(destination) / 255.0;
+    float exponent = source >= 128u
+        ? 128.0 / max(float(source), 1.0)
+        : (1.0 - s) / 0.5;
+    // TVP's table stores an unsigned char, so conversion intentionally
+    // truncates instead of rounding.
+    return uint(clamp(pow(max(d, 0.0), exponent) * 255.0, 0.0, 255.0));
+}
+
+uint ps_soft_light_blend(uint d, uint s, uint opa) {
+    uint a = (s >> 24) & 0xffu;
+    if (opa != 255u) {
+        a = (a * opa) >> 8;
+    }
+    int dr = int(d & 0xffu);
+    int dg = int((d >> 8) & 0xffu);
+    int db = int((d >> 16) & 0xffu);
+    int sr = int(soft_light_channel(s & 0xffu, d & 0xffu));
+    int sg = int(soft_light_channel((s >> 8) & 0xffu, (d >> 8) & 0xffu));
+    int sb = int(soft_light_channel((s >> 16) & 0xffu, (d >> 16) & 0xffu));
+    uint r = uint(clamp(dr + (((sr - dr) * int(a)) >> 8), 0, 255));
+    uint g = uint(clamp(dg + (((sg - dg) * int(a)) >> 8), 0, 255));
+    uint b = uint(clamp(db + (((sb - db) * int(a)) >> 8), 0, 255));
+    return (d & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
 uint additive_alpha_blend_hda(uint d, uint s, uint opa) {
     if (opa != 255u) {
         uint sr = ((s & 0xffu) * opa) >> 8;
@@ -1937,6 +1977,23 @@ uint remove_const_opacity(uint d, uint strength) {
     return (d & 0x00ffffffu) | (a << 24);
 }
 
+uint alpha_to_additive_alpha(uint c) {
+    uint alpha = (c >> 24) & 0xffu;
+    uint r = ((c & 0xffu) * alpha) >> 8;
+    uint g = (((c >> 8) & 0xffu) * alpha) >> 8;
+    uint b = (((c >> 16) & 0xffu) * alpha) >> 8;
+    return (c & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
+uint additive_alpha_to_alpha(uint c) {
+    uint alpha = (c >> 24) & 0xffu;
+    if (alpha == 0u) return c & 0xff000000u;
+    uint r = min((c & 0xffu) * 255u / alpha, 255u);
+    uint g = min(((c >> 8) & 0xffu) * 255u / alpha, 255u);
+    uint b = min(((c >> 16) & 0xffu) * 255u / alpha, 255u);
+    return (c & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
 int reflect101_index(int value, int extent) {
     if (extent <= 1) return 0;
     int period = (extent - 1) * 2;
@@ -1984,6 +2041,8 @@ void main() {
         uint s = pack_u8(vec4_to_u8(load_src(local)));
         if (pc.rect1.z == 20) {
         out_color = s;
+        } else if (pc.rect1.z == 27) {
+        out_color = (s & 0x00ffffffu) | 0xff000000u;
         } else if (pc.rect1.z == 19) {
         uint da = (d >> 24) & 0xffu;
         uint sa = (s >> 24) & 0xffu;
@@ -2021,6 +2080,8 @@ void main() {
         out_color = ps_add_blend(d, s, opa);
         } else if (pc.rect1.z == 17) {
         out_color = ps_sub_blend(d, s, opa);
+        } else if (pc.rect1.z == 28) {
+        out_color = ps_soft_light_blend(d, s, opa);
         } else if (pc.rect1.z == 23) {
         out_color = apply_color_map_a(
             d, s & 0xffu, opa,
@@ -2031,6 +2092,10 @@ void main() {
         out_color = additive_alpha_blend_a(d, s, opa);
         } else if (pc.rect1.z == 8) {
         out_color = remove_const_opacity(d, opa);
+        } else if (pc.rect1.z == 29) {
+        out_color = alpha_to_additive_alpha(s);
+        } else if (pc.rect1.z == 30) {
+        out_color = additive_alpha_to_alpha(s);
         }
         }
     }
@@ -2054,6 +2119,140 @@ void main() {
     g_gpu_pipeline_state->blend_pipeline =
         rd->compute_pipeline_create(g_gpu_pipeline_state->blend_shader);
     return g_gpu_pipeline_state->blend_pipeline.is_valid();
+}
+
+bool EnsureAlphaConvertPipeline(RenderingDevice *rd) {
+    if (rd == nullptr) return false;
+    if (g_gpu_pipeline_state == nullptr) {
+        g_gpu_pipeline_state = new GodotGpuPipelineState();
+    }
+    if (g_gpu_pipeline_state->alpha_convert_pipeline.is_valid()) return true;
+
+    Ref<RDShaderSource> source;
+    source.instantiate();
+    source->set_language(RenderingDevice::SHADER_LANGUAGE_GLSL);
+    source->set_stage_source(
+        RenderingDevice::SHADER_STAGE_COMPUTE,
+        R"GLSL(#version 450
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(rgba8, set = 0, binding = 0) uniform image2D target_img;
+layout(push_constant, std430) uniform Params {
+    ivec4 rect0;
+    ivec4 rect1;
+    ivec4 color0;
+} pc;
+
+uvec4 vec4_to_u8(vec4 value) {
+    return uvec4(round(clamp(value, vec4(0.0), vec4(1.0)) * 255.0));
+}
+
+vec4 unpack_u8(uint c) {
+    return vec4(float(c & 0xffu),
+                float((c >> 8) & 0xffu),
+                float((c >> 16) & 0xffu),
+                float((c >> 24) & 0xffu)) / 255.0;
+}
+
+uint pack_u8(uvec4 c) {
+    return (c.r & 0xffu) |
+           ((c.g & 0xffu) << 8) |
+           ((c.b & 0xffu) << 16) |
+           ((c.a & 0xffu) << 24);
+}
+
+uint alpha_to_additive_alpha(uint c) {
+    uint alpha = (c >> 24) & 0xffu;
+    uint r = ((c & 0xffu) * alpha) >> 8;
+    uint g = (((c >> 8) & 0xffu) * alpha) >> 8;
+    uint b = (((c >> 16) & 0xffu) * alpha) >> 8;
+    return (c & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
+uint additive_alpha_to_alpha(uint c) {
+    uint alpha = (c >> 24) & 0xffu;
+    if (alpha == 0u) return c & 0xff000000u;
+    uint r = min((c & 0xffu) * 255u / alpha, 255u);
+    uint g = min(((c >> 8) & 0xffu) * 255u / alpha, 255u);
+    uint b = min(((c >> 16) & 0xffu) * 255u / alpha, 255u);
+    return (c & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
+void main() {
+    ivec2 local = ivec2(gl_GlobalInvocationID.xy);
+    if (local.x >= pc.rect1.x || local.y >= pc.rect1.y) return;
+    ivec2 pos = pc.rect0.xy + local;
+    uint color = pack_u8(vec4_to_u8(imageLoad(target_img, pos)));
+    color = pc.rect1.z == 29
+        ? alpha_to_additive_alpha(color)
+        : additive_alpha_to_alpha(color);
+    imageStore(target_img, pos, unpack_u8(color));
+}
+)GLSL");
+
+    Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(source);
+    if (spirv.is_null()) return false;
+    const String compile_error =
+        spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE);
+    if (!compile_error.is_empty()) {
+        UtilityFunctions::printerr("Godot GPU alpha conversion shader compile error: ",
+                                   compile_error);
+        return false;
+    }
+    g_gpu_pipeline_state->alpha_convert_shader =
+        rd->shader_create_from_spirv(spirv, "AetherKiriAlphaConvert");
+    if (!g_gpu_pipeline_state->alpha_convert_shader.is_valid()) return false;
+    g_gpu_pipeline_state->alpha_convert_pipeline =
+        rd->compute_pipeline_create(g_gpu_pipeline_state->alpha_convert_shader);
+    return g_gpu_pipeline_state->alpha_convert_pipeline.is_valid();
+}
+
+RID GetCachedAlphaConvertUniformSet(RenderingDevice *rd,
+                                    const RID &target) {
+    if (rd == nullptr || g_gpu_pipeline_state == nullptr) return RID();
+    const GodotGpuUniformSetKey key{
+        g_gpu_pipeline_state->alpha_convert_shader.get_id(), target.get_id(),
+        0, 0, 1};
+    const auto found = g_gpu_uniform_set_cache.find(key);
+    if (found != g_gpu_uniform_set_cache.end() &&
+        found->second.is_valid()) {
+        return found->second;
+    }
+    Ref<RDUniform> image;
+    image.instantiate();
+    image->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
+    image->set_binding(0);
+    image->add_id(target);
+    TypedArray<RDUniform> uniforms;
+    uniforms.push_back(image);
+    RID uniform_set = rd->uniform_set_create(
+        uniforms, g_gpu_pipeline_state->alpha_convert_shader, 0);
+    if (uniform_set.is_valid()) {
+        g_gpu_uniform_set_cache[key] = uniform_set;
+    }
+    return uniform_set;
+}
+
+bool ExecuteGodotGpuAlphaConvert(RenderingDevice *rd,
+                                 const std::shared_ptr<GodotGpuOp> &op) {
+    if (rd == nullptr || op == nullptr || op->dst != op->src ||
+        !EnsureAlphaConvertPipeline(rd)) {
+        return false;
+    }
+    const RID uniform_set = GetCachedAlphaConvertUniformSet(rd, op->dst);
+    if (!uniform_set.is_valid()) return false;
+    const PackedByteArray push_constants = PackGpuPushConstants(*op);
+    const int64_t compute_list = rd->compute_list_begin();
+    rd->compute_list_bind_compute_pipeline(
+        compute_list, g_gpu_pipeline_state->alpha_convert_pipeline);
+    rd->compute_list_bind_uniform_set(compute_list, uniform_set, 0);
+    rd->compute_list_set_push_constant(compute_list, push_constants, 48);
+    rd->compute_list_dispatch(
+        compute_list, static_cast<uint32_t>((op->size.x + 7) / 8),
+        static_cast<uint32_t>((op->size.y + 7) / 8), 1);
+    rd->compute_list_add_barrier(compute_list);
+    rd->compute_list_end();
+    ApplyGodotGpuBarrier(rd);
+    return true;
 }
 
 bool EnsureAlphaBlendAPipeline(RenderingDevice *rd) {
@@ -4666,13 +4865,24 @@ bool DispatchGodotGpuBlend3(RenderingDevice *rd,
 bool ExecuteGodotGpuBlend(RenderingDevice *rd,
                           const std::shared_ptr<GodotGpuOp> &op) {
     if (rd == nullptr || op == nullptr) return false;
+    const bool alpha_convert =
+        op->mode == TVP_GODOT_GPU_BLEND_ALPHA_TO_ADDITIVE_ALPHA ||
+        op->mode == TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA_TO_ALPHA;
+    if (alpha_convert && op->src == op->dst) {
+        // Use a single read/write image binding for in-place conversion.  A
+        // texture bound simultaneously as readonly source and writable
+        // destination is not portable across Metal (iOS/macOS) and Vulkan.
+        return ExecuteGodotGpuAlphaConvert(rd, op);
+    }
     const bool alias_box_blur =
         op->src == op->dst &&
         op->mode == TVP_GODOT_GPU_BLEND_BOX_BLUR_ALPHA;
     if (op->src == op->dst && !alias_box_blur &&
         op->mode != TVP_GODOT_GPU_BLEND_FILL_ARGB &&
         op->mode != TVP_GODOT_GPU_BLEND_REMOVE_CONST_OPACITY &&
-        op->mode != TVP_GODOT_GPU_BLEND_FILL_MASK) {
+        op->mode != TVP_GODOT_GPU_BLEND_FILL_MASK &&
+        op->mode != TVP_GODOT_GPU_BLEND_ALPHA_TO_ADDITIVE_ALPHA &&
+        op->mode != TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA_TO_ALPHA) {
         g_gpu_alias_sources.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
@@ -7865,6 +8075,37 @@ uint32_t CpuPsSubBlend(uint32_t d, uint32_t s, int opacity) {
     return (d & 0xff000000u) | r | (g << 8) | (b << 16);
 }
 
+uint32_t CpuPsSoftLightBlend(uint32_t d, uint32_t s, int opacity) {
+    const auto channel = [](uint32_t source, uint32_t destination) {
+        const double sf = static_cast<double>(source) / 255.0;
+        const double df = static_cast<double>(destination) / 255.0;
+        const double exponent = source >= 128u
+            ? 128.0 / static_cast<double>(std::max(source, 1u))
+            : (1.0 - sf) / 0.5;
+        return static_cast<uint32_t>(std::clamp(
+            static_cast<int>(std::pow(std::max(df, 0.0), exponent) * 255.0),
+            0, 255));
+    };
+    uint32_t a = (s >> 24) & 0xffu;
+    const uint32_t opa = static_cast<uint32_t>(std::clamp(opacity, 0, 255));
+    if (opa != 255u) a = (a * opa) >> 8;
+    const int dr = static_cast<int>(d & 0xffu);
+    const int dg = static_cast<int>((d >> 8) & 0xffu);
+    const int db = static_cast<int>((d >> 16) & 0xffu);
+    const int sr = static_cast<int>(channel(s & 0xffu, d & 0xffu));
+    const int sg = static_cast<int>(channel((s >> 8) & 0xffu,
+                                            (d >> 8) & 0xffu));
+    const int sb = static_cast<int>(channel((s >> 16) & 0xffu,
+                                            (d >> 16) & 0xffu));
+    const uint32_t r = static_cast<uint32_t>(std::clamp(
+        dr + (((sr - dr) * static_cast<int>(a)) >> 8), 0, 255));
+    const uint32_t g = static_cast<uint32_t>(std::clamp(
+        dg + (((sg - dg) * static_cast<int>(a)) >> 8), 0, 255));
+    const uint32_t b = static_cast<uint32_t>(std::clamp(
+        db + (((sb - db) * static_cast<int>(a)) >> 8), 0, 255));
+    return (d & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
 uint32_t CpuAdditiveAlphaBlendHda(uint32_t d, uint32_t s, int opacity) {
     const uint32_t opa = static_cast<uint32_t>(std::clamp(opacity, 0, 255));
     if(opa != 255u) {
@@ -7910,6 +8151,15 @@ uint32_t CpuApplyColorMapA(uint32_t d, uint32_t mask, int opacity,
     return (out_alpha << 24) | r | (g << 8) | (b << 16);
 }
 
+uint32_t CpuAdditiveAlphaToAlpha(uint32_t color) {
+    const uint32_t alpha = color >> 24;
+    if (alpha == 0u) return color & 0xff000000u;
+    const uint32_t r = std::min((color & 0xffu) * 255u / alpha, 255u);
+    const uint32_t g = std::min(((color >> 8) & 0xffu) * 255u / alpha, 255u);
+    const uint32_t b = std::min(((color >> 16) & 0xffu) * 255u / alpha, 255u);
+    return (color & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
 uint32_t CpuBlendReference(uint32_t mode, uint32_t d, uint32_t s,
                            int opacity, uint32_t color) {
     switch (mode) {
@@ -7928,6 +8178,8 @@ uint32_t CpuBlendReference(uint32_t mode, uint32_t d, uint32_t s,
                    (static_cast<uint32_t>(std::clamp(opacity, 0, 255)) << 24);
         case TVP_GODOT_GPU_BLEND_COPY_RGBA:
             return s;
+        case TVP_GODOT_GPU_BLEND_COPY_OPAQUE:
+            return (s & 0x00ffffffu) | 0xff000000u;
         case TVP_GODOT_GPU_BLEND_ALPHA_BLEND_A:
             return CpuAlphaBlendA(d, s, opacity);
         case TVP_GODOT_GPU_BLEND_CONST_ALPHA_D:
@@ -7940,6 +8192,8 @@ uint32_t CpuBlendReference(uint32_t mode, uint32_t d, uint32_t s,
             return CpuPsAddBlend(d, s, opacity);
         case TVP_GODOT_GPU_BLEND_PS_SUBTRACT:
             return CpuPsSubBlend(d, s, opacity);
+        case TVP_GODOT_GPU_BLEND_PS_SOFT_LIGHT:
+            return CpuPsSoftLightBlend(d, s, opacity);
         case TVP_GODOT_GPU_BLEND_APPLY_COLOR_MAP_A:
             return CpuApplyColorMapA(d, s & 0xffu, opacity, color);
         case TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA:
@@ -7961,6 +8215,10 @@ uint32_t CpuBlendReference(uint32_t mode, uint32_t d, uint32_t s,
             return (CpuAdditiveAlphaBlendHda(d, s, 255) & 0x00ffffffu) |
                 (out_alpha << 24);
         }
+        case TVP_GODOT_GPU_BLEND_ALPHA_TO_ADDITIVE_ALPHA:
+            return CpuAlphaToAdditiveAlpha(s);
+        case TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA_TO_ALPHA:
+            return CpuAdditiveAlphaToAlpha(s);
         default:
             return s;
     }
@@ -8004,6 +8262,9 @@ uint32_t BlendModeFromName(const String &mode_name) {
     if (lower == "copycolor" || lower == "copy_color") {
         return TVP_GODOT_GPU_BLEND_COPY_COLOR;
     }
+    if (lower == "copyopaqueimage" || lower == "copy_opaque_image") {
+        return TVP_GODOT_GPU_BLEND_COPY_OPAQUE;
+    }
     if (lower == "fillargb" || lower == "fill") {
         return TVP_GODOT_GPU_BLEND_FILL_ARGB;
     }
@@ -8040,6 +8301,14 @@ uint32_t BlendModeFromName(const String &mode_name) {
     if (lower == "additivealphablend" || lower == "additive_alpha_blend") {
         return TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA;
     }
+    if (lower == "alphatoadditivealpha" ||
+        lower == "alpha_to_additive_alpha") {
+        return TVP_GODOT_GPU_BLEND_ALPHA_TO_ADDITIVE_ALPHA;
+    }
+    if (lower == "additivealphatoalpha" ||
+        lower == "additive_alpha_to_alpha") {
+        return TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA_TO_ALPHA;
+    }
     if (lower == "applycolormap_a" || lower == "apply_color_map_a") {
         return TVP_GODOT_GPU_BLEND_APPLY_COLOR_MAP_A;
     }
@@ -8054,6 +8323,9 @@ uint32_t BlendModeFromName(const String &mode_name) {
     }
     if (lower == "pssubblend" || lower == "ps_sub_blend") {
         return TVP_GODOT_GPU_BLEND_PS_SUBTRACT;
+    }
+    if (lower == "pssoftlightblend" || lower == "ps_soft_light_blend") {
+        return TVP_GODOT_GPU_BLEND_PS_SOFT_LIGHT;
     }
     return 0;
 }
@@ -8092,6 +8364,12 @@ void ReleaseGodotGpuPipeline() {
         }
         if (g_gpu_pipeline_state->alpha_blend_a_shader.is_valid()) {
             rd->free_rid(g_gpu_pipeline_state->alpha_blend_a_shader);
+        }
+        if (g_gpu_pipeline_state->alpha_convert_pipeline.is_valid()) {
+            rd->free_rid(g_gpu_pipeline_state->alpha_convert_pipeline);
+        }
+        if (g_gpu_pipeline_state->alpha_convert_shader.is_valid()) {
+            rd->free_rid(g_gpu_pipeline_state->alpha_convert_shader);
         }
         if (g_gpu_pipeline_state->blend2_pipeline.is_valid()) {
             rd->free_rid(g_gpu_pipeline_state->blend2_pipeline);
@@ -9265,22 +9543,29 @@ public:
             return frame_texture_;
         }
 
-        PackedByteArray data;
         const size_t size =
             static_cast<size_t>(desc.stride_bytes) * desc.height;
-        data.resize(static_cast<int64_t>(size));
-        result = engine_read_frame_rgba(handle_, data.ptrw(), size);
+        // Reuse the readback storage across frames.  The engine overwrites
+        // the complete buffer, so allocating a temporary PackedByteArray on
+        // every tick only adds a large zero-fill and allocator hit before the
+        // actual frame copy.  Keep this buffer private to the player and let
+        // Image::create_from_data() consume it after the read completes.
+        if (frame_rgba_buffer_.size() != static_cast<int64_t>(size)) {
+            frame_rgba_buffer_.resize(static_cast<int64_t>(size));
+        }
+        result = engine_read_frame_rgba(handle_, frame_rgba_buffer_.ptrw(), size);
         update_last_error(result);
         if (result != ENGINE_RESULT_OK) {
             return Ref<Texture2D>();
         }
-        ForceOpaqueAlpha(data, desc.stride_bytes, desc.width, desc.height);
+        ForceOpaqueAlpha(frame_rgba_buffer_, desc.stride_bytes, desc.width,
+                         desc.height);
 
         const bool prefer_rd_texture =
             normalized_backend == ENGINE_RENDERER_GODOT_NATIVE ||
             normalized_backend == ENGINE_RENDERER_GPU_BRIDGE;
         if (prefer_rd_texture) {
-            Ref<Texture2D> rd_texture = update_rd_texture(desc, data);
+            Ref<Texture2D> rd_texture = update_rd_texture(desc, frame_rgba_buffer_);
             if (rd_texture.is_valid()) {
                 frame_texture_.unref();
                 frame_texture_serial_ = desc.frame_serial;
@@ -9295,7 +9580,7 @@ public:
             static_cast<int32_t>(desc.height),
             false,
             Image::FORMAT_RGBA8,
-            data);
+            frame_rgba_buffer_);
         if (image.is_null()) {
             return Ref<Texture2D>();
         }
@@ -10131,6 +10416,19 @@ void main() {
 #endif
     }
 
+    // The compiled-in unlock digest lives in AetherInternal. Public fallbacks
+    // never report a match, so release artifacts without the package cannot
+    // open the secret unlock path.
+    bool verify_unlock_secret(const String &candidate) const {
+#if defined(AETHERKIRI_INTERNAL_UNLOCK_GATE)
+        const CharString candidate_utf8 = candidate.utf8();
+        return AetherInternalVerifyUnlockSecret(candidate_utf8.get_data()) != 0;
+#else
+        (void)candidate;
+        return false;
+#endif
+    }
+
     bool native_launch_file_picker_open(
             const String &title, const String &initial_directory) const {
 #if defined(__APPLE__)
@@ -10319,6 +10617,8 @@ protected:
                              &AetherRuntimePlayer::iap_restore);
         ClassDB::bind_method(D_METHOD("iap_get_state_json", "product_id"),
                              &AetherRuntimePlayer::iap_get_state_json);
+        ClassDB::bind_method(D_METHOD("verify_unlock_secret", "candidate"),
+                             &AetherRuntimePlayer::verify_unlock_secret);
         ClassDB::bind_method(
             D_METHOD("native_launch_file_picker_open", "title", "initial_directory"),
             &AetherRuntimePlayer::native_launch_file_picker_open);
@@ -10759,6 +11059,7 @@ private:
         runtime_tick_quantizer_;
     bool artemis_logical_frame_pacing_ = false;
     Ref<ImageTexture> frame_texture_;
+    PackedByteArray frame_rgba_buffer_;
     Ref<Texture2DRD> frame_rd_texture_;
     RID frame_rd_rid_;
     uint32_t frame_rd_width_ = 0;

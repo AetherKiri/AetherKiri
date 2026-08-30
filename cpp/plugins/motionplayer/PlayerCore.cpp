@@ -1343,6 +1343,30 @@ namespace motion {
             return clip;
         }
 
+        // Yuzu title motion sources are cloned into an affine render layer.
+        // The render-side clone intentionally has no playback controller of
+        // its own, while the authored `title_trial` clip starts fully
+        // transparent.  Prefer the resource's explicit static state only for
+        // this distinctive title asset shape; other multi-clip resources keep
+        // their authored primary-label order.
+        const auto &motionPath = _runtime->activeMotion->path;
+        const auto slash = motionPath.find_last_of("/\\");
+        std::string motionName =
+            slash == std::string::npos ? motionPath : motionPath.substr(slash + 1);
+        std::transform(motionName.begin(), motionName.end(), motionName.begin(),
+                       [](const unsigned char ch) {
+                           return static_cast<char>(std::tolower(ch));
+                       });
+        if(!_runtime->isEmoteMode && motionName == "title_bg.psb" &&
+           _runtime->activeMotion->clipsByLabel.find("title_trial") !=
+               _runtime->activeMotion->clipsByLabel.end() &&
+           _runtime->activeMotion->clipsByLabel.find("title") !=
+               _runtime->activeMotion->clipsByLabel.end()) {
+            if(const auto *clip = selectByLabel("normal")) {
+                return clip;
+            }
+        }
+
         const auto &primaryLabels =
             !_runtime->activeMotion->mainTimelineLabels.empty()
                 ? _runtime->activeMotion->mainTimelineLabels

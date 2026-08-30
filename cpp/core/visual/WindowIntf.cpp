@@ -24,6 +24,7 @@
 #include "LayerManager.h"
 #include "BasicDrawDevice.h"
 #include "EventImpl.h"
+#include "godot/GodotGpuBridge.h"
 
 #include "Application.h"
 
@@ -671,6 +672,12 @@ void tTJSNI_BaseWindow::NotifyUpdateRegionFixed(
 //---------------------------------------------------------------------------
 void tTJSNI_BaseWindow::UpdateContent() {
     if(DrawDevice) {
+        // A window update can issue dozens of bitmap compositions. Keep the
+        // whole update in one ordered GPU batch so intermediate blends and
+        // texture uploads are submitted together instead of forcing a queue
+        // drain between every operation. The scope is a no-op for renderers
+        // which do not register the optional Godot bridge callbacks.
+        TVPGodotGpuBatchScope gpuBatch;
         // is called from event dispatcher
         DrawDevice->Update();
 

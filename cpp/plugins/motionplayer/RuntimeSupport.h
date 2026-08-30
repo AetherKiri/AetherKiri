@@ -301,6 +301,15 @@ namespace motion::detail {
         std::size_t nextD3DRenderLayer = 0;
         std::size_t lastD3DRenderLayer = 0;
         std::uint64_t lastD3DRasterPublishUs = 0;
+        // Non-emote AffineSourceMotion frames are rasterized into a CPU
+        // layer.  Keep the last completed surface for a short interval so a
+        // 60 Hz script timer cannot immediately repaint the same expensive
+        // full-canvas transition twice before the compositor presents it.
+        tTJSVariant lastMotionRasterTarget;
+        std::string lastMotionRasterMotion;
+        int lastMotionRasterWidth = 0;
+        int lastMotionRasterHeight = 0;
+        std::uint64_t lastMotionRasterPublishUs = 0;
         // Stable visible endpoint for D3DAffineSourceMotion scripts that
         // present Player.draw() directly instead of calling captureCanvas().
         // AssignMotionImages swaps completed scratch textures into this layer
@@ -704,6 +713,11 @@ namespace motion::detail {
             nextD3DRenderLayer = 0;
             lastD3DRenderLayer = 0;
             lastD3DRasterPublishUs = 0;
+            lastMotionRasterTarget.Clear();
+            lastMotionRasterMotion.clear();
+            lastMotionRasterWidth = 0;
+            lastMotionRasterHeight = 0;
+            lastMotionRasterPublishUs = 0;
             nativeBackendGpuFrameLifetime.reset();
             nativeBackendGpuFrameCount = 0;
             inheritedVariableInputs.clear();
