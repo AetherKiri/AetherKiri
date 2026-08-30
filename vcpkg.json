@@ -44,6 +44,10 @@
     "godot-cpp",
     "jxrlib",
     "libarchive",
+    {
+      "name": "libb2",
+      "platform": "osx"
+    },
     "libxml2",
     {
       "name": "libgdiplus",
