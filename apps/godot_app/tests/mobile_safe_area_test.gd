@@ -50,6 +50,16 @@ func _initialize() -> void:
         app._on_game_virtual_key_event(true, 0x1b, 0)
         app._on_game_virtual_key_event(false, 0x1b, 0)
     assert(runtime_player.key_events.size() == 4)
+    app._on_game_virtual_key_event(true, 0x57, 0)
+    app._on_game_virtual_key_event(false, 0x57, 0)
+    assert(runtime_player.key_events[-2].unicode == 0x77)
+    assert(runtime_player.key_events[-1].unicode == 0)
+    app._on_game_virtual_key_event(true, 0x31, 0)
+    app._on_game_virtual_key_event(true, 0x20, 0)
+    app._on_game_virtual_key_event(true, 0x41, 0x04)
+    assert(runtime_player.key_events[-3].unicode == 0x31)
+    assert(runtime_player.key_events[-2].unicode == 0x20)
+    assert(runtime_player.key_events[-1].unicode == 0)
 
     var portrait := app._scaled_display_safe_rect(
         Vector2(430, 932),

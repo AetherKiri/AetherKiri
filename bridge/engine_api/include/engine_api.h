@@ -213,7 +213,7 @@ typedef struct engine_input_event_t {
   double x;
   double y;
   double delta_x;
-  double delta_y;
+  double delta_y;  /* Pointer scroll: positive=up, negative=down. */
   int32_t pointer_id;
   int32_t button;
   int32_t key_code;

@@ -36,6 +36,8 @@ const MENU_DRAG_THRESHOLD := 6.0
 const SCROLL_HOLD_DELAY_MSEC := 360
 const SCROLL_HOLD_REPEAT_MSEC := 90
 const SCROLL_HOLD_MAX_CATCH_UP_STEPS := 4
+const DPAD_DEAD_ZONE_RATIO := 0.18
+const DPAD_DIRECTION_AXIS_THRESHOLD := 0.382683
 const INPUT_DEVICE_ID_EMULATION := -1
 const INPUT_MODE_MOUSE := "mouse"
 const INPUT_MODE_TOUCH := "touch"
@@ -93,6 +95,12 @@ var _input_mode := INPUT_MODE_MOUSE
 var _mouse_mode_blocked_touch_indices := {}
 var _held_scroll_direction := 0.0
 var _scroll_next_repeat_msec := 0
+var _dpad_touch_index := -1
+var _dpad_mouse_dragging := false
+var _dpad_home_position := Vector2.ZERO
+var _dpad_travel_radius := 0.0
+var _dpad_vector := Vector2.ZERO
+var _dpad_held_keys := {}
 
 func setup(tokens) -> void:
     if _root != null:
@@ -156,6 +164,13 @@ func setup(tokens) -> void:
     d_button = _add_key_button("DButton", "D", VK_D)
     for direction_button in [w_button, a_button, s_button, d_button]:
         _apply_dpad_button_style(direction_button)
+        # The whole disc is an eight-way joystick. Direction labels are only
+        # visual targets; letting their individual Buttons handle input would
+        # prevent a drag from holding two keys on a diagonal.
+        direction_button.toggle_mode = true
+        direction_button.set_pressed_no_signal(false)
+        direction_button.mouse_filter = Control.MOUSE_FILTER_IGNORE
+        _interactive_controls.erase(direction_button)
     for index in range(4):
         var digit := _add_key_button(
             "Digit%dButton" % (index + 1),
@@ -168,7 +183,7 @@ func setup(tokens) -> void:
 
     mouse_left_button = _add_mouse_button("MouseLeftButton", "", 0, 0)
     mouse_right_button = _add_mouse_button(
-        "MouseRightButton", "", 0, POINTER_MOD_RIGHT
+        "MouseRightButton", "", 1, POINTER_MOD_RIGHT
     )
     _attach_mouse_icon(mouse_left_button, true)
     _attach_mouse_icon(mouse_right_button, false)
@@ -206,6 +221,8 @@ func set_enabled(enabled: bool) -> void:
         _menu_touch_index = -1
         _menu_mouse_dragging = false
         _menu_drag_moved = false
+        _dpad_touch_index = -1
+        _dpad_mouse_dragging = false
         _mouse_mode_blocked_touch_indices.clear()
     visible = enabled
     _sync_visibility()
@@ -249,6 +266,7 @@ func show_virtual_controls() -> void:
 
 func release_all() -> void:
     _cancel_scroll_hold()
+    _reset_dpad()
     for key_variant in _held_keys.keys().duplicate():
         _release_key(int(key_variant))
     for mouse_variant in _held_mouse_buttons.keys().duplicate():
@@ -316,8 +334,12 @@ func layout(_window_size: Vector2, safe_rect: Rect2) -> void:
         button.size = direction_size
 
     var center_size := dpad_diameter * 0.34
-    dpad_center.position = dpad_center_position - Vector2.ONE * center_size * 0.5
     dpad_center.size = Vector2.ONE * center_size
+    _dpad_home_position = (
+        dpad_center_position - Vector2.ONE * center_size * 0.5
+    )
+    _dpad_travel_radius = (dpad_diameter - center_size) * 0.5
+    _position_dpad_center()
 
     var digit_x := menu_button.position.x - diameter - gap
     var digit_top := safe_rect.position.y + margin + diameter * 0.24
@@ -395,6 +417,25 @@ func routes_pointer(event: InputEvent) -> bool:
 
     if event is InputEventScreenTouch:
         var touch := event as InputEventScreenTouch
+        if touch.index == _dpad_touch_index:
+            if touch.pressed:
+                _update_dpad(touch.position)
+            else:
+                _dpad_touch_index = -1
+                _reset_dpad()
+            return true
+        if (
+            touch.pressed
+            and _panel_open
+            and _dpad_contains_point(touch.position)
+        ):
+            if _dpad_touch_index == -1:
+                _dpad_touch_index = touch.index
+                # iOS may synthesize a mouse press before exposing the same
+                # contact as ScreenTouch. The real touch owns the joystick.
+                _dpad_mouse_dragging = false
+                _update_dpad(touch.position)
+            return true
         if _mouse_mode_blocked_touch_indices.has(touch.index):
             if not touch.pressed:
                 _mouse_mode_blocked_touch_indices.erase(touch.index)
@@ -433,6 +474,9 @@ func routes_pointer(event: InputEvent) -> bool:
             return true
     elif event is InputEventScreenDrag:
         var drag := event as InputEventScreenDrag
+        if drag.index == _dpad_touch_index:
+            _update_dpad(drag.position)
+            return true
         if _mouse_mode_blocked_touch_indices.has(drag.index):
             return true
         if drag.index == _menu_touch_index:
@@ -444,6 +488,20 @@ func routes_pointer(event: InputEvent) -> bool:
     elif event is InputEventMouseButton:
         var mouse_button := event as InputEventMouseButton
         if mouse_button.button_index == MOUSE_BUTTON_LEFT:
+            if (
+                mouse_button.pressed
+                and _panel_open
+                and _dpad_contains_point(mouse_button.position)
+            ):
+                if _dpad_touch_index == -1:
+                    _dpad_mouse_dragging = true
+                    _update_dpad(mouse_button.position)
+                return true
+            if _dpad_mouse_dragging:
+                if not mouse_button.pressed:
+                    _dpad_mouse_dragging = false
+                    _reset_dpad()
+                return true
             if (
                 mouse_button.device != INPUT_DEVICE_ID_EMULATION
                 and
@@ -479,6 +537,9 @@ func routes_pointer(event: InputEvent) -> bool:
                 return true
     elif event is InputEventMouseMotion:
         var motion := event as InputEventMouseMotion
+        if _dpad_mouse_dragging:
+            _update_dpad(motion.position)
+            return true
         if (
             motion.device != INPUT_DEVICE_ID_EMULATION
             and _menu_mouse_dragging
@@ -622,6 +683,70 @@ func _apply_dpad_button_style(button: Button) -> void:
         )
     )
     button.add_theme_font_size_override("font_size", 24)
+
+func _dpad_contains_point(screen_position: Vector2) -> bool:
+    if dpad_backdrop == null or not dpad_backdrop.is_visible_in_tree():
+        return false
+    var backdrop_rect := dpad_backdrop.get_global_rect()
+    return screen_position.distance_to(backdrop_rect.get_center()) \
+        <= minf(backdrop_rect.size.x, backdrop_rect.size.y) * 0.5
+
+func _update_dpad(screen_position: Vector2) -> void:
+    if _dpad_travel_radius <= 0.0:
+        return
+    var offset := screen_position - dpad_backdrop.get_global_rect().get_center()
+    if offset.length() > _dpad_travel_radius:
+        offset = offset.normalized() * _dpad_travel_radius
+    _dpad_vector = offset / _dpad_travel_radius
+    _position_dpad_center()
+    _set_dpad_keys(_dpad_vector)
+
+func _position_dpad_center() -> void:
+    if dpad_center == null:
+        return
+    dpad_center.position = (
+        _dpad_home_position + _dpad_vector * _dpad_travel_radius
+    )
+
+func _set_dpad_keys(direction_vector: Vector2) -> void:
+    var desired := {}
+    if direction_vector.length() >= DPAD_DEAD_ZONE_RATIO:
+        var direction := direction_vector.normalized()
+        if direction.y <= -DPAD_DIRECTION_AXIS_THRESHOLD:
+            desired[VK_W] = true
+        if direction.x <= -DPAD_DIRECTION_AXIS_THRESHOLD:
+            desired[VK_A] = true
+        if direction.y >= DPAD_DIRECTION_AXIS_THRESHOLD:
+            desired[VK_S] = true
+        if direction.x >= DPAD_DIRECTION_AXIS_THRESHOLD:
+            desired[VK_D] = true
+
+    for key_variant in _dpad_held_keys.keys().duplicate():
+        var key_code := int(key_variant)
+        if not desired.has(key_code):
+            _dpad_held_keys.erase(key_code)
+            _release_key(key_code)
+    for key_variant in desired.keys():
+        var key_code := int(key_variant)
+        if not _dpad_held_keys.has(key_code):
+            _dpad_held_keys[key_code] = true
+            _press_key(key_code)
+    _sync_dpad_button_highlights(desired)
+
+func _sync_dpad_button_highlights(desired: Dictionary) -> void:
+    if w_button != null:
+        w_button.set_pressed_no_signal(desired.has(VK_W))
+    if a_button != null:
+        a_button.set_pressed_no_signal(desired.has(VK_A))
+    if s_button != null:
+        s_button.set_pressed_no_signal(desired.has(VK_S))
+    if d_button != null:
+        d_button.set_pressed_no_signal(desired.has(VK_D))
+
+func _reset_dpad() -> void:
+    _set_dpad_keys(Vector2.ZERO)
+    _dpad_vector = Vector2.ZERO
+    _position_dpad_center()
 
 func _apply_edge_menu_style(button: Button) -> void:
     button.text = ""

@@ -157,6 +157,24 @@ bool PushRuntimeEvent(const SDL_Event &event) {
     return true;
 }
 
+constexpr Uint8 MapPointerButtonToSdl(int button, int modifiers) {
+    // The public engine input contract is zero-based: left=0, right=1,
+    // middle=2. Keep the modifier fallbacks for older hosts that encoded a
+    // secondary button as a primary button plus its held-state flag.
+    if (button == 1 || (modifiers & 0x10) != 0) {
+        return SDL_BUTTON_RIGHT;
+    }
+    if (button == 2 || (modifiers & 0x20) != 0) {
+        return SDL_BUTTON_MIDDLE;
+    }
+    return SDL_BUTTON_LEFT;
+}
+
+static_assert(MapPointerButtonToSdl(0, 0) == SDL_BUTTON_LEFT);
+static_assert(MapPointerButtonToSdl(1, 0) == SDL_BUTTON_RIGHT);
+static_assert(MapPointerButtonToSdl(2, 0) == SDL_BUTTON_MIDDLE);
+static_assert(MapPointerButtonToSdl(0, 0x10) == SDL_BUTTON_RIGHT);
+
 class EmbeddedMovieHost {
 public:
     virtual ~EmbeddedMovieHost() = default;
@@ -1574,10 +1592,10 @@ bool Runtime::send_pointer_event(int type, int pointer_id, double x, double y,
     }
     if (type == 4) {
         int32_t scroll_delta = static_cast<int32_t>(
-            std::lround(delta_y * 40.0));
+            std::lround(-delta_y * 40.0));
         if (scroll_delta == 0 &&
             std::abs(delta_y) > std::numeric_limits<double>::epsilon()) {
-            scroll_delta = delta_y > 0.0 ? 40 : -40;
+            scroll_delta = delta_y > 0.0 ? -40 : 40;
         }
         if (adjust_system_list_scroll(scroll_delta)) {
             return true;
@@ -1585,7 +1603,7 @@ bool Runtime::send_pointer_event(int type, int pointer_id, double x, double y,
         SDL_Event event{};
         event.type = SDL_MOUSEWHEEL;
         event.wheel.x = static_cast<int>(std::lround(delta_x));
-        event.wheel.y = static_cast<int>(std::lround(-delta_y));
+        event.wheel.y = static_cast<int>(std::lround(delta_y));
         event.wheel.direction = SDL_MOUSEWHEEL_NORMAL;
         return PushRuntimeEvent(event);
     }
@@ -1650,13 +1668,7 @@ bool Runtime::send_pointer_event(int type, int pointer_id, double x, double y,
         event.button.state = type == 1 ? SDL_PRESSED : SDL_RELEASED;
         event.button.x = device_x;
         event.button.y = device_y;
-        if (button == 2 || (modifiers & 0x10) != 0) {
-            event.button.button = SDL_BUTTON_RIGHT;
-        } else if (button == 3 || (modifiers & 0x20) != 0) {
-            event.button.button = SDL_BUTTON_MIDDLE;
-        } else {
-            event.button.button = SDL_BUTTON_LEFT;
-        }
+        event.button.button = MapPointerButtonToSdl(button, modifiers);
         event.button.clicks = 1;
         return PushRuntimeEvent(event);
     }

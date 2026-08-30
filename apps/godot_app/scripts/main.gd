@@ -1465,6 +1465,7 @@ const POINTER_MOD_LEFT := 0x08
 const POINTER_MOD_RIGHT := 0x10
 const POINTER_MOD_MIDDLE := 0x20
 const POINTER_MOD_CANCEL := 1 << 30
+const KEY_MOD_CONTROL := 0x04
 const RUNTIME_KIRIKIRI := "kirikiri"
 const RUNTIME_ONSCRIPTER := "onscripter"
 const RUNTIME_PLAYER_CLASS := "AetherRuntimePlayer"
@@ -14257,7 +14258,12 @@ func _on_game_virtual_key_event(
         return
     if not pressed and not game_running:
         return
-    var result := int(player.send_key_event(pressed, key_code, modifiers, 0))
+    var unicode_codepoint := _virtual_key_unicode(
+        pressed, key_code, modifiers
+    )
+    var result := int(player.send_key_event(
+        pressed, key_code, modifiers, unicode_codepoint
+    ))
     input_trace_forwarded += 1
     if result != ENGINE_RESULT_OK:
         input_trace_send_failed += 1
@@ -14270,6 +14276,21 @@ func _on_game_virtual_key_event(
                 result,
             ]
         )
+
+func _virtual_key_unicode(
+    pressed: bool,
+    key_code: int,
+    modifiers: int
+) -> int:
+    if not pressed or (modifiers & KEY_MOD_CONTROL) != 0:
+        return 0
+    if key_code >= 0x41 and key_code <= 0x5A:
+        return key_code + 0x20
+    if key_code >= 0x30 and key_code <= 0x39:
+        return key_code
+    if key_code == 0x20:
+        return key_code
+    return 0
 
 func _on_game_virtual_pointer_move(
     screen_position: Vector2,
@@ -14412,7 +14433,7 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             mapped.x,
             mapped.y,
             0.0,
-            -1.0 if mouse_button.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0,
+            1.0 if mouse_button.button_index == MOUSE_BUTTON_WHEEL_UP else -1.0,
             button
         )
         if event_type == POINTER_DOWN:

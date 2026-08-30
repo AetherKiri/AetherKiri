@@ -217,6 +217,123 @@ func _run() -> void:
     if controls.dpad_backdrop.size.x < controls.w_button.size.x * 2.5:
         _fail("direction pad is not the large UU-style disc")
         return
+    for direction in [
+        controls.w_button,
+        controls.a_button,
+        controls.s_button,
+        controls.d_button,
+    ]:
+        if direction.mouse_filter != Control.MOUSE_FILTER_IGNORE:
+            _fail("direction label still intercepts joystick drags: %s" % direction.name)
+            return
+
+    var dpad_home: Vector2 = controls.dpad_center.get_global_rect().get_center()
+    var dpad_down := InputEventScreenTouch.new()
+    dpad_down.index = 21
+    dpad_down.pressed = true
+    dpad_down.position = dpad_home
+    if not controls.routes_pointer(dpad_down) or not _key_events.is_empty():
+        _fail("joystick center did not capture its touch dead zone")
+        return
+    var dpad_drag := InputEventScreenDrag.new()
+    dpad_drag.index = dpad_down.index
+    dpad_drag.position = dpad_home + Vector2(-24.0, -24.0)
+    if not controls.routes_pointer(dpad_drag):
+        _fail("joystick diagonal drag was not captured")
+        return
+    if not controls.dpad_center.get_global_rect().get_center().is_equal_approx(
+        dpad_drag.position
+    ):
+        _fail("joystick center did not follow the touch position")
+        return
+    if _key_events != [
+        {"pressed": true, "key_code": 0x57, "modifiers": 0},
+        {"pressed": true, "key_code": 0x41, "modifiers": 0},
+    ]:
+        _fail("upper-left joystick diagonal did not hold W+A: %s" % [_key_events])
+        return
+    if (
+        not controls.w_button.button_pressed
+        or not controls.a_button.button_pressed
+        or controls.s_button.button_pressed
+        or controls.d_button.button_pressed
+    ):
+        _fail("upper-left joystick did not highlight W+A")
+        return
+    dpad_drag.position = dpad_home + Vector2(24.0, -24.0)
+    if not controls.routes_pointer(dpad_drag):
+        _fail("joystick direction change was not captured")
+        return
+    if _key_events.slice(2) != [
+        {"pressed": false, "key_code": 0x41, "modifiers": 0},
+        {"pressed": true, "key_code": 0x44, "modifiers": 0},
+    ]:
+        _fail("upper-right joystick diagonal did not switch from A to D")
+        return
+    if (
+        not controls.w_button.button_pressed
+        or controls.a_button.button_pressed
+        or controls.s_button.button_pressed
+        or not controls.d_button.button_pressed
+    ):
+        _fail("upper-right joystick did not switch highlight from A to D")
+        return
+    var dpad_up := InputEventScreenTouch.new()
+    dpad_up.index = dpad_down.index
+    dpad_up.pressed = false
+    dpad_up.position = dpad_drag.position
+    if not controls.routes_pointer(dpad_up):
+        _fail("joystick release was not captured")
+        return
+    if (
+        not controls.dpad_center.get_global_rect().get_center().is_equal_approx(
+            dpad_home
+        )
+        or not controls._dpad_held_keys.is_empty()
+        or controls.w_button.button_pressed
+        or controls.a_button.button_pressed
+        or controls.s_button.button_pressed
+        or controls.d_button.button_pressed
+        or _key_events.slice(4) != [
+            {"pressed": false, "key_code": 0x57, "modifiers": 0},
+            {"pressed": false, "key_code": 0x44, "modifiers": 0},
+        ]
+    ):
+        _fail("joystick release did not recenter and release W+D")
+        return
+    _key_events.clear()
+
+    var dpad_mouse_down := InputEventMouseButton.new()
+    dpad_mouse_down.button_index = MOUSE_BUTTON_LEFT
+    dpad_mouse_down.pressed = true
+    dpad_mouse_down.position = dpad_home + Vector2(24.0, 0.0)
+    if not controls.routes_pointer(dpad_mouse_down):
+        _fail("mouse-driven joystick press was not captured")
+        return
+    var dpad_mouse_drag := InputEventMouseMotion.new()
+    dpad_mouse_drag.position = dpad_home + Vector2(0.0, 24.0)
+    if not controls.routes_pointer(dpad_mouse_drag):
+        _fail("mouse-driven joystick drag was not captured")
+        return
+    dpad_mouse_down.pressed = false
+    dpad_mouse_down.position = dpad_mouse_drag.position
+    if not controls.routes_pointer(dpad_mouse_down):
+        _fail("mouse-driven joystick release was not captured")
+        return
+    if _key_events != [
+        {"pressed": true, "key_code": 0x44, "modifiers": 0},
+        {"pressed": false, "key_code": 0x44, "modifiers": 0},
+        {"pressed": true, "key_code": 0x53, "modifiers": 0},
+        {"pressed": false, "key_code": 0x53, "modifiers": 0},
+    ]:
+        _fail("mouse joystick did not switch from D to S: %s" % [_key_events])
+        return
+    if not controls.dpad_center.get_global_rect().get_center().is_equal_approx(
+        dpad_home
+    ):
+        _fail("mouse joystick did not recenter on release")
+        return
+    _key_events.clear()
     if (
         controls.mouse_left_button.get_node_or_null("MouseIcon") == null
         or controls.mouse_right_button.get_node_or_null("MouseIcon") == null
@@ -492,10 +609,16 @@ func _run() -> void:
         _fail("mouse buttons did not produce down/up pairs")
         return
     if (
-        _pointer_buttons[0].modifiers != 0
+        _pointer_buttons[0].button != 0
+        or _pointer_buttons[0].modifiers != 0
+        or _pointer_buttons[1].button != 0
+        or _pointer_buttons[1].modifiers != 0
+        or _pointer_buttons[2].button != 1
         or _pointer_buttons[2].modifiers != 0x10
+        or _pointer_buttons[3].button != 1
+        or _pointer_buttons[3].modifiers != 0x10
     ):
-        _fail("left/right mouse modifiers are incorrect")
+        _fail("left/right mouse button contract is incorrect")
         return
     controls.scroll_up_button.emit_signal("button_down")
     controls.scroll_up_button.emit_signal("button_up")
@@ -539,7 +662,11 @@ func _run() -> void:
     if _key_events.back() != {"pressed": false, "key_code": 0x41, "modifiers": 0}:
         _fail("changing modes did not release the held key")
         return
-    if _pointer_buttons.back().pressed or _pointer_buttons.back().modifiers != 0x10:
+    if (
+        _pointer_buttons.back().pressed
+        or _pointer_buttons.back().button != 1
+        or _pointer_buttons.back().modifiers != 0x10
+    ):
         _fail("changing modes did not release the held mouse button")
         return
     controls._advance_scroll_hold(
@@ -560,7 +687,11 @@ func _run() -> void:
     if _key_events.back() != {"pressed": false, "key_code": 0x41, "modifiers": 0}:
         _fail("hiding controls did not release held key")
         return
-    if _pointer_buttons.back().pressed or _pointer_buttons.back().modifiers != 0x10:
+    if (
+        _pointer_buttons.back().pressed
+        or _pointer_buttons.back().button != 1
+        or _pointer_buttons.back().modifiers != 0x10
+    ):
         _fail("hiding controls did not release held mouse button")
         return
     if controls.routes_pointer(inside):
