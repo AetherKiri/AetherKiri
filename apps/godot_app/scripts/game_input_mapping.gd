@@ -52,9 +52,10 @@ static func map_delta(
 
 # Frame enhancement presents the game's logical frame directly, while the
 # runtime continues to accept pointer events in its requested surface space.
-# DrawDevice maps that whole surface back to the logical layer independently
-# on each axis, so this conversion must use the exact inverse scale. Applying
-# aspect-fit here would introduce a second set of bars and shift 4:3 input.
+# Artemis maps that surface to the logical frame with an aspect-fit viewport
+# (including letterbox offsets), then maps input back through the same viewport.
+# Mirror that transform here so the provider does not apply a second, different
+# scale when it receives the event.
 static func map_point_to_surface(
     window_point: Vector2,
     target_rect: Rect2,
@@ -72,9 +73,17 @@ static func map_point_to_surface(
         return content_point
     if surface_size.x <= 0.0 or surface_size.y <= 0.0:
         return content_point
+    var surface_scale := minf(
+        surface_size.x / content_size.x,
+        surface_size.y / content_size.y
+    )
+    if surface_scale <= 0.0:
+        return Vector2(-1.0, -1.0)
+    var presented_size := content_size * surface_scale
+    var surface_offset := (surface_size - presented_size) * 0.5
     return Vector2(
-        content_point.x * surface_size.x / content_size.x,
-        content_point.y * surface_size.y / content_size.y
+        surface_offset.x + content_point.x * surface_scale,
+        surface_offset.y + content_point.y * surface_scale
     )
 
 
@@ -92,9 +101,13 @@ static func map_delta_to_surface(
         or surface_size.y <= 0.0
     ):
         return content_delta
+    var surface_scale := minf(
+        surface_size.x / content_size.x,
+        surface_size.y / content_size.y
+    )
     return Vector2(
-        content_delta.x * surface_size.x / content_size.x,
-        content_delta.y * surface_size.y / content_size.y
+        content_delta.x * surface_scale,
+        content_delta.y * surface_scale
     )
 
 

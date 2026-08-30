@@ -4,6 +4,8 @@
 #include <optional>
 #include <algorithm>
 #include <cctype>
+#include <limits>
+#include <vector>
 
 #include <boost/locale/encoding.hpp>
 
@@ -17,6 +19,7 @@
 #include "tjsError.h"
 #include "CharacterSet.h"
 #include "BinaryStream.h"
+#include "StorageIntf.h"
 
 // Legacy KiriKiri scripts without a BOM are traditionally encoded as CP932.
 // UTF-8 remains auto-detected before this fallback is used.
@@ -133,6 +136,87 @@ static bool shouldPreferCP932ForStandMetadata(const ttstr &name) {
     return suffix == TJS_W("_info.txt");
 }
 
+static std::optional<size_t> findEmbeddedBmpTextOffset(
+    const std::vector<std::uint8_t> &raw) {
+    // Some older KiriKiri save systems append saveStruct output to a BMP
+    // thumbnail and then read the combined file as a text stream.  The BMP
+    // file-size field marks the end of the image; only honor it when the tail
+    // starts with a real KiriKiri text signature so ordinary bitmaps and
+    // arbitrary trailing metadata keep their normal behavior.
+    if(raw.size() < 14 || raw[0] != 'B' || raw[1] != 'M')
+        return std::nullopt;
+
+    const size_t imageSize = static_cast<size_t>(raw[2]) |
+        (static_cast<size_t>(raw[3]) << 8) |
+        (static_cast<size_t>(raw[4]) << 16) |
+        (static_cast<size_t>(raw[5]) << 24);
+    if(imageSize < 14 || imageSize >= raw.size())
+        return std::nullopt;
+
+    const size_t remaining = raw.size() - imageSize;
+    const auto *tail = raw.data() + imageSize;
+    const bool utf16Bom = remaining >= 2 &&
+        ((tail[0] == 0xff && tail[1] == 0xfe) ||
+         (tail[0] == 0xfe && tail[1] == 0xff));
+    const bool utf8Bom = remaining >= 3 && tail[0] == 0xef &&
+        tail[1] == 0xbb && tail[2] == 0xbf;
+    const bool kirikiriCipher = remaining >= 3 && tail[0] == 0xfe &&
+        tail[1] == 0xfe && tail[2] <= 2;
+    if(!utf16Bom && !utf8Bom && !kirikiriCipher)
+        return std::nullopt;
+    return imageSize;
+}
+
+static bool selectLegacyBmpTextPayload(const ttstr &requested,
+                                       std::vector<std::uint8_t> &raw) {
+    ttstr legacy;
+    try {
+        legacy = TVPFindLegacySaveThumbnail(requested);
+    } catch(...) {
+        return false;
+    }
+    if(legacy.IsEmpty())
+        return false;
+
+    try {
+        std::unique_ptr<tTJSBinaryStream> stream(
+            TVPCreateStream(legacy, TJS_BS_READ));
+        const auto streamSize = stream->GetSize();
+        if(streamSize == 0 ||
+           streamSize > static_cast<tjs_uint64>(
+                            std::numeric_limits<size_t>::max())) {
+            return false;
+        }
+
+        std::vector<std::uint8_t> candidate(
+            static_cast<size_t>(streamSize));
+        stream->ReadBuffer(candidate.data(), candidate.size());
+        const auto embeddedOffset = findEmbeddedBmpTextOffset(candidate);
+        if(!embeddedOffset)
+            return false;
+
+        candidate.erase(candidate.begin(),
+                        candidate.begin() + *embeddedOffset);
+        raw = std::move(candidate);
+        spdlog::debug(
+            "Text stream selected legacy compound BMP payload: requested={} source={} offset={} bytes={}",
+            requested.AsStdString(), legacy.AsStdString(), *embeddedOffset,
+            raw.size());
+        return true;
+    } catch(...) {
+        // The requested stream still exists and remains the authoritative
+        // fallback if the legacy sidecar disappears between lookup and open.
+        return false;
+    }
+}
+
+static std::uint64_t readLe64(const std::uint8_t *bytes) {
+    std::uint64_t value = 0;
+    for(int i = 0; i < 8; i++)
+        value |= static_cast<std::uint64_t>(bytes[i]) << (i * 8);
+    return value;
+}
+
 std::string checkTextEncoding(const void *buf, size_t size,
                               std::uint8_t &bomSize) {
     auto raw = static_cast<const unsigned char *>(buf);
@@ -217,6 +301,18 @@ public:
         std::vector<std::uint8_t> raw(size);
         _stream->ReadBuffer(raw.data(), size);
 
+        if(ofs == 0) {
+            if(const auto embeddedOffset = findEmbeddedBmpTextOffset(raw)) {
+                raw.erase(raw.begin(), raw.begin() + *embeddedOffset);
+                size = raw.size();
+                spdlog::debug(
+                    "Text stream selected embedded BMP payload: {} offset={} bytes={}",
+                    name.AsStdString(), *embeddedOffset, size);
+            } else if(selectLegacyBmpTextPayload(name, raw)) {
+                size = raw.size();
+            }
+        }
+
         // ---------- 检查是否加密/压缩 ----------
         if(size >= 3 && raw[0] == 0xFE && raw[1] == 0xFE) {
             std::uint8_t m = raw[2];
@@ -251,13 +347,17 @@ public:
                     TVPThrowExceptionMessage(TVPUnsupportedCipherMode, name);
 
                 // 读压缩大小和解压大小
-                std::uint8_t *ptr = raw.data() + 5;
-                std::uint64_t compressed =
-                    *reinterpret_cast<std::uint64_t *>(ptr);
+                const std::uint8_t *ptr = raw.data() + 5;
+                const std::uint64_t compressed = readLe64(ptr);
                 ptr += 8;
-                std::uint64_t uncompressed =
-                    *reinterpret_cast<std::uint64_t *>(ptr);
+                const std::uint64_t uncompressed = readLe64(ptr);
                 ptr += 8;
+
+                if(compressed > size - 21 ||
+                   compressed > std::numeric_limits<unsigned long>::max() ||
+                   uncompressed > std::numeric_limits<unsigned long>::max()) {
+                    TVPThrowExceptionMessage(TVPUnsupportedCipherMode, name);
+                }
 
                 std::vector<std::uint8_t> compBuf(compressed);
                 memcpy(compBuf.data(), ptr, compressed);

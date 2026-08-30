@@ -31,6 +31,7 @@
 #include "LayerTreeOwner.h"
 #include "WindowIntf.h"
 #include "EngineLoop.h"
+#include "RenderManager.h"
 #include "spdlog/spdlog.h"
 
 #include <cctype>
@@ -210,6 +211,10 @@ std::string TVPTraceLayerImageSampleInfo(tTJSNI_BaseLayer *layer,
     if(!TVPInputTraceEnabled() || !layer)
         return "-";
 
+    if(const char *all = std::getenv("AETHERKIRI_INPUT_TRACE_ALL_IMAGES");
+       all && *all && *all != '0')
+        force = true;
+
     const std::string name = layer->GetName().AsStdString();
     if(!force && name.find("CG View Layer") == std::string::npos &&
        name.find("表メッセージレイヤ2") == std::string::npos)
@@ -254,11 +259,29 @@ std::string TVPTraceLayerImageSampleInfo(tTJSNI_BaseLayer *layer,
     const tjs_uint32 p00 = sample(0, 0);
     const tjs_uint32 center = sample(iw / 2, ih / 2);
     const tjs_uint32 pbr = sample(iw - 1, ih - 1);
-    char buf[192];
+    tjs_uint32 extra = 0;
+    int extra_x = -1;
+    int extra_y = -1;
+    if(const char *sx = std::getenv("AETHERKIRI_INPUT_TRACE_SAMPLE_X");
+       sx && *sx) {
+        char *end = nullptr;
+        extra_x = static_cast<int>(std::strtol(sx, &end, 10));
+        if(!end || *end != '\0') extra_x = -1;
+    }
+    if(const char *sy = std::getenv("AETHERKIRI_INPUT_TRACE_SAMPLE_Y");
+       sy && *sy) {
+        char *end = nullptr;
+        extra_y = static_cast<int>(std::strtol(sy, &end, 10));
+        if(!end || *end != '\0') extra_y = -1;
+    }
+    if(extra_x >= 0 && extra_y >= 0)
+        extra = sample(extra_x, extra_y);
+    char buf[240];
     std::snprintf(buf, sizeof(buf),
-                  "img=%dx%d ofs=%d,%d alpha=%d/%d p00=%08x center=%08x pbr=%08x",
+                  "img=%dx%d ofs=%d,%d alpha=%d/%d p00=%08x center=%08x pbr=%08x sample(%d,%d)=%08x",
                   iw, ih, layer->GetImageLeft(), layer->GetImageTop(),
-                  nonzero_alpha, total, p00, center, pbr);
+                  nonzero_alpha, total, p00, center, pbr, extra_x, extra_y,
+                  extra);
     return buf;
 }
 
@@ -267,7 +290,9 @@ std::string TVPTraceLayerChildrenInfo(tTJSNI_BaseLayer *layer) {
         return "-";
 
     const std::string name = layer->GetName().AsStdString();
-    if(name.find("CG View Layer") == std::string::npos)
+    const char *requested = std::getenv("AETHERKIRI_INPUT_TRACE_CHILDREN");
+    const bool trace_all = requested && *requested && *requested != '0';
+    if(!trace_all && name.find("CG View Layer") == std::string::npos)
         return "-";
 
     std::string result;
@@ -302,6 +327,10 @@ std::string TVPTraceLayerChildrenInfo(tTJSNI_BaseLayer *layer) {
         result += std::to_string(child->GetOpacity());
         result += " has=";
         result += child->GetHasImage() ? "1" : "0";
+        result += " owner=";
+        result += child->GetOwnerNoAddRef() ? "1" : "0";
+        result += " action=";
+        result += child->GetActionOwnerNoAddRef().Object ? "1" : "0";
         result += " ";
         result += TVPTraceLayerImageSampleInfo(child, true);
     }
@@ -669,8 +698,13 @@ bool TVPIsGalleryItemLayer(tTJSNI_BaseLayer *layer) {
         if(!std::isdigit(static_cast<unsigned char>(name[i])))
             return false;
     }
-    return layer->GetWidth() >= 120 && layer->GetWidth() <= 360 &&
-           layer->GetHeight() >= 80 && layer->GetHeight() <= 240;
+    // Scene-gallery sheets are authored at more than one scale.  The
+    // compact layouts used by most titles are around 240x140, while
+    // drciot's replay sheet uses 460x271 cells.  Keep the predicate bounded
+    // so arbitrary full-screen `itemNN` layers are not treated as gallery
+    // controls, but accept both authored ranges.
+    return layer->GetWidth() >= 120 && layer->GetWidth() <= 640 &&
+        layer->GetHeight() >= 80 && layer->GetHeight() <= 360;
 }
 
 bool TVPIsConfirmableSelectionLayer(tTJSNI_BaseLayer *layer) {
@@ -768,6 +802,16 @@ tTJSNI_BaseLayer *TVPRouteAffinePresentationToMessageLayer(
 //---------------------------------------------------------------------------
 // tTVPLayerManager
 //---------------------------------------------------------------------------
+tTVPDestTexture::tTVPDestTexture(tjs_uint w, tjs_uint h)
+    : tTVPBaseTexture(w, h) {
+    // This texture is the layer-manager's readback-visible composition
+    // surface. GPU backends can keep aliased KAG blits on the software path
+    // while leaving ordinary layer textures fast.
+    if(Bitmap != nullptr) {
+        Bitmap->SetCpuCompositeTarget(true);
+    }
+}
+
 tTVPLayerManager::tTVPLayerManager(iTVPLayerTreeOwner *owner) {
     RefCount = 1;
     LayerTreeOwner = owner;
@@ -822,11 +866,19 @@ tTVPBaseTexture *tTVPLayerManager::EnsureDrawBufferSize(
     if(w <= 0 || h <= 0)
         return DrawBuffer;
 
+    // The compositor can expose untouched pixels while a transparent child
+    // only updates part of the primary surface. KiriKiri defines those pixels
+    // from the opaque primary layer's neutral color; a hard-coded black clear
+    // leaks a black edge through otherwise valid transparent title artwork.
+    const tjs_uint32 clear_color = Primary
+        ? (Primary->GetNeutralColor() & 0x00ffffffu) | 0xff000000u
+        : 0xff000000u;
+
     const tjs_uint target_w = static_cast<tjs_uint>(w);
     const tjs_uint target_h = static_cast<tjs_uint>(h);
     if(!DrawBuffer) {
         DrawBuffer = new tTVPDestTexture(target_w, target_h);
-        DrawBuffer->Fill(tTVPRect(0, 0, w, h), 0xFF000000);
+        DrawBuffer->Fill(tTVPRect(0, 0, w, h), clear_color);
         static_cast<tTVPDestTexture *>(DrawBuffer)->SetHoldAlpha(HoldAlpha);
         return DrawBuffer;
     }
@@ -835,7 +887,7 @@ tTVPBaseTexture *tTVPLayerManager::EnsureDrawBufferSize(
        DrawBuffer->GetHeight() != target_h) {
         DrawBuffer->SetSize(target_w, target_h, !clear_on_resize);
         if(clear_on_resize)
-            DrawBuffer->Fill(tTVPRect(0, 0, w, h), 0xFF000000);
+            DrawBuffer->Fill(tTVPRect(0, 0, w, h), clear_color);
         static_cast<tTVPDestTexture *>(DrawBuffer)->SetHoldAlpha(HoldAlpha);
     }
     return DrawBuffer;
@@ -884,6 +936,35 @@ void tTVPLayerManager::DrawCompleted(const tTVPRect &destrect,
         return;
     // Window->GetDrawDevice()->GetSrcSize(w, h);
     EnsureDrawBufferSize(w, h, false);
+
+    if(const char *trace = std::getenv("AETHERKIRI_MESSAGE_FRAME_COMPOSE");
+       trace && *trace && *trace != '0' && type == ltAlpha && bmp &&
+       destrect.get_width() >= 1000 && destrect.get_height() >= 400) {
+        const tjs_int sx = std::clamp(
+            cliprect.left + cliprect.get_width() / 2, 0,
+            static_cast<tjs_int>(bmp->GetWidth()) - 1);
+        const tjs_int sy = std::clamp(
+            cliprect.top + cliprect.get_height() / 2, 0,
+            static_cast<tjs_int>(bmp->GetHeight()) - 1);
+        const tjs_int dx = std::clamp(
+            destrect.left + destrect.get_width() / 2, 0,
+            static_cast<tjs_int>(DrawBuffer->GetWidth()) - 1);
+        const tjs_int dy = std::clamp(
+            destrect.top + destrect.get_height() / 2, 0,
+            static_cast<tjs_int>(DrawBuffer->GetHeight()) - 1);
+        spdlog::info(
+            "message-frame compose type={} opacity={} dest=({},{} {}x{}) "
+            "clip=({},{} {}x{}) src=0x{:08x} dst_before=0x{:08x}",
+            static_cast<int>(type), opacity, destrect.left, destrect.top,
+            destrect.get_width(), destrect.get_height(), cliprect.left,
+            cliprect.top, cliprect.get_width(), cliprect.get_height(),
+            bmp->GetPoint(sx, sy), DrawBuffer->GetPoint(dx, dy));
+        DrawBuffer->Blt(destrect.left, destrect.top, bmp, cliprect, type,
+                        opacity, HoldAlpha);
+        spdlog::info("message-frame compose dst_after=0x{:08x}",
+                     DrawBuffer->GetPoint(dx, dy));
+        return;
+    }
 
     DrawBuffer->Blt(destrect.left, destrect.top, bmp, cliprect, type, opacity,
                     HoldAlpha);
@@ -1110,6 +1191,7 @@ tTJSNI_BaseLayer *tTVPLayerManager::GetClickableLayerAt(tjs_int x, tjs_int y) {
     layer = TVPFindMotionButtonOwnerForDisplayProxy(layer, x, y);
     layer = TVPRoutePassiveKagPresentationProxyToPage(layer, x, y);
     layer = TVPRouteAffinePresentationToMessageLayer(this, layer, x, y);
+
     if(TVPIsSaveLoadItemLayer(layer))
         TVPTraceLayersAt(this, "save-load-item", x, y);
     if(!layer || !TVPIsMessageLayer(layer) || !Primary)
@@ -1354,10 +1436,31 @@ void tTVPLayerManager::PrimaryClick(tjs_int x, tjs_int y) {
             l->FireButtonClick();
             return;
         }
-        if(IsTitleMenuInputState(l) && l->HasButtonClickTarget()) {
+        // LinkButtonLayerBase and copied UI-sheet buttons dispatch through
+        // _evalOnClick/onButtonClick, regardless of whether the surrounding
+        // page is the title screen.  Limiting this path to title/save-load
+        // pages made gallery group selectors, settings controls, and the
+        // language switch receive only the generic Layer.onClick event.
+        if(l->HasButtonClickTarget()) {
+            // A normal captured button gesture is already completed by the
+            // captured layer's onMouseUp handler.  PrimaryClick is delivered
+            // before PrimaryMouseUp on the Godot host, so evaluating the
+            // bound expression here as well toggles state twice (open, then
+            // immediately closed).  Only synthesize the click when the
+            // button appeared after mouse-down and therefore does not own the
+            // capture; that case has no matching button mouse-up to dispatch
+            // its expression.
+            if(CaptureOwner == l) {
+                if(TVPInputTraceEnabled()) {
+                    spdlog::info(
+                        "LayerManager title link click deferred to captured mouseup layer={} primary=({}, {})",
+                    l->GetName().AsStdString(), x, y);
+                }
+                return;
+            }
             if(TVPInputTraceEnabled()) {
                 spdlog::info(
-                    "LayerManager title link click -> onButtonClick layer={} primary=({}, {})",
+                    "LayerManager link click -> onButtonClick layer={} primary=({}, {})",
                     l->GetName().AsStdString(), x, y);
             }
             l->FireButtonClick();
@@ -2106,6 +2209,14 @@ void tTVPLayerManager::PrimaryKeyPress(tjs_char key) {
 //---------------------------------------------------------------------------
 void tTVPLayerManager::PrimaryMouseWheel(tjs_uint32 shift, tjs_int delta,
                                          tjs_int x, tjs_int y) {
+    if(TVPInputTraceEnabled()) {
+        tTJSNI_BaseLayer *hit = GetClickableLayerAt(x, y);
+        spdlog::info(
+            "LayerManager wheel primary=({}, {}) delta={} focused={} hit={}", x,
+            y, delta,
+            FocusedLayer ? FocusedLayer->GetName().AsStdString() : "<none>",
+            hit ? hit->GetName().AsStdString() : "<none>");
+    }
     if(FocusedLayer)
         FocusedLayer->FireMouseWheel(shift, delta, x, y);
 }

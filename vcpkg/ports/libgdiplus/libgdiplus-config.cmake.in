@@ -1,0 +1,11 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# The exported libgdiplus::libgdiplus target references TIFF::TIFF in its
+# link interface, so it must be defined before the targets are loaded.
+find_dependency(TIFF)
+
+include("${CMAKE_CURRENT_LIST_DIR}/libgdiplus-targets.cmake")
+
+check_required_components(libgdiplus)

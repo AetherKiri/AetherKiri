@@ -17,43 +17,6 @@ namespace {
         return layer;
     }
 
-    iTJSDispatch2 *resolveAssignableLayer(const tTJSVariant &value) {
-        if(value.Type() != tvtObject || !value.AsObjectNoAddRef()) {
-            return nullptr;
-        }
-
-        if(auto *adaptor =
-               ncbInstanceAdaptor<motion::SeparateLayerAdaptor>::GetNativeInstance(
-                   value.AsObjectNoAddRef(), false)) {
-            if(auto *privateTarget = adaptor->getPrivateRenderTargetObject()) {
-                return privateTarget;
-            }
-            if(auto *target = tryResolveLayerDispatch(adaptor->getTargetLayer())) {
-                return target;
-            }
-            return adaptor->getOwner();
-        }
-
-        return tryResolveLayerDispatch(value);
-    }
-
-    bool copyLayerImages(iTJSDispatch2 *sourceLayerObject,
-                         iTJSDispatch2 *targetLayerObject) {
-        if(!sourceLayerObject || !targetLayerObject) {
-            return false;
-        }
-
-        try {
-            tTJSVariant targetVar(targetLayerObject, targetLayerObject);
-            tTJSVariant *args[] = { &targetVar };
-            return TJS_SUCCEEDED(sourceLayerObject->FuncCall(
-                0, TJS_W("assignImages"), nullptr, nullptr, 1, args,
-                sourceLayerObject));
-        } catch(...) {
-            return false;
-        }
-    }
-
 } // namespace
 
 namespace motion {
@@ -100,62 +63,15 @@ namespace motion {
             result->Clear();
         }
 
-        auto *nativeInstance =
-            ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(objthis, true);
-        if(!nativeInstance) {
+        if(!ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(
+               objthis, true)) {
             return TJS_E_INVALIDOBJECT;
         }
-
-        tTJSVariant sourceValue;
-        if(numparams > 0 && param && param[0]) {
-            sourceValue = *param[0];
-        }
-
-        iTJSDispatch2 *sourceLayerObject = nullptr;
-        if(sourceValue.Type() == tvtObject && sourceValue.AsObjectNoAddRef()) {
-            sourceLayerObject = resolveAssignableLayer(sourceValue);
-        }
-        if(!sourceLayerObject) {
-            sourceLayerObject = nativeInstance->getPrivateRenderTargetObject();
-        }
-
-        tTJSVariant targetValue = nativeInstance->getTargetLayer();
-        if(targetValue.Type() != tvtObject || !targetValue.AsObjectNoAddRef()) {
-            targetValue = nativeInstance->getOwnerVariant();
-        }
-        iTJSDispatch2 *targetLayerObject = resolveAssignableLayer(targetValue);
-        if(!targetLayerObject) {
-            targetLayerObject = nativeInstance->getOwner();
-        }
-
-        if(!sourceLayerObject || !targetLayerObject) {
-            return TJS_S_OK;
-        }
-
-        auto *sourceLayer = resolveNativeLayer(sourceLayerObject);
-        auto *targetLayer = resolveNativeLayer(targetLayerObject);
-        if(sourceLayer && targetLayer) {
-            targetLayer->SetAbsoluteOrderMode(sourceLayer->GetAbsoluteOrderMode());
-            targetLayer->SetOpacity(sourceLayer->GetOpacity());
-            targetLayer->SetType(sourceLayer->GetType());
-            targetLayer->SetVisible(sourceLayer->GetVisible());
-
-            if(sourceLayer->GetWidth() > 0 && sourceLayer->GetHeight() > 0) {
-                targetLayer->SetSize(sourceLayer->GetWidth(),
-                                     sourceLayer->GetHeight());
-            }
-            if(sourceLayer->GetImageWidth() > 0 &&
-               sourceLayer->GetImageHeight() > 0) {
-                targetLayer->SetHasImage(true);
-                targetLayer->SetImageSize(sourceLayer->GetImageWidth(),
-                                          sourceLayer->GetImageHeight());
-            }
-        }
-
-        copyLayerImages(sourceLayerObject, targetLayerObject);
-        if(result) {
-            *result = tTJSVariant(targetLayerObject, targetLayerObject);
-        }
+        (void)numparams;
+        (void)param;
+        // krkrsdl3 leaves SeparateLayerAdaptor::assign as a no-op. The
+        // adaptor's private child is already the visible presentation layer;
+        // copying it into the authored owner creates a second, offset frame.
         return TJS_S_OK;
     }
 

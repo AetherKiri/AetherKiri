@@ -21,6 +21,8 @@
 #include "tjsDebug.h"
 #include "../base/ScriptMgnIntf.h"
 
+#include <spdlog/spdlog.h>
+
 #include <atomic>
 
 static std::atomic<int64_t> sTJSCustomObjectCount{0};
@@ -1621,6 +1623,32 @@ namespace TJS {
 
         tTJSSymbolData *data = Find(membername, hint);
 
+        // A failed affine source callback is especially important because it
+        // prevents the source image from ever reaching the layer compositor.
+        // Keep this probe opt-in and side-effect free: compare the normal
+        // hinted lookup with a direct lookup without changing the caller's
+        // hint.  If the latter succeeds, the issue is a stale/incorrect
+        // dispatch hint; if both fail, the class instance was not populated.
+        if(!data && membername &&
+           !TJS_strcmp(membername, TJS_W("calcImageMatrix"))) {
+            const char *trace = std::getenv("AETHERKIRI_CALC_TRACE");
+            if(trace && *trace && *trace != '0') {
+                tTJSVariant class_name;
+                std::string cls;
+                if(TJS_SUCCEEDED(ClassInstanceInfo(TJS_CII_GET, 0,
+                                                   &class_name)))
+                    cls = ttstr(class_name).AsStdString();
+                const tTJSSymbolData *uncached = Find(membername, nullptr);
+                spdlog::info(
+                    "AffineCalcLookup this={} objthis={} class={} hint={} hinted={} uncached={} count={} hashSize={} hashMask={}",
+                    static_cast<const void *>(this),
+                    static_cast<const void *>(objthis), cls,
+                    hint ? *hint : 0, static_cast<const void *>(data),
+                    static_cast<const void *>(uncached), Count, HashSize,
+                    HashMask);
+            }
+        }
+
         if(!data) {
             if(membername && !TJS_strcmp(membername, TJS_W("touchImage"))) {
                 return TJSCompatTouchImage(result, numparams, param, objthis);
@@ -1635,6 +1663,57 @@ namespace TJS {
                 if(CallGetMissing(membername, value_func))
                     return TJSDefaultFuncCall(flag, value_func, result,
                                               numparams, param, objthis);
+            }
+
+            // Affine scene layers are script subclasses whose onPaint method
+            // is looked up with a bytecode-cached hash hint.  When diagnosing
+            // a missing affine callback, retry with an uncached lookup so we
+            // can distinguish a stale hint from a genuinely incomplete
+            // instance; this is intentionally opt-in and has no runtime
+            // behavior change.
+            if(const char *trace = std::getenv("AETHERKIRI_AFFINE_TRACE");
+               trace && *trace && !TJS_strcmp(membername, TJS_W("onPaint"))) {
+                tTJSVariant probe;
+                const tjs_error probe_er =
+                    PropGet(TJS_IGNOREPROP, membername, nullptr, &probe,
+                            objthis);
+                tTJSSymbolData *uncached_data = Find(membername, nullptr);
+                tTJSVariant obj_probe;
+                const tjs_error obj_probe_er = objthis
+                    ? objthis->PropGet(TJS_IGNOREPROP, membername, nullptr,
+                                       &obj_probe, objthis)
+                    : TJS_E_INVALIDOBJECT;
+                tTJSVariant class_name;
+                std::string cls;
+                if(TJS_SUCCEEDED(ClassInstanceInfo(TJS_CII_GET, 0,
+                                                   &class_name)))
+                    cls = ttstr(class_name).AsStdString();
+                const tjs_error this_is_function =
+                    IsInstanceOf(0, nullptr, nullptr, TJS_W("Function"),
+                                 this);
+                const tjs_error this_is_class =
+                    IsInstanceOf(0, nullptr, nullptr, TJS_W("Class"), this);
+                const tjs_error obj_is_env = objthis
+                    ? objthis->IsInstanceOf(0, nullptr, nullptr,
+                                            TJS_W("EnvGraphicLayer"), objthis)
+                    : TJS_E_INVALIDOBJECT;
+                const std::string this_type =
+                    TJSGetObjectTypeInfo(this).AsStdString();
+                const std::string obj_type = objthis
+                    ? TJSGetObjectTypeInfo(objthis).AsStdString()
+                    : std::string();
+                spdlog::info(
+                    "AffineMissing onPaint this={} objthis={} class={} hint={} uncached_data={} uncached_er={} uncached_type={} probe_obj={} obj_er={} obj_type={} obj_probe_obj={} thisFn={} thisClass={} objEnv={} thisType={} objType={}",
+                    static_cast<const void *>(this),
+                    static_cast<const void *>(objthis), cls,
+                    hint ? *hint : 0,
+                    static_cast<const void *>(uncached_data), probe_er,
+                    static_cast<int>(probe.Type()),
+                    static_cast<const void *>(probe.AsObjectNoAddRef()),
+                    obj_probe_er, static_cast<int>(obj_probe.Type()),
+                    static_cast<const void *>(obj_probe.AsObjectNoAddRef()),
+                    this_is_function, this_is_class, obj_is_env, this_type,
+                    obj_type);
             }
 
             PluginCallTracer::Instance().LogMissingMember(membername, "FuncCall", objthis);

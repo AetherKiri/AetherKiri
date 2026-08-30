@@ -35,6 +35,11 @@ enum class GpuCall {
 
 TriangleDrawCall g_triangle_draw_call;
 int g_blend_rect_calls = 0;
+int g_read_rgba_calls = 0;
+int g_update_rgba_calls = 0;
+uint32_t g_last_blend_mode = 0;
+uint32_t g_last_blend_color = 0;
+int g_last_blend_opacity = 0;
 uint64_t g_next_texture_handle = 1;
 uint64_t g_next_readback_handle = 101;
 uint64_t g_last_discarded_readback = 0;
@@ -52,6 +57,7 @@ void ReleaseTestTexture(uint64_t) {}
 
 bool ReadTestGrayTexture(uint64_t, void *out_pixels, size_t out_pixels_size,
                          uint32_t stride_bytes) {
+    ++g_read_rgba_calls;
     if(out_pixels == nullptr || out_pixels_size < 24 || stride_bytes != 12)
         return false;
 
@@ -60,6 +66,12 @@ bool ReadTestGrayTexture(uint64_t, void *out_pixels, size_t out_pixels_size,
         44, 44, 44, 255, 55, 55, 55, 255, 66, 66, 66, 255,
     };
     std::memcpy(out_pixels, rgba.data(), rgba.size());
+    return true;
+}
+
+bool UpdateTestTexture(uint64_t, const void *, uint32_t,
+                       const tTVPRect *) {
+    ++g_update_rgba_calls;
     return true;
 }
 
@@ -100,9 +112,12 @@ bool DrawTestTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
 }
 
 bool BlendTestRect(uint64_t, uint64_t, const tTVPRect *, const tTVPRect *,
-                   uint32_t, int, uint32_t) {
+                   uint32_t mode, int opacity, uint32_t color) {
     g_gpu_calls.push_back(GpuCall::Blend);
     ++g_blend_rect_calls;
+    g_last_blend_mode = mode;
+    g_last_blend_color = color;
+    g_last_blend_opacity = opacity;
     return true;
 }
 
@@ -130,6 +145,11 @@ public:
     TestGpuBridge() {
         g_triangle_draw_call = {};
         g_blend_rect_calls = 0;
+        g_read_rgba_calls = 0;
+        g_update_rgba_calls = 0;
+        g_last_blend_mode = 0;
+        g_last_blend_color = 0;
+        g_last_blend_opacity = 0;
         g_next_texture_handle = 1;
         g_next_readback_handle = 101;
         g_last_discarded_readback = 0;
@@ -141,6 +161,7 @@ public:
         TVPGodotGpuBridgeCallbacks callbacks{};
         callbacks.create_rgba = CreateTestTexture;
         callbacks.release_texture = ReleaseTestTexture;
+        callbacks.update_rgba = UpdateTestTexture;
         callbacks.draw_triangles = DrawTestTriangles;
         callbacks.blend_rect = BlendTestRect;
         callbacks.read_rgba = ReadTestGrayTexture;
@@ -611,6 +632,47 @@ TEST_CASE("Godot Gray textures extract province pixels after GPU writes") {
     CHECK(row[3] == 0xee);
 }
 
+TEST_CASE("Godot textures retain CPU shadows after script writes") {
+    TestGpuBridge bridge;
+    const std::array<std::uint8_t, 8> pixels = {
+        1, 2, 3, 255, 4, 5, 6, 255,
+    };
+    GodotTexture2D texture(pixels.data(), 8, 2, 1,
+                           TVPTextureFormat::RGBA);
+    REQUIRE(texture.EnsureGpuHandle());
+
+    auto *first = static_cast<std::uint8_t *>(texture.GetScanLineForWrite(0));
+    REQUIRE(first != nullptr);
+    const int reads_after_first_write = g_read_rgba_calls;
+    first[0] = 9;
+    REQUIRE(texture.UploadCpuToGpu());
+    REQUIRE(g_update_rgba_calls == 1);
+
+    auto *second = static_cast<std::uint8_t *>(texture.GetScanLineForWrite(0));
+    REQUIRE(second != nullptr);
+    CHECK(g_read_rgba_calls == reads_after_first_write);
+    CHECK(second[0] == 9);
+}
+
+TEST_CASE("Godot Gray textures update reused GPU glyph masks") {
+    TestGpuBridge bridge;
+    const std::array<std::uint8_t, 6> pixels = {1, 2, 3, 4, 5, 6};
+    GodotTexture2D texture(pixels.data(), 3, 3, 2,
+                           TVPTextureFormat::Gray);
+    REQUIRE(texture.EnsureGpuHandle());
+
+    auto *row = static_cast<std::uint8_t *>(texture.GetScanLineForWrite(0));
+    REQUIRE(row != nullptr);
+    row[1] = 99;
+    REQUIRE(texture.EnsureGpuHandle());
+
+    CHECK(g_update_rgba_calls == 1);
+    const auto *retained = static_cast<const std::uint8_t *>(
+        texture.GetScanLineForRead(0));
+    REQUIRE(retained != nullptr);
+    CHECK(retained[1] == 99);
+}
+
 TEST_CASE("Godot texture updates clip off-texture rectangles") {
     GodotTexture2D texture(nullptr, 0, 2, 2, TVPTextureFormat::RGBA);
     const std::array<std::uint8_t, 16> pixels = {
@@ -638,6 +700,91 @@ TEST_CASE("Godot texture updates reallocate when the pixel format changes") {
     CHECK(texture.GetFormat() == TVPTextureFormat::RGBA);
     CHECK(texture.GetPitch() == 8);
     CHECK(texture.GetPoint(1, 0) == 0xff060504u);
+}
+
+TEST_CASE("Godot render manager applies glyph color maps on the GPU") {
+    TestGpuBridge bridge;
+    const std::array<std::uint8_t, 8> mask = {0, 64, 128, 255, 0, 0, 0, 0};
+    const std::array<std::uint8_t, 16> destination = {
+        1, 2, 3, 4, 5, 6, 7, 8,
+        9, 10, 11, 12, 13, 14, 15, 16,
+    };
+    GodotTexture2D src(mask.data(), 4, 4, 1, TVPTextureFormat::Gray);
+    GodotTexture2D dst(destination.data(), 16, 4, 1,
+                       TVPTextureFormat::RGBA);
+    GodotRenderMethod method(nullptr);
+    method.SetName("ApplyColorMap_a");
+    method.SetParameterColor4B(-1, 0x00112233u);
+    method.SetParameterOpa(-1, 192);
+    const tTVPRect rect(0, 0, 4, 1);
+    std::pair<iTVPTexture2D *, tTVPRect> source(&src, rect);
+    const tRenderTexRectArray textures(&source, 1);
+    GodotRenderManager manager;
+
+    manager.OperateRect(&method, &dst, nullptr, rect, textures);
+
+    CHECK(g_blend_rect_calls == 1);
+    CHECK(g_last_blend_mode == TVP_GODOT_GPU_BLEND_APPLY_COLOR_MAP_A);
+    CHECK(g_last_blend_color == 0x00112233u);
+    CHECK(g_last_blend_opacity == 192);
+}
+
+TEST_CASE("Godot render manager composites additive-alpha layers on the GPU") {
+    TestGpuBridge bridge;
+    const std::array<std::uint8_t, 16> source_pixels = {
+        1, 2, 3, 4, 5, 6, 7, 8,
+        9, 10, 11, 12, 13, 14, 15, 16,
+    };
+    const std::array<std::uint8_t, 16> destination_pixels = {
+        16, 15, 14, 13, 12, 11, 10, 9,
+        8, 7, 6, 5, 4, 3, 2, 1,
+    };
+    GodotTexture2D src(source_pixels.data(), 16, 4, 1,
+                       TVPTextureFormat::RGBA);
+    GodotTexture2D dst(destination_pixels.data(), 16, 4, 1,
+                       TVPTextureFormat::RGBA);
+    GodotRenderMethod method(nullptr);
+    method.SetName("AdditiveAlphaBlend");
+    method.SetParameterOpa(-1, 192);
+    const tTVPRect rect(0, 0, 4, 1);
+    std::pair<iTVPTexture2D *, tTVPRect> source(&src, rect);
+    const tRenderTexRectArray textures(&source, 1);
+    GodotRenderManager manager;
+
+    manager.OperateRect(&method, &dst, nullptr, rect, textures);
+
+    CHECK(g_blend_rect_calls == 1);
+    CHECK(g_last_blend_mode == TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA);
+    CHECK(g_last_blend_opacity == 192);
+}
+
+TEST_CASE("Godot render manager composites additive-alpha destination layers on the GPU") {
+    TestGpuBridge bridge;
+    const std::array<std::uint8_t, 16> source_pixels = {
+        1, 2, 3, 4, 5, 6, 7, 8,
+        9, 10, 11, 12, 13, 14, 15, 16,
+    };
+    const std::array<std::uint8_t, 16> destination_pixels = {
+        16, 15, 14, 13, 12, 11, 10, 9,
+        8, 7, 6, 5, 4, 3, 2, 1,
+    };
+    GodotTexture2D src(source_pixels.data(), 16, 4, 1,
+                       TVPTextureFormat::RGBA);
+    GodotTexture2D dst(destination_pixels.data(), 16, 4, 1,
+                       TVPTextureFormat::RGBA);
+    GodotRenderMethod method(nullptr);
+    method.SetName("AdditiveAlphaBlend_a");
+    method.SetParameterOpa(-1, 192);
+    const tTVPRect rect(0, 0, 4, 1);
+    std::pair<iTVPTexture2D *, tTVPRect> source(&src, rect);
+    const tRenderTexRectArray textures(&source, 1);
+    GodotRenderManager manager;
+
+    manager.OperateRect(&method, &dst, nullptr, rect, textures);
+
+    CHECK(g_blend_rect_calls == 1);
+    CHECK(g_last_blend_mode == TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA_A);
+    CHECK(g_last_blend_opacity == 192);
 }
 
 TEST_CASE("Godot textures tag Kirikiri triangle blend modes") {

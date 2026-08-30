@@ -6,6 +6,7 @@
 #include "tjsString.h"
 #include <string>
 #include <vector>
+#include <deque>
 #include <functional>
 #include <mutex>
 #include <tuple>
@@ -159,7 +160,7 @@ public:
     void PostUserMessage(const std::function<void()> &func,
                          void *host = nullptr, int msg = 0);
     void FilterUserMessage(
-        const std::function<void(std::vector<std::tuple<void *, int, tMsg>> &)>
+        const std::function<void(std::deque<std::tuple<void *, int, tMsg>> &)>
             &func);
 
 #if 0
@@ -203,7 +204,10 @@ public:
 private:
     std::mutex m_msgQueueLock;
 
-    std::vector<std::tuple<void *, int, tMsg>> m_lstUserMsg;
+    // User messages are consumed from the front every frame. A vector made
+    // each erase(begin()) shift the entire pending queue, turning bursts of
+    // async image completions into quadratic main-thread work.
+    std::deque<std::tuple<void *, int, tMsg>> m_lstUserMsg;
     std::map<void *, std::function<void(void *, eTVPActiveEvent)>>
         m_activeEvents;
 };

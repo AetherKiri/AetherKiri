@@ -25,6 +25,10 @@ public:
     int Opacity() const { return opacity_; }
     int Phase() const { return phase_; }
     int Vague() const { return vague_; }
+    int AreaLeft() const { return area_left_; }
+    int AreaTop() const { return area_top_; }
+    int AreaRight() const { return area_right_; }
+    int AreaBottom() const { return area_bottom_; }
 
 private:
     iTVPRenderMethod *delegate_ = nullptr;
@@ -32,8 +36,16 @@ private:
     int opacity_ = 255;
     int phase_id_ = -1;
     int vague_id_ = -1;
+    int area_left_id_ = -1;
+    int area_top_id_ = -1;
+    int area_right_id_ = -1;
+    int area_bottom_id_ = -1;
     int phase_ = 0;
     int vague_ = 0;
+    int area_left_ = 0;
+    int area_top_ = 0;
+    int area_right_ = 0;
+    int area_bottom_ = 0;
 };
 
 class GodotTexture2D final : public iTVPTexture2D {
@@ -46,6 +58,7 @@ public:
     TVPTextureFormat::e GetFormat() const override { return format_; }
     const void *GetScanLineForRead(tjs_uint l) override;
     void *GetScanLineForWrite(tjs_uint l) override;
+    void *GetScanLineForWriteUninitialized(tjs_uint l) override;
     tjs_int GetPitch() const override { return pitch_; }
     void Update(const void *pixel, TVPTextureFormat::e format, int pitch,
                 const tTVPRect &rc) override;
@@ -54,6 +67,10 @@ public:
     void SetSize(unsigned int w, unsigned int h) override;
     bool IsStatic() override { return false; }
     bool IsOpaque() override { return opacity_known_ && opaque_; }
+    bool IsCpuCompositeTarget() const override { return cpu_composite_target_; }
+    void SetCpuCompositeTarget(bool value) override {
+        cpu_composite_target_ = value;
+    }
     bool HasKnownTransparency() const { return opacity_known_ && !opaque_; }
     krkr::Texture2D *GetAdapterTexture(krkr::Texture2D *origTex) override {
         return origTex;
@@ -62,7 +79,7 @@ public:
     bool HasGodotGpuHandle() const { return gpu_handle_ != 0; }
     bool HasPendingGpuWrites() const { return gpu_dirty_ && !cpu_dirty_; }
     bool RequiresGpuReadback() const {
-        return gpu_handle_ != 0 && !cpu_dirty_ && pixels_.empty();
+        return gpu_handle_ != 0 && gpu_dirty_ && !cpu_dirty_;
     }
     uint64_t BeginGpuReadback() const;
     bool PollGpuReadback(uint64_t request, void *out_pixels,
@@ -133,6 +150,8 @@ private:
     bool cpu_dirty_ = false;
     bool opacity_known_ = false;
     bool opaque_ = false;
+    bool cpu_composite_target_ = false;
+    bool retain_cpu_shadow_ = false;
     bool discard_unwritten_on_partial_update_ = false;
 };
 

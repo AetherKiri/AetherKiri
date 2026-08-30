@@ -12,6 +12,7 @@
 #include "tjsCommHead.h"
 
 #include <algorithm>
+#include <deque>
 #include "SysInitIntf.h"
 #include "EventIntf.h"
 #include "WindowIntf.h"
@@ -21,6 +22,84 @@
 #include "TickCount.h"
 #include "SystemImpl.h"
 #include <spdlog/spdlog.h>
+#include <chrono>
+#include <cstdlib>
+#include <cstring>
+#include "../../plugins/motionplayer/MotionRenderProfile.h"
+
+namespace {
+
+static std::string TVPAsyncActionValueString(const tTJSVariant &value) {
+    try {
+        return ttstr(value).AsStdString();
+    } catch(...) {
+        return "<unprintable>";
+    }
+}
+
+static void TVPTraceSlowAsyncActionOwner(
+    const tTJSVariantClosure &owner, double elapsedMs) {
+    if(!owner.Object || elapsedMs < 100.0)
+        return;
+    const auto logger = spdlog::get("core");
+    if(!logger)
+        return;
+
+    const auto classNameFor = [](iTJSDispatch2 *object) {
+        std::string className;
+        if(!object)
+            return className;
+        for(tjs_uint index = 0; index < 4; ++index) {
+            tTJSVariant value;
+            if(TJS_FAILED(object->ClassInstanceInfo(TJS_CII_GET, index,
+                                                     &value)))
+                break;
+            const std::string name = TVPAsyncActionValueString(value);
+            if(!name.empty()) {
+                if(!className.empty())
+                    className += "/";
+                className += name;
+            }
+        }
+        return className;
+    };
+    const std::string objectClass = classNameFor(owner.Object);
+    const std::string thisClass = classNameFor(owner.ObjThis);
+
+    logger->info(
+        "async trigger slow owner: owner={} objthis={} object_class={} "
+        "this_class={} elapsed_ms={:.3f}",
+                 static_cast<const void *>(owner.Object),
+                 static_cast<const void *>(owner.ObjThis),
+                 objectClass.empty() ? "<unknown>" : objectClass,
+                 thisClass.empty() ? "<unknown>" : thisClass, elapsedMs);
+
+    static constexpr const tjs_char *kProperties[] = {
+        TJS_W("name"),       TJS_W("action"),   TJS_W("current"),
+        TJS_W("storage"),    TJS_W("chara"),    TJS_W("expression"),
+        TJS_W("exp"),        TJS_W("target"),   TJS_W("owner"),
+        TJS_W("parent"),     TJS_W("scene"),    TJS_W("call"),
+        TJS_W("file"),       TJS_W("tag"),      TJS_W("layer"),
+        TJS_W("onPaint"),    TJS_W("onFire"),   TJS_W("visible"),
+    };
+    iTJSDispatch2 *propertyObject = owner.ObjThis ? owner.ObjThis
+                                                  : owner.Object;
+    for(const tjs_char *property : kProperties) {
+        ttstr propertyName(property);
+        tTJSVariant value;
+        const tjs_error hr = propertyObject->PropGet(
+            0, propertyName.c_str(), propertyName.GetHint(), &value,
+            propertyObject);
+        if(TJS_FAILED(hr) || value.Type() == tvtVoid)
+            continue;
+        logger->info("async trigger slow owner property: owner={} {}={}",
+                     static_cast<const void *>(owner.Object),
+                     propertyName.AsStdString(),
+                     TVPAsyncActionValueString(value));
+    }
+}
+
+} // namespace
 
 //---------------------------------------------------------------------------
 // tTVPEvent  : script event class
@@ -53,9 +132,11 @@ public:
         Sequence = TVPEventSequenceNumber;
         EventName = eventname;
         NumArgs = numargs;
-        Args = new tTJSVariant[NumArgs];
-        for(tjs_uint i = 0; i < NumArgs; i++)
-            Args[i] = args[i];
+        if(NumArgs > 0) {
+            Args = new tTJSVariant[NumArgs];
+            for(tjs_uint i = 0; i < NumArgs; i++)
+                Args[i] = args[i];
+        }
         Target = target;
         Source = source;
         Tag = tag;
@@ -74,9 +155,11 @@ public:
 
         EventName = ref.EventName;
         NumArgs = ref.NumArgs;
-        Args = new tTJSVariant[NumArgs];
-        for(tjs_uint i = 0; i < NumArgs; i++)
-            Args[i] = ref.Args[i];
+        if(NumArgs > 0) {
+            Args = new tTJSVariant[NumArgs];
+            for(tjs_uint i = 0; i < NumArgs; i++)
+                Args[i] = ref.Args[i];
+        }
         Target = ref.Target;
         Source = ref.Source;
         Tag = ref.Tag;
@@ -98,15 +181,58 @@ public:
     void Deliver() {
         if(!TJSIsObjectValid(Target->IsValid(0, nullptr, nullptr, Target)))
             return; // The target had been invalidated
-        tTJSVariant **ArgsPtr = new tTJSVariant *[NumArgs];
-        for(tjs_uint i = 0; i < NumArgs; i++)
-            ArgsPtr[i] = Args + i;
+        tTJSVariant **ArgsPtr = nullptr;
+        if(NumArgs > 0) {
+            ArgsPtr = new tTJSVariant *[NumArgs];
+            for(tjs_uint i = 0; i < NumArgs; i++)
+                ArgsPtr[i] = Args + i;
+        }
+        static const bool profileEnabled = [] {
+            const char *value =
+                std::getenv("AETHERKIRI_MOTION_RENDER_PROFILE");
+            return value && *value && std::strcmp(value, "0") != 0;
+        }();
+        const auto profileStarted = profileEnabled
+            ? std::chrono::steady_clock::now()
+            : std::chrono::steady_clock::time_point{};
+        const std::string eventName = EventName.AsStdString();
+        motion::detail::ScopedMotionRenderBatchProfile batchProfile(
+            profileEnabled && eventName == "onFire");
         try {
             Target->FuncCall(0, EventName.c_str(), EventName.GetHint(), nullptr,
                              NumArgs, ArgsPtr, Target);
         } catch(...) {
             delete[] ArgsPtr;
             throw;
+        }
+        if(profileEnabled) {
+            const double elapsedMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - profileStarted).count();
+            if(eventName == "onPaint") {
+                motion::detail::motionRenderBatchRecordOnPaint(elapsedMs);
+            }
+            if(batchProfile.owns()) {
+                const auto &stats = batchProfile.stats();
+                if(const auto logger = spdlog::get("core")) {
+                    logger->info(
+                    "motion event batch profile: event=onFire "
+                    "event_ms={:.3f} onPaint_calls={} onPaint_ms={:.3f} "
+                    "drawCompat_calls={} drawCompat_ms={:.3f} "
+                    "native_render_calls={} native_render_ms={:.3f}",
+                    elapsedMs, stats.onPaintCalls, stats.onPaintMs,
+                    stats.drawCompatCalls, stats.drawCompatMs,
+                    stats.nativeRenderCalls, stats.nativeRenderMs);
+                }
+            }
+            if(elapsedMs >= 5.0) {
+                if(const auto logger = spdlog::get("core")) {
+                    logger->info(
+                        "event delivery profile: name={} tag={} flags={} "
+                        "target={} elapsed_ms={:.3f}",
+                        EventName.AsStdString(), Tag, Flags,
+                        static_cast<const void *>(Target), elapsedMs);
+                }
+            }
         }
         delete[] ArgsPtr;
     }
@@ -158,8 +284,11 @@ public:
 // global/static definitions
 //---------------------------------------------------------------------------
 // event queue must be a globally sequential queue
-std::vector<tTVPBaseInputEvent *> TVPInputEventQueue;
-std::vector<tTVPEvent *> TVPEventQueue;
+// Both queues are consumed from the front on every host tick. Keeping them
+// as vectors makes erase(begin()) shift all pending events and turns bursts
+// from async image/timer delivery into quadratic main-thread work.
+std::deque<tTVPBaseInputEvent *> TVPInputEventQueue;
+std::deque<tTVPEvent *> TVPEventQueue;
 std::vector<tTVPWinUpdateEvent> TVPWinUpdateEventQueue;
 bool TVPExclusiveEventPosted = false; // true if exclusive event is posted
 tjs_uint64 TVPEventSequenceNumber = 0; // event sequence number
@@ -171,21 +300,17 @@ static void TVPDestroyEventQueue() {
     // deletion of event object may cause other deletion of event
     // objects.
     {
-        std::vector<tTVPEvent *>::iterator i;
         while(TVPEventQueue.size()) {
-            i = TVPEventQueue.end() - 1;
-            tTVPEvent *ev = *i;
-            TVPEventQueue.erase(i);
+            tTVPEvent *ev = TVPEventQueue.back();
+            TVPEventQueue.pop_back();
             delete ev;
         }
     }
     //--
     {
-        std::vector<tTVPBaseInputEvent *>::iterator i;
         while(TVPInputEventQueue.size()) {
-            i = TVPInputEventQueue.end() - 1;
-            tTVPBaseInputEvent *ev = *i;
-            TVPInputEventQueue.erase(i);
+            tTVPBaseInputEvent *ev = TVPInputEventQueue.back();
+            TVPInputEventQueue.pop_back();
             delete ev;
         }
     }
@@ -236,7 +361,7 @@ void TVPPostEvent(iTJSDispatch2 *source, iTJSDispatch2 *target,
     if(method == TVP_EPT_REMOVE_POST) {
         // events in queue that have same target/source/name/tag are
         // to be removed
-        std::vector<tTVPEvent *>::iterator i;
+        std::deque<tTVPEvent *>::iterator i;
         i = TVPEventQueue.begin();
         while(/*TVPEventQueue.size() &&*/ i != TVPEventQueue.end()) {
             if(source == (*i)->GetSourceNoAddRef() &&
@@ -272,7 +397,7 @@ void TVPPostEvent(iTJSDispatch2 *source, iTJSDispatch2 *target,
 tjs_int TVPCancelEvents(iTJSDispatch2 *source, iTJSDispatch2 *target,
                         const ttstr &eventname, tjs_uint32 tag) {
     tjs_int count = 0;
-    std::vector<tTVPEvent *>::iterator i;
+    std::deque<tTVPEvent *>::iterator i;
     i = TVPEventQueue.begin();
     while(/*TVPEventQueue.size() &&*/ i != TVPEventQueue.end()) {
         if(source == (*i)->GetSourceNoAddRef() &&
@@ -297,7 +422,7 @@ tjs_int TVPCancelEvents(iTJSDispatch2 *source, iTJSDispatch2 *target,
 //---------------------------------------------------------------------------
 bool TVPAreEventsInQueue(iTJSDispatch2 *source, iTJSDispatch2 *target,
                          const ttstr &eventname, tjs_uint32 tag) {
-    std::vector<tTVPEvent *>::iterator i;
+    std::deque<tTVPEvent *>::iterator i;
     i = TVPEventQueue.begin();
     while(/*TVPEventQueue.size() &&*/ i != TVPEventQueue.end()) {
         if(source == (*i)->GetSourceNoAddRef() &&
@@ -317,7 +442,7 @@ bool TVPAreEventsInQueue(iTJSDispatch2 *source, iTJSDispatch2 *target,
 tjs_int TVPCountEventsInQueue(iTJSDispatch2 *source, iTJSDispatch2 *target,
                               const ttstr &eventname, tjs_uint32 tag) {
     tjs_int count = 0;
-    std::vector<tTVPEvent *>::iterator i;
+    std::deque<tTVPEvent *>::iterator i;
     i = TVPEventQueue.begin();
     while(/*TVPEventQueue.size() &&*/ i != TVPEventQueue.end()) {
         if(source == (*i)->GetSourceNoAddRef() &&
@@ -336,7 +461,7 @@ tjs_int TVPCountEventsInQueue(iTJSDispatch2 *source, iTJSDispatch2 *target,
 //---------------------------------------------------------------------------
 void TVPCancelEventsByTag(iTJSDispatch2 *source, iTJSDispatch2 *target,
                           tjs_uint32 tag) {
-    std::vector<tTVPEvent *>::iterator i;
+    std::deque<tTVPEvent *>::iterator i;
     i = TVPEventQueue.begin();
     while(/*TVPEventQueue.size() &&*/ i != TVPEventQueue.end()) {
         if(source == (*i)->GetSourceNoAddRef() &&
@@ -357,7 +482,7 @@ void TVPCancelEventsByTag(iTJSDispatch2 *source, iTJSDispatch2 *target,
 // TVPCancelSourceEvent
 //---------------------------------------------------------------------------
 void TVPCancelSourceEvents(iTJSDispatch2 *source) {
-    std::vector<tTVPEvent *>::iterator i;
+    std::deque<tTVPEvent *>::iterator i;
     i = TVPEventQueue.begin();
     while(/*TVPEventQueue.size() &&*/ i != TVPEventQueue.end()) {
         if(source == (*i)->GetSourceNoAddRef()) {
@@ -376,7 +501,7 @@ void TVPCancelSourceEvents(iTJSDispatch2 *source) {
 // TVPDiscardAllDiscardableEvents
 //---------------------------------------------------------------------------
 void TVPDiscardAllDiscardableEvents() {
-    std::vector<tTVPEvent *>::iterator i;
+    std::deque<tTVPEvent *>::iterator i;
     i = TVPEventQueue.begin();
     while(/*TVPEventQueue.size() &&*/ i != TVPEventQueue.end()) {
         if((*i)->GetFlags() & TVP_EPT_DISCARDABLE) {
@@ -401,7 +526,7 @@ static void _TVPDeliverEventByPrio(tjs_uint prio) {
         // retrieve item to deliver
         if(TVPEventQueue.size() == 0)
             break;
-        std::vector<tTVPEvent *>::iterator i = TVPEventQueue.begin();
+        std::deque<tTVPEvent *>::iterator i = TVPEventQueue.begin();
         while(i != TVPEventQueue.end()) {
             if((*i)->GetSequence() <= TVPEventSequenceNumberToProcess &&
                (((*i)->GetFlags() & TVP_EPT_PRIO_MASK) == prio))
@@ -411,7 +536,10 @@ static void _TVPDeliverEventByPrio(tjs_uint prio) {
         if(i == TVPEventQueue.end())
             break;
         e = *i;
-        TVPEventQueue.erase(i);
+        if(i == TVPEventQueue.begin())
+            TVPEventQueue.pop_front();
+        else
+            TVPEventQueue.erase(i);
 
         // event delivering
         try {
@@ -441,10 +569,8 @@ static bool _TVPDeliverAllEvents2() {
         // retrieve item to deliver
         if(TVPInputEventQueue.size() == 0)
             break;
-        std::vector<tTVPBaseInputEvent *>::iterator i =
-            TVPInputEventQueue.begin();
-        e = *i;
-        TVPInputEventQueue.erase(i);
+        e = TVPInputEventQueue.front();
+        TVPInputEventQueue.pop_front();
         // event delivering
         try {
             e->Deliver();
@@ -490,6 +616,22 @@ static bool _TVPDeliverAllEvents() {
 //---------------------------------------------------------------------------
 void TVPDeliverAllEvents() {
     bool r;
+    static const bool profileEnabled = [] {
+        const char *value = std::getenv("AETHERKIRI_MOTION_RENDER_PROFILE");
+        return value && *value && std::strcmp(value, "0") != 0;
+    }();
+    const auto profileStarted = profileEnabled
+        ? std::chrono::steady_clock::now()
+        : std::chrono::steady_clock::time_point{};
+    // onPaint is normally posted while an onFire handler runs and delivered
+    // immediately afterwards by the event queue. Keep the render counters
+    // alive for the whole dispatch pass so that the batch profile accounts
+    // for those queued callbacks instead of attributing only the lexical
+    // onFire call (which made the counters appear as zero).
+    motion::detail::ScopedMotionRenderBatchProfile dispatchBatchProfile(
+        profileEnabled);
+    const std::size_t queuedEventsBefore = TVPEventQueue.size();
+    const std::size_t queuedInputEventsBefore = TVPInputEventQueue.size();
 
     if(!TVPEventInterrupting) {
         TVPEventSequenceNumberToProcess = TVPEventSequenceNumber;
@@ -504,6 +646,36 @@ void TVPDeliverAllEvents() {
         TJS_CONVERT_TO_TJS_EXCEPTION
     }
     TVP_CATCH_AND_SHOW_SCRIPT_EXCEPTION(TJS_W("event"));
+
+    if(profileEnabled) {
+        const double elapsedMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - profileStarted).count();
+        if(dispatchBatchProfile.owns()) {
+            const auto &stats = dispatchBatchProfile.stats();
+            if(const auto logger = spdlog::get("core")) {
+                logger->info(
+                    "motion dispatch render batch: queued_events={} "
+                    "queued_inputs={} elapsed_ms={:.3f} onPaint_calls={} "
+                    "onPaint_ms={:.3f} drawCompat_calls={} "
+                    "drawCompat_ms={:.3f} native_render_calls={} "
+                    "native_render_ms={:.3f}",
+                    queuedEventsBefore, queuedInputEventsBefore, elapsedMs,
+                    stats.onPaintCalls, stats.onPaintMs,
+                    stats.drawCompatCalls, stats.drawCompatMs,
+                    stats.nativeRenderCalls, stats.nativeRenderMs);
+            }
+        }
+        if(elapsedMs >= 5.0 || queuedEventsBefore >= 64u ||
+           queuedInputEventsBefore >= 64u) {
+            if(const auto logger = spdlog::get("core")) {
+                logger->info(
+                    "event dispatch profile: queued_events={} queued_inputs={} "
+                    "remaining_events={} remaining_inputs={} elapsed_ms={:.3f}",
+                    queuedEventsBefore, queuedInputEventsBefore,
+                    TVPEventQueue.size(), TVPInputEventQueue.size(), elapsedMs);
+            }
+        }
+    }
 
     if(!r) {
         // event processing is to be interrupted
@@ -666,7 +838,7 @@ void TVPPostInputEvent(tTVPBaseInputEvent *ev, tjs_uint32 flags) {
 void TVPCancelInputEvents(void *source) {
     // removes all evens which have the same source
     if(TVPInputEventQueue.size()) {
-        std::vector<tTVPBaseInputEvent *>::iterator i;
+        std::deque<tTVPBaseInputEvent *>::iterator i;
         for(i = TVPInputEventQueue.begin(); i != TVPInputEventQueue.end();) {
             if(source == (*i)->GetSource()) {
                 tTVPBaseInputEvent *ev = *i;
@@ -683,7 +855,7 @@ void TVPCancelInputEvents(void *source) {
 void TVPCancelInputEvents(void *source, tjs_int tag) {
     // removes all evens which have the same source and the same tag
     if(TVPInputEventQueue.size()) {
-        std::vector<tTVPBaseInputEvent *>::iterator i;
+        std::deque<tTVPBaseInputEvent *>::iterator i;
         for(i = TVPInputEventQueue.begin(); i != TVPInputEventQueue.end();) {
             if(source == (*i)->GetSource() && tag == (*i)->GetTag()) {
                 tTVPBaseInputEvent *ev = *i;
@@ -1158,10 +1330,33 @@ TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ onFire) {
     tTJSVariantClosure obj = _this->GetActionOwnerNoAddRef();
     if(obj.Object) {
         ttstr &actionname = _this->GetActionName();
+        static const bool profileEnabled = [] {
+            const char *value =
+                std::getenv("AETHERKIRI_MOTION_RENDER_PROFILE");
+            return value && *value && std::strcmp(value, "0") != 0;
+        }();
+        const auto actionStarted = profileEnabled
+            ? std::chrono::steady_clock::now()
+            : std::chrono::steady_clock::time_point{};
         TVP_ACTION_INVOKE_BEGIN(0, "onFire", objthis);
         TVP_ACTION_INVOKE_END_NAME(
             obj, actionname.IsEmpty() ? nullptr : actionname.c_str(),
             actionname.IsEmpty() ? nullptr : actionname.GetHint());
+        if(profileEnabled) {
+            const double elapsedMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - actionStarted).count();
+            if(elapsedMs >= 5.0) {
+                if(const auto logger = spdlog::get("core")) {
+                    logger->info(
+                        "async trigger action profile: action={} owner={} "
+                        "elapsed_ms={:.3f}",
+                        actionname.IsEmpty() ? "<default>"
+                                              : actionname.AsStdString(),
+                        static_cast<const void *>(obj.Object), elapsedMs);
+                }
+            }
+            TVPTraceSlowAsyncActionOwner(obj, elapsedMs);
+        }
     }
 
     return TJS_S_OK;

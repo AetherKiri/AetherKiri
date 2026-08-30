@@ -111,6 +111,14 @@ struct dest_alpha_op {
     inline dest_alpha_op() = default;
     inline dest_alpha_op(tjs_uint32 opa) {}
     inline tjs_uint32 operator()(tjs_uint32 d, tjs_uint32 s) const {
+        // A fully transparent source cannot affect a destination that already
+        // has coverage.  Avoid both table lookups and packed multiplications
+        // for the transparent texels surrounding character sprites.  Keep the
+        // zero-alpha destination case on the original formula because its
+        // legacy rounding is observable for non-zero RGB in transparent
+        // buffers.
+        if((s & 0xff000000u) == 0 && (d & 0xff000000u) != 0)
+            return d;
 #ifdef NOT_USE_TABLE
         tjs_uint32 sa = s >> 24;
         tjs_uint32 da = d >> 24;

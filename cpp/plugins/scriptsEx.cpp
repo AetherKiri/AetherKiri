@@ -15,10 +15,64 @@
 #include "kbadDataPack.h"
 #include "tjsNs0DataPack.h"
 #include <array>
+#include <fstream>
 #include <iomanip>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <spdlog/spdlog.h>
+
+#ifdef AETHERKIRI_INTERNAL_KRKR2_PLUGIN
+// The private PackinOne data-pack implementation is installed through an
+// explicit anchor after the Scripts object is available.  PackinOne also
+// calls this anchor during its early registration; keeping both call sites
+// makes startup order deterministic across hosts.
+extern "C" void TVPRegisterDataPackCompatPluginAnchor();
+extern "C" void TVPRegisterSliceLayerCompat();
+// PackinOne's generated UI atlases are prepared by the private compatibility
+// layer after a data-pack has been decoded.  Keeping this hook at the
+// loadDataPack boundary mirrors the original plugin's post-decode hand-off
+// and avoids trying to execute TJS while ProxyStorage is resolving a file.
+extern "C" void TVPPreparePackinOneVirtualResources(const ttstr &path,
+                                                     const tTJSVariant &data);
+// The private package owns PackinOne's recovered JPEG/PNG chunk format.  The
+// public loader only supplies bytes and consumes the decoded TJS value.
+extern "C" bool TVPDecodePackinOneDataPack(const void *data, std::size_t size,
+                                           const ttstr *outerIv,
+                                           tTJSVariant *result);
+#endif
+
+// PackinOne is loaded very early by the game, while the global Scripts and
+// Storages objects are created a little later by the script runtime.  The NCB
+// pre/post callbacks are therefore only a best-effort early hook.  Keep a
+// late, idempotent retry on the first real Scripts.loadDataPack call; at that
+// point both global objects are guaranteed to exist and the private package
+// can install its recovered methods without relying on registration order.
+static void ensurePackinOneCompat() {
+#ifdef AETHERKIRI_INTERNAL_KRKR2_PLUGIN
+    static bool attempted = false;
+    if(attempted)
+        return;
+    attempted = true;
+    spdlog::info("AetherInternal PackinOne late compatibility anchor invoked");
+    spdlog::info("AetherInternal PackinOne late anchor: calling data-pack");
+    TVPRegisterDataPackCompatPluginAnchor();
+    spdlog::info("AetherInternal PackinOne late anchor: data-pack returned");
+    spdlog::info("AetherInternal PackinOne late anchor: calling SliceLayer");
+    TVPRegisterSliceLayerCompat();
+    spdlog::info("AetherInternal PackinOne late anchor: SliceLayer returned");
+#endif
+}
+
+static void preparePackinOneVirtualResources(const ttstr &path,
+                                              const tTJSVariant &data) {
+#ifdef AETHERKIRI_INTERNAL_KRKR2_PLUGIN
+    TVPPreparePackinOneVirtualResources(path, data);
+#else
+    (void)path;
+    (void)data;
+#endif
+}
 
 #define NCB_MODULE_NAME TJS_W("ScriptsEx.dll")
 
@@ -992,6 +1046,7 @@ static tjs_error loadDataPack(tTJSVariant *result,
     ttstr path = *param[0];
     if(path.IsEmpty())
         return TJS_S_OK;
+    ensurePackinOneCompat();
     spdlog::info("Scripts.loadDataPack enter: {}", path.AsStdString());
     TVPAddLog(ttstr(TJS_W("Scripts.loadDataPack enter: ")) + path);
 
@@ -1035,6 +1090,36 @@ static tjs_error loadDataPack(tTJSVariant *result,
             result->Clear();
     }
 
+#ifdef AETHERKIRI_INTERNAL_KRKR2_PLUGIN
+    try {
+        const tjs_uint64 containerSize64 = stream->GetSize();
+        if(containerSize64 <=
+           static_cast<tjs_uint64>(std::numeric_limits<tjs_uint>::max())) {
+            std::vector<tjs_uint8> container(
+                static_cast<std::size_t>(containerSize64));
+            stream->SetPosition(0);
+            if(!container.empty())
+                stream->ReadBuffer(container.data(),
+                                   static_cast<tjs_uint>(container.size()));
+            if(TVPDecodePackinOneDataPack(container.data(), container.size(),
+                                          &outerIv,
+                                          result ? result : &binaryResult)) {
+                spdlog::info("Scripts.loadDataPack PackinOne image ok: {}",
+                             path.AsStdString());
+                TVPAddLog(
+                    ttstr(TJS_W("Scripts.loadDataPack PackinOne image ok: ")) +
+                    path);
+                preparePackinOneVirtualResources(
+                    path, result ? *result : binaryResult);
+                return TJS_S_OK;
+            }
+        }
+    } catch(...) {
+        if(result)
+            result->Clear();
+    }
+#endif
+
     try {
         stream->Seek(0, TJS_BS_SEEK_SET);
         if(TVPLoadTjsNs0DataPack(
@@ -1043,6 +1128,8 @@ static tjs_error loadDataPack(tTJSVariant *result,
                          path.AsStdString());
             TVPAddLog(ttstr(TJS_W("Scripts.loadDataPack TJS/ns0 ok: ")) +
                       path);
+            preparePackinOneVirtualResources(
+                path, result ? *result : binaryResult);
             return TJS_S_OK;
         }
         stream->Seek(0, TJS_BS_SEEK_SET);
@@ -1051,6 +1138,8 @@ static tjs_error loadDataPack(tTJSVariant *result,
             spdlog::info("Scripts.loadDataPack KBAD ok: {}",
                          path.AsStdString());
             TVPAddLog(ttstr(TJS_W("Scripts.loadDataPack KBAD ok: ")) + path);
+            preparePackinOneVirtualResources(
+                path, result ? *result : binaryResult);
             return TJS_S_OK;
         }
         stream->Seek(0, TJS_BS_SEEK_SET);
@@ -1101,6 +1190,20 @@ static tjs_error loadDataPack(tTJSVariant *result,
     if(!root)
         return TJS_S_OK;
 
+    // Opt-in forensic dump for authored PBD/PSB layer metadata.  This is
+    // intentionally disabled by default; it lets compatibility work inspect
+    // the exact `sliced`, `layerFilename`, width and height values without
+    // changing normal game behavior.
+    if(const char *dumpPath = std::getenv("AETHERKIRI_PSB_DUMP");
+       dumpPath && *dumpPath) {
+        try {
+            std::ofstream dump(dumpPath, std::ios::app);
+            dump << "\n=== " << path.AsStdString() << " ===\n"
+                 << root->toString() << "\n";
+        } catch(...) {
+        }
+    }
+
     PSB::registerRootResources(path, psb);
     if(result) {
         *result = root->toTJSVal();
@@ -1135,5 +1238,21 @@ NCB_ATTACH_CLASS(ScriptsAdd, Scripts) {
 };
 
 NCB_ATTACH_FUNCTION(rehash, Scripts, TJSDoRehash);
+
+#ifdef AETHERKIRI_INTERNAL_KRKR2_PLUGIN
+namespace {
+
+void registerScriptsCompat() {
+#ifdef AETHERKIRI_INTERNAL_KRKR2_PLUGIN
+    TVPRegisterDataPackCompatPluginAnchor();
+    TVPRegisterSliceLayerCompat();
+#endif
+}
+
+} // namespace
+
+NCB_PRE_REGIST_CALLBACK(registerScriptsCompat);
+NCB_POST_REGIST_CALLBACK(registerScriptsCompat);
+#endif
 
 extern "C" void TVPRegisterScriptsExPluginAnchor() {}

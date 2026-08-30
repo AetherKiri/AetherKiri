@@ -25,8 +25,12 @@ const GAME_COVER_PATH_PREFIX := "game://"
 const SETTINGS_FILE := "user://aetherkiri_settings.cfg"
 const IAP_LIST_LIMIT_PRODUCT_ID := "com.aether.list.limit"
 const IAP_COFFEE_PRODUCT_ID := "com.aether.coffee"
+const ANDROID_COFFEE_URL := "https://qr.alipay.com/fkx108053gol728ayzhec90"
 const IAP_POLL_INTERVAL_SEC := 0.12
 const IAP_DETAIL_AUTHORIZATION_TTL_MS := 30000
+const SECRET_UNLOCK_TAP_TARGET := 20
+const SECRET_UNLOCK_TAP_WINDOW_MSEC := 6000
+const SECRET_UNLOCK_COFFEE_SEC := 30 * 24 * 60 * 60
 const LEGAL_AGREEMENT_VERSION := "2026-07-27.4"
 const IOS_STATEMENT_VERSION := "2026-08-04"
 const LEGAL_AGREEMENT_ZH_HANS := "res://legal/privacy_disclaimer_zh_hans.txt"
@@ -50,6 +54,7 @@ const RUNTIME_DEFAULT_FONT_FILE := "default.otf"
 const RUNTIME_SYMBOL_FONT_FILE := "symbols.ttf"
 const ProbeConfig = preload("res://scripts/probe_config.gd")
 const GameInputMapping = preload("res://scripts/game_input_mapping.gd")
+const GameVirtualControls = preload("res://scripts/game_virtual_controls.gd")
 const DiagnosticSession = preload("res://scripts/diagnostic_session.gd")
 const DiagnosticLocalization = preload("res://scripts/diagnostic_localization.gd")
 const DebugConsole = preload("res://scripts/debug_console.gd")
@@ -175,7 +180,7 @@ const UI_TEXT := {
         "settings.surface_mode": "画布尺寸",
         "settings.surface_mode_desc": "Game Native 按游戏基准画布运行；Display Fit 按设备显示尺寸运行",
         "settings.upscale": "缩放算法",
-        "settings.upscale_desc": "外层拉伸画面时使用；Smooth/Linear 会做平滑采样",
+        "settings.upscale_desc": "外层拉伸画面时使用；Bicubic/Lanczos 提供更高质量采样",
         "settings.output_resolution": "输出分辨率",
         "settings.output_resolution_desc": "设置外层缩放与画面增强的目标分辨率；较高档位会增加 GPU 和显存占用",
         "settings.output_resolution.original": "原始",
@@ -256,6 +261,18 @@ const UI_TEXT := {
         "iap.coffee.inactive": "内测功能当前未启用",
         "iap.coffee.purchase_success": "感谢支持！内测功能有效期至：%s",
         "iap.runtime_unavailable": "此视觉小说兼容正在测试中，请等待后续支持",
+        "support.coffee.title": "请作者喝一杯咖啡",
+        "support.coffee.desc": "打开支付宝支持作者，不影响游戏导入或启动",
+        "support.coffee.open": "打开支付宝",
+        "support.coffee.thanks_title": "感谢支持",
+        "support.coffee.thanks": "谢谢你的支持！",
+        "support.coffee.open_failed": "无法打开浏览器，请稍后重试。",
+        "secret.unlock.title": "内部解锁",
+        "secret.unlock.body": "请输入解锁密码",
+        "secret.unlock.placeholder": "密码",
+        "secret.unlock.confirm": "确认",
+        "secret.unlock.failed": "密码不正确，请重试。",
+        "secret.unlock.success": "内购已解锁，内测功能有效期至：%s",
         "iap.status.purchased": "已购买",
         "iap.status.not_purchased": "未购买",
         "iap.status.loading": "正在读取商品信息…",
@@ -430,7 +447,7 @@ const UI_TEXT := {
         "settings.surface_mode": "畫布尺寸",
         "settings.surface_mode_desc": "Game Native 依遊戲基準畫布執行；Display Fit 依裝置顯示尺寸執行",
         "settings.upscale": "縮放演算法",
-        "settings.upscale_desc": "外層拉伸畫面時使用；Smooth/Linear 會進行平滑取樣",
+        "settings.upscale_desc": "外層拉伸畫面時使用；Bicubic/Lanczos 提供更高品質取樣",
         "settings.output_resolution": "輸出解析度",
         "settings.output_resolution_desc": "設定外層縮放與畫面增強的目標解析度；較高檔位會增加 GPU 與顯示記憶體用量",
         "settings.output_resolution.original": "原始",
@@ -511,6 +528,18 @@ const UI_TEXT := {
         "iap.coffee.inactive": "測試功能目前尚未啟用",
         "iap.coffee.purchase_success": "感謝支持！測試功能有效期限至：%s",
         "iap.runtime_unavailable": "此視覺小說的相容支援仍在測試中，請等待後續支援",
+        "support.coffee.title": "請作者喝一杯咖啡",
+        "support.coffee.desc": "開啟支付寶支持作者，不影響遊戲匯入或啟動",
+        "support.coffee.open": "開啟支付寶",
+        "support.coffee.thanks_title": "感謝支持",
+        "support.coffee.thanks": "謝謝你的支持！",
+        "support.coffee.open_failed": "無法開啟瀏覽器，請稍後再試。",
+        "secret.unlock.title": "內部解鎖",
+        "secret.unlock.body": "請輸入解鎖密碼",
+        "secret.unlock.placeholder": "密碼",
+        "secret.unlock.confirm": "確認",
+        "secret.unlock.failed": "密碼不正確，請再試一次。",
+        "secret.unlock.success": "內購已解鎖，測試功能有效期限至：%s",
         "iap.status.purchased": "已購買",
         "iap.status.not_purchased": "尚未購買",
         "iap.status.loading": "正在載入商品資訊…",
@@ -685,7 +714,7 @@ const UI_TEXT := {
         "settings.surface_mode": "Canvas Size",
         "settings.surface_mode_desc": "Game Native uses the game's base canvas; Display Fit uses the device display size",
         "settings.upscale": "Scaling",
-        "settings.upscale_desc": "Used when stretching the outer frame; Smooth/Linear apply filtered sampling",
+        "settings.upscale_desc": "Used when stretching the outer frame; Bicubic/Lanczos provide higher-quality filtering",
         "settings.output_resolution": "Output Resolution",
         "settings.output_resolution_desc": "Sets the target for outer scaling and image enhancement; higher tiers use more GPU time and memory",
         "settings.output_resolution.original": "Original",
@@ -766,6 +795,18 @@ const UI_TEXT := {
         "iap.coffee.inactive": "Beta feature access is not active",
         "iap.coffee.purchase_success": "Thank you! Beta feature access expires: %s",
         "iap.runtime_unavailable": "Compatibility for this visual novel is still being tested. Please wait for a future update.",
+        "support.coffee.title": "Buy the Author a Coffee",
+        "support.coffee.desc": "Open Alipay to support the author; game import and launch are unaffected",
+        "support.coffee.open": "Open Alipay",
+        "support.coffee.thanks_title": "Thank You",
+        "support.coffee.thanks": "Thank you for your support!",
+        "support.coffee.open_failed": "Unable to open the browser. Please try again later.",
+        "secret.unlock.title": "Secret Unlock",
+        "secret.unlock.body": "Enter the unlock passphrase",
+        "secret.unlock.placeholder": "Passphrase",
+        "secret.unlock.confirm": "Confirm",
+        "secret.unlock.failed": "Incorrect passphrase. Please try again.",
+        "secret.unlock.success": "Purchases unlocked; beta feature access expires: %s",
         "iap.status.purchased": "Purchased",
         "iap.status.not_purchased": "Not purchased",
         "iap.status.loading": "Loading product information…",
@@ -940,7 +981,7 @@ const UI_TEXT := {
         "settings.surface_mode": "キャンバスサイズ",
         "settings.surface_mode_desc": "Game Native はゲーム基準のキャンバス、Display Fit はデバイス表示サイズで実行します",
         "settings.upscale": "スケーリング",
-        "settings.upscale_desc": "外側の画面を引き伸ばすときに使用します。Smooth/Linear は平滑化サンプリングを行います",
+        "settings.upscale_desc": "外側の画面を引き伸ばすときに使用します。Bicubic/Lanczos は高品質な補間を行います",
         "settings.output_resolution": "出力解像度",
         "settings.output_resolution_desc": "外側のスケーリングと画質強化の目標解像度を設定します。高い設定ほど GPU とメモリを多く使用します",
         "settings.output_resolution.original": "オリジナル",
@@ -1021,6 +1062,18 @@ const UI_TEXT := {
         "iap.coffee.inactive": "ベータ機能は現在有効ではありません",
         "iap.coffee.purchase_success": "ご支援ありがとうございます！ベータ機能の有効期限：%s",
         "iap.runtime_unavailable": "このビジュアルノベルの互換対応はテスト中です。今後の対応をお待ちください。",
+        "support.coffee.title": "作者にコーヒーを一杯贈る",
+        "support.coffee.desc": "Alipay を開いて作者を支援します。ゲームの読み込みや起動には影響しません",
+        "support.coffee.open": "Alipay を開く",
+        "support.coffee.thanks_title": "ご支援ありがとうございます",
+        "support.coffee.thanks": "ご支援ありがとうございます！",
+        "support.coffee.open_failed": "ブラウザを開けませんでした。後でもう一度お試しください。",
+        "secret.unlock.title": "シークレット解錠",
+        "secret.unlock.body": "解錠パスフレーズを入力してください",
+        "secret.unlock.placeholder": "パスフレーズ",
+        "secret.unlock.confirm": "確認",
+        "secret.unlock.failed": "パスフレーズが正しくありません。もう一度お試しください。",
+        "secret.unlock.success": "課金が解錠されました。ベータ機能の有効期限：%s",
         "iap.status.purchased": "購入済み",
         "iap.status.not_purchased": "未購入",
         "iap.status.loading": "商品情報を読み込み中…",
@@ -1195,7 +1248,7 @@ const UI_TEXT := {
         "settings.surface_mode": "캔버스 크기",
         "settings.surface_mode_desc": "Game Native는 게임 기준 캔버스를 사용하고 Display Fit은 장치 표시 크기를 사용합니다",
         "settings.upscale": "스케일링",
-        "settings.upscale_desc": "외부 화면을 늘릴 때 사용합니다. Smooth/Linear는 부드러운 샘플링을 적용합니다",
+        "settings.upscale_desc": "외부 화면을 늘릴 때 사용합니다. Bicubic/Lanczos는 고품질 보간을 적용합니다",
         "settings.output_resolution": "출력 해상도",
         "settings.output_resolution_desc": "외부 스케일링과 화질 향상의 목표 해상도를 설정합니다. 높은 단계일수록 GPU와 메모리를 더 사용합니다",
         "settings.output_resolution.original": "원본",
@@ -1276,6 +1329,18 @@ const UI_TEXT := {
         "iap.coffee.inactive": "베타 기능이 현재 활성화되어 있지 않습니다",
         "iap.coffee.purchase_success": "후원해 주셔서 감사합니다! 베타 기능 만료일: %s",
         "iap.runtime_unavailable": "이 비주얼 노벨의 호환성은 아직 테스트 중입니다. 추후 지원을 기다려 주세요.",
+        "support.coffee.title": "작가에게 커피 한 잔 사주기",
+        "support.coffee.desc": "Alipay를 열어 작가를 후원합니다. 게임 가져오기나 실행에는 영향을 주지 않습니다",
+        "support.coffee.open": "Alipay 열기",
+        "support.coffee.thanks_title": "후원해 주셔서 감사합니다",
+        "support.coffee.thanks": "후원해 주셔서 감사합니다!",
+        "support.coffee.open_failed": "브라우저를 열 수 없습니다. 나중에 다시 시도해 주세요.",
+        "secret.unlock.title": "시크릿 잠금 해제",
+        "secret.unlock.body": "잠금 해제 암호를 입력하세요",
+        "secret.unlock.placeholder": "암호",
+        "secret.unlock.confirm": "확인",
+        "secret.unlock.failed": "암호가 올바르지 않습니다. 다시 시도해 주세요.",
+        "secret.unlock.success": "인앱 구매가 잠금 해제되었습니다. 베타 기능 만료일: %s",
         "iap.status.purchased": "구입 완료",
         "iap.status.not_purchased": "구입하지 않음",
         "iap.status.loading": "상품 정보 불러오는 중…",
@@ -1395,9 +1460,12 @@ const POINTER_DOWN := 1
 const POINTER_MOVE := 2
 const POINTER_UP := 3
 const POINTER_SCROLL := 4
+const BUTTON_POSITION_MEMORY_PATH := "user://aetherkiri-button-positions.json"
 const POINTER_MOD_LEFT := 0x08
 const POINTER_MOD_RIGHT := 0x10
 const POINTER_MOD_MIDDLE := 0x20
+const POINTER_MOD_CANCEL := 1 << 30
+const KEY_MOD_CONTROL := 0x04
 const RUNTIME_KIRIKIRI := "kirikiri"
 const RUNTIME_ONSCRIPTER := "onscripter"
 const BETA_PROVIDER_RUNTIME_IDS := ["artemis", "catsystem2"]
@@ -1487,6 +1555,8 @@ var settings_view: ScrollContainer
 var detail_view: Control
 var detail_scroll: ScrollContainer
 var game_view: Control
+var game_virtual_controls
+var game_virtual_input_mode := GameVirtualControls.INPUT_MODE_MOUSE
 var modal_layer: Control
 var active_modal_scrim: ColorRect
 var active_modal_dialog: Control
@@ -1540,10 +1610,16 @@ var home_search_queries := {"game": "", "video": ""}
 var home_search_syncing := false
 var home_filtered_game_count := 0
 var home_filtered_video_count := 0
-var show_perf_monitor := true
+# Keep the runtime viewport unobstructed by default.  Diagnostics continue to
+# collect according to the debug profile, while the floating performance
+# panel remains an explicit opt-in from Settings (or a legacy config value).
+var show_perf_monitor := false
 var diagnostic_profile := "baseline" if OS.is_debug_build() else "off"
-var debug_overlay_mode := "summary" if OS.is_debug_build() else "off"
+var debug_overlay_mode := "off"
 var lock_landscape := false
+var game_runtime_shell_orientation := DisplayServer.SCREEN_SENSOR
+var game_runtime_shell_screen_size := Vector2i.ZERO
+var game_runtime_shell_orientation_captured := false
 var frame_limit_enabled := false
 var target_fps := 80
 var plugin_trace := false
@@ -1566,6 +1642,10 @@ var legal_accepted_at := 0
 var ios_statement_accepted_version := ""
 var ios_statement_accepted_at := 0
 var legal_gate_completed := false
+var secret_iap_unlocked := false
+var secret_coffee_until_unix := 0
+var secret_version_tap_count := 0
+var secret_version_last_tap_msec := 0
 var iap_state := {}
 var iap_coffee_state := {}
 var iap_last_revision := -1
@@ -1582,6 +1662,9 @@ var iap_pending_beta_check_id := 0
 var iap_pending_beta_game := {}
 var iap_settings_refresh_pending := false
 var android_video_import_notice_shown := false
+var android_storage_permission_request_active := false
+var android_storage_permission_request_deadline_msec := 0
+var android_storage_permission_request_last_probe_msec := 0
 var dirty_settings := false
 var settings_animate_next := true
 var settings_draft := {}
@@ -1605,6 +1688,10 @@ var mobile_edge_back_start := Vector2.ZERO
 var mobile_edge_back_last := Vector2.ZERO
 var mobile_edge_back_cancelled := false
 var opaque_frame_shader: Shader
+var bicubic_frame_shader: Shader
+var lanczos_frame_shader: Shader
+var bicubic_frame_material: ShaderMaterial
+var lanczos_frame_material: ShaderMaterial
 var shown_system_alerts := {}
 var ui_icon_cache := {}
 var cover_texture_cache := {}
@@ -1618,7 +1705,7 @@ var builtin_demo = BuiltinDemo.new()
 var runtime_default_font_path := ""
 var runtime_font_dir_path := ""
 var selected_backend := "Godot Native"
-var upscale_algorithm := "smooth"
+var upscale_algorithm := "bicubic"
 var output_resolution := OUTPUT_RESOLUTION_DEFAULT
 var render_surface_mode := "game"
 var frame_enhancement_enabled := false
@@ -1687,6 +1774,9 @@ var capture_after_open_done := false
 var capture_after_open_delay_sec := 0.0
 var capture_after_open_ready_usec := 0
 var auto_probe_clicks: Array[Vector2] = []
+var remembered_button_positions: Array[Vector2] = []
+var observed_button_positions: Array[Vector2] = []
+var button_position_memory_key := ""
 var auto_probe_running := false
 var auto_probe_done := false
 var startup_click_stream_enabled := false
@@ -1719,12 +1809,15 @@ var input_trace_move_suppressed := 0
 var tick_trace_serial := 0
 var tick_trace_active_serial := 0
 var tick_trace_until_msec := 0
+var artemis_input_trace_sequence := 0
+var artemis_input_trace_samples: Array[Dictionary] = []
 var black_frame_guard_until_msec := 0
 var black_frame_next_sample_msec := 0
 var black_frame_consecutive := 0
 var black_frame_last_log_msec := 0
 var black_frame_guard_enabled := false
 var cli_probe_script := ""
+var cli_probe_runtime_debug := false
 var verbose_render_log := false
 var diagnostics_enabled := false
 var ui_log_enabled := false
@@ -1748,12 +1841,15 @@ var dragging_touch_points := {}
 var pending_touch_index := -1
 var pending_touch_mapped := Vector2.ZERO
 var pending_touch_down_msec := 0
-var delayed_ons_touch_releases := {}
+var pending_touch_quarantined := false
+var delayed_touch_releases := {}
 var last_forwarded_touch_down_msec := 0
 var last_forwarded_touch_up_msec := 0
 var last_forwarded_touch_move_msec_by_id := {}
+var touch_secondary_quarantine_until_msec := 0
 var touch_input_busy_until_msec := 0
 var game_text_input_active := false
+var game_text_input_forced := false
 var game_text_input_attention_position := Vector2i(-1, -1)
 var game_text_input_reopen_requested := false
 var game_text_input_last_show_msec := 0
@@ -1835,9 +1931,12 @@ const TOUCH_BUSY_SUPPRESS_MS := 0
 const VIRTUAL_KEYBOARD_REOPEN_DELAY_MS := 750
 const TOUCH_POINTER_ID_OFFSET := 100000
 const TOUCH_SECONDARY_POINTER_ID := 0
+const VIRTUAL_CONTROLS_POINTER_ID := TOUCH_POINTER_ID_OFFSET + 65535
 const TOUCH_SECONDARY_TAP_WINDOW_MS := 180
+const TOUCH_SECONDARY_QUARANTINE_MS := 320
 const TOUCH_SINGLE_TAP_DELAY_MS := 90
-const ONS_TOUCH_CLICK_HOLD_MS := 48
+const TOUCH_CLICK_HOLD_MS := 48
+const ARTEMIS_INPUT_TRACE_DELAYS_MS := [0, 80, 240, 800]
 const INPUT_DEVICE_ID_EMULATION := -1
 const BLACK_FRAME_GUARD_MS := 3200
 const BLACK_FRAME_SAMPLE_INTERVAL_MS := 120
@@ -2148,6 +2247,32 @@ func _build_ui() -> void:
     game_view.mouse_filter = Control.MOUSE_FILTER_IGNORE
     game_view.visible = false
     add_child(game_view)
+
+    game_virtual_controls = GameVirtualControls.new()
+    add_child(game_virtual_controls)
+    game_virtual_controls.setup(ui_tokens)
+    game_virtual_controls.set_input_mode(game_virtual_input_mode)
+    game_virtual_controls.key_event_requested.connect(
+        _on_game_virtual_key_event
+    )
+    game_virtual_controls.pointer_move_requested.connect(
+        _on_game_virtual_pointer_move
+    )
+    game_virtual_controls.pointer_button_requested.connect(
+        _on_game_virtual_pointer_button
+    )
+    game_virtual_controls.pointer_scroll_requested.connect(
+        _on_game_virtual_pointer_scroll
+    )
+    game_virtual_controls.keyboard_requested.connect(
+        _on_game_virtual_keyboard_requested
+    )
+    game_virtual_controls.virtual_controls_requested.connect(
+        _on_game_virtual_controls_requested
+    )
+    game_virtual_controls.input_mode_changed.connect(
+        _on_game_virtual_input_mode_changed
+    )
 
     _build_video_view()
 
@@ -2963,10 +3088,13 @@ func _load_shell_settings() -> void:
     _apply_style_mode()
     selected_backend = _normalize_backend_name(String(cfg.get_value("rendering", "backend", selected_backend)))
     upscale_algorithm = String(cfg.get_value("rendering", "upscale_algorithm", upscale_algorithm))
-    if upscale_algorithm == "sharp" or upscale_algorithm == "nearest":
-        upscale_algorithm = "smooth"
-    if not upscale_algorithm in ["smooth", "nearest", "linear"]:
-        upscale_algorithm = "smooth"
+    # `sharp` was an obsolete alias from the original settings schema. Keep
+    # migrating that value, but do not fold the supported `nearest` mode back
+    # into the default while loading the saved settings.
+    if upscale_algorithm == "sharp":
+        upscale_algorithm = "bicubic"
+    if not upscale_algorithm in ["smooth", "nearest", "linear", "bicubic", "lanczos"]:
+        upscale_algorithm = "bicubic"
     output_resolution = _normalize_output_resolution(String(cfg.get_value(
         "rendering",
         "output_resolution",
@@ -3013,7 +3141,7 @@ func _load_shell_settings() -> void:
     var legacy_perf_overlay := bool(cfg.get_value("rendering", "perf_overlay", show_perf_monitor))
     debug_overlay_mode = String(cfg.get_value("diagnostics", "overlay_mode", "summary" if legacy_perf_overlay else "off"))
     if not debug_overlay_mode in DEBUG_OVERLAY_MODES:
-        debug_overlay_mode = "summary" if OS.is_debug_build() else "off"
+        debug_overlay_mode = "off"
     show_perf_monitor = debug_overlay_mode != "off"
     diagnostic_profile = String(cfg.get_value("diagnostics", "profile", diagnostic_profile))
     if not diagnostic_profile in DIAGNOSTIC_PROFILES:
@@ -3024,6 +3152,9 @@ func _load_shell_settings() -> void:
     var orientation_schema := int(cfg.get_value("rendering", "orientation_schema", 0))
     if _mobile_runtime() and orientation_schema < MOBILE_ORIENTATION_SCHEMA_VERSION:
         lock_landscape = false
+    game_virtual_input_mode = _normalize_game_virtual_input_mode(String(
+        cfg.get_value("input", "virtual_control_mode", game_virtual_input_mode)
+    ))
     plugin_load_mode = String(cfg.get_value("developer", "plugin_load_mode", plugin_load_mode))
     if not plugin_load_mode in ["krkrsdl3", "aether_all"]:
         plugin_load_mode = "krkrsdl3"
@@ -3033,6 +3164,8 @@ func _load_shell_settings() -> void:
     legal_accepted_at = int(cfg.get_value("legal", "accepted_at", 0))
     ios_statement_accepted_version = String(cfg.get_value("legal", "ios_statement_accepted_version", ""))
     ios_statement_accepted_at = int(cfg.get_value("legal", "ios_statement_accepted_at", 0))
+    secret_iap_unlocked = bool(cfg.get_value("unlock", "secret_iap_unlocked", false))
+    secret_coffee_until_unix = int(cfg.get_value("unlock", "secret_coffee_until_unix", 0))
 
 func _configure_runtime_diagnostics() -> void:
     diagnostics_enabled = _runtime_flag("AETHERKIRI_DIAGNOSTICS")
@@ -3058,6 +3191,13 @@ func _normalize_backend_name(value: String) -> String:
         return "Godot Native"
     return backend_name
 
+func _normalize_game_virtual_input_mode(value: String) -> String:
+    return (
+        value
+        if value in GameVirtualControls.INPUT_MODES
+        else GameVirtualControls.INPUT_MODE_MOUSE
+    )
+
 func _save_shell_settings() -> void:
     var cfg := ConfigFile.new()
     cfg.set_value("interface", "language", language_mode)
@@ -3080,6 +3220,7 @@ func _save_shell_settings() -> void:
     cfg.set_value("rendering", "target_fps", target_fps)
     cfg.set_value("rendering", "force_landscape", lock_landscape)
     cfg.set_value("rendering", "orientation_schema", MOBILE_ORIENTATION_SCHEMA_VERSION)
+    cfg.set_value("input", "virtual_control_mode", game_virtual_input_mode)
     cfg.set_value("developer", "plugin_load_mode", plugin_load_mode)
     cfg.set_value("developer", "mock_enabled", mock_enabled)
     cfg.set_value("developer", "error_dialog_logs", error_dialog_logs)
@@ -3087,6 +3228,8 @@ func _save_shell_settings() -> void:
     cfg.set_value("legal", "accepted_at", legal_accepted_at)
     cfg.set_value("legal", "ios_statement_accepted_version", ios_statement_accepted_version)
     cfg.set_value("legal", "ios_statement_accepted_at", ios_statement_accepted_at)
+    cfg.set_value("unlock", "secret_iap_unlocked", secret_iap_unlocked)
+    cfg.set_value("unlock", "secret_coffee_until_unix", secret_coffee_until_unix)
     cfg.save(SETTINGS_FILE)
     ProjectSettings.set_setting(SETTINGS_KEY, selected_backend)
     _apply_engine_options()
@@ -3100,6 +3243,12 @@ func _save_shell_settings() -> void:
     if save_button != null:
         save_button.disabled = true
         _sync_pill_button_content_state(save_button)
+
+func _save_game_virtual_input_mode() -> void:
+    var cfg := ConfigFile.new()
+    cfg.load(SETTINGS_FILE)
+    cfg.set_value("input", "virtual_control_mode", game_virtual_input_mode)
+    cfg.save(SETTINGS_FILE)
 
 func _current_settings_snapshot() -> Dictionary:
     return {
@@ -3254,8 +3403,8 @@ func _apply_settings_snapshot(snapshot: Dictionary) -> void:
         selected_backend = "Godot Native"
 
     upscale_algorithm = String(snapshot.get("upscale_algorithm", upscale_algorithm))
-    if not upscale_algorithm in ["smooth", "nearest", "linear"]:
-        upscale_algorithm = "smooth"
+    if not upscale_algorithm in ["smooth", "nearest", "linear", "bicubic", "lanczos"]:
+        upscale_algorithm = "bicubic"
     _apply_upscale_algorithm()
     output_resolution = _normalize_output_resolution(String(snapshot.get(
         "output_resolution",
@@ -3283,7 +3432,7 @@ func _apply_settings_snapshot(snapshot: Dictionary) -> void:
         diagnostic_profile = "baseline" if OS.is_debug_build() else "off"
     debug_overlay_mode = String(snapshot.get("debug_overlay_mode", debug_overlay_mode))
     if not debug_overlay_mode in DEBUG_OVERLAY_MODES:
-        debug_overlay_mode = "summary" if OS.is_debug_build() else "off"
+        debug_overlay_mode = "off"
     show_perf_monitor = debug_overlay_mode != "off"
     _set_perf_visible(game_running and show_perf_monitor)
     frame_limit_enabled = bool(snapshot.get("fps_limit_enabled", frame_limit_enabled))
@@ -3475,13 +3624,38 @@ func _apply_shell_runtime_settings() -> void:
         var orientation := DisplayServer.SCREEN_LANDSCAPE if lock_landscape else DisplayServer.SCREEN_SENSOR
         DisplayServer.screen_set_orientation(orientation)
 
+func _game_runtime_restore_orientation(previous_screen_size: Vector2i, fallback: int) -> int:
+    if lock_landscape:
+        return DisplayServer.SCREEN_LANDSCAPE
+    if previous_screen_size.y > previous_screen_size.x:
+        return DisplayServer.SCREEN_PORTRAIT
+    if previous_screen_size.x > previous_screen_size.y:
+        return DisplayServer.SCREEN_LANDSCAPE
+    return fallback
+
 func _set_game_runtime_orientation(active: bool) -> void:
     if OS.get_name() != "iOS" and OS.get_name() != "Android":
         return
     if active:
+        if OS.get_name() == "Android" and not game_runtime_shell_orientation_captured:
+            # Android reports the requested orientation here rather than the
+            # physical display rotation, so retain the current screen size as
+            # the authoritative portrait/landscape state to restore on exit.
+            game_runtime_shell_orientation = DisplayServer.screen_get_orientation()
+            game_runtime_shell_screen_size = DisplayServer.screen_get_size()
+            game_runtime_shell_orientation_captured = true
         DisplayServer.screen_set_orientation(DisplayServer.SCREEN_SENSOR_LANDSCAPE)
     else:
-        _apply_shell_runtime_settings()
+        if OS.get_name() != "Android" or not game_runtime_shell_orientation_captured:
+            _apply_shell_runtime_settings()
+            return
+        var orientation := _game_runtime_restore_orientation(
+            game_runtime_shell_screen_size,
+            game_runtime_shell_orientation
+        )
+        game_runtime_shell_orientation_captured = false
+        game_runtime_shell_screen_size = Vector2i.ZERO
+        DisplayServer.screen_set_orientation(orientation)
 
 func _scaled_display_safe_rect(
     viewport_size: Vector2,
@@ -3672,6 +3846,8 @@ func _fit_full_rects() -> void:
     _layout_modal_safe_area(safe_rect)
     _layout_video_safe_area(window_size, safe_rect)
     _layout_game_viewport(window_size)
+    if game_virtual_controls != null:
+        game_virtual_controls.layout(window_size, safe_rect)
     _layout_shell(safe_rect.size)
     _layout_shell_safe_area_fills(window_size, safe_rect)
     var compact_shell := AetherDisplayScale.use_compact_shell(safe_rect.size)
@@ -3780,16 +3956,117 @@ void fragment() {
     material.shader = opaque_frame_shader
     return material
 
+func _resampling_frame_material(kind: String) -> ShaderMaterial:
+    if kind == "bicubic":
+        if bicubic_frame_material != null:
+            return bicubic_frame_material
+        bicubic_frame_shader = Shader.new()
+        bicubic_frame_shader.code = """
+shader_type canvas_item;
+
+vec4 cubic_weights(float v) {
+    float v2 = v * v;
+    float v3 = v2 * v;
+    return vec4(
+        -0.5 * v3 + v2 - 0.5 * v,
+        1.5 * v3 - 2.5 * v2 + 1.0,
+        -1.5 * v3 + 2.0 * v2 + 0.5 * v,
+        0.5 * v3 - 0.5 * v2
+    );
+}
+
+void fragment() {
+    vec2 texel = TEXTURE_PIXEL_SIZE;
+    vec2 coord = UV / texel - vec2(0.5);
+    vec2 base = floor(coord);
+    vec2 fraction = fract(coord);
+    vec4 weights_x = cubic_weights(fraction.x);
+    vec4 weights_y = cubic_weights(fraction.y);
+    vec4 color = vec4(0.0);
+
+    for (int y = 0; y < 4; y++) {
+        for (int x = 0; x < 4; x++) {
+            vec2 sample_uv = (base + vec2(float(x - 1), float(y - 1)) + vec2(0.5)) * texel;
+            sample_uv = clamp(sample_uv, vec2(0.0), vec2(1.0));
+            color += texture(TEXTURE, sample_uv) * weights_x[x] * weights_y[y];
+        }
+    }
+    COLOR = vec4(clamp(color.rgb, vec3(0.0), vec3(1.0)), 1.0);
+}
+"""
+        bicubic_frame_material = ShaderMaterial.new()
+        bicubic_frame_material.shader = bicubic_frame_shader
+        return bicubic_frame_material
+
+    if kind == "lanczos":
+        if lanczos_frame_material != null:
+            return lanczos_frame_material
+        lanczos_frame_shader = Shader.new()
+        lanczos_frame_shader.code = """
+shader_type canvas_item;
+
+const float KERNEL_PI = 3.14159265359;
+
+float sinc(float value) {
+    float distance = abs(value);
+    if (distance < 0.0001) {
+        return 1.0;
+    }
+    return sin(KERNEL_PI * distance) / (KERNEL_PI * distance);
+}
+
+float lanczos_weight(float value) {
+    float distance = abs(value);
+    if (distance >= 3.0) {
+        return 0.0;
+    }
+    return sinc(distance) * sinc(distance / 3.0);
+}
+
+void fragment() {
+    vec2 texel = TEXTURE_PIXEL_SIZE;
+    vec2 coord = UV / texel - vec2(0.5);
+    vec2 base = floor(coord);
+    vec2 fraction = fract(coord);
+    vec4 color = vec4(0.0);
+    float weight_sum = 0.0;
+
+    for (int y = -2; y <= 3; y++) {
+        for (int x = -2; x <= 3; x++) {
+            float weight = lanczos_weight(float(x) - fraction.x) * lanczos_weight(float(y) - fraction.y);
+            vec2 sample_uv = (base + vec2(float(x), float(y)) + vec2(0.5)) * texel;
+            sample_uv = clamp(sample_uv, vec2(0.0), vec2(1.0));
+            color += texture(TEXTURE, sample_uv) * weight;
+            weight_sum += weight;
+        }
+    }
+    color /= max(weight_sum, 0.0001);
+    COLOR = vec4(clamp(color.rgb, vec3(0.0), vec3(1.0)), 1.0);
+}
+"""
+        lanczos_frame_material = ShaderMaterial.new()
+        lanczos_frame_material.shader = lanczos_frame_shader
+        return lanczos_frame_material
+
+    return _opaque_frame_material()
+
 func _apply_upscale_algorithm() -> void:
     if viewport == null:
         return
     match upscale_algorithm:
         "nearest":
             viewport.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-            viewport.material = _opaque_frame_material()
+            # The opaque presentation shader samples TEXTURE through its own
+            # sampler and can retain linear filtering on some renderers. Use
+            # the native TextureRect path for nearest so the CanvasItem filter
+            # is the actual sampler used by the final presentation pass.
+            viewport.material = null
         "linear", "smooth":
             viewport.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
             viewport.material = _opaque_frame_material()
+        "bicubic", "lanczos":
+            viewport.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+            viewport.material = _resampling_frame_material(upscale_algorithm)
         _:
             viewport.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
             viewport.material = _opaque_frame_material()
@@ -4368,6 +4645,13 @@ func _rebuild_settings_view() -> void:
         ))
 
     var about_group := _settings_group(secondary_column, _t("settings.section.about"), ICON_HELP, animate_page, 0.18)
+    if OS.get_name() == "Android":
+        _add_settings_row(about_group, _settings_action_row(
+            _t("support.coffee.title"),
+            _t("support.coffee.desc"),
+            _t("support.coffee.open"),
+            _open_android_coffee
+        ))
     _add_settings_row(about_group, _settings_action_row(
         _t("settings.legal"),
         _t("settings.legal_desc"),
@@ -4381,10 +4665,12 @@ func _rebuild_settings_view() -> void:
             _t("settings.ios_statement_open"),
             _show_ios_additional_statement
         ))
-    _add_settings_row(about_group, _settings_value_row(
+    var version_row := _settings_value_row(
         _t("settings.version"),
         _application_version_text()
-    ))
+    )
+    _attach_secret_version_tap(version_row)
+    _add_settings_row(about_group, version_row)
 
     if animate_page:
         ui_motion.reveal(top)
@@ -5658,7 +5944,7 @@ func _settings_iap_product_row() -> Control:
     status.add_theme_color_override("font_color", ui_tokens.accent)
     labels.add_child(status)
 
-    var entitled := bool(iap_state.get("entitled", false))
+    var entitled := bool(iap_state.get("entitled", false)) or _secret_iap_unlock_active()
     var product_ready := String(iap_state.get("product_state", "idle")) == "ready"
     var price := String(iap_state.get("display_price", ""))
     var action_text := _t("iap.status.purchased") if entitled else _t("iap.buy")
@@ -5674,7 +5960,7 @@ func _settings_iap_product_row() -> Control:
     return margin
 
 func _iap_product_status_text() -> String:
-    if bool(iap_state.get("entitled", false)):
+    if bool(iap_state.get("entitled", false)) or _secret_iap_unlock_active():
         return _t("iap.status.purchased")
     var product_state := String(iap_state.get("product_state", "idle"))
     if product_state in ["idle", "loading"]:
@@ -5748,12 +6034,167 @@ func _iap_coffee_status_text() -> String:
     )).strip_edges()
     if bool(iap_coffee_state.get("entitled", false)) and not expiration.is_empty():
         return _t("iap.coffee.active_until", [expiration])
+    if _secret_coffee_active():
+        return _t("iap.coffee.active_until", [_secret_coffee_expiry_text()])
     var product_state := String(iap_coffee_state.get("product_state", "idle"))
     if product_state in ["idle", "loading"]:
         return _t("iap.status.loading")
     if product_state != "ready":
         return _t("iap.status.unavailable")
     return _t("iap.coffee.inactive")
+
+func _secret_iap_unlock_active() -> bool:
+    return secret_iap_unlocked
+
+func _secret_coffee_active() -> bool:
+    return secret_coffee_until_unix > int(Time.get_unix_time_from_system())
+
+func _secret_coffee_expiry_text() -> String:
+    if secret_coffee_until_unix <= 0:
+        return ""
+    var expiry := Time.get_datetime_dict_from_unix_time(secret_coffee_until_unix)
+    return "%04d-%02d-%02d %02d:%02d" % [
+        int(expiry.get("year", 0)),
+        int(expiry.get("month", 1)),
+        int(expiry.get("day", 1)),
+        int(expiry.get("hour", 0)),
+        int(expiry.get("minute", 0)),
+    ]
+
+func _attach_secret_version_tap(row: Control) -> void:
+    row.gui_input.connect(func(event: InputEvent):
+        if event is InputEventMouseButton \
+                and event.pressed \
+                and event.button_index == MOUSE_BUTTON_LEFT:
+            _register_secret_version_tap()
+    )
+
+func _register_secret_version_tap() -> void:
+    var now := Time.get_ticks_msec()
+    if now - secret_version_last_tap_msec > SECRET_UNLOCK_TAP_WINDOW_MSEC:
+        secret_version_tap_count = 0
+    secret_version_last_tap_msec = now
+    secret_version_tap_count += 1
+    if secret_version_tap_count >= SECRET_UNLOCK_TAP_TARGET:
+        secret_version_tap_count = 0
+        _show_secret_unlock_dialog()
+
+func _verify_secret_unlock(candidate: String) -> bool:
+    if candidate.is_empty():
+        return false
+    if player == null or not player.has_method("verify_unlock_secret"):
+        return false
+    return bool(player.verify_unlock_secret(candidate))
+
+func _apply_secret_unlock() -> void:
+    var now := int(Time.get_unix_time_from_system())
+    secret_iap_unlocked = true
+    secret_coffee_until_unix = maxi(secret_coffee_until_unix, now) + SECRET_UNLOCK_COFFEE_SEC
+    _persist_secret_unlock_state()
+    if is_instance_valid(settings_view) and settings_view.visible:
+        _rebuild_settings_view()
+
+func _persist_secret_unlock_state() -> void:
+    # Merge into the settings file without saving unrelated in-progress drafts.
+    var cfg := ConfigFile.new()
+    cfg.load(SETTINGS_FILE)
+    cfg.set_value("unlock", "secret_iap_unlocked", secret_iap_unlocked)
+    cfg.set_value("unlock", "secret_coffee_until_unix", secret_coffee_until_unix)
+    cfg.save(SETTINGS_FILE)
+
+func _show_secret_unlock_dialog() -> void:
+    modal_layer.visible = true
+    modal_layer.move_to_front()
+    for child in modal_layer.get_children():
+        child.queue_free()
+    var dim := ColorRect.new()
+    dim.color = Color(0, 0, 0, 0.52)
+    dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+    dim.mouse_filter = Control.MOUSE_FILTER_STOP
+    modal_layer.add_child(dim)
+    var width := 560.0
+    if is_inside_tree():
+        width = minf(width, get_viewport_rect().size.x * 0.92)
+    var height := 380.0
+    var dialog := PanelContainer.new()
+    dialog.anchor_left = 0.5
+    dialog.anchor_top = 0.5
+    dialog.anchor_right = 0.5
+    dialog.anchor_bottom = 0.5
+    dialog.position = Vector2(-width * 0.5, -height * 0.5)
+    dialog.size = Vector2(width, height)
+    dialog.add_theme_stylebox_override(
+        "panel",
+        _panel_style(22, color_card, Color(0, 0, 0, 0.06), 1)
+    )
+    modal_layer.add_child(dialog)
+    var box := VBoxContainer.new()
+    box.add_theme_constant_override("separation", 20)
+    dialog.add_child(box)
+    var title := Label.new()
+    title.text = _t("secret.unlock.title")
+    title.add_theme_font_size_override("font_size", 30)
+    title.add_theme_color_override("font_color", color_text)
+    box.add_child(title)
+    var body := Label.new()
+    body.text = _t("secret.unlock.body")
+    body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    body.add_theme_font_size_override("font_size", 20)
+    body.add_theme_color_override("font_color", color_text)
+    box.add_child(body)
+    var input := LineEdit.new()
+    input.secret = true
+    input.max_length = 64
+    input.placeholder_text = _t("secret.unlock.placeholder")
+    input.custom_minimum_size = Vector2(0, 62)
+    input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    input.add_theme_font_size_override("font_size", 22)
+    box.add_child(input)
+    var error_label := Label.new()
+    error_label.text = _t("secret.unlock.failed")
+    error_label.visible = false
+    error_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    error_label.add_theme_font_size_override("font_size", 16)
+    error_label.add_theme_color_override("font_color", Color(0.94, 0.35, 0.32))
+    box.add_child(error_label)
+    var buttons := HBoxContainer.new()
+    buttons.alignment = BoxContainer.ALIGNMENT_END
+    buttons.add_theme_constant_override("separation", 14)
+    buttons.custom_minimum_size = Vector2(0, 62)
+    box.add_child(buttons)
+    var cancel := Button.new()
+    cancel.text = _t("dialog.cancel")
+    cancel.flat = true
+    cancel.custom_minimum_size = Vector2(130, 60)
+    cancel.add_theme_font_size_override("font_size", 20)
+    cancel.add_theme_color_override("font_color", color_text)
+    cancel.pressed.connect(func():
+        modal_layer.visible = false
+    )
+    buttons.add_child(cancel)
+    var confirm := _pill_button(_t("secret.unlock.confirm"))
+    confirm.custom_minimum_size = Vector2(180, 60)
+    confirm.pressed.connect(func(): _submit_secret_unlock(input, error_label))
+    buttons.add_child(confirm)
+    input.text_submitted.connect(func(_text: String):
+        _submit_secret_unlock(input, error_label)
+    )
+    if input.is_inside_tree():
+        input.call_deferred("grab_focus")
+
+func _submit_secret_unlock(input: LineEdit, error_label: Label) -> void:
+    var candidate := input.text if is_instance_valid(input) else ""
+    if _verify_secret_unlock(candidate):
+        modal_layer.visible = false
+        _apply_secret_unlock()
+        _show_system_alert(
+            _t("secret.unlock.success", [_secret_coffee_expiry_text()]),
+            _t("secret.unlock.title")
+        )
+        return
+    input.text = ""
+    if is_instance_valid(error_label):
+        error_label.visible = true
 
 func _apple_select(width: float = 220.0):
     var select = AetherSelect.new()
@@ -5866,6 +6307,8 @@ func _upscale_select() -> Control:
         {"label": "Smooth", "value": "smooth"},
         {"label": "Linear", "value": "linear"},
         {"label": "Nearest", "value": "nearest"},
+        {"label": "Bicubic", "value": "bicubic"},
+        {"label": "Lanczos", "value": "lanczos"},
     ]
     var selected_index := 0
     var draft_upscale := _settings_draft_string("upscale_algorithm", upscale_algorithm)
@@ -6133,7 +6576,7 @@ func _select_backend(value: String) -> void:
     _set_settings_draft_value("backend", BACKENDS[index])
 
 func _select_upscale_algorithm(value: String) -> void:
-    if not value in ["smooth", "nearest", "linear"]:
+    if not value in ["smooth", "nearest", "linear", "bicubic", "lanczos"]:
         return
     _set_settings_draft_value("upscale_algorithm", value)
 
@@ -6705,9 +7148,14 @@ func _detail_identity(game: Dictionary, compact: bool) -> VBoxContainer:
     return identity
 
 func _detail_launch_button() -> Button:
-    var start := _icon_action_button(ICON_PLAY, _t("detail.launch"), _start_selected_game, true, false, 52.0)
-    _reveal_icon_action_label_on_hover(start, _t("detail.launch"))
+    # Use the explicit content row here instead of Button.icon + Button.text.
+    # FlowContainer sizes a native Button from its text first, which can clip
+    # the icon when the action is laid out at its shrink-to-fit width.
+    var start := _pill_button(_t("detail.launch"), ICON_PLAY)
+    # Keep enough room for the longest localized label as well as the icon.
+    start.custom_minimum_size = Vector2(220, 52)
     start.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+    start.pressed.connect(_start_selected_game)
     start.button_down.connect(func(): _android_input_debug_log("detail launch button_down"))
     start.button_up.connect(func(): _android_input_debug_log("detail launch button_up"))
     start.pressed.connect(func(): _android_input_debug_log("detail launch pressed"))
@@ -6938,13 +7386,29 @@ func _show_system_alert_once(key: String, message: String, title: String = "Aeth
     shown_system_alerts[key] = true
     _show_system_alert(message, title)
 
+func _open_android_coffee() -> void:
+    if OS.get_name() != "Android":
+        return
+    var result := OS.shell_open(ANDROID_COFFEE_URL)
+    if result == OK:
+        _show_system_alert(
+            _t("support.coffee.thanks"),
+            _t("support.coffee.thanks_title")
+        )
+    else:
+        _show_system_alert(
+            _t("support.coffee.open_failed"),
+            _t("support.coffee.title")
+        )
+
 func _iap_supported_platform() -> bool:
     return OS.get_name() in ["iOS", "macOS"]
 
 func _iap_enforcement_enabled() -> bool:
     # Local/debug artifacts are for compatibility and UI testing. Catalog
-    # enforcement is enabled only in Release/TestFlight/App Store builds.
-    return _iap_supported_platform() and not OS.is_debug_build()
+    # enforcement is enabled only in Release/TestFlight/App Store builds. A
+    # verified secret unlock removes the catalog limit for this installation.
+    return _iap_supported_platform() and not OS.is_debug_build() and not secret_iap_unlocked
 
 func _initialize_iap() -> void:
     if not _iap_supported_platform() or player == null:
@@ -7654,6 +8118,8 @@ func _on_refresh_or_import() -> void:
     if OS.get_name() == "Web":
         _show_web_import_picker()
         return
+    if OS.get_name() == "Android":
+        _android_storage_permission_log("add_game_click target=/storage/emulated/0")
     if not _ensure_android_storage_permission_for_import():
         return
     _show_import_picker()
@@ -9509,9 +9975,9 @@ func _start_selected_game_after_iap() -> void:
     if library_path.is_empty():
         return
     var selected_runtime_kind := _game_runtime_kind(library_path)
-    # Development artifacts intentionally bypass StoreKit so local
-    # compatibility work never depends on a sandbox account or network.
-    if OS.is_debug_build():
+    # Development artifacts and Android releases do not use the Apple-only
+    # beta entitlement flow. Keep provider beta access enabled for both paths.
+    if not _beta_access_enforcement_enabled():
         if (
             selected_runtime_kind == RUNTIME_KIRIKIRI
             and current_player_runtime_kind != RUNTIME_KIRIKIRI
@@ -9553,10 +10019,14 @@ func _start_selected_game_after_iap() -> void:
         _deny_runtime_beta_launch()
 
 func _runtime_requires_beta_access(runtime_kind: String) -> bool:
-    # ONS support follows the same release policy as provider-based beta
-    # runtimes: unrestricted in Debug, and gated by an active coffee
-    # entitlement in distributed builds.
+    # ONS support follows the same Apple release policy as provider-based beta
+    # runtimes: unrestricted in Debug and Android builds, and gated by an
+    # active coffee entitlement on iOS and macOS distribution builds.
     return runtime_kind == RUNTIME_ONSCRIPTER
+
+func _beta_access_enforcement_enabled(platform_name: String = "") -> bool:
+    var effective_platform := platform_name if not platform_name.is_empty() else OS.get_name()
+    return effective_platform in ["iOS", "macOS"] and not OS.is_debug_build()
 
 func _provider_runtime_requires_beta_access(runtime_id: String) -> bool:
     return BETA_PROVIDER_RUNTIME_IDS.has(runtime_id.strip_edges().to_lower())
@@ -9578,7 +10048,7 @@ func _complete_runtime_beta_check() -> void:
         return
     var pending_game: Dictionary = iap_pending_beta_game.duplicate(true)
     iap_pending_beta_game.clear()
-    if not bool(iap_coffee_state.get("entitled", false)):
+    if not bool(iap_coffee_state.get("entitled", false)) and not _secret_coffee_active():
         _deny_runtime_beta_launch()
         return
     selected_game = pending_game
@@ -9740,7 +10210,11 @@ func _ready() -> void:
     frame_probe_enabled = _runtime_flag("AETHERKIRI_FRAME_PROBE")
     frame_probe_interval = maxf(0.05, _runtime_float("AETHERKIRI_FRAME_PROBE_INTERVAL", 1.0))
     black_frame_guard_enabled = _runtime_flag("AETHERKIRI_BLACK_FRAME_GUARD")
-    input_trace_enabled = _runtime_flag("AETHERKIRI_INPUT_TRACE") or ios_diagnostics_enabled
+    input_trace_enabled = (
+        _runtime_flag("AETHERKIRI_INPUT_TRACE")
+        or ios_diagnostics_enabled
+        or not cli_probe_script.is_empty()
+    )
     device_probe_enabled = device_probe_enabled or frame_probe_enabled
     device_probe_enabled = device_probe_enabled or input_trace_enabled
     var native_auto_start_enabled := _native_auto_start_enabled()
@@ -10391,10 +10865,20 @@ func _continue_ready_after_legal_gate() -> void:
 func _request_android_storage_permissions() -> void:
     if OS.get_name() != "Android":
         return
+    var before := _android_has_external_storage_permission()
+    _android_storage_permission_log("request_begin granted_before=%s" % str(before))
     if player != null and player.has_method("android_request_external_storage_permission"):
-        if bool(player.android_request_external_storage_permission()):
+        var native_result := bool(player.android_request_external_storage_permission())
+        _android_storage_permission_log("request_native dispatched=%s" % str(native_result))
+        if native_result:
+            _begin_android_storage_permission_probe()
             return
-    OS.request_permissions()
+    var godot_result := bool(OS.request_permissions())
+    _android_storage_permission_log("request_godot dispatched=%s" % str(godot_result))
+    if godot_result:
+        _begin_android_storage_permission_probe()
+    else:
+        _android_storage_permission_log("request_failed dispatch=false")
 
 func _ensure_android_storage_permission_for_import(video_import: bool = false) -> bool:
     var message_key := (
@@ -10408,12 +10892,52 @@ func _ensure_android_storage_permission_for_path(
     path: String,
     message_key: String = "message.android_storage_permission_required"
 ) -> bool:
-    if not _android_path_needs_storage_permission(path):
+    var needs_permission := _android_path_needs_storage_permission(path)
+    if not needs_permission:
+        if OS.get_name() == "Android":
+            _android_storage_permission_log(
+                "check path=%s needs=false granted=not_checked" % path
+            )
         return true
-    if _android_has_external_storage_permission():
+    var granted := _android_has_external_storage_permission()
+    _android_storage_permission_log(
+        "check path=%s needs=true granted=%s" % [path, str(granted)]
+    )
+    if granted:
         return true
+    _android_storage_permission_log(
+        "authorization_failed path=%s reason=permission_not_granted" % path
+    )
     _show_android_storage_permission_prompt(Callable(), message_key)
     return false
+
+func _android_storage_permission_log(message: String) -> void:
+    var line := "android storage permission: %s" % message
+    print(line)
+    _append_log(line)
+
+func _begin_android_storage_permission_probe() -> void:
+    android_storage_permission_request_active = true
+    android_storage_permission_request_deadline_msec = Time.get_ticks_msec() + 8000
+    android_storage_permission_request_last_probe_msec = 0
+
+func _poll_android_storage_permission_request() -> void:
+    if not android_storage_permission_request_active or OS.get_name() != "Android":
+        return
+    var now := Time.get_ticks_msec()
+    if android_storage_permission_request_last_probe_msec != 0 and now - android_storage_permission_request_last_probe_msec < 250:
+        return
+    android_storage_permission_request_last_probe_msec = now
+    var granted := _android_has_external_storage_permission()
+    if granted:
+        android_storage_permission_request_active = false
+        _android_storage_permission_log("authorization_granted after_request=true")
+        return
+    if now >= android_storage_permission_request_deadline_msec:
+        android_storage_permission_request_active = false
+        _android_storage_permission_log(
+            "authorization_failed after_request=true timeout_ms=8000"
+        )
 
 func _show_android_storage_permission_prompt(
     after_acknowledged: Callable = Callable(),
@@ -10774,6 +11298,8 @@ func _probe_wait_startup(config: Dictionary, fallback_frames: int = 900) -> bool
     return false
 
 func _probe_tick_and_update() -> bool:
+    _flush_delayed_touch_releases()
+    _flush_pending_touch_press_if_ready()
     var result: int = int(player.tick(1.0 / 60.0))
     if result != ENGINE_RESULT_OK:
         _write_probe_marker("probe_tick failed error=%s" % player.get_last_error())
@@ -10859,6 +11385,7 @@ func _run_cli_smoke_probe(config: Dictionary, target_game_path: String) -> void:
     await _probe_cleanup_and_quit(0)
 
 func _run_cli_step_probe(config: Dictionary, target_game_path: String) -> void:
+    cli_probe_runtime_debug = bool(config.get("runtime_debug", false))
     if not _probe_open_game(config, target_game_path, "AETHERKIRI_PROBE_BACKEND"):
         await _probe_cleanup_and_quit(1)
         return
@@ -10955,6 +11482,21 @@ func _probe_run_actions(config: Dictionary, step: int) -> int:
             _probe_send_mapped_click(pos, config, 1)
             if label.is_empty() or label == "right_click":
                 label = "right_click_%d_%d" % [int(pos.x), int(pos.y)]
+        elif kind == "touch_click":
+            var pos := ProbeConfig.click_position(action)
+            _probe_send_mapped_touch_click(pos, config, int(action.get("touch_index", 0)))
+            if label.is_empty() or label == "touch_click":
+                label = "touch_click_%d_%d" % [int(pos.x), int(pos.y)]
+        elif kind == "two_finger_tap":
+            var pos := ProbeConfig.click_position(action)
+            if not await _probe_send_mapped_two_finger_tap(
+                pos,
+                config,
+                max(0, int(action.get("first_finger_lead_ms", 0)))
+            ):
+                return -1
+            if label.is_empty() or label == "two_finger_tap":
+                label = "two_finger_tap_%d_%d" % [int(pos.x), int(pos.y)]
         elif kind == "move":
             var pos := ProbeConfig.click_position(action)
             _probe_send_mapped_move(pos, config)
@@ -11218,6 +11760,44 @@ func _probe_save_step(index: int, label: String, wait_frames: int = 2) -> void:
     ]
     print(line)
     _write_probe_marker(line)
+    if cli_probe_runtime_debug:
+        var runtime_debug := String(player.get_plugin_debug_info())
+        print("step %02d runtime_debug=%s" % [index, runtime_debug])
+        var parsed = JSON.parse_string(runtime_debug)
+        if parsed is Dictionary:
+            var runtime_state := {}
+            for key in [
+                "scriptState",
+                "scriptWaitReason",
+                "waitFlag",
+                "delayFlag",
+                "textClickFlag",
+                "clickFlag",
+                "exclickFlag",
+                "transitionFlag",
+                "keycodeFlag",
+                "buttonName",
+                "buttonClick",
+                "buttonEntry",
+                "buttonStop",
+                "lastInputDebug",
+                "localInput2",
+                "externalWaitReason",
+                "queuedCommands",
+                "eventResumeStates",
+                "scriptStack",
+            ]:
+                if parsed.has(key):
+                    runtime_state[key] = parsed[key]
+            if parsed.has("commandTrace") and parsed["commandTrace"] is Array:
+                var command_trace: Array = parsed["commandTrace"]
+                runtime_state["commandTraceTail"] = command_trace.slice(
+                    maxi(0, command_trace.size() - 8)
+                )
+            _write_probe_marker("step %02d runtime_state=%s" % [
+                index,
+                JSON.stringify(runtime_state),
+            ])
 
 func _probe_send_mapped_click(window_pos: Vector2, config: Dictionary, button: int = 0) -> void:
     var mapped := _probe_map_window_point(window_pos, config)
@@ -11231,6 +11811,63 @@ func _probe_send_mapped_click(window_pos: Vector2, config: Dictionary, button: i
     player.tick(1.0 / 60.0)
     player.send_pointer_event(POINTER_UP, 0, mapped.x, mapped.y, 0.0, 0.0, button)
     _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
+
+func _probe_send_mapped_touch_click(window_pos: Vector2, config: Dictionary, touch_index: int = 0) -> void:
+    var mapped := _probe_map_window_point(window_pos, config)
+    if mapped.x < 0.0 or mapped.y < 0.0:
+        print("skip touch click outside texture window=%s mapped=%s" % [window_pos, mapped])
+        return
+    # The CLI probe captures a step before its next tick, so flush any
+    # release whose hold interval elapsed while the previous screenshot was
+    # being written. The real app performs this from _process every frame.
+    _flush_delayed_touch_releases()
+    _set_pending_touch(touch_index, mapped)
+    _send_pending_touch_click(touch_index, mapped)
+
+func _probe_send_mapped_two_finger_tap(
+    window_pos: Vector2,
+    config: Dictionary,
+    first_finger_lead_ms: int = 0
+) -> bool:
+    var mapped := _probe_map_window_point(window_pos, config)
+    if mapped.x < 0.0 or mapped.y < 0.0:
+        print("skip two-finger tap outside texture window=%s mapped=%s" % [window_pos, mapped])
+        return false
+    var first_id := 0
+    var second_id := 1
+    var separation := Vector2(12.0, 0.0)
+    _set_pending_touch(first_id, mapped - separation)
+    if first_finger_lead_ms > 0:
+        # Match the real mobile path where the first finger outlives the
+        # single-tap disambiguation delay before the second finger lands.
+        # This produces primary DOWN, then primary UP + secondary DOWN/UP.
+        if not _flush_pending_touch_press(true):
+            return false
+        if not await _probe_advance_for_ms(first_finger_lead_ms):
+            return false
+    _handle_secondary_touch_press(second_id, mapped + separation)
+    for pointer_id in [first_id, second_id]:
+        suppressed_touch_points.erase(pointer_id)
+        active_touch_points.erase(pointer_id)
+        touch_down_points.erase(pointer_id)
+        dragging_touch_points.erase(pointer_id)
+        last_forwarded_touch_move_msec_by_id.erase(pointer_id)
+        _clear_pending_touch_if_matches(pointer_id)
+    return true
+
+func _probe_advance_for_ms(duration_ms: int) -> bool:
+    if duration_ms <= 0:
+        return true
+    var deadline_usec := Time.get_ticks_usec() + duration_ms * 1000
+    var next_tick_usec := Time.get_ticks_usec()
+    while Time.get_ticks_usec() < deadline_usec:
+        var now_usec := Time.get_ticks_usec()
+        if now_usec >= next_tick_usec:
+            if not _probe_tick_and_update():
+                return false
+            next_tick_usec = now_usec + 16667
+        await get_tree().process_frame
+    return true
 
 func _probe_send_mapped_move(window_pos: Vector2, config: Dictionary) -> void:
     var mapped := _probe_map_window_point(window_pos, config)
@@ -11425,10 +12062,11 @@ func _probe_send_direct_click(pos: Vector2) -> void:
     player.send_pointer_event(POINTER_UP, 0, pos.x, pos.y, 0.0, 0.0, 0)
 
 func _probe_capture_image() -> Image:
+    var prefer_engine_frame := OS.get_environment("AETHERKIRI_PROBE_PREFER_ENGINE_FRAME") == "1"
     # In GPU-direct mode this is the texture the user actually sees. The CPU
     # compatibility frame can legitimately lag behind it, so consulting
     # read_frame_rgba() first would hide one-frame crop and layer corruption.
-    if viewport.texture != null:
+    if not prefer_engine_frame and viewport.texture != null:
         var direct_image := viewport.texture.get_image()
         if direct_image != null and direct_image.get_width() > 0 and direct_image.get_height() > 0:
             if int(_image_stats(direct_image).get("visible", 0)) > 0:
@@ -11577,9 +12215,11 @@ func _apply_pending_video_resume(state: Dictionary) -> bool:
     return true
 
 func _process(delta: float) -> void:
+    _poll_android_storage_permission_request()
     _poll_native_launch_file_picker()
     _poll_native_cover_file_picker()
     _fit_full_rects()
+    _sync_game_virtual_controls()
     _process_iap(delta)
     _update_advanced_tool_timeouts()
     _flush_log_view_if_needed(delta)
@@ -11604,6 +12244,7 @@ func _process(delta: float) -> void:
             startup_poll_accum = 0.0
             cached_startup_state = player.get_startup_state()
             startup_state = cached_startup_state
+            _sync_game_virtual_controls()
         if startup_state == STARTUP_SUCCEEDED:
             restart_notice.text = ""
             if loading_panel != null and loading_panel.visible:
@@ -11612,7 +12253,7 @@ func _process(delta: float) -> void:
                 )
             else:
                 _set_perf_visible(show_perf_monitor)
-            _flush_delayed_ons_touch_releases()
+            _flush_delayed_touch_releases()
             _flush_pending_touch_press_if_ready()
             tick_trace_serial += 1
             tick_trace_active_serial = tick_trace_serial
@@ -11663,6 +12304,7 @@ func _process(delta: float) -> void:
                     perf_log_file.store_line(tick_error_line)
                     perf_log_file.flush()
                 game_running = false
+                _sync_game_virtual_controls()
                 _deactivate_game_text_input()
                 _sync_debug_console_state()
                 if diagnostic_session != null:
@@ -11684,6 +12326,7 @@ func _process(delta: float) -> void:
                 _update_frame()
                 var update_ms := float(Time.get_ticks_usec() - update_start) / 1000.0
                 last_update_ms = update_ms
+                _flush_artemis_input_trace_samples()
                 _update_touch_busy_gate(maxf(delta * 1000.0, tick_ms + update_ms))
                 if diagnostic_session != null:
                     diagnostic_session.sample_frame(
@@ -11710,6 +12353,7 @@ func _process(delta: float) -> void:
             viewport.visible = false
             game_view.visible = false
             game_running = false
+            _sync_game_virtual_controls()
             _deactivate_game_text_input()
             _sync_debug_console_state()
             if diagnostic_session != null:
@@ -11820,7 +12464,8 @@ func _log_live_perf(delta: float, tick_ms: float, update_ms: float) -> void:
     if perf_log_accum < perf_log_interval:
         return
     perf_log_accum = 0.0
-    var line := "live_perf fps=%d frame_ms=%.2f tick_ms=%.2f update_ms=%.2f texture=%s size=%dx%d renderer=\"%s\" errors=%d" % [
+    var memory := _runtime_memory_snapshot()
+    var line := "live_perf fps=%d frame_ms=%.2f tick_ms=%.2f update_ms=%.2f texture=%s size=%dx%d renderer=\"%s\" errors=%d app_mb=%d resident_mb=%d gpu_mb=%d gpu_tex_mb=%d cache_mb=%d graphic_cache_mb=%d xp3_cache_mb=%d psb_cache_mb=%d psb_entries=%d" % [
         Engine.get_frames_per_second(),
         delta * 1000.0,
         tick_ms,
@@ -11830,6 +12475,15 @@ func _log_live_perf(delta: float, tick_ms: float, update_ms: float) -> void:
         last_texture_size.y,
         player.get_renderer_info(),
         render_errors,
+        int(memory.get("current_bytes", 0) / (1024 * 1024)),
+        int(memory.get("resident_bytes", 0) / (1024 * 1024)),
+        int(memory.get("gpu_total_bytes", 0) / (1024 * 1024)),
+        int(memory.get("gpu_texture_bytes", 0) / (1024 * 1024)),
+        int(memory.get("cache_bytes", 0) / (1024 * 1024)),
+        int(memory.get("graphic_cache_bytes", 0) / (1024 * 1024)),
+        int(memory.get("xp3_segment_cache_bytes", 0) / (1024 * 1024)),
+        int(memory.get("psb_cache_bytes", 0) / (1024 * 1024)),
+        int(memory.get("psb_cache_entries", 0)),
     ]
     print(line)
     if perf_log_file != null:
@@ -11873,6 +12527,144 @@ func _log_tick_trace(line: String) -> void:
     if perf_log_file != null:
         perf_log_file.store_line(line)
         perf_log_file.flush()
+
+func _log_input_diagnostic_line(line: String) -> void:
+    if not input_trace_enabled:
+        return
+    print(line)
+    _write_probe_marker(line)
+    if perf_log_file != null:
+        perf_log_file.store_line(line)
+        perf_log_file.flush()
+
+func _trace_touch_route(
+    action: String,
+    pointer_id: int,
+    mapped: Vector2,
+    detail: String = ""
+) -> void:
+    if not input_trace_enabled:
+        return
+    _log_input_diagnostic_line(
+        "touch_route action=%s pid=%d mapped=%.1f,%.1f pending=%d active=%s suppressed=%s delayed=%s detail=%s" % [
+            action,
+            pointer_id,
+            mapped.x,
+            mapped.y,
+            pending_touch_index,
+            JSON.stringify(active_touch_points.keys()),
+            JSON.stringify(suppressed_touch_points.keys()),
+            JSON.stringify(delayed_touch_releases.keys()),
+            detail,
+        ]
+    )
+
+func _queue_artemis_input_state_trace(label: String) -> void:
+    if not input_trace_enabled or active_runtime_kind != RUNTIME_KIRIKIRI:
+        return
+    artemis_input_trace_sequence += 1
+    var now := Time.get_ticks_msec()
+    for delay_variant in ARTEMIS_INPUT_TRACE_DELAYS_MS:
+        var delay_ms := int(delay_variant)
+        artemis_input_trace_samples.append({
+            "sequence": artemis_input_trace_sequence,
+            "label": label,
+            "delay_ms": delay_ms,
+            "due_msec": now + delay_ms,
+        })
+    _flush_artemis_input_trace_samples()
+
+func _renderer_trace_stat(renderer: String, name: String) -> String:
+    var marker := "%s=" % name
+    var start := renderer.find(marker)
+    if start < 0:
+        return ""
+    start += marker.length()
+    var end := renderer.find(" ", start)
+    if end < 0:
+        end = renderer.length()
+    return renderer.substr(start, end - start)
+
+func _flush_artemis_input_trace_samples() -> void:
+    if artemis_input_trace_samples.is_empty() or player == null:
+        return
+    if not game_running or active_runtime_kind != RUNTIME_KIRIKIRI:
+        artemis_input_trace_samples.clear()
+        return
+    var now := Time.get_ticks_msec()
+    var remaining: Array[Dictionary] = []
+    for sample in artemis_input_trace_samples:
+        if now < int(sample.get("due_msec", now)):
+            remaining.append(sample)
+            continue
+        var runtime_debug := String(player.get_plugin_debug_info())
+        var parsed = JSON.parse_string(runtime_debug)
+        if not parsed is Dictionary:
+            _log_input_diagnostic_line(
+                "artemis_input_state sequence=%d label=%s after_ms=%d parse_failed=1" % [
+                    int(sample.get("sequence", 0)),
+                    String(sample.get("label", "")),
+                    int(sample.get("delay_ms", 0)),
+                ]
+            )
+            continue
+        var debug: Dictionary = parsed
+        var state := {
+            "runtime": debug.get("runtime", ""),
+            "scriptState": debug.get("scriptState", ""),
+            "scriptWaitReason": debug.get("scriptWaitReason", ""),
+            "waitFlag": debug.get("waitFlag", ""),
+            "delayFlag": debug.get("delayFlag", ""),
+            "textClickFlag": debug.get("textClickFlag", ""),
+            "clickFlag": debug.get("clickFlag", ""),
+            "exclickFlag": debug.get("exclickFlag", ""),
+            "transitionFlag": debug.get("transitionFlag", ""),
+            "keycodeFlag": debug.get("keycodeFlag", ""),
+            "buttonName": debug.get("buttonName", ""),
+            "buttonClick": debug.get("buttonClick", ""),
+            "buttonEntry": debug.get("buttonEntry", ""),
+            "buttonStop": debug.get("buttonStop", ""),
+            "localInput2": debug.get("localInput2", ""),
+            "externalWaitReason": debug.get("externalWaitReason", ""),
+            "queuedCommands": debug.get("queuedCommands", 0),
+            "eventResumeStates": debug.get("eventResumeStates", 0),
+            "lastInputDebug": debug.get("lastInputDebug", ""),
+            "inputDispatchDebug": debug.get("inputDispatchDebug", ""),
+            "overrideDebug": debug.get("overrideDebug", ""),
+            "frameSerial": debug.get("frameSerial", ""),
+            "uiEvents": debug.get("uiEvents", ""),
+            "scriptStack": debug.get("scriptStack", []),
+            "touchPending": pending_touch_index,
+            "touchPendingQuarantined": pending_touch_quarantined,
+            "touchActive": active_touch_points.keys(),
+            "touchSuppressed": suppressed_touch_points.keys(),
+            "touchDelayed": delayed_touch_releases.keys(),
+            "touchSecondaryQuarantineRemainingMs": maxi(
+                0,
+                touch_secondary_quarantine_until_msec - Time.get_ticks_msec()
+            ),
+        }
+        if debug.has("commandTrace") and debug["commandTrace"] is Array:
+            var command_trace: Array = debug["commandTrace"]
+            state["commandTraceTail"] = command_trace.slice(
+                maxi(0, command_trace.size() - 6)
+            )
+        var renderer := String(player.get_renderer_info())
+        state["bridgeInputs"] = _renderer_trace_stat(renderer, "inputs")
+        state["bridgeCoalescedInputs"] = _renderer_trace_stat(
+            renderer,
+            "coalesced_inputs"
+        )
+        _log_input_diagnostic_line(
+            "artemis_input_state sequence=%d label=%s after_ms=%d tick=%d state=%s" % [
+                int(sample.get("sequence", 0)),
+                String(sample.get("label", "")),
+                int(sample.get("delay_ms", 0)),
+                tick_trace_serial,
+                JSON.stringify(state),
+            ]
+        )
+    artemis_input_trace_samples = remaining
 
 func _log_frame_probe(delta: float) -> void:
     if not frame_probe_enabled:
@@ -12131,6 +12923,14 @@ func _on_open_game() -> void:
     if detected_runtime == RUNTIME_ONSCRIPTER:
         path = _game_runtime_root(path)
         game_path.text = path
+    _load_button_position_memory(path)
+    if (
+        detected_runtime == RUNTIME_ONSCRIPTER
+        and auto_probe_clicks.is_empty()
+        and _runtime_flag("AETHERKIRI_AUTO_PROBE_REMEMBERED_CLICKS")
+    ):
+        auto_probe_clicks = remembered_button_positions.duplicate()
+        device_probe_enabled = device_probe_enabled or not auto_probe_clicks.is_empty()
 
     if not _ensure_player_initialized():
         return
@@ -12433,10 +13233,9 @@ func _game_input_content_size() -> Vector2:
     return Vector2(maxi(1, last_texture_size.x), maxi(1, last_texture_size.y))
 
 func _game_input_surface_size() -> Vector2:
-    # The engine API still consumes the runtime surface coordinate space. It
-    # can differ from the raw frame (for example 1920x1080 for an 800x600
-    # layer). DrawDevice stretches that full surface back to the layer, so
-    # input mapping must apply the inverse per-axis scale without letterboxing.
+    # The engine API consumes the runtime surface coordinate space. Artemis
+    # maps that surface to its logical frame with an aspect-fit viewport, so
+    # GameInputMapping mirrors the same letterbox transform before dispatch.
     if active_runtime_kind == RUNTIME_ONSCRIPTER:
         return _game_input_content_size()
     if current_surface_size.x > 0 and current_surface_size.y > 0:
@@ -12511,6 +13310,8 @@ func _capture_main_view(frame_stats: Dictionary) -> void:
         get_tree().quit(0 if visible > 0 else 2)
 
 func _clear_game_input_capture() -> void:
+    if game_virtual_controls != null:
+        game_virtual_controls.set_enabled(false)
     _deactivate_game_text_input()
     active_touch_points.clear()
     active_mouse_buttons.clear()
@@ -12520,15 +13321,18 @@ func _clear_game_input_capture() -> void:
     pending_touch_index = -1
     pending_touch_mapped = Vector2.ZERO
     pending_touch_down_msec = 0
-    delayed_ons_touch_releases.clear()
+    pending_touch_quarantined = false
+    delayed_touch_releases.clear()
     last_forwarded_touch_move_msec_by_id.clear()
     last_forwarded_touch_down_msec = 0
     last_forwarded_touch_up_msec = 0
+    touch_secondary_quarantine_until_msec = 0
     suppress_mouse_until_msec = 0
     present_hold_frames = 0
     last_present_hold_msec = 0
     tick_trace_until_msec = 0
     tick_trace_active_serial = 0
+    artemis_input_trace_samples.clear()
     input_trace_accum = 0.0
     input_trace_received = 0
     input_trace_forwarded = 0
@@ -13004,6 +13808,51 @@ func _parse_click_points(spec: String) -> Array[Vector2]:
             clicks.push_back(Vector2(float(parts[0]), float(parts[1])))
     return clicks
 
+func _load_button_position_memory(path: String) -> void:
+    button_position_memory_key = path.simplify_path()
+    remembered_button_positions.clear()
+    observed_button_positions.clear()
+    if not FileAccess.file_exists(BUTTON_POSITION_MEMORY_PATH):
+        return
+    var file := FileAccess.open(BUTTON_POSITION_MEMORY_PATH, FileAccess.READ)
+    if file == null:
+        return
+    var parsed = JSON.parse_string(file.get_as_text())
+    file.close()
+    if not parsed is Dictionary:
+        return
+    var raw = parsed.get(button_position_memory_key, [])
+    if not raw is Array:
+        return
+    for item in raw:
+        if item is Array and item.size() >= 2:
+            remembered_button_positions.append(Vector2(float(item[0]), float(item[1])))
+    observed_button_positions = remembered_button_positions.duplicate()
+
+func _remember_button_position(position: Vector2) -> void:
+    if active_runtime_kind != RUNTIME_ONSCRIPTER or button_position_memory_key.is_empty():
+        return
+    if observed_button_positions.size() >= 2:
+        return
+    observed_button_positions.append(position)
+    var memory: Dictionary = {}
+    if FileAccess.file_exists(BUTTON_POSITION_MEMORY_PATH):
+        var existing := FileAccess.open(BUTTON_POSITION_MEMORY_PATH, FileAccess.READ)
+        if existing != null:
+            var parsed = JSON.parse_string(existing.get_as_text())
+            existing.close()
+            if parsed is Dictionary:
+                memory = parsed
+    var saved_positions: Array = []
+    for item in observed_button_positions:
+        saved_positions.append([item.x, item.y])
+    memory[button_position_memory_key] = saved_positions
+    var output := FileAccess.open(BUTTON_POSITION_MEMORY_PATH, FileAccess.WRITE)
+    if output != null:
+        output.store_string(JSON.stringify(memory))
+        output.close()
+    remembered_button_positions = observed_button_positions.duplicate()
+
 func _runtime_string(name: String, fallback: String = "") -> String:
     var value := OS.get_environment(name)
     if not value.is_empty():
@@ -13350,6 +14199,11 @@ func _input(event: InputEvent) -> void:
         return
     if diagnostic_session != null and diagnostic_session.routes_pointer_to_marker(event):
         return
+    if (
+        game_virtual_controls != null
+        and game_virtual_controls.routes_pointer(event)
+    ):
+        return
     # Platform dialogs are real Godot Controls, matching CDialog's host-owned
     # modal. Leave their events unhandled so LineEdit/Button GUI dispatch owns
     # them, and never pass the same event through to the game.
@@ -13511,6 +14365,15 @@ func _handle_shell_scroll_input(event: InputEvent) -> bool:
     return false
 
 func _on_viewport_input(event: InputEvent) -> void:
+    if (
+        game_virtual_controls != null
+        and game_virtual_controls.owns_viewport_pointer(event)
+    ):
+        # Main._input already routed the original full-screen event. The
+        # TextureRect receives a localized copy through gui_input; routing it
+        # again would mix the two coordinate spaces and apply a second delta.
+        get_viewport().set_input_as_handled()
+        return
     if not _can_forward_game_input():
         if _is_game_pointer_event(event):
             if _is_game_input_busy():
@@ -13535,6 +14398,164 @@ func _can_forward_game_input() -> bool:
     )
     return game_running and viewport.visible and cached_startup_state == STARTUP_SUCCEEDED and not loading_blocks_input and (
         modal_layer == null or not modal_layer.visible
+    )
+
+func _sync_game_virtual_controls() -> void:
+    if game_virtual_controls == null:
+        return
+    game_virtual_controls.set_enabled(
+        _should_enable_game_virtual_controls(
+            _is_touch_platform(),
+            _can_forward_game_input(),
+            app_lifecycle_paused
+        )
+    )
+
+func _should_enable_game_virtual_controls(
+    touch_platform: bool,
+    input_ready: bool,
+    lifecycle_paused: bool
+) -> bool:
+    # Every runtime uses the same EngineApi key and pointer input contract.
+    return touch_platform and input_ready and not lifecycle_paused
+
+func _on_game_virtual_key_event(
+    pressed: bool,
+    key_code: int,
+    modifiers: int
+) -> void:
+    if player == null:
+        return
+    if pressed and not _can_forward_game_input():
+        return
+    if not pressed and not game_running:
+        return
+    var unicode_codepoint := _virtual_key_unicode(
+        pressed, key_code, modifiers
+    )
+    var result := int(player.send_key_event(
+        pressed, key_code, modifiers, unicode_codepoint
+    ))
+    input_trace_forwarded += 1
+    if result != ENGINE_RESULT_OK:
+        input_trace_send_failed += 1
+    if input_trace_enabled:
+        _write_probe_marker(
+            "game_virtual_key pressed=%s key=0x%02X modifiers=0x%02X result=%d" % [
+                str(pressed),
+                key_code,
+                modifiers,
+                result,
+            ]
+        )
+
+func _virtual_key_unicode(
+    pressed: bool,
+    key_code: int,
+    modifiers: int
+) -> int:
+    if not pressed or (modifiers & KEY_MOD_CONTROL) != 0:
+        return 0
+    if key_code >= 0x41 and key_code <= 0x5A:
+        return key_code + 0x20
+    if key_code >= 0x30 and key_code <= 0x39:
+        return key_code
+    if key_code == 0x20:
+        return key_code
+    return 0
+
+func _on_game_virtual_pointer_move(
+    screen_position: Vector2,
+    screen_delta: Vector2
+) -> void:
+    if player == null or not _can_forward_virtual_controls_input():
+        return
+    var mapped := _map_viewport_point(screen_position, true)
+    var mapped_delta := _map_viewport_delta(screen_delta)
+    _send_game_pointer_event(
+        POINTER_MOVE,
+        VIRTUAL_CONTROLS_POINTER_ID,
+        mapped.x,
+        mapped.y,
+        mapped_delta.x,
+        mapped_delta.y,
+        0
+    )
+
+func _on_game_virtual_pointer_button(
+    pressed: bool,
+    button: int,
+    modifiers: int,
+    screen_position: Vector2
+) -> void:
+    if player == null:
+        return
+    if pressed and not _can_forward_virtual_controls_input():
+        return
+    if not pressed and not game_running:
+        return
+    var mapped := _map_viewport_point(screen_position, true)
+    _send_game_pointer_event(
+        POINTER_DOWN if pressed else POINTER_UP,
+        VIRTUAL_CONTROLS_POINTER_ID,
+        mapped.x,
+        mapped.y,
+        0.0,
+        0.0,
+        button,
+        modifiers
+    )
+    if pressed:
+        _hold_next_present_after_input()
+    else:
+        _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
+
+func _on_game_virtual_pointer_scroll(
+    delta_y: float,
+    screen_position: Vector2
+) -> void:
+    if player == null or not _can_forward_virtual_controls_input():
+        return
+    var mapped := _map_viewport_point(screen_position, true)
+    _send_game_pointer_event(
+        POINTER_SCROLL,
+        VIRTUAL_CONTROLS_POINTER_ID,
+        mapped.x,
+        mapped.y,
+        0.0,
+        delta_y,
+        0
+    )
+
+func _on_game_virtual_keyboard_requested() -> void:
+    if not _can_forward_virtual_controls_input():
+        return
+    if (
+        _is_touch_platform()
+        and DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD)
+    ):
+        game_text_input_forced = true
+        var attention := Vector2i(get_viewport().get_visible_rect().get_center())
+        _show_game_virtual_keyboard(attention, {})
+        game_text_input_attention_position = attention
+        game_text_input_active = true
+    elif DisplayServer.has_feature(DisplayServer.FEATURE_IME):
+        game_text_input_forced = true
+        DisplayServer.window_set_ime_active(true)
+        game_text_input_active = true
+
+func _on_game_virtual_controls_requested() -> void:
+    if game_text_input_active or game_text_input_forced:
+        _deactivate_game_text_input()
+
+func _on_game_virtual_input_mode_changed(mode: String) -> void:
+    game_virtual_input_mode = _normalize_game_virtual_input_mode(mode)
+    _save_game_virtual_input_mode()
+
+func _can_forward_virtual_controls_input() -> bool:
+    return (
+        _can_forward_game_input()
+        and not app_lifecycle_paused
     )
 
 func _is_game_pointer_event(event: InputEvent) -> bool:
@@ -13571,6 +14592,7 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             event_type = POINTER_SCROLL
         elif mouse_button.pressed:
             active_mouse_buttons[mouse_button.button_index] = mapped
+            _remember_button_position(mapped)
         else:
             if not captured:
                 _trace_input_throttled()
@@ -13583,7 +14605,7 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             mapped.x,
             mapped.y,
             0.0,
-            -1.0 if mouse_button.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0,
+            1.0 if mouse_button.button_index == MOUSE_BUTTON_WHEEL_UP else -1.0,
             button
         )
         if event_type == POINTER_DOWN:
@@ -13640,6 +14662,21 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
                 return false
             if _handle_secondary_touch_press(pointer_id, mapped):
                 return true
+            var quarantine_remaining := touch_secondary_quarantine_until_msec - Time.get_ticks_msec()
+            if quarantine_remaining > 0:
+                # Keep the first finger pending so a second finger can still
+                # form the next two-finger gesture during the quarantine. If
+                # no second finger arrives, the pending tap is discarded on
+                # release (or when the quarantine expires) and never reaches
+                # the engine.
+                _set_pending_touch(pointer_id, mapped, true)
+                _trace_touch_route(
+                    "secondary_quarantine_pending",
+                    pointer_id,
+                    mapped,
+                    "remaining_ms=%d" % quarantine_remaining
+                )
+                return true
             if not active_touch_points.is_empty():
                 _suppress_touch_pointer(pointer_id)
                 _trace_input_throttled()
@@ -13662,6 +14699,14 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             var pending_up_mapped := _map_viewport_point(touch.position, true)
             if pending_up_mapped.x < 0.0 or pending_up_mapped.y < 0.0:
                 pending_up_mapped = pending_touch_mapped
+            if pending_touch_quarantined:
+                _clear_pending_touch()
+                _trace_touch_route(
+                    "secondary_quarantine_release",
+                    pointer_id,
+                    pending_up_mapped
+                )
+                return true
             _send_pending_touch_click(pointer_id, pending_up_mapped)
             return true
         var captured := active_touch_points.has(pointer_id)
@@ -13676,7 +14721,7 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             mapped = GameInputMapping.stable_tap_point(
                 down_mapped,
                 mapped,
-                TOUCH_DRAG_DISTANCE_THRESHOLD
+                _touch_drag_distance_threshold()
             )
         active_touch_points.erase(pointer_id)
         touch_down_points.erase(pointer_id)
@@ -13692,12 +14737,7 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
         var drag := event as InputEventScreenDrag
         suppress_mouse_until_msec = Time.get_ticks_msec() + TOUCH_MOUSE_SUPPRESS_MS
         var pointer_id := drag.index
-        var drag_distance_threshold := TOUCH_DRAG_DISTANCE_THRESHOLD
-        if _is_touch_platform() and active_runtime_kind == RUNTIME_ONSCRIPTER:
-            # ONS menus are controlled by moving a cursor and activating the
-            # item on release. The generic 18 px drag slop makes that cursor
-            # feel stationary on a touch screen, especially for small menus.
-            drag_distance_threshold = ONS_TOUCH_CURSOR_DISTANCE_THRESHOLD
+        var drag_distance_threshold := _touch_drag_distance_threshold()
         if suppressed_touch_points.has(pointer_id):
             _trace_input_throttled()
             return true
@@ -13756,7 +14796,7 @@ func _suppress_touch_pointer(pointer_id: int) -> void:
     last_forwarded_touch_move_msec_by_id.erase(pointer_id)
     _clear_pending_touch_if_matches(pointer_id)
 
-func _set_pending_touch(pointer_id: int, mapped: Vector2) -> void:
+func _set_pending_touch(pointer_id: int, mapped: Vector2, quarantined: bool = false) -> void:
     suppressed_touch_points.erase(pointer_id)
     active_touch_points.erase(pointer_id)
     touch_down_points.erase(pointer_id)
@@ -13765,11 +14805,14 @@ func _set_pending_touch(pointer_id: int, mapped: Vector2) -> void:
     pending_touch_index = pointer_id
     pending_touch_mapped = mapped
     pending_touch_down_msec = Time.get_ticks_msec()
+    pending_touch_quarantined = quarantined
+    _trace_touch_route("pending_primary", pointer_id, mapped)
 
 func _clear_pending_touch() -> void:
     pending_touch_index = -1
     pending_touch_mapped = Vector2.ZERO
     pending_touch_down_msec = 0
+    pending_touch_quarantined = false
 
 func _clear_pending_touch_if_matches(pointer_id: int) -> void:
     if pending_touch_index == pointer_id:
@@ -13779,6 +14822,15 @@ func _handle_secondary_touch_press(pointer_id: int, mapped: Vector2) -> bool:
     var now := Time.get_ticks_msec()
     if pending_touch_index >= 0 and pending_touch_index != pointer_id:
         if now - pending_touch_down_msec <= TOUCH_SECONDARY_TAP_WINDOW_MS:
+            _trace_touch_route(
+                "secondary_matches_pending",
+                pointer_id,
+                mapped,
+                "first_pid=%d age_ms=%d" % [
+                    pending_touch_index,
+                    now - pending_touch_down_msec,
+                ]
+            )
             _send_touch_secondary_click(pointer_id, mapped)
             return true
         _flush_pending_touch_press(true)
@@ -13786,6 +14838,12 @@ func _handle_secondary_touch_press(pointer_id: int, mapped: Vector2) -> bool:
 
     if active_touch_points.size() == 1 and last_forwarded_touch_down_msec > 0:
         if now - last_forwarded_touch_down_msec <= TOUCH_SECONDARY_TAP_WINDOW_MS:
+            _trace_touch_route(
+                "secondary_matches_active",
+                pointer_id,
+                mapped,
+                "age_ms=%d" % (now - last_forwarded_touch_down_msec)
+            )
             _send_touch_secondary_click(pointer_id, mapped)
             return true
     return false
@@ -13797,6 +14855,18 @@ func _flush_pending_touch_press(force: bool = false) -> bool:
     if pending_touch_index < 0:
         return false
     var now := Time.get_ticks_msec()
+    if pending_touch_quarantined:
+        if not force and now < touch_secondary_quarantine_until_msec:
+            return false
+        var quarantined_pointer_id := pending_touch_index
+        var quarantined_mapped := pending_touch_mapped
+        _clear_pending_touch()
+        _trace_touch_route(
+            "secondary_quarantine_expire",
+            quarantined_pointer_id,
+            quarantined_mapped
+        )
+        return false
     if not force and now - pending_touch_down_msec < TOUCH_SINGLE_TAP_DELAY_MS:
         return false
 
@@ -13808,8 +14878,11 @@ func _flush_pending_touch_press(force: bool = false) -> bool:
     touch_down_points[pointer_id] = mapped
     dragging_touch_points.erase(pointer_id)
     last_forwarded_touch_down_msec = now
+    _remember_button_position(mapped)
     _send_game_pointer_event(POINTER_MOVE, _touch_engine_pointer_id(pointer_id), mapped.x, mapped.y, 0.0, 0.0, 0)
     _send_game_pointer_event(POINTER_DOWN, _touch_engine_pointer_id(pointer_id), mapped.x, mapped.y, 0.0, 0.0, 0)
+    _trace_touch_route("primary_hold_down", pointer_id, mapped)
+    _queue_artemis_input_state_trace("primary_hold_down")
     _arm_tick_trace()
     _arm_black_frame_guard()
     _hold_next_present_after_input()
@@ -13820,7 +14893,7 @@ func _send_pending_touch_click(pointer_id: int, up_mapped: Vector2) -> void:
     var click_mapped := GameInputMapping.stable_tap_point(
         down_mapped,
         up_mapped,
-        TOUCH_DRAG_DISTANCE_THRESHOLD
+        _touch_drag_distance_threshold()
     )
     _clear_pending_touch()
     suppressed_touch_points.erase(pointer_id)
@@ -13830,36 +14903,40 @@ func _send_pending_touch_click(pointer_id: int, up_mapped: Vector2) -> void:
     last_forwarded_touch_move_msec_by_id.erase(pointer_id)
 
     last_forwarded_touch_down_msec = Time.get_ticks_msec()
+    _remember_button_position(click_mapped)
     _send_game_pointer_event(POINTER_MOVE, _touch_engine_pointer_id(pointer_id), click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
     _send_game_pointer_event(POINTER_DOWN, _touch_engine_pointer_id(pointer_id), click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
-    if _is_touch_platform() and active_runtime_kind == RUNTIME_ONSCRIPTER:
+    if _is_touch_platform():
         # A short tap can be released before the 90 ms gesture-disambiguation
         # window expires. Sending DOWN and UP from this callback puts both SDL
-        # events in the same frame, which ONS can miss while a timed wait is
-        # changing state. Keep one small, deterministic press pulse instead.
-        delayed_ons_touch_releases[pointer_id] = {
-            "due_msec": Time.get_ticks_msec() + ONS_TOUCH_CLICK_HOLD_MS,
+        # events in the same frame; Artemis can consume that pulse while a
+        # timed transition is changing state. Keep one small, deterministic
+        # press pulse for every mobile runtime.
+        delayed_touch_releases[pointer_id] = {
+            "due_msec": Time.get_ticks_msec() + TOUCH_CLICK_HOLD_MS,
             "mapped": click_mapped,
         }
     else:
         _send_game_pointer_event(POINTER_UP, _touch_engine_pointer_id(pointer_id), click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
         last_forwarded_touch_up_msec = Time.get_ticks_msec()
         _apply_touch_action_cooldown()
+    _trace_touch_route("primary_tap_down", pointer_id, click_mapped)
+    _queue_artemis_input_state_trace("primary_tap")
     _arm_tick_trace()
     _arm_black_frame_guard()
     _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
 
-func _flush_delayed_ons_touch_releases() -> void:
-    if delayed_ons_touch_releases.is_empty():
+func _flush_delayed_touch_releases() -> void:
+    if delayed_touch_releases.is_empty():
         return
     var now := Time.get_ticks_msec()
-    for pointer_id_variant in delayed_ons_touch_releases.keys():
+    for pointer_id_variant in delayed_touch_releases.keys():
         var pointer_id := int(pointer_id_variant)
-        var release: Dictionary = delayed_ons_touch_releases.get(pointer_id, {})
+        var release: Dictionary = delayed_touch_releases.get(pointer_id, {})
         if now < int(release.get("due_msec", now)):
             continue
-        delayed_ons_touch_releases.erase(pointer_id)
-        if not game_running or active_runtime_kind != RUNTIME_ONSCRIPTER:
+        delayed_touch_releases.erase(pointer_id)
+        if player == null:
             continue
         var mapped: Vector2 = release.get("mapped", Vector2.ZERO)
         _send_game_pointer_event(
@@ -13872,6 +14949,7 @@ func _flush_delayed_ons_touch_releases() -> void:
             0
         )
         last_forwarded_touch_up_msec = now
+        _trace_touch_route("primary_delayed_up", pointer_id, mapped)
         _apply_touch_action_cooldown()
         _arm_black_frame_guard()
         _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
@@ -13890,7 +14968,19 @@ func _send_touch_secondary_click(pointer_id: int, mapped: Vector2) -> void:
         var first_id := int(active_touch_points.keys()[0])
         var first_mapped: Vector2 = active_touch_points.get(first_id, mapped)
         click_mapped = (first_mapped + mapped) * 0.5
-        _send_game_pointer_event(POINTER_UP, _touch_engine_pointer_id(first_id), first_mapped.x, first_mapped.y, 0.0, 0.0, 0)
+        # The first finger may already have crossed the single-touch delay.
+        # Reclassifying it as a two-finger gesture must cancel that press; a
+        # normal UP would also dispatch Artemis setonpush/adv_click.
+        _send_game_pointer_event(
+            POINTER_UP,
+            _touch_engine_pointer_id(first_id),
+            first_mapped.x,
+            first_mapped.y,
+            0.0,
+            0.0,
+            0,
+            POINTER_MOD_CANCEL
+        )
         active_touch_points.erase(first_id)
         touch_down_points.erase(first_id)
         dragging_touch_points.erase(first_id)
@@ -13899,11 +14989,29 @@ func _send_touch_secondary_click(pointer_id: int, mapped: Vector2) -> void:
         last_forwarded_touch_up_msec = Time.get_ticks_msec()
 
     _suppress_touch_pointer(pointer_id)
+    _remember_button_position(click_mapped)
     _send_game_pointer_event(POINTER_MOVE, TOUCH_SECONDARY_POINTER_ID, click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
     last_forwarded_touch_down_msec = Time.get_ticks_msec()
     _send_game_pointer_event(POINTER_DOWN, TOUCH_SECONDARY_POINTER_ID, click_mapped.x, click_mapped.y, 0.0, 0.0, 1)
     _send_game_pointer_event(POINTER_UP, TOUCH_SECONDARY_POINTER_ID, click_mapped.x, click_mapped.y, 0.0, 0.0, 1)
     last_forwarded_touch_up_msec = Time.get_ticks_msec()
+    touch_secondary_quarantine_until_msec = maxi(
+        touch_secondary_quarantine_until_msec,
+        last_forwarded_touch_up_msec + TOUCH_SECONDARY_QUARANTINE_MS
+    )
+    _trace_touch_route(
+        "secondary_click",
+        pointer_id,
+        click_mapped,
+        "button=1"
+    )
+    _trace_touch_route(
+        "secondary_quarantine_arm",
+        pointer_id,
+        click_mapped,
+        "duration_ms=%d" % TOUCH_SECONDARY_QUARANTINE_MS
+    )
+    _queue_artemis_input_state_trace("secondary_click")
     _apply_touch_action_cooldown()
     _arm_tick_trace()
     _arm_black_frame_guard()
@@ -14068,6 +15176,15 @@ func _is_touch_platform() -> bool:
     var platform := OS.get_name()
     return platform == "iOS" or platform == "Android"
 
+func _touch_drag_distance_threshold() -> float:
+    if not _is_touch_platform():
+        return TOUCH_DRAG_DISTANCE_THRESHOLD
+    if active_runtime_kind == RUNTIME_ONSCRIPTER:
+        # ONS menus are controlled by moving a cursor and activating the
+        # item on release. Small touch movement should not move that cursor.
+        return ONS_TOUCH_CURSOR_DISTANCE_THRESHOLD
+    return TOUCH_DRAG_DISTANCE_THRESHOLD
+
 func _deactivate_game_text_input() -> void:
     if game_text_input_active:
         if (
@@ -14078,6 +15195,7 @@ func _deactivate_game_text_input() -> void:
         elif DisplayServer.has_feature(DisplayServer.FEATURE_IME):
             DisplayServer.window_set_ime_active(false)
     game_text_input_active = false
+    game_text_input_forced = false
     game_text_input_attention_position = Vector2i(-1, -1)
     game_text_input_reopen_requested = false
 
@@ -14111,6 +15229,10 @@ func _show_game_virtual_keyboard(attention_position: Vector2i, state: Dictionary
     game_text_input_last_show_msec = Time.get_ticks_msec()
 
 func _sync_game_text_input_state() -> void:
+    if game_text_input_forced:
+        if game_text_input_suspended or not _can_forward_game_input():
+            _deactivate_game_text_input()
+        return
     if game_text_input_suspended or not _can_forward_game_input():
         _deactivate_game_text_input()
         return

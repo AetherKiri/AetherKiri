@@ -51,8 +51,12 @@ namespace PSB {
          * @param filePath
          */
         bool loadPSBFile(const ttstr &filePath);
-        bool loadPSBData(const void *data, size_t size,
-                         const ttstr &sourceName);
+        // `loadResources=false` is useful for metadata-only consumers (for
+        // example gallery indexes) that need the object tree but not the
+        // potentially hundreds of megabytes of embedded image chunks.  Keep
+        // the default unchanged for normal PSB decoding.
+        bool loadPSBData(const void *data, size_t size, const ttstr &sourceName,
+                         bool loadResources = true);
         /**
          * Load a string based on index, lift stream Position
          */
@@ -80,6 +84,15 @@ namespace PSB {
 
         [[nodiscard]] const std::shared_ptr<IPSBValue> &getRootValue() const {
             return _root;
+        }
+
+        [[nodiscard]] const tTJSVariant &getCompatRoot() const {
+            return _compatRoot;
+        }
+
+        [[nodiscard]] bool hasCompatRoot() const {
+            return _compatRoot.Type() == tvtObject &&
+                _compatRoot.AsObjectNoAddRef() != nullptr;
         }
 
         [[nodiscard]] PSBSpec getPlatform() const {
@@ -117,6 +130,7 @@ namespace PSB {
         PreParseCallback _preParseCallback;
         PSBHeader _header{};
         std::shared_ptr<IPSBValue> _root{};
+        tTJSVariant _compatRoot{};
         std::shared_ptr<const std::vector<std::uint8_t>> _objectImage;
         PSBType _type{ PSBType::PSB };
 

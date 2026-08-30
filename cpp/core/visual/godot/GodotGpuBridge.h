@@ -153,6 +153,22 @@ enum TVPGodotGpuBlendMode : uint32_t {
     TVP_GODOT_GPU_BLEND_ALPHA_D_MASK_MULTIPLY = 21,
     // Threshold-mask src1 at alpha 64, then AlphaBlend_d it into dst.
     TVP_GODOT_GPU_BLEND_ALPHA_D_MASK_THRESHOLD = 22,
+    // Apply an 8-bit glyph mask using KiriKiri additive-alpha color mapping.
+    TVP_GODOT_GPU_BLEND_APPLY_COLOR_MAP_A = 23,
+    // Composite an additive-alpha source while preserving destination alpha.
+    TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA = 24,
+    TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA_A = 25,
+    // Symmetric box blur. The x radius is passed in opacity and the y radius
+    // in the low byte of color; this reuses the stable blend callback ABI.
+    TVP_GODOT_GPU_BLEND_BOX_BLUR_ALPHA = 26,
+    // Copy RGB from the source and force destination alpha to opaque.
+    TVP_GODOT_GPU_BLEND_COPY_OPAQUE = 27,
+    // Photoshop soft-light blend, preserving destination alpha.
+    TVP_GODOT_GPU_BLEND_PS_SOFT_LIGHT = 28,
+    // Convert straight-alpha RGB to additive/premultiplied-alpha RGB in place.
+    TVP_GODOT_GPU_BLEND_ALPHA_TO_ADDITIVE_ALPHA = 29,
+    // Convert additive/premultiplied-alpha RGB to straight-alpha RGB in place.
+    TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA_TO_ALPHA = 30,
     // draw_triangles is shared by Cubism (whose low bits describe Cubism
     // colour/alpha modes) and KiriKiri (whose low bits are the modes above).
     // Tag the latter so AlphaBlend/AlphaBlend_d are not mistaken for Cubism

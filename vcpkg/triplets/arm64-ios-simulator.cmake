@@ -5,6 +5,7 @@ set(VCPKG_CMAKE_SYSTEM_NAME iOS)
 set(VCPKG_OSX_SYSROOT iphonesimulator)
 set(VCPKG_OSX_DEPLOYMENT_TARGET 16.0)
 set(VCPKG_OSX_ARCHITECTURES arm64)
+set(VCPKG_MESON_CROSS_FILE "${CMAKE_CURRENT_LIST_DIR}/../meson/ios-cross.ini")
 
 # Fix autotools cross-compilation detection for iOS Simulator.
 # Apple Silicon hosts and arm64 simulator targets otherwise both appear as

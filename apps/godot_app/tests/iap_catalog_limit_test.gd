@@ -47,6 +47,8 @@ func _initialize() -> void:
     assert(app._selected_game_uses_beta_provider())
     probe_player.scores = {"fake": 120}
     assert(not app._selected_game_uses_beta_provider())
+    assert(not app._beta_access_enforcement_enabled("Android"))
+    assert(not app._beta_access_enforcement_enabled("iOS"))
 
     var settings_action := Button.new()
     app._configure_settings_action_button(settings_action)

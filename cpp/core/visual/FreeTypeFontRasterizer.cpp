@@ -81,10 +81,20 @@ void FreeTypeFontRasterizer::ApplyFaceOptions(tFreeTypeFace *face) {
 }
 
 void FreeTypeFontRasterizer::ClearFallbackFaces() {
-    for(auto *face : FaceFallbacks) {
-        delete face;
-    }
     FaceFallbacks.clear();
+}
+
+class tFreeTypeFace *FreeTypeFontRasterizer::GetOrCreateFace(
+    const ttstr &name, tjs_uint32 options) {
+    const std::string key = name.AsStdString() + "|" +
+        std::to_string(options);
+    auto found = FaceCache.find(key);
+    if(found != FaceCache.end())
+        return found->second.get();
+    auto face = std::make_unique<tFreeTypeFace>(name, options);
+    auto *result = face.get();
+    FaceCache.emplace(key, std::move(face));
+    return result;
 }
 
 void FreeTypeFontRasterizer::ApplyFallbackFaces() {
@@ -112,7 +122,7 @@ void FreeTypeFontRasterizer::ApplyFallbackFaces() {
     }
 
     for(const auto &name : candidates) {
-        auto *fallback = new tFreeTypeFace(name, 0);
+        auto *fallback = GetOrCreateFace(name, 0);
         ApplyFaceOptions(fallback);
         FaceFallbacks.emplace_back(fallback);
     }
@@ -125,9 +135,9 @@ FreeTypeFontRasterizer::FreeTypeFontRasterizer() :
 FreeTypeFontRasterizer::~FreeTypeFontRasterizer() {
     std::lock_guard<std::recursive_mutex> stateLock(Mutex);
 
-    delete Face;
     Face = nullptr;
     ClearFallbackFaces();
+    FaceCache.clear();
 }
 void FreeTypeFontRasterizer::AddRef() { RefCount++; }
 //---------------------------------------------------------------------------
@@ -136,9 +146,9 @@ void FreeTypeFontRasterizer::Release() {
     LastBitmap = nullptr;
     if(RefCount == 0) {
 
-        delete Face;
         Face = nullptr;
         ClearFallbackFaces();
+        FaceCache.clear();
         delete this;
     }
 }
@@ -168,14 +178,12 @@ void FreeTypeFontRasterizer::ApplyFont(const tTVPFont &font) {
     bool recreate = false;
     if(Face) {
         if(Face->GetFontName() != stdname) {
-            delete Face;
-            Face = nullptr;
             ClearFallbackFaces();
-            Face = new tFreeTypeFace(stdname, opt);
+            Face = GetOrCreateFace(stdname, opt);
             recreate = true;
         }
     } else {
-        Face = new tFreeTypeFace(stdname, opt);
+        Face = GetOrCreateFace(stdname, opt);
         ClearFallbackFaces();
         recreate = true;
     }

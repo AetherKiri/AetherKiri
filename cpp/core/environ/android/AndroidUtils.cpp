@@ -1,5 +1,5 @@
 #include "AndroidUtils.h"
-#include <unzip.h>
+#include <minizip/unzip.h>
 #include "zlib.h"
 #include <map>
 #include <string>

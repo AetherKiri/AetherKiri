@@ -582,7 +582,14 @@ bool StoreLatestCpuFrameFromTexture(iTVPTexture2D *tex) {
     if (tw == 0 || th == 0) return false;
 
     const uint32_t dst_stride = static_cast<uint32_t>(tw * 4u);
-    std::vector<uint8_t> frame(static_cast<size_t>(dst_stride) * th);
+    // Keep a reusable staging buffer on the render thread.  This function is
+    // called once per presented frame; constructing a fresh multi-megapixel
+    // vector every time caused allocator churn and page zeroing before the
+    // frame was even handed to the host.  Swapping it into the protected
+    // front buffer leaves the previous front allocation in this TLS buffer,
+    // ready for the next frame without changing the reader's locking rules.
+    static thread_local std::vector<uint8_t> frame;
+    frame.resize(static_cast<size_t>(dst_stride) * th);
     const tjs_int src_pitch = tex->GetPitch();
     const void *pixel_data = tex->GetPixelData();
     if (pixel_data) {

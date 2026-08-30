@@ -13,8 +13,10 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdlib>
+#include <cctype>
 #include <stdexcept>
 #include <memory>
+#include <mutex>
 #include <string>
 #include "StorageIntf.h"
 #include "tjsUtils.h"
@@ -244,7 +246,60 @@ bool TVPIsSplitEmoteVirtualStorage(const ttstr &name) {
     return storage.size() > 3 &&
         storage.compare(storage.size() - 3, 3, "emo") == 0;
 }
+
+// AffineSourceVector treats solid_<colour>.emf/.wmf as virtual vector images.
+// They deliberately have no archive entry; the layerExDraw backend
+// materialises the solid ARGB source when GdiPlus.Image.load() is called.
+// Advertising only the supported naming protocol here lets KAG's normal
+// getExistImageName() path select the vector source without pretending that
+// arbitrary missing EMF/WMF files exist.
+bool TVPIsVirtualSolidVectorStorageImpl(const ttstr &name) {
+    std::string storage = TVPExtractStorageName(name).AsStdString();
+    if(storage.empty()) {
+        storage = name.AsStdString();
+        const auto slash = storage.find_last_of("/\\");
+        if(slash != std::string::npos) {
+            storage = storage.substr(slash + 1);
+        }
+    }
+    std::transform(storage.begin(), storage.end(), storage.begin(),
+                   [](unsigned char ch) {
+                       return static_cast<char>(std::tolower(ch));
+                   });
+
+    const auto dot = storage.find_last_of('.');
+    if(dot == std::string::npos) {
+        return false;
+    }
+    const std::string ext = storage.substr(dot);
+    if(ext != ".emf" && ext != ".wmf") {
+        return false;
+    }
+    storage.resize(dot);
+    constexpr const char prefix[] = "solid_";
+    if(storage.rfind(prefix, 0) != 0 || storage.size() <= sizeof(prefix) - 1) {
+        return false;
+    }
+
+    std::string token = storage.substr(sizeof(prefix) - 1);
+    if(token == "black" || token == "white" || token == "transparent") {
+        return true;
+    }
+    if(!token.empty() && token.front() == '#') {
+        token.erase(token.begin());
+    } else if(token.size() > 2 && token[0] == '0' && token[1] == 'x') {
+        token.erase(0, 2);
+    }
+    return (token.size() == 6 || token.size() == 8) &&
+        std::all_of(token.begin(), token.end(), [](unsigned char ch) {
+            return std::isxdigit(ch) != 0;
+        });
+}
 } // namespace
+
+bool TVPIsVirtualSolidVectorStorage(const ttstr &name) {
+    return TVPIsVirtualSolidVectorStorageImpl(name);
+}
 
 //---------------------------------------------------------------------------
 // global variables
@@ -260,6 +315,73 @@ tjs_char TVPArchiveDelimiter = '>';
 // statics
 //---------------------------------------------------------------------------
 static tTJSStaticCriticalSection TVPCreateStreamCS;
+
+// Private plug-ins can publish a logical-storage resolver without making the
+// public storage layer know any game-specific filenames. Keep the callback
+// list here so placement and stream opening observe the same result. A
+// recursion guard lets a resolver probe a concrete candidate through the
+// normal storage APIs safely.
+static std::mutex TVPStorageResolverMutex;
+static std::vector<tTVPStorageResolver> TVPStorageResolvers;
+static thread_local unsigned int TVPStorageResolverDepth = 0;
+
+static bool TVPResolveStorageName(const ttstr &requested, ttstr &resolved) {
+    if(requested.IsEmpty() || TVPStorageResolverDepth != 0)
+        return false;
+
+    std::vector<tTVPStorageResolver> resolvers;
+    {
+        std::lock_guard<std::mutex> lock(TVPStorageResolverMutex);
+        resolvers = TVPStorageResolvers;
+    }
+
+    if(TVPStorageTraceEnabled() && TVPStorageTraceName(requested) &&
+       requested.AsStdString().find("__pack") != std::string::npos) {
+        spdlog::info("StorageTrace resolver-attempt request={} count={}",
+                     requested.AsStdString(), resolvers.size());
+    }
+
+    ++TVPStorageResolverDepth;
+    for(const auto resolver : resolvers) {
+        if(resolver == nullptr)
+            continue;
+        ttstr candidate;
+        bool handled = false;
+        try {
+            handled = resolver(requested, candidate);
+        } catch(...) {
+            // A compatibility resolver must not make ordinary storage lookup
+            // fail. Its own diagnostic, if any, remains in the plugin log.
+            handled = false;
+        }
+        if(handled && !candidate.IsEmpty() && candidate != requested) {
+            resolved = candidate;
+            --TVPStorageResolverDepth;
+            return true;
+        }
+    }
+    --TVPStorageResolverDepth;
+    return false;
+}
+
+void TVPRegisterStorageResolver(tTVPStorageResolver resolver) {
+    if(resolver == nullptr)
+        return;
+    std::lock_guard<std::mutex> lock(TVPStorageResolverMutex);
+    if(std::find(TVPStorageResolvers.begin(), TVPStorageResolvers.end(),
+                 resolver) == TVPStorageResolvers.end())
+        TVPStorageResolvers.push_back(resolver);
+}
+
+void TVPUnregisterStorageResolver(tTVPStorageResolver resolver) {
+    if(resolver == nullptr)
+        return;
+    std::lock_guard<std::mutex> lock(TVPStorageResolverMutex);
+    TVPStorageResolvers.erase(
+        std::remove(TVPStorageResolvers.begin(), TVPStorageResolvers.end(),
+                    resolver),
+        TVPStorageResolvers.end());
+}
 //---------------------------------------------------------------------------
 
 static bool TVPIsGfxEffectCompanionScript(const ttstr &name) {
@@ -1422,6 +1544,90 @@ static ttstr TVPFindExactArchiveAutoPath(const ttstr &normalized) {
     return {};
 }
 
+// Older KAG save screens stored their continue/quick-save/slot screenshots as
+// BMPs, while newer scripts may probe the same basename with a JPG suffix.
+// Keep this compatibility rule at storage resolution so an existence probe
+// and the subsequent graphic load observe the same legacy file.  The
+// basename and savedata directory checks are deliberately narrow; ordinary
+// game resources must retain the normal explicit-extension semantics.
+static bool TVPStorageNameLooksLegacySaveThumbnail(const ttstr &name) {
+    const ttstr file_name = TVPExtractStorageName(name);
+    std::string file = TVPChopStorageExt(file_name).AsStdString();
+    std::transform(file.begin(), file.end(), file.begin(),
+                   [](unsigned char ch) {
+                       return static_cast<char>(std::tolower(ch));
+                   });
+
+    bool known_save_name = file == "data_continue";
+    if(!known_save_name && file.rfind("data_quick_", 0) == 0) {
+        const std::string slot = file.substr(std::strlen("data_quick_"));
+        known_save_name = !slot.empty() &&
+            std::all_of(slot.begin(), slot.end(),
+                        [](unsigned char ch) { return std::isdigit(ch); });
+    }
+    if(!known_save_name && file.rfind("data_", 0) == 0) {
+        const std::size_t separator = file.find('_', 5);
+        if(separator > 5 && separator + 1 < file.size()) {
+            const std::string save = file.substr(5, separator - 5);
+            const std::string slot = file.substr(separator + 1);
+            known_save_name =
+                std::all_of(save.begin(), save.end(),
+                            [](unsigned char ch) { return std::isdigit(ch); }) &&
+                std::all_of(slot.begin(), slot.end(),
+                            [](unsigned char ch) { return std::isdigit(ch); });
+        }
+    }
+    if(!known_save_name)
+        return false;
+
+    std::string path = TVPExtractStoragePath(name).AsStdString();
+    std::transform(path.begin(), path.end(), path.begin(),
+                   [](unsigned char ch) {
+                       return static_cast<char>(std::tolower(ch));
+                   });
+    return path.find("savedata") != std::string::npos;
+}
+
+ttstr TVPFindLegacySaveThumbnail(const ttstr &name) {
+    if(!TVPStorageNameLooksLegacySaveThumbnail(name))
+        return {};
+
+    const ttstr normalized = TVPNormalizeStorageName(name);
+
+    const ttstr ext = TVPExtractStorageExt(normalized);
+    if(ext.IsEmpty())
+        return {}; // extensionless requests already use graphic guessing
+
+    static constexpr const char *raster_extensions[] = {
+        ".bmp",  ".jpg",  ".jpeg", ".png",  ".tlg",  ".tlg5", ".tlg6",
+        ".webp", ".jxr",  ".bpg",  ".pvr",  ".jif",  ".dib",  ".amv",
+    };
+    std::string requested_ext = ext.AsStdString();
+    std::transform(requested_ext.begin(), requested_ext.end(),
+                   requested_ext.begin(), [](unsigned char ch) {
+                       return static_cast<char>(std::tolower(ch));
+                   });
+    bool known_raster = false;
+    for(const char *candidate : raster_extensions) {
+        if(requested_ext == candidate) {
+            known_raster = true;
+            break;
+        }
+    }
+    if(!known_raster)
+        return {}; // never alias a save-state or metadata file to an image
+
+    const ttstr stem = TVPChopStorageExt(normalized);
+    for(const char *extension : raster_extensions) {
+        const ttstr candidate = stem + ttstr(extension);
+        if(candidate == normalized ||
+           !TVPIsRealStorageNoSearchNoNormalize(candidate))
+            continue;
+        return candidate;
+    }
+    return {};
+}
+
 //---------------------------------------------------------------------------
 void TVPAddAutoPath(const ttstr &name) {
     tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
@@ -1673,6 +1879,26 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
         }
     }
 
+    // Give private compatibility plug-ins one chance to translate a logical
+    // storage name (for example a PackinOne virtual UI atlas) to a concrete
+    // archive entry. This runs before the placement lock and miss cache: a
+    // resolver may safely probe the concrete candidate through normal storage
+    // APIs, and a previous miss cannot hide a later plugin registration.
+    ttstr resolved;
+    if(TVPResolveStorageName(name, resolved)) {
+        ttstr placed = TVPGetPlacedPath(resolved);
+        if(!placed.IsEmpty()) {
+            TVPAutoPathCache.Add(name, placed);
+            if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
+                spdlog::info(
+                    "StorageTrace resolver request={} resolved={} placed={}",
+                    name.AsStdString(), resolved.AsStdString(),
+                    placed.AsStdString());
+            }
+            return placed;
+        }
+    }
+
     ttstr *incache = TVPAutoPathCache.FindAndTouch(name);
     if(incache) {
         if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
@@ -1695,6 +1921,21 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
                          name.AsStdString(), normalized.AsStdString());
         }
         return normalized;
+    }
+
+    // Preserve the old save-thumbnail convention when a script explicitly
+    // asks for a missing raster suffix (for example data_quick_01.jpg) but
+    // only the same-stem BMP is present in savedata/. This must happen before
+    // the normal auto-path miss is cached, otherwise the failed JPG probe
+    // would prevent the legacy candidate from being considered later.
+    if(ttstr legacy = TVPFindLegacySaveThumbnail(normalized);
+       !legacy.IsEmpty()) {
+        if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
+            spdlog::info(
+                "StorageTrace legacy save thumbnail request={} resolved={}",
+                name.AsStdString(), legacy.AsStdString());
+        }
+        return legacy;
     }
 
     // A normalized project-relative path cannot be opened directly when the
@@ -1824,6 +2065,13 @@ ttstr TVPSearchPlacedPath(const ttstr &name) {
 // TVPIsExistentStorage
 //---------------------------------------------------------------------------
 bool TVPIsExistentStorage(const ttstr &name) {
+    if(TVPIsVirtualSolidVectorStorage(name)) {
+        if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
+            spdlog::info("StorageTrace virtual solid-vector exists request={}",
+                         name.AsStdString());
+        }
+        return true;
+    }
     if(!TVPGetPlacedPath(name).IsEmpty())
         return true;
     if(TVPIsSplitEmoteVirtualStorage(name))
@@ -1873,6 +2121,11 @@ static tTJSBinaryStream *_TVPCreateStream(const ttstr &_name,
                                           tjs_uint32 flags) {
     tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
 
+    if(std::getenv("AETHERKIRI_STORAGE_TRACE") != nullptr &&
+       _name.AsStdString().find("langselect_auto.func") != std::string::npos)
+        spdlog::info("StorageTrace create-stream request={} flags={}",
+                     _name.AsStdString(), flags);
+
     ttstr name;
 
     tjs_uint32 access = flags & TJS_BS_ACCESS_MASK;
@@ -1881,6 +2134,11 @@ static tTJSBinaryStream *_TVPCreateStream(const ttstr &_name,
         name = TVPNormalizeStorageName(_name);
     else
         name = TVPGetPlacedPath(_name); // file must exist
+
+    if(std::getenv("AETHERKIRI_STORAGE_TRACE") != nullptr &&
+       _name.AsStdString().find("langselect_auto.func") != std::string::npos)
+        spdlog::info("StorageTrace create-stream placed={} access={}",
+                     name.AsStdString(), access);
 
     if(TVPSaveTraceEnabled() && access != TJS_BS_READ) {
         spdlog::info("SaveTrace TVPCreateStream request={} normalized={} flags={} access={}",

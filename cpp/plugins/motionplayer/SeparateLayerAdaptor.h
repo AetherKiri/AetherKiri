@@ -35,6 +35,8 @@ namespace motion {
         // Aligned to libkrkr2.so SeparateLayerAdaptor_ncb_registerMembers (0x6ABFAC)
         bool getAbsolute() const { return _absolute; }
         void setAbsolute(bool v) { _absolute = v; }
+        // Compatibility property only. Rendering remains parented to the
+        // constructor owner, matching krkrsdl3's immutable private child.
         tTJSVariant getTargetLayer() const { return _targetLayer; }
         void setTargetLayer(tTJSVariant v) { _targetLayer = v; }
 

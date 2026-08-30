@@ -102,6 +102,7 @@ void aether_native_launch_file_picker_free_string(char *value);
 
 #if defined(__ANDROID__)
 #include <jni.h>
+#include <android/log.h>
 
 extern JNIEnv* krkr_GetJNIEnv();
 extern jobject krkr_GetApplicationContext();
@@ -114,7 +115,24 @@ void RegisterAetherInternalFrameEffects();
 void UnregisterAetherInternalFrameEffects();
 #endif
 
+#if defined(AETHERKIRI_INTERNAL_UNLOCK_GATE)
+int32_t AetherInternalVerifyUnlockSecret(const char *candidate_utf8);
+#endif
+
 namespace {
+
+#if defined(__ANDROID__)
+void AndroidBridgeLog(const char *format, ...) {
+    char buffer[1024];
+    va_list args;
+    va_start(args, format);
+    std::vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    __android_log_write(ANDROID_LOG_INFO, "AetherKiriBridge", buffer);
+}
+#else
+void AndroidBridgeLog(const char *, ...) {}
+#endif
 
 struct GodotGpuTextureRecord {
     RID rid;
@@ -200,6 +218,10 @@ struct GodotGpuOp {
     RID src3;
     RID dst;
     PackedByteArray data;
+    uint32_t profile_width = 0;
+    uint32_t profile_height = 0;
+    double profile_pack_ms = 0.0;
+    std::chrono::steady_clock::time_point profile_enqueued_at{};
     std::shared_ptr<ArtemisGpuShaderRequest> artemis_shader;
     std::vector<float> vertices;
     Color clear_color;
@@ -280,6 +302,54 @@ constexpr uint32_t kGodotGpuPreserveMinifiedDetail = 0x40000000u;
 
 constexpr auto kGodotGpuSyncWaitTimeout = std::chrono::milliseconds(900);
 
+bool GodotGpuTextureProfileEnabled() {
+    static const bool enabled = [] {
+        const char *value =
+            std::getenv("AETHERKIRI_GODOT_TEXTURE_PROFILE");
+        if (value != nullptr && value[0] != '\0') {
+            return std::strcmp(value, "0") != 0;
+        }
+        value = std::getenv("AETHERKIRI_MOTION_RENDER_PROFILE");
+        return value != nullptr && value[0] != '\0' &&
+               std::strcmp(value, "0") != 0;
+    }();
+    return enabled;
+}
+
+double GodotGpuTextureProfileSlowMs() {
+    static const double threshold = [] {
+        const char *value =
+            std::getenv("AETHERKIRI_GODOT_TEXTURE_SLOW_MS");
+        if (value == nullptr || value[0] == '\0') return 5.0;
+        char *end = nullptr;
+        const double parsed = std::strtod(value, &end);
+        return end != value && std::isfinite(parsed) && parsed > 0.0
+                   ? parsed
+                   : 5.0;
+    }();
+    return threshold;
+}
+
+void LogGodotGpuUpdateProfile(const char *phase, uint32_t width,
+                              uint32_t height, size_t bytes, double elapsed_ms,
+                              double pack_ms, double queue_ms, bool result,
+                              bool on_render_thread) {
+    if (!GodotGpuTextureProfileEnabled() ||
+        elapsed_ms < GodotGpuTextureProfileSlowMs()) {
+        return;
+    }
+    std::ostringstream message;
+    message << std::fixed << std::setprecision(3)
+            << "godot gpu update profile: phase="
+            << (phase != nullptr ? phase : "unknown")
+            << " elapsed_ms=" << elapsed_ms << " pack_ms=" << pack_ms
+            << " queue_ms=" << queue_ms << " size=" << width << "x"
+            << height << " bytes=" << bytes << " result="
+            << (result ? 1 : 0) << " render_thread="
+            << (on_render_thread ? 1 : 0);
+    UtilityFunctions::print(String(message.str().c_str()));
+}
+
 bool GodotGpuBarrierShadowEnabled() {
     static const bool enabled = [] {
         const char *value =
@@ -296,7 +366,10 @@ bool Live2DHardwareRasterEnabled() {
         if (value != nullptr && value[0] != '\0') {
             return std::strcmp(value, "0") != 0;
         }
-#if defined(__APPLE__)
+        // Apple and Android both use the Godot RenderingDevice path for Live2D
+        // triangle rasterization. Keep the opt-out available for driver
+        // diagnostics.
+#if defined(__APPLE__) || defined(__ANDROID__)
         return true;
 #else
         return false;
@@ -320,6 +393,7 @@ void EnqueueGodotGpuOpLocked(const std::shared_ptr<GodotGpuOp> &op) {
 #if defined(__ANDROID__)
 constexpr int kAndroidFlagActivityNewTask = 0x10000000;
 constexpr int kAndroidPermissionGranted = 0;
+constexpr int kAndroidStoragePermissionRequestCode = 1301;
 
 void AndroidLogPrintf(const char *level, const char *format, ...) {
 #if !defined(NDEBUG)
@@ -339,6 +413,31 @@ void AndroidLogPrintf(const char *level, const char *format, ...) {
 
 #define AK_ANDROID_LOGI(...) AndroidLogPrintf("info", __VA_ARGS__)
 #define AK_ANDROID_LOGW(...) AndroidLogPrintf("warn", __VA_ARGS__)
+
+struct AndroidGodotStoragePermissionState {
+    bool read = false;
+    bool write = false;
+    bool manage = false;
+};
+
+AndroidGodotStoragePermissionState AndroidGetGodotStoragePermissionState() {
+    AndroidGodotStoragePermissionState state;
+    OS *os = OS::get_singleton();
+    if (os == nullptr) {
+        AK_ANDROID_LOGW("storage permission Godot OS unavailable");
+        return state;
+    }
+
+    const PackedStringArray granted = os->get_granted_permissions();
+    state.read = granted.has(String("android.permission.READ_EXTERNAL_STORAGE"));
+    state.write = granted.has(String("android.permission.WRITE_EXTERNAL_STORAGE"));
+    state.manage = granted.has(String("android.permission.MANAGE_EXTERNAL_STORAGE"));
+    AK_ANDROID_LOGI(
+        "storage permission Godot OS state read=%d write=%d manage=%d count=%d",
+        state.read ? 1 : 0, state.write ? 1 : 0, state.manage ? 1 : 0,
+        granted.size());
+    return state;
+}
 
 JavaClassWrapper *AndroidJavaWrapper() {
     JavaClassWrapper *wrapper = JavaClassWrapper::get_singleton();
@@ -518,6 +617,8 @@ void AndroidClearJniException(JNIEnv *env) {
         env->ExceptionClear();
     }
 }
+
+int AndroidGetSdkInt();
 
 void AndroidDeleteLocalRef(JNIEnv *env, jobject ref) {
     if (env != nullptr && ref != nullptr) {
@@ -758,6 +859,8 @@ bool AndroidHasRuntimePermission(const char *permission) {
                                           permission_string);
     const bool ok =
         !env->ExceptionCheck() && result == kAndroidPermissionGranted;
+    AK_ANDROID_LOGI("storage permission check permission=%s result=%d granted=%d",
+                    permission, static_cast<int>(result), ok ? 1 : 0);
     AndroidClearJniException(env);
     env->DeleteLocalRef(permission_string);
     env->DeleteLocalRef(context_class);
@@ -765,14 +868,108 @@ bool AndroidHasRuntimePermission(const char *permission) {
     return ok;
 }
 
+bool AndroidRequestRuntimeStoragePermissions() {
+    JNIEnv *env = krkr_GetJNIEnv();
+    if (env == nullptr) {
+        AK_ANDROID_LOGW("storage permission request failed: no JNI env");
+        return false;
+    }
+
+    jobject activity = AndroidGetGodotActivityLocal(env);
+    if (activity == nullptr) {
+        AK_ANDROID_LOGW("storage permission request failed: no activity");
+        return false;
+    }
+
+    jclass activity_class = env->FindClass("android/app/Activity");
+    if (activity_class == nullptr) {
+        AndroidClearJniException(env);
+        env->DeleteLocalRef(activity);
+        AK_ANDROID_LOGW("storage permission request failed: Activity unavailable");
+        return false;
+    }
+
+    jmethodID request_permissions = env->GetMethodID(
+        activity_class, "requestPermissions", "([Ljava/lang/String;I)V");
+    jclass string_class = env->FindClass("java/lang/String");
+    if (request_permissions == nullptr || string_class == nullptr) {
+        AndroidClearJniException(env);
+        AndroidDeleteLocalRef(env, string_class);
+        env->DeleteLocalRef(activity_class);
+        env->DeleteLocalRef(activity);
+        AK_ANDROID_LOGW("storage permission request failed: requestPermissions unavailable");
+        return false;
+    }
+
+    constexpr const char *permissions[] = {
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+    };
+    constexpr jsize permission_count =
+        static_cast<jsize>(sizeof(permissions) / sizeof(permissions[0]));
+    jobjectArray permission_array = env->NewObjectArray(
+        permission_count, string_class, nullptr);
+    if (permission_array == nullptr) {
+        AndroidClearJniException(env);
+        env->DeleteLocalRef(string_class);
+        env->DeleteLocalRef(activity_class);
+        env->DeleteLocalRef(activity);
+        AK_ANDROID_LOGW("storage permission request failed: permission array unavailable");
+        return false;
+    }
+
+    for (jsize index = 0; index < permission_count; ++index) {
+        jstring permission = env->NewStringUTF(permissions[index]);
+        if (permission == nullptr) {
+            AndroidClearJniException(env);
+            env->DeleteLocalRef(permission_array);
+            env->DeleteLocalRef(string_class);
+            env->DeleteLocalRef(activity_class);
+            env->DeleteLocalRef(activity);
+            AK_ANDROID_LOGW("storage permission request failed: permission string unavailable");
+            return false;
+        }
+        env->SetObjectArrayElement(permission_array, index, permission);
+        env->DeleteLocalRef(permission);
+    }
+
+    env->CallVoidMethod(activity, request_permissions, permission_array,
+                        kAndroidStoragePermissionRequestCode);
+    const bool ok = !env->ExceptionCheck();
+    AK_ANDROID_LOGI(
+        "storage permission runtime request sdk=%d permissions=READ,WRITE dispatched=%d",
+        AndroidGetSdkInt(), ok ? 1 : 0);
+    AndroidClearJniException(env);
+    env->DeleteLocalRef(permission_array);
+    env->DeleteLocalRef(string_class);
+    env->DeleteLocalRef(activity_class);
+    env->DeleteLocalRef(activity);
+    AK_ANDROID_LOGI("storage permission runtime request result=%d", ok ? 1 : 0);
+    return ok;
+}
+
 bool AndroidHasExternalStoragePermission() {
+    const AndroidGodotStoragePermissionState godot_state =
+        AndroidGetGodotStoragePermissionState();
+    if (godot_state.read || godot_state.write || godot_state.manage) {
+        AK_ANDROID_LOGI("storage permission effective granted via Godot OS");
+        return true;
+    }
+
     const int sdk = AndroidGetSdkInt();
     if (sdk > 0 && sdk < 23) {
         return true;
     }
     if (sdk > 0 && sdk < 30) {
-        return AndroidHasRuntimePermission(
-            "android.permission.READ_EXTERNAL_STORAGE");
+        AK_ANDROID_LOGI(
+            "storage permission state sdk=%d read=%d write=%d effective_read=0",
+            sdk, godot_state.read ? 1 : 0, godot_state.write ? 1 : 0);
+        return false;
+    }
+    if (sdk <= 0) {
+        AK_ANDROID_LOGW(
+            "storage permission state unavailable: Android SDK/JNI not ready");
+        return false;
     }
 
     const int java_result = AndroidHasExternalStoragePermissionViaGodotJava();
@@ -934,14 +1131,37 @@ bool AndroidStartSettingsIntent(JNIEnv *env, jobject context, const char *action
 }
 
 bool AndroidRequestExternalStoragePermission() {
+    const AndroidGodotStoragePermissionState before =
+        AndroidGetGodotStoragePermissionState();
+    if (before.read || before.write || before.manage) {
+        AK_ANDROID_LOGI("storage permission already granted");
+        return true;
+    }
+
+    // Calling through Godot's OS keeps this path on the Activity that owns
+    // the current Godot instance. This is important on Android 6-9, where
+    // the extension may be loaded as an ELF dependency and JNI_OnLoad is not
+    // guaranteed to have run for engine_api.so yet.
+    OS *os = OS::get_singleton();
+    if (os != nullptr) {
+        const bool dispatched = os->request_permissions();
+        AK_ANDROID_LOGI(
+            "storage permission request via Godot OS dispatched=%d",
+            dispatched ? 1 : 0);
+        if (dispatched) {
+            const int sdk = AndroidGetSdkInt();
+            if (sdk <= 0 || sdk < 30) {
+                return true;
+            }
+        }
+    }
+
     const int sdk = AndroidGetSdkInt();
     AK_ANDROID_LOGI("storage permission request sdk=%d", sdk);
     if (sdk > 0 && sdk < 30) {
-        AK_ANDROID_LOGI("storage permission request falling back to runtime permissions");
         return false;
     }
     if (AndroidHasExternalStoragePermission()) {
-        AK_ANDROID_LOGI("storage permission already granted");
         return true;
     }
 
@@ -983,8 +1203,11 @@ bool AndroidRequestExternalStoragePermission() {
 struct GodotGpuPipelineState {
     RID blend_shader;
     RID blend_pipeline;
+    RID fill_source_texture;
     RID alpha_blend_a_shader;
     RID alpha_blend_a_pipeline;
+    RID alpha_convert_shader;
+    RID alpha_convert_pipeline;
     RID blend2_shader;
     RID blend2_pipeline;
     RID blend3_shader;
@@ -1106,10 +1329,16 @@ void ForceOpaqueAlpha(PackedByteArray &data, uint32_t stride_bytes,
     if (pixels == nullptr) {
         return;
     }
+    // Operate on complete pixels instead of touching the alpha byte through a
+    // byte-stride loop.  The frame is RGBA8888 and the host surface is always
+    // 32-bit aligned, so this preserves the exact result while allowing the
+    // compiler to vectorize the large 2560x1440 pass.
+    constexpr uint32_t kOpaqueAlpha = 0xff000000u;
     for (uint32_t y = 0; y < height; ++y) {
-        uint8_t *row = pixels + static_cast<size_t>(y) * stride_bytes;
+        auto *row = reinterpret_cast<uint32_t *>(
+            pixels + static_cast<size_t>(y) * stride_bytes);
         for (uint32_t x = 0; x < width; ++x) {
-            row[x * 4u + 3u] = 0xffu;
+            row[x] |= kOpaqueAlpha;
         }
     }
 }
@@ -1664,10 +1893,113 @@ uint ps_sub_blend(uint d, uint s, uint opa) {
     return (d & 0xff000000u) | r | (g << 8) | (b << 16);
 }
 
+uint soft_light_channel(uint source, uint destination) {
+    float s = float(source) / 255.0;
+    float d = float(destination) / 255.0;
+    float exponent = source >= 128u
+        ? 128.0 / max(float(source), 1.0)
+        : (1.0 - s) / 0.5;
+    // TVP's table stores an unsigned char, so conversion intentionally
+    // truncates instead of rounding.
+    return uint(clamp(pow(max(d, 0.0), exponent) * 255.0, 0.0, 255.0));
+}
+
+uint ps_soft_light_blend(uint d, uint s, uint opa) {
+    uint a = (s >> 24) & 0xffu;
+    if (opa != 255u) {
+        a = (a * opa) >> 8;
+    }
+    int dr = int(d & 0xffu);
+    int dg = int((d >> 8) & 0xffu);
+    int db = int((d >> 16) & 0xffu);
+    int sr = int(soft_light_channel(s & 0xffu, d & 0xffu));
+    int sg = int(soft_light_channel((s >> 8) & 0xffu, (d >> 8) & 0xffu));
+    int sb = int(soft_light_channel((s >> 16) & 0xffu, (d >> 16) & 0xffu));
+    uint r = uint(clamp(dr + (((sr - dr) * int(a)) >> 8), 0, 255));
+    uint g = uint(clamp(dg + (((sg - dg) * int(a)) >> 8), 0, 255));
+    uint b = uint(clamp(db + (((sb - db) * int(a)) >> 8), 0, 255));
+    return (d & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
+uint additive_alpha_blend_hda(uint d, uint s, uint opa) {
+    if (opa != 255u) {
+        uint sr = ((s & 0xffu) * opa) >> 8;
+        uint sg = (((s >> 8) & 0xffu) * opa) >> 8;
+        uint sb = (((s >> 16) & 0xffu) * opa) >> 8;
+        uint sa = (((s >> 24) & 0xffu) * opa) >> 8;
+        s = sr | (sg << 8) | (sb << 16) | (sa << 24);
+    }
+    uint inverse_alpha = ((~s) >> 24) & 0xffu;
+    uint r = min((((d & 0xffu) * inverse_alpha) >> 8) + (s & 0xffu), 255u);
+    uint g = min(((((d >> 8) & 0xffu) * inverse_alpha) >> 8) +
+                 ((s >> 8) & 0xffu), 255u);
+    uint b = min(((((d >> 16) & 0xffu) * inverse_alpha) >> 8) +
+                 ((s >> 16) & 0xffu), 255u);
+    return (d & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
+uint additive_alpha_blend_a(uint d, uint s, uint opa) {
+    if (opa != 255u) {
+        uint sr = ((s & 0xffu) * opa) >> 8;
+        uint sg = (((s >> 8) & 0xffu) * opa) >> 8;
+        uint sb = (((s >> 16) & 0xffu) * opa) >> 8;
+        uint sa = (((s >> 24) & 0xffu) * opa) >> 8;
+        s = sr | (sg << 8) | (sb << 16) | (sa << 24);
+    }
+    uint da = (d >> 24) & 0xffu;
+    uint sa = (s >> 24) & 0xffu;
+    uint out_alpha = da + sa - ((da * sa) >> 8);
+    out_alpha -= out_alpha >> 8;
+    return (additive_alpha_blend_hda(d, s, 255u) & 0x00ffffffu) |
+           (out_alpha << 24);
+}
+
+uint apply_color_map_a(uint d, uint mask, uint opa, uvec3 color) {
+    uint source_alpha = opa == 255u ? mask : ((mask * opa) >> 8);
+    source_alpha -= source_alpha >> 8;
+    uint inverse_alpha = source_alpha ^ 0xffu;
+    uint dest_alpha = (d >> 24) & 0xffu;
+    uint out_alpha = dest_alpha + source_alpha -
+                     ((dest_alpha * source_alpha) >> 8);
+    out_alpha -= out_alpha >> 8;
+    uint r = min((((d & 0xffu) * inverse_alpha) >> 8) +
+                 ((source_alpha * color.r) >> 8), 255u);
+    uint g = min(((((d >> 8) & 0xffu) * inverse_alpha) >> 8) +
+                 ((source_alpha * color.g) >> 8), 255u);
+    uint b = min(((((d >> 16) & 0xffu) * inverse_alpha) >> 8) +
+                 ((source_alpha * color.b) >> 8), 255u);
+    return (out_alpha << 24) | r | (g << 8) | (b << 16);
+}
+
 uint remove_const_opacity(uint d, uint strength) {
     uint inv_strength = 255u - clamp(strength, 0u, 255u);
     uint a = (((d >> 24) & 0xffu) * inv_strength) >> 8;
     return (d & 0x00ffffffu) | (a << 24);
+}
+
+uint alpha_to_additive_alpha(uint c) {
+    uint alpha = (c >> 24) & 0xffu;
+    uint r = ((c & 0xffu) * alpha) >> 8;
+    uint g = (((c >> 8) & 0xffu) * alpha) >> 8;
+    uint b = (((c >> 16) & 0xffu) * alpha) >> 8;
+    return (c & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
+uint additive_alpha_to_alpha(uint c) {
+    uint alpha = (c >> 24) & 0xffu;
+    if (alpha == 0u) return c & 0xff000000u;
+    uint r = min((c & 0xffu) * 255u / alpha, 255u);
+    uint g = min(((c >> 8) & 0xffu) * 255u / alpha, 255u);
+    uint b = min(((c >> 16) & 0xffu) * 255u / alpha, 255u);
+    return (c & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
+int reflect101_index(int value, int extent) {
+    if (extent <= 1) return 0;
+    int period = (extent - 1) * 2;
+    int wrapped = value % period;
+    if (wrapped < 0) wrapped += period;
+    return wrapped < extent ? wrapped : period - wrapped;
 }
 
 void main() {
@@ -1680,7 +2012,22 @@ void main() {
     uint opa = uint(clamp(pc.rect1.w, 0, 255));
     uint out_color = 0u;
 
-    if (pc.rect1.z == 5) {
+    if (pc.rect1.z == 26) {
+        int radius_x = clamp(pc.rect1.w, 0, 64);
+        int radius_y = clamp(pc.color0.x, 0, 64);
+        ivec2 extent = max(pc.rect1.xy, ivec2(1));
+        vec4 sum = vec4(0.0);
+        int samples = 0;
+        for (int oy = -radius_y; oy <= radius_y; ++oy) {
+            int sy = reflect101_index(local.y + oy, extent.y);
+            for (int ox = -radius_x; ox <= radius_x; ++ox) {
+                int sx = reflect101_index(local.x + ox, extent.x);
+                sum += imageLoad(src_img, pc.rect0.zw + ivec2(sx, sy));
+                ++samples;
+            }
+        }
+        out_color = pack_u8(vec4_to_u8(sum / float(max(samples, 1))));
+    } else if (pc.rect1.z == 5) {
         out_color = (uint(pc.color0.x) & 0xffu) |
                     ((uint(pc.color0.y) & 0xffu) << 8) |
                     ((uint(pc.color0.z) & 0xffu) << 16) |
@@ -1694,6 +2041,8 @@ void main() {
         uint s = pack_u8(vec4_to_u8(load_src(local)));
         if (pc.rect1.z == 20) {
         out_color = s;
+        } else if (pc.rect1.z == 27) {
+        out_color = (s & 0x00ffffffu) | 0xff000000u;
         } else if (pc.rect1.z == 19) {
         uint da = (d >> 24) & 0xffu;
         uint sa = (s >> 24) & 0xffu;
@@ -1731,8 +2080,22 @@ void main() {
         out_color = ps_add_blend(d, s, opa);
         } else if (pc.rect1.z == 17) {
         out_color = ps_sub_blend(d, s, opa);
+        } else if (pc.rect1.z == 28) {
+        out_color = ps_soft_light_blend(d, s, opa);
+        } else if (pc.rect1.z == 23) {
+        out_color = apply_color_map_a(
+            d, s & 0xffu, opa,
+            uvec3(uint(pc.color0.x), uint(pc.color0.y), uint(pc.color0.z)));
+        } else if (pc.rect1.z == 24) {
+        out_color = additive_alpha_blend_hda(d, s, opa);
+        } else if (pc.rect1.z == 25) {
+        out_color = additive_alpha_blend_a(d, s, opa);
         } else if (pc.rect1.z == 8) {
         out_color = remove_const_opacity(d, opa);
+        } else if (pc.rect1.z == 29) {
+        out_color = alpha_to_additive_alpha(s);
+        } else if (pc.rect1.z == 30) {
+        out_color = additive_alpha_to_alpha(s);
         }
         }
     }
@@ -1756,6 +2119,140 @@ void main() {
     g_gpu_pipeline_state->blend_pipeline =
         rd->compute_pipeline_create(g_gpu_pipeline_state->blend_shader);
     return g_gpu_pipeline_state->blend_pipeline.is_valid();
+}
+
+bool EnsureAlphaConvertPipeline(RenderingDevice *rd) {
+    if (rd == nullptr) return false;
+    if (g_gpu_pipeline_state == nullptr) {
+        g_gpu_pipeline_state = new GodotGpuPipelineState();
+    }
+    if (g_gpu_pipeline_state->alpha_convert_pipeline.is_valid()) return true;
+
+    Ref<RDShaderSource> source;
+    source.instantiate();
+    source->set_language(RenderingDevice::SHADER_LANGUAGE_GLSL);
+    source->set_stage_source(
+        RenderingDevice::SHADER_STAGE_COMPUTE,
+        R"GLSL(#version 450
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(rgba8, set = 0, binding = 0) uniform image2D target_img;
+layout(push_constant, std430) uniform Params {
+    ivec4 rect0;
+    ivec4 rect1;
+    ivec4 color0;
+} pc;
+
+uvec4 vec4_to_u8(vec4 value) {
+    return uvec4(round(clamp(value, vec4(0.0), vec4(1.0)) * 255.0));
+}
+
+vec4 unpack_u8(uint c) {
+    return vec4(float(c & 0xffu),
+                float((c >> 8) & 0xffu),
+                float((c >> 16) & 0xffu),
+                float((c >> 24) & 0xffu)) / 255.0;
+}
+
+uint pack_u8(uvec4 c) {
+    return (c.r & 0xffu) |
+           ((c.g & 0xffu) << 8) |
+           ((c.b & 0xffu) << 16) |
+           ((c.a & 0xffu) << 24);
+}
+
+uint alpha_to_additive_alpha(uint c) {
+    uint alpha = (c >> 24) & 0xffu;
+    uint r = ((c & 0xffu) * alpha) >> 8;
+    uint g = (((c >> 8) & 0xffu) * alpha) >> 8;
+    uint b = (((c >> 16) & 0xffu) * alpha) >> 8;
+    return (c & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
+uint additive_alpha_to_alpha(uint c) {
+    uint alpha = (c >> 24) & 0xffu;
+    if (alpha == 0u) return c & 0xff000000u;
+    uint r = min((c & 0xffu) * 255u / alpha, 255u);
+    uint g = min(((c >> 8) & 0xffu) * 255u / alpha, 255u);
+    uint b = min(((c >> 16) & 0xffu) * 255u / alpha, 255u);
+    return (c & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
+void main() {
+    ivec2 local = ivec2(gl_GlobalInvocationID.xy);
+    if (local.x >= pc.rect1.x || local.y >= pc.rect1.y) return;
+    ivec2 pos = pc.rect0.xy + local;
+    uint color = pack_u8(vec4_to_u8(imageLoad(target_img, pos)));
+    color = pc.rect1.z == 29
+        ? alpha_to_additive_alpha(color)
+        : additive_alpha_to_alpha(color);
+    imageStore(target_img, pos, unpack_u8(color));
+}
+)GLSL");
+
+    Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(source);
+    if (spirv.is_null()) return false;
+    const String compile_error =
+        spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE);
+    if (!compile_error.is_empty()) {
+        UtilityFunctions::printerr("Godot GPU alpha conversion shader compile error: ",
+                                   compile_error);
+        return false;
+    }
+    g_gpu_pipeline_state->alpha_convert_shader =
+        rd->shader_create_from_spirv(spirv, "AetherKiriAlphaConvert");
+    if (!g_gpu_pipeline_state->alpha_convert_shader.is_valid()) return false;
+    g_gpu_pipeline_state->alpha_convert_pipeline =
+        rd->compute_pipeline_create(g_gpu_pipeline_state->alpha_convert_shader);
+    return g_gpu_pipeline_state->alpha_convert_pipeline.is_valid();
+}
+
+RID GetCachedAlphaConvertUniformSet(RenderingDevice *rd,
+                                    const RID &target) {
+    if (rd == nullptr || g_gpu_pipeline_state == nullptr) return RID();
+    const GodotGpuUniformSetKey key{
+        g_gpu_pipeline_state->alpha_convert_shader.get_id(), target.get_id(),
+        0, 0, 1};
+    const auto found = g_gpu_uniform_set_cache.find(key);
+    if (found != g_gpu_uniform_set_cache.end() &&
+        found->second.is_valid()) {
+        return found->second;
+    }
+    Ref<RDUniform> image;
+    image.instantiate();
+    image->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
+    image->set_binding(0);
+    image->add_id(target);
+    TypedArray<RDUniform> uniforms;
+    uniforms.push_back(image);
+    RID uniform_set = rd->uniform_set_create(
+        uniforms, g_gpu_pipeline_state->alpha_convert_shader, 0);
+    if (uniform_set.is_valid()) {
+        g_gpu_uniform_set_cache[key] = uniform_set;
+    }
+    return uniform_set;
+}
+
+bool ExecuteGodotGpuAlphaConvert(RenderingDevice *rd,
+                                 const std::shared_ptr<GodotGpuOp> &op) {
+    if (rd == nullptr || op == nullptr || op->dst != op->src ||
+        !EnsureAlphaConvertPipeline(rd)) {
+        return false;
+    }
+    const RID uniform_set = GetCachedAlphaConvertUniformSet(rd, op->dst);
+    if (!uniform_set.is_valid()) return false;
+    const PackedByteArray push_constants = PackGpuPushConstants(*op);
+    const int64_t compute_list = rd->compute_list_begin();
+    rd->compute_list_bind_compute_pipeline(
+        compute_list, g_gpu_pipeline_state->alpha_convert_pipeline);
+    rd->compute_list_bind_uniform_set(compute_list, uniform_set, 0);
+    rd->compute_list_set_push_constant(compute_list, push_constants, 48);
+    rd->compute_list_dispatch(
+        compute_list, static_cast<uint32_t>((op->size.x + 7) / 8),
+        static_cast<uint32_t>((op->size.y + 7) / 8), 1);
+    rd->compute_list_add_barrier(compute_list);
+    rd->compute_list_end();
+    ApplyGodotGpuBarrier(rd);
+    return true;
 }
 
 bool EnsureAlphaBlendAPipeline(RenderingDevice *rd) {
@@ -2894,10 +3391,8 @@ void main() {
                 covered = true;
                 break;
             } else {
-                if (src.g >= 0.70 && src.g > src.r + 0.20 &&
-                    src.g > src.b + 0.20) {
-                    src.a = 0.0;
-                }
+                // Texture alpha is authoritative.  Green is used by some
+                // models as ordinary artwork, not as a runtime chroma key.
                 src.a *= opacity;
                 if (src.a <= 0.00001) {
                     continue;
@@ -3459,20 +3954,56 @@ layout(location = 0) in vec2 source_coord;
 layout(location = 1) in vec2 mask_coord;
 layout(location = 0) out vec4 fragment_color;
 
-void main() {
-    vec2 source_size = vec2(textureSize(source_texture, 0));
-    vec4 source = texture(source_texture, source_coord / source_size);
-    if (source.g >= 0.70 && source.g > source.r + 0.20 &&
-        source.g > source.b + 0.20) {
-        source.a = 0.0;
+vec4 load_raster_source(vec2 edge_coord) {
+    // Live2D textures contain large transparent/chroma-keyed regions. A
+    // regular sampler interpolates their hidden RGB values before alpha is
+    // applied, which turns transparent edges into dark/black patches. Match
+    // the compute rasterizer and interpolate in premultiplied-alpha space.
+    ivec2 limit = textureSize(source_texture, 0) - ivec2(1);
+    vec2 center_coord = clamp(edge_coord - vec2(0.5), vec2(0.0), vec2(limit));
+    ivec2 p0 = ivec2(floor(center_coord));
+    ivec2 p1 = clamp(p0 + ivec2(1), ivec2(0), limit);
+    vec2 f = clamp(fract(center_coord), vec2(0.0), vec2(1.0));
+    vec4 c00 = texelFetch(source_texture, p0, 0);
+    vec4 c10 = texelFetch(source_texture, ivec2(p1.x, p0.y), 0);
+    vec4 c01 = texelFetch(source_texture, ivec2(p0.x, p1.y), 0);
+    vec4 c11 = texelFetch(source_texture, p1, 0);
+    c00.rgb *= c00.a;
+    c10.rgb *= c10.a;
+    c01.rgb *= c01.a;
+    c11.rgb *= c11.a;
+    vec4 premul = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+    if (premul.a > 0.00001) {
+        premul.rgb /= premul.a;
+    } else {
+        premul.rgb = vec3(0.0);
     }
+    return clamp(premul, vec4(0.0), vec4(1.0));
+}
+
+float load_raster_mask(vec2 edge_coord) {
+    ivec2 limit = textureSize(mask_texture, 0) - ivec2(1);
+    vec2 center_coord = clamp(edge_coord - vec2(0.5), vec2(0.0), vec2(limit));
+    ivec2 p0 = ivec2(floor(center_coord));
+    ivec2 p1 = clamp(p0 + ivec2(1), ivec2(0), limit);
+    vec2 f = clamp(fract(center_coord), vec2(0.0), vec2(1.0));
+    float a00 = texelFetch(mask_texture, p0, 0).a;
+    float a10 = texelFetch(mask_texture, ivec2(p1.x, p0.y), 0).a;
+    float a01 = texelFetch(mask_texture, ivec2(p0.x, p1.y), 0).a;
+    float a11 = texelFetch(mask_texture, p1, 0).a;
+    return clamp(mix(mix(a00, a10, f.x), mix(a01, a11, f.x), f.y),
+                  0.0, 1.0);
+}
+
+void main() {
+    vec4 source = load_raster_source(source_coord);
+    // Texture alpha is authoritative; do not chroma-key valid green art.
     float alpha = source.a *
         clamp(float(pc.rect1.w) / 255.0, 0.0, 1.0);
     uint flags = uint(pc.color0.z);
     if ((flags & 0x08000000u) != 0u) {
-        vec2 mask_size = vec2(textureSize(mask_texture, 0));
         float mask_value = 1.0 -
-            texture(mask_texture, mask_coord / mask_size).a;
+            load_raster_mask(mask_coord);
         if ((flags & 0x00010000u) != 0u) {
             mask_value = 1.0 - mask_value;
         }
@@ -4226,7 +4757,8 @@ void ExecuteGodotGpuLive2DRasterBatch(
 bool DispatchGodotGpuBlend(RenderingDevice *rd,
                            const std::shared_ptr<GodotGpuOp> &op,
                            int64_t compute_list,
-                           std::vector<RID> &uniform_sets) {
+                           std::vector<RID> &uniform_sets,
+                           const RID &source_override = RID()) {
     const bool alpha_blend_a = op->mode == TVP_GODOT_GPU_BLEND_ALPHA_BLEND_A;
     if (alpha_blend_a) {
         if (!EnsureAlphaBlendAPipeline(rd)) return false;
@@ -4234,15 +4766,45 @@ bool DispatchGodotGpuBlend(RenderingDevice *rd,
         return false;
     }
 
+    RID source = source_override.is_valid() ? source_override : op->src;
+    if (op->mode == TVP_GODOT_GPU_BLEND_FILL_ARGB) {
+        // FillARGB does not sample its source, but the shared blend shader
+        // still declares one. Binding the destination RID as both the
+        // readonly source and writable destination is undefined on
+        // Metal/Vulkan and can leave transparent text surfaces uncleared.
+        // Bind a harmless non-aliased image instead while keeping the clear
+        // in the ordered compute batch.
+        if (!g_gpu_pipeline_state->fill_source_texture.is_valid()) {
+            Ref<RDTextureView> view;
+            view.instantiate();
+            TypedArray<PackedByteArray> initial_data;
+            g_gpu_pipeline_state->fill_source_texture = rd->texture_create(
+                MakeRgbaTextureFormat(1, 1), view, initial_data);
+        }
+        if (!g_gpu_pipeline_state->fill_source_texture.is_valid()) {
+            return false;
+        }
+        source = g_gpu_pipeline_state->fill_source_texture;
+    }
     RID uniform_set = GetCachedBlendUniformSet(
         rd,
         alpha_blend_a ? g_gpu_pipeline_state->alpha_blend_a_shader
                       : g_gpu_pipeline_state->blend_shader,
-        op->src, op->dst);
+        source, op->dst);
     if (!uniform_set.is_valid()) return false;
     (void)uniform_sets;
 
-    const PackedByteArray push_constants = PackGpuPushConstants(*op);
+    PackedByteArray push_constants = PackGpuPushConstants(*op);
+    if (source_override.is_valid() && op->mode == TVP_GODOT_GPU_BLEND_BOX_BLUR_ALPHA) {
+        // The alias scratch texture is tightly sized to the source rectangle.
+        // Its local origin replaces the original source texture coordinates.
+        int32_t zero = 0;
+        uint8_t *bytes = push_constants.ptrw();
+        if (bytes != nullptr) {
+            std::memcpy(bytes + 2 * sizeof(int32_t), &zero, sizeof(zero));
+            std::memcpy(bytes + 3 * sizeof(int32_t), &zero, sizeof(zero));
+        }
+    }
     rd->compute_list_bind_compute_pipeline(
         compute_list,
         alpha_blend_a ? g_gpu_pipeline_state->alpha_blend_a_pipeline
@@ -4303,17 +4865,49 @@ bool DispatchGodotGpuBlend3(RenderingDevice *rd,
 bool ExecuteGodotGpuBlend(RenderingDevice *rd,
                           const std::shared_ptr<GodotGpuOp> &op) {
     if (rd == nullptr || op == nullptr) return false;
-    if (op->src == op->dst &&
+    const bool alpha_convert =
+        op->mode == TVP_GODOT_GPU_BLEND_ALPHA_TO_ADDITIVE_ALPHA ||
+        op->mode == TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA_TO_ALPHA;
+    if (alpha_convert && op->src == op->dst) {
+        // Use a single read/write image binding for in-place conversion.  A
+        // texture bound simultaneously as readonly source and writable
+        // destination is not portable across Metal (iOS/macOS) and Vulkan.
+        return ExecuteGodotGpuAlphaConvert(rd, op);
+    }
+    const bool alias_box_blur =
+        op->src == op->dst &&
+        op->mode == TVP_GODOT_GPU_BLEND_BOX_BLUR_ALPHA;
+    if (op->src == op->dst && !alias_box_blur &&
         op->mode != TVP_GODOT_GPU_BLEND_FILL_ARGB &&
         op->mode != TVP_GODOT_GPU_BLEND_REMOVE_CONST_OPACITY &&
-        op->mode != TVP_GODOT_GPU_BLEND_FILL_MASK) {
+        op->mode != TVP_GODOT_GPU_BLEND_FILL_MASK &&
+        op->mode != TVP_GODOT_GPU_BLEND_ALPHA_TO_ADDITIVE_ALPHA &&
+        op->mode != TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA_TO_ALPHA) {
         g_gpu_alias_sources.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
 
     std::vector<RID> uniform_sets;
+    RID alias_source;
+    if (alias_box_blur) {
+        Ref<RDTextureView> view;
+        view.instantiate();
+        TypedArray<PackedByteArray> initial_data;
+        alias_source = rd->texture_create(
+            MakeRgbaTextureFormat(static_cast<uint32_t>(op->size.x),
+                                  static_cast<uint32_t>(op->size.y)),
+            view, initial_data);
+        if (!alias_source.is_valid()) return false;
+        if (rd->texture_copy(op->src, alias_source, op->src_pos, Vector3(),
+                             op->size, 0, 0, 0, 0) != OK) {
+            rd->free_rid(alias_source);
+            return false;
+        }
+        ApplyGodotGpuBarrier(rd);
+    }
     int64_t compute_list = rd->compute_list_begin();
-    const bool ok = DispatchGodotGpuBlend(rd, op, compute_list, uniform_sets);
+    const bool ok = DispatchGodotGpuBlend(
+        rd, op, compute_list, uniform_sets, alias_source);
     if (ok) {
         rd->compute_list_add_barrier(compute_list);
     }
@@ -4323,6 +4917,10 @@ bool ExecuteGodotGpuBlend(RenderingDevice *rd,
     }
     for (const RID &uniform_set : uniform_sets) {
         rd->free_rid(uniform_set);
+    }
+    if (alias_source.is_valid()) {
+        InvalidateGodotGpuUniformSetsForResource(rd, alias_source);
+        rd->free_rid(alias_source);
     }
     return ok;
 }
@@ -4627,10 +5225,28 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
     bool result = false;
     bool wrote_texture = false;
     switch (op->type) {
-        case GodotGpuOp::Type::Update:
+        case GodotGpuOp::Type::Update: {
+            const auto update_started = std::chrono::steady_clock::now();
+            const double queue_ms =
+                op->profile_enqueued_at.time_since_epoch().count() != 0
+                    ? std::chrono::duration<double, std::milli>(
+                          update_started - op->profile_enqueued_at)
+                          .count()
+                    : 0.0;
             result = rd->texture_update(op->dst, 0, op->data) == OK;
+            const double update_ms =
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - update_started)
+                    .count();
+            RenderingServer *server = RenderingServer::get_singleton();
+            LogGodotGpuUpdateProfile(
+                "texture_update", op->profile_width, op->profile_height,
+                static_cast<size_t>(op->data.size()), update_ms,
+                op->profile_pack_ms, queue_ms, result,
+                server != nullptr && server->is_on_render_thread());
             wrote_texture = true;
             break;
+        }
         case GodotGpuOp::Type::Clear:
             result = rd->texture_clear(op->dst, op->clear_color, 0, 1, 0, 1) == OK;
             wrote_texture = true;
@@ -6324,12 +6940,23 @@ uint64_t BridgeCreateRgba(uint32_t width, uint32_t height, const void *pixels,
         return 0;
     }
 
+    const auto create_started = std::chrono::steady_clock::now();
     Ref<RDTextureView> view;
     view.instantiate();
     TypedArray<PackedByteArray> initial_data;
     initial_data.push_back(PackRgbaBytes(pixels, width, height, stride_bytes));
     RID rid = rd->texture_create(MakeRgbaTextureFormat(width, height), view,
                                  initial_data);
+    const double create_ms = std::chrono::duration<double, std::milli>(
+                                 std::chrono::steady_clock::now() -
+                                 create_started)
+                                 .count();
+    LogGodotGpuUpdateProfile(
+        "texture_create", width, height,
+        static_cast<size_t>(width) * static_cast<size_t>(height) * 4u,
+        create_ms, 0.0, 0.0, rid.is_valid(),
+        RenderingServer::get_singleton() != nullptr &&
+            RenderingServer::get_singleton()->is_on_render_thread());
     if (!rid.is_valid()) return 0;
 
     GodotGpuTextureRecord record;
@@ -6495,13 +7122,32 @@ bool BridgeUpdateRgba(uint64_t texture, const void *pixels,
         rect->bottom != static_cast<int>(record.height)) {
         return false;
     }
+    const auto bridge_started = std::chrono::steady_clock::now();
     PackedByteArray data =
         PackRgbaBytes(pixels, record.width, record.height, stride_bytes);
+    const auto packed_at = std::chrono::steady_clock::now();
+    const double pack_ms = std::chrono::duration<double, std::milli>(
+                               packed_at - bridge_started)
+                               .count();
     auto op = std::make_shared<GodotGpuOp>();
     op->type = GodotGpuOp::Type::Update;
     op->dst = record.rid;
     op->data = data;
-    return RunGodotGpuOpAsync(op);
+    op->profile_width = record.width;
+    op->profile_height = record.height;
+    op->profile_pack_ms = pack_ms;
+    op->profile_enqueued_at = packed_at;
+    const bool result = RunGodotGpuOpAsync(op);
+    const double bridge_ms = std::chrono::duration<double, std::milli>(
+                                 std::chrono::steady_clock::now() -
+                                 bridge_started)
+                                 .count();
+    RenderingServer *server = RenderingServer::get_singleton();
+    LogGodotGpuUpdateProfile(
+        "bridge_update_rgba", record.width, record.height,
+        static_cast<size_t>(data.size()), bridge_ms, pack_ms, 0.0, result,
+        server != nullptr && server->is_on_render_thread());
+    return result;
 }
 
 bool BridgeClearRgba(uint64_t texture, uint32_t argb, const tTVPRect *rect) {
@@ -7429,6 +8075,91 @@ uint32_t CpuPsSubBlend(uint32_t d, uint32_t s, int opacity) {
     return (d & 0xff000000u) | r | (g << 8) | (b << 16);
 }
 
+uint32_t CpuPsSoftLightBlend(uint32_t d, uint32_t s, int opacity) {
+    const auto channel = [](uint32_t source, uint32_t destination) {
+        const double sf = static_cast<double>(source) / 255.0;
+        const double df = static_cast<double>(destination) / 255.0;
+        const double exponent = source >= 128u
+            ? 128.0 / static_cast<double>(std::max(source, 1u))
+            : (1.0 - sf) / 0.5;
+        return static_cast<uint32_t>(std::clamp(
+            static_cast<int>(std::pow(std::max(df, 0.0), exponent) * 255.0),
+            0, 255));
+    };
+    uint32_t a = (s >> 24) & 0xffu;
+    const uint32_t opa = static_cast<uint32_t>(std::clamp(opacity, 0, 255));
+    if (opa != 255u) a = (a * opa) >> 8;
+    const int dr = static_cast<int>(d & 0xffu);
+    const int dg = static_cast<int>((d >> 8) & 0xffu);
+    const int db = static_cast<int>((d >> 16) & 0xffu);
+    const int sr = static_cast<int>(channel(s & 0xffu, d & 0xffu));
+    const int sg = static_cast<int>(channel((s >> 8) & 0xffu,
+                                            (d >> 8) & 0xffu));
+    const int sb = static_cast<int>(channel((s >> 16) & 0xffu,
+                                            (d >> 16) & 0xffu));
+    const uint32_t r = static_cast<uint32_t>(std::clamp(
+        dr + (((sr - dr) * static_cast<int>(a)) >> 8), 0, 255));
+    const uint32_t g = static_cast<uint32_t>(std::clamp(
+        dg + (((sg - dg) * static_cast<int>(a)) >> 8), 0, 255));
+    const uint32_t b = static_cast<uint32_t>(std::clamp(
+        db + (((sb - db) * static_cast<int>(a)) >> 8), 0, 255));
+    return (d & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
+uint32_t CpuAdditiveAlphaBlendHda(uint32_t d, uint32_t s, int opacity) {
+    const uint32_t opa = static_cast<uint32_t>(std::clamp(opacity, 0, 255));
+    if(opa != 255u) {
+        const uint32_t rb = ((s & 0x00ff00ffu) * opa >> 8) & 0x00ff00ffu;
+        const uint32_t ga = ((s >> 8 & 0x00ff00ffu) * opa) & 0xff00ff00u;
+        s = rb | ga;
+    }
+    const uint32_t inverse_alpha = (~s) >> 24;
+    const uint32_t r = std::min(
+        (((d & 0xffu) * inverse_alpha) >> 8) + (s & 0xffu), 255u);
+    const uint32_t g = std::min(
+        (((d >> 8 & 0xffu) * inverse_alpha) >> 8) +
+            (s >> 8 & 0xffu),
+        255u);
+    const uint32_t b = std::min(
+        (((d >> 16 & 0xffu) * inverse_alpha) >> 8) +
+            (s >> 16 & 0xffu),
+        255u);
+    return (d & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
+uint32_t CpuApplyColorMapA(uint32_t d, uint32_t mask, int opacity,
+                           uint32_t color) {
+    const uint32_t opa = static_cast<uint32_t>(std::clamp(opacity, 0, 255));
+    uint32_t source_alpha = opa == 255u ? mask : ((mask * opa) >> 8);
+    source_alpha -= source_alpha >> 8;
+    const uint32_t inverse_alpha = source_alpha ^ 0xffu;
+    uint32_t out_alpha = ((d >> 24) & 0xffu) + source_alpha -
+                         ((((d >> 24) & 0xffu) * source_alpha) >> 8);
+    out_alpha -= out_alpha >> 8;
+    const uint32_t r = std::min(
+        (((d & 0xffu) * inverse_alpha) >> 8) +
+            ((source_alpha * (color & 0xffu)) >> 8),
+        255u);
+    const uint32_t g = std::min(
+        (((d >> 8 & 0xffu) * inverse_alpha) >> 8) +
+            ((source_alpha * (color >> 8 & 0xffu)) >> 8),
+        255u);
+    const uint32_t b = std::min(
+        (((d >> 16 & 0xffu) * inverse_alpha) >> 8) +
+            ((source_alpha * (color >> 16 & 0xffu)) >> 8),
+        255u);
+    return (out_alpha << 24) | r | (g << 8) | (b << 16);
+}
+
+uint32_t CpuAdditiveAlphaToAlpha(uint32_t color) {
+    const uint32_t alpha = color >> 24;
+    if (alpha == 0u) return color & 0xff000000u;
+    const uint32_t r = std::min((color & 0xffu) * 255u / alpha, 255u);
+    const uint32_t g = std::min(((color >> 8) & 0xffu) * 255u / alpha, 255u);
+    const uint32_t b = std::min(((color >> 16) & 0xffu) * 255u / alpha, 255u);
+    return (color & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
 uint32_t CpuBlendReference(uint32_t mode, uint32_t d, uint32_t s,
                            int opacity, uint32_t color) {
     switch (mode) {
@@ -7447,6 +8178,8 @@ uint32_t CpuBlendReference(uint32_t mode, uint32_t d, uint32_t s,
                    (static_cast<uint32_t>(std::clamp(opacity, 0, 255)) << 24);
         case TVP_GODOT_GPU_BLEND_COPY_RGBA:
             return s;
+        case TVP_GODOT_GPU_BLEND_COPY_OPAQUE:
+            return (s & 0x00ffffffu) | 0xff000000u;
         case TVP_GODOT_GPU_BLEND_ALPHA_BLEND_A:
             return CpuAlphaBlendA(d, s, opacity);
         case TVP_GODOT_GPU_BLEND_CONST_ALPHA_D:
@@ -7459,6 +8192,33 @@ uint32_t CpuBlendReference(uint32_t mode, uint32_t d, uint32_t s,
             return CpuPsAddBlend(d, s, opacity);
         case TVP_GODOT_GPU_BLEND_PS_SUBTRACT:
             return CpuPsSubBlend(d, s, opacity);
+        case TVP_GODOT_GPU_BLEND_PS_SOFT_LIGHT:
+            return CpuPsSoftLightBlend(d, s, opacity);
+        case TVP_GODOT_GPU_BLEND_APPLY_COLOR_MAP_A:
+            return CpuApplyColorMapA(d, s & 0xffu, opacity, color);
+        case TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA:
+            return CpuAdditiveAlphaBlendHda(d, s, opacity);
+        case TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA_A: {
+            const uint32_t opa =
+                static_cast<uint32_t>(std::clamp(opacity, 0, 255));
+            if(opa != 255u) {
+                const uint32_t rb =
+                    ((s & 0x00ff00ffu) * opa >> 8) & 0x00ff00ffu;
+                const uint32_t ga =
+                    ((s >> 8 & 0x00ff00ffu) * opa) & 0xff00ff00u;
+                s = rb | ga;
+            }
+            const uint32_t da = d >> 24;
+            const uint32_t sa = s >> 24;
+            uint32_t out_alpha = da + sa - ((da * sa) >> 8);
+            out_alpha -= out_alpha >> 8;
+            return (CpuAdditiveAlphaBlendHda(d, s, 255) & 0x00ffffffu) |
+                (out_alpha << 24);
+        }
+        case TVP_GODOT_GPU_BLEND_ALPHA_TO_ADDITIVE_ALPHA:
+            return CpuAlphaToAdditiveAlpha(s);
+        case TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA_TO_ALPHA:
+            return CpuAdditiveAlphaToAlpha(s);
         default:
             return s;
     }
@@ -7502,6 +8262,9 @@ uint32_t BlendModeFromName(const String &mode_name) {
     if (lower == "copycolor" || lower == "copy_color") {
         return TVP_GODOT_GPU_BLEND_COPY_COLOR;
     }
+    if (lower == "copyopaqueimage" || lower == "copy_opaque_image") {
+        return TVP_GODOT_GPU_BLEND_COPY_OPAQUE;
+    }
     if (lower == "fillargb" || lower == "fill") {
         return TVP_GODOT_GPU_BLEND_FILL_ARGB;
     }
@@ -7531,6 +8294,24 @@ uint32_t BlendModeFromName(const String &mode_name) {
         lower == "alpha_blend_d_mask_threshold") {
         return TVP_GODOT_GPU_BLEND_ALPHA_D_MASK_THRESHOLD;
     }
+    if (lower == "additivealphablend_a" ||
+        lower == "additive_alpha_blend_a") {
+        return TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA_A;
+    }
+    if (lower == "additivealphablend" || lower == "additive_alpha_blend") {
+        return TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA;
+    }
+    if (lower == "alphatoadditivealpha" ||
+        lower == "alpha_to_additive_alpha") {
+        return TVP_GODOT_GPU_BLEND_ALPHA_TO_ADDITIVE_ALPHA;
+    }
+    if (lower == "additivealphatoalpha" ||
+        lower == "additive_alpha_to_alpha") {
+        return TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA_TO_ALPHA;
+    }
+    if (lower == "applycolormap_a" || lower == "apply_color_map_a") {
+        return TVP_GODOT_GPU_BLEND_APPLY_COLOR_MAP_A;
+    }
     if (lower == "psscreenblend" || lower == "ps_screen_blend") {
         return TVP_GODOT_GPU_BLEND_PS_SCREEN;
     }
@@ -7542,6 +8323,9 @@ uint32_t BlendModeFromName(const String &mode_name) {
     }
     if (lower == "pssubblend" || lower == "ps_sub_blend") {
         return TVP_GODOT_GPU_BLEND_PS_SUBTRACT;
+    }
+    if (lower == "pssoftlightblend" || lower == "ps_soft_light_blend") {
+        return TVP_GODOT_GPU_BLEND_PS_SOFT_LIGHT;
     }
     return 0;
 }
@@ -7566,6 +8350,9 @@ void ReleaseGodotGpuPipeline() {
     if (g_gpu_pipeline_state == nullptr) return;
     if (rd != nullptr) {
         ClearGodotGpuUniformSetCache(rd);
+        if (g_gpu_pipeline_state->fill_source_texture.is_valid()) {
+            rd->free_rid(g_gpu_pipeline_state->fill_source_texture);
+        }
         if (g_gpu_pipeline_state->blend_pipeline.is_valid()) {
             rd->free_rid(g_gpu_pipeline_state->blend_pipeline);
         }
@@ -7577,6 +8364,12 @@ void ReleaseGodotGpuPipeline() {
         }
         if (g_gpu_pipeline_state->alpha_blend_a_shader.is_valid()) {
             rd->free_rid(g_gpu_pipeline_state->alpha_blend_a_shader);
+        }
+        if (g_gpu_pipeline_state->alpha_convert_pipeline.is_valid()) {
+            rd->free_rid(g_gpu_pipeline_state->alpha_convert_pipeline);
+        }
+        if (g_gpu_pipeline_state->alpha_convert_shader.is_valid()) {
+            rd->free_rid(g_gpu_pipeline_state->alpha_convert_shader);
         }
         if (g_gpu_pipeline_state->blend2_pipeline.is_valid()) {
             rd->free_rid(g_gpu_pipeline_state->blend2_pipeline);
@@ -7693,8 +8486,14 @@ public:
 
     bool initialize_engine(const String &writable_path, const String &cache_path) {
         if (handle_ != nullptr) {
+            AndroidBridgeLog("event=initialize_engine_already_initialized runtime=%s",
+                             runtime_id_.utf8().get_data());
             return true;
         }
+
+        AndroidBridgeLog("event=initialize_engine_begin writable=%s cache=%s",
+                         writable_path.utf8().get_data(),
+                         cache_path.utf8().get_data());
 
         TVPGodotGpuBridgeCallbacks callbacks{};
         callbacks.create_rgba = BridgeCreateRgba;
@@ -7753,6 +8552,9 @@ public:
         if (result == ENGINE_RESULT_OK) {
             sync_frame_effect_source_mode(true);
         }
+        AndroidBridgeLog("event=initialize_engine_result result=%s error=%s",
+                         last_result_.utf8().get_data(),
+                         last_error_.utf8().get_data());
         return result == ENGINE_RESULT_OK;
     }
 
@@ -7942,6 +8744,10 @@ public:
         option.value_utf8 = value_utf8.get_data();
         const engine_result_t result = engine_set_option(handle_, &option);
         update_last_error(result);
+        AndroidBridgeLog("event=set_engine_option key=%s value=%s result=%s error=%s",
+                         key_utf8.get_data(), value_utf8.get_data(),
+                         last_result_.utf8().get_data(),
+                         last_error_.utf8().get_data());
         if (result == ENGINE_RESULT_OK &&
             key.strip_edges().to_lower() == "runtime") {
             runtime_id_ = value.strip_edges().to_lower();
@@ -7989,6 +8795,10 @@ public:
             return ENGINE_RESULT_INVALID_STATE;
         }
 
+        AndroidBridgeLog("event=open_game_begin path=%s async=%d runtime=%s",
+                         game_root_path.utf8().get_data(), async ? 1 : 0,
+                         runtime_id_.utf8().get_data());
+
         CharString path_utf8 = game_root_path.utf8();
         const String normalized_runtime = runtime_id_.strip_edges().to_lower();
         artemis_logical_frame_pacing_ = normalized_runtime == "artemis" ||
@@ -8003,6 +8813,9 @@ public:
             artemis_logical_frame_pacing_ = false;
         }
         update_last_error(result);
+        AndroidBridgeLog("event=open_game_result result=%s error=%s game_open=%d",
+                         last_result_.utf8().get_data(),
+                         last_error_.utf8().get_data(), game_open_ ? 1 : 0);
         return result;
     }
 
@@ -8730,22 +9543,29 @@ public:
             return frame_texture_;
         }
 
-        PackedByteArray data;
         const size_t size =
             static_cast<size_t>(desc.stride_bytes) * desc.height;
-        data.resize(static_cast<int64_t>(size));
-        result = engine_read_frame_rgba(handle_, data.ptrw(), size);
+        // Reuse the readback storage across frames.  The engine overwrites
+        // the complete buffer, so allocating a temporary PackedByteArray on
+        // every tick only adds a large zero-fill and allocator hit before the
+        // actual frame copy.  Keep this buffer private to the player and let
+        // Image::create_from_data() consume it after the read completes.
+        if (frame_rgba_buffer_.size() != static_cast<int64_t>(size)) {
+            frame_rgba_buffer_.resize(static_cast<int64_t>(size));
+        }
+        result = engine_read_frame_rgba(handle_, frame_rgba_buffer_.ptrw(), size);
         update_last_error(result);
         if (result != ENGINE_RESULT_OK) {
             return Ref<Texture2D>();
         }
-        ForceOpaqueAlpha(data, desc.stride_bytes, desc.width, desc.height);
+        ForceOpaqueAlpha(frame_rgba_buffer_, desc.stride_bytes, desc.width,
+                         desc.height);
 
         const bool prefer_rd_texture =
             normalized_backend == ENGINE_RENDERER_GODOT_NATIVE ||
             normalized_backend == ENGINE_RENDERER_GPU_BRIDGE;
         if (prefer_rd_texture) {
-            Ref<Texture2D> rd_texture = update_rd_texture(desc, data);
+            Ref<Texture2D> rd_texture = update_rd_texture(desc, frame_rgba_buffer_);
             if (rd_texture.is_valid()) {
                 frame_texture_.unref();
                 frame_texture_serial_ = desc.frame_serial;
@@ -8760,7 +9580,7 @@ public:
             static_cast<int32_t>(desc.height),
             false,
             Image::FORMAT_RGBA8,
-            data);
+            frame_rgba_buffer_);
         if (image.is_null()) {
             return Ref<Texture2D>();
         }
@@ -9596,6 +10416,19 @@ void main() {
 #endif
     }
 
+    // The compiled-in unlock digest lives in AetherInternal. Public fallbacks
+    // never report a match, so release artifacts without the package cannot
+    // open the secret unlock path.
+    bool verify_unlock_secret(const String &candidate) const {
+#if defined(AETHERKIRI_INTERNAL_UNLOCK_GATE)
+        const CharString candidate_utf8 = candidate.utf8();
+        return AetherInternalVerifyUnlockSecret(candidate_utf8.get_data()) != 0;
+#else
+        (void)candidate;
+        return false;
+#endif
+    }
+
     bool native_launch_file_picker_open(
             const String &title, const String &initial_directory) const {
 #if defined(__APPLE__)
@@ -9784,6 +10617,8 @@ protected:
                              &AetherRuntimePlayer::iap_restore);
         ClassDB::bind_method(D_METHOD("iap_get_state_json", "product_id"),
                              &AetherRuntimePlayer::iap_get_state_json);
+        ClassDB::bind_method(D_METHOD("verify_unlock_secret", "candidate"),
+                             &AetherRuntimePlayer::verify_unlock_secret);
         ClassDB::bind_method(
             D_METHOD("native_launch_file_picker_open", "title", "initial_directory"),
             &AetherRuntimePlayer::native_launch_file_picker_open);
@@ -10197,12 +11032,12 @@ private:
 
     bool platform_prefers_raw_source() const {
 #if defined(IOS_ENABLED)
-        // KiriKiri/Artemis' logical GPU frame is complete, while its extra
-        // scaled surface copy is not reliably sampleable through Metal on iOS.
-        // Let Godot scale the provider-owned source texture, which also avoids
-        // an unnecessary full-resolution GPU pass. ONScripter owns a separate
-        // presentation contract and keeps its existing surface output.
-        return runtime_id_ != "onscripter";
+        // Prefer the configured high-resolution surface on iOS. Keep the
+        // previous raw-source route as an explicit emergency fallback for
+        // devices whose Metal bridge cannot sample the scaled surface.
+        const char *raw_source = std::getenv("AETHERKIRI_IOS_RAW_SOURCE");
+        return raw_source != nullptr && raw_source[0] != '\0' &&
+               std::strcmp(raw_source, "0") != 0;
 #else
         return false;
 #endif
@@ -10224,6 +11059,7 @@ private:
         runtime_tick_quantizer_;
     bool artemis_logical_frame_pacing_ = false;
     Ref<ImageTexture> frame_texture_;
+    PackedByteArray frame_rgba_buffer_;
     Ref<Texture2DRD> frame_rd_texture_;
     RID frame_rd_rid_;
     uint32_t frame_rd_width_ = 0;

@@ -2139,8 +2139,18 @@ namespace motion {
                 assignIfChanged(child._pendingRootZ, rootState.posZ);
                 assignIfChanged(child._hasPendingRootPos, true);
                 assignIfChanged(child._zFactor, _zFactor);
+                const bool childAffineChanged =
+                    child._runtime->drawAffineMatrix !=
+                    _runtime->drawAffineMatrix;
                 assignIfChanged(child._runtime->drawAffineMatrix,
                                 _runtime->drawAffineMatrix);
+                if(childAffineChanged) {
+                    // Prepared child vertices already include the previous
+                    // inherited matrix.  Invalidate that cache immediately;
+                    // otherwise the first frame after a parent affine update
+                    // can be rendered at the origin before the next tick.
+                    child._runtime->preparedRenderItemsValid = false;
+                }
                 uint32_t packed;
                 std::memcpy(&packed, &parentNode.colorBytes[0],
                             sizeof(uint32_t));
@@ -2295,17 +2305,6 @@ namespace motion {
             // Binary: calls cleanup (sub_6C0DE8, sub_6B56F8), releases TJS variants,
             // then goes to LABEL_3 (next loop iteration), SKIPPING frameProgress/updateLayers.
             if (mn.activeSlot().done) {
-                const bool retainYuzuSdPreviewChild =
-                    isYuzuSdPresentationMotionPath(motionPath) &&
-                    ((!_completedEndedTimelineRenderHoldLabel.empty() &&
-                      _completedEndedTimelineRenderHoldLabel ==
-                          _runtime->lastExplicitTimelineLabel) ||
-                     (!_deferredEndedTimelineRenderHoldLabel.empty() &&
-                      _deferredEndedTimelineRenderHoldLabel ==
-                          _runtime->lastExplicitTimelineLabel)) &&
-                    child._runtime && child._runtime->activeMotion &&
-                    child._runtime->nodesBuilt &&
-                    child._runtime->nodes.size() > 1;
                 const bool retainTitlePresentationChild =
                     isYuzuTitlePresentationMotionPath(motionPath) &&
                     child._runtime &&
@@ -2326,32 +2325,27 @@ namespace motion {
                     }
                     continue;
                 }
-                if(!retainYuzuSdPreviewChild) {
-                    // Binary cleanup at 0x6BE328..0x6BE354:
-                    // 1. child._allplaying = false (player+1099)
-                    // 2. sub_6C0DE8(child+1296) — resets timeline keyframe cache
-                    // 3. sub_6B56F8(child) — releases layer IDs for all non-root nodes,
-                    //    clears nodes (except root), resets label map
-                    // 4. Release TJS variants at child+984 and child+976
-                    child._allplaying = false;
-                    if (child._runtime) {
-                        // sub_6C0DE8: reset timeline keyframe cache
-                        child._runtime->timelines.clear();
-                        // sub_6B56F8: release layer IDs for non-root nodes, then clear
-                        child._runtime->layerIdsByName.clear();
-                        child._runtime->layerNamesById.clear();
-                        child._runtime->nodeLabelMap.clear();
-                        // Keep root node but clear the rest (sub_6B56F8 at 0x6B59E0)
-                        if (child._runtime->nodes.size() > 1) {
-                            child._runtime->nodes.resize(1);
-                        }
-                        child._runtime->nodesBuilt = false;
+                // Binary cleanup at 0x6BE328..0x6BE354:
+                // 1. child._allplaying = false (player+1099)
+                // 2. sub_6C0DE8(child+1296) — resets timeline keyframe cache
+                // 3. sub_6B56F8(child) — releases layer IDs for all non-root nodes,
+                //    clears nodes (except root), resets label map
+                // 4. Release TJS variants at child+984 and child+976
+                child._allplaying = false;
+                if (child._runtime) {
+                    // sub_6C0DE8: reset timeline keyframe cache
+                    child._runtime->timelines.clear();
+                    // sub_6B56F8: release layer IDs for non-root nodes, then clear
+                    child._runtime->layerIdsByName.clear();
+                    child._runtime->layerNamesById.clear();
+                    child._runtime->nodeLabelMap.clear();
+                    // Keep root node but clear the rest (sub_6B56F8 at 0x6B59E0)
+                    if (child._runtime->nodes.size() > 1) {
+                        child._runtime->nodes.resize(1);
                     }
-                    continue;  // skip to next iteration — binary goes to LABEL_3, not LABEL_18
+                    child._runtime->nodesBuilt = false;
                 }
-                // A one-frame SD selector owns looping child motions. Its clip
-                // slot finishes immediately, but its children keep advancing
-                // until the user selects the next SD state.
+                continue;  // skip to next iteration — binary goes to LABEL_3, not LABEL_18
             }
 
             {
@@ -2765,9 +2759,27 @@ namespace motion {
                 childRootHasAngle = hasAngle;
                 childRootComputedAngle = computedAngle;
                 childRootStateValid = true;
-                applyMotionSubNodeRootState(
+                const bool inheritedRootChanged = applyMotionSubNodeRootState(
                     child, mn, childRootState, childRootHasAngle,
                     childRootComputedAngle);
+                if(inheritedRootChanged && LOGGER &&
+                   motionUpdateDebugEnabled()) {
+                    LOGGER->info(
+                        "motion child inherited root: parent={} node={} child={} key={} parentPos=({:.3f},{:.3f},{:.3f}) parentMatrix=({:.6f},{:.6f},{:.6f},{:.6f}) origin=({:.3f},{:.3f}) childRoot=({:.3f},{:.3f},{:.3f}) childNodes={} firstUpdate={}",
+                        motionPath, mn.layerName,
+                        child._runtime && child._runtime->activeMotion
+                            ? child._runtime->activeMotion->path
+                            : std::string("<none>"),
+                        detail::narrow(child._motionKey),
+                        mn.accumulated.posX, mn.accumulated.posY,
+                        mn.accumulated.posZ, mn.accumulated.m11,
+                        mn.accumulated.m12, mn.accumulated.m21,
+                        mn.accumulated.m22, mn.activeSlot().ox,
+                        mn.activeSlot().oy, childRootState.posX,
+                        childRootState.posY, childRootState.posZ,
+                        child._runtime ? child._runtime->nodes.size() : 0,
+                        child._noUpdateYet ? 1 : 0);
+                }
                 // Note: clip chain propagation is done in label_18 below,
                 // which ALL paths (active + inactive) fall through to.
 
@@ -2961,64 +2973,6 @@ namespace motion {
                     // Looping/standalone children keep their own clock.
                     child.frameProgress(_frameLastTime);
                 }
-                if(isYuzuSdPresentationMotionPath(motionPath) &&
-                   child._runtime) {
-                    const std::string childLabel =
-                        detail::narrow(child._motionKey);
-                    const bool parentHoldsSdFrame =
-                        (!_deferredEndedTimelineRenderHoldLabel.empty() &&
-                         _deferredEndedTimelineRenderHoldLabel ==
-                             _runtime->lastExplicitTimelineLabel) ||
-                        (!_completedEndedTimelineRenderHoldLabel.empty() &&
-                         _completedEndedTimelineRenderHoldLabel ==
-                             _runtime->lastExplicitTimelineLabel);
-                    constexpr const char *bodySetSuffix = "_body_set";
-                    const bool isBodySet =
-                        childLabel.size() >= std::strlen(bodySetSuffix) &&
-                        childLabel.compare(
-                            childLabel.size() - std::strlen(bodySetSuffix),
-                            std::strlen(bodySetSuffix), bodySetSuffix) == 0;
-                    const auto stateIt =
-                        child._runtime->timelines.find(childLabel);
-                    if(isBodySet &&
-                       stateIt != child._runtime->timelines.end()) {
-                        auto &state = stateIt->second;
-                        if(!state.playing && state.totalFrames > 0.0 &&
-                           state.currentTime + 0.0001 >= state.totalFrames) {
-                            state.currentTime = 0.0;
-                            child._clampedEvalTime = state.currentTime;
-                            child._runtime->nodesBuilt = false;
-                            child._emoteDirty = true;
-                            if(LOGGER && motionUpdateDebugEnabled()) {
-                                LOGGER->info(
-                                    "motion hold yuzu sd body setup: motion={} label={} time={:.6f}/{:.6f}",
-                                    motionPath, childLabel,
-                                    state.currentTime, state.totalFrames);
-                            }
-                        }
-                    }
-                    if(parentHoldsSdFrame && !isBodySet &&
-                       stateIt != child._runtime->timelines.end()) {
-                        auto &state = stateIt->second;
-                        if(!state.playing && state.totalFrames > 0.0 &&
-                           state.currentTime >= state.totalFrames) {
-                            const double renderTime = std::max(
-                                0.0,
-                                std::nextafter(state.totalFrames, 0.0));
-                            state.currentTime = renderTime;
-                            state.playing = false;
-                            state.wasPlaying = false;
-                            child._clampedEvalTime = renderTime;
-                            child._emoteDirty = true;
-                            if(LOGGER && motionUpdateDebugEnabled()) {
-                                LOGGER->info(
-                                    "motion hold yuzu sd child final frame: motion={} label={} time={:.6f}/{:.6f}",
-                                    motionPath, childLabel, state.currentTime,
-                                    state.totalFrames);
-                            }
-                        }
-                    }
-                }
                 child.ensureNodeTreeBuilt();
                 if (childRootStateValid) {
                     applyMotionSubNodeRootState(
@@ -3187,8 +3141,17 @@ namespace motion {
         _pendingRootZ = posZ;
         _hasPendingRootPos = true;
         _zFactor = _motionParentPlayer->_zFactor;
+        const bool inheritedAffineChanged =
+            _runtime->drawAffineMatrix !=
+            _motionParentPlayer->_runtime->drawAffineMatrix;
         _runtime->drawAffineMatrix =
             _motionParentPlayer->_runtime->drawAffineMatrix;
+        if(inheritedAffineChanged) {
+            // Child prepared items are keyed by drawAffineMatrix.  Parent
+            // propagation can happen during render, after the child was
+            // prepared once, so explicitly discard the old transform cache.
+            _runtime->preparedRenderItemsValid = false;
+        }
         {
             uint32_t packed;
             std::memcpy(&packed, &parentNode.colorBytes[0],
@@ -5094,6 +5057,10 @@ namespace motion {
             int parentNodeIndex = -1;
             int externalAncestorNodeIndex = -1;
             int externalMeshAncestorIndex = -1;
+            // A flattened child still belongs to the nearest type-12
+            // off-screen composite. Keep that boundary separately from the
+            // visible-ancestor link used for draw ordering.
+            int externalCompositeClipNodeIndex = -1;
             bool forceExternalAncestorForRoot = false;
             std::string childMotionPath;
             std::vector<detail::PlayerRuntime::PreparedRenderItem> entries;
@@ -5167,6 +5134,8 @@ namespace motion {
                         : (insideStencilComposite
                                ? stencilCompositeAncestorIndex
                                : parentNode.visibleAncestorIndex);
+                pending.externalCompositeClipNodeIndex =
+                    stencilCompositeAncestorIndex;
             }
             pending.childMotionPath = child->_runtime->activeMotion
                 ? child->_runtime->activeMotion->path
@@ -5415,158 +5384,6 @@ namespace motion {
                 }
             };
 
-        auto isLikelySdMotion = [](const std::string &path) {
-            std::string lowered = path;
-            std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-                           [](unsigned char c) {
-                               return static_cast<char>(std::tolower(c));
-                           });
-            const auto slash = lowered.find_last_of("/\\");
-            const std::string base =
-                slash == std::string::npos ? lowered : lowered.substr(slash + 1);
-            return base.rfind("sd", 0) == 0 ||
-                lowered.find("/sd/") != std::string::npos ||
-                lowered.find("\\sd\\") != std::string::npos ||
-                lowered.find("/sd") != std::string::npos ||
-                lowered.find("\\sd") != std::string::npos;
-        };
-
-        auto translatePreparedEntry =
-            [](detail::PlayerRuntime::PreparedRenderItem &entry,
-               float dx, float dy,
-               const std::array<float, 4> *replacementViewport) {
-                for(size_t i = 0; i + 1 < entry.corners.size(); i += 2) {
-                    entry.corners[i] += dx;
-                    entry.corners[i + 1] += dy;
-                }
-                if(entry.paintBox[2] >= entry.paintBox[0] &&
-                   entry.paintBox[3] >= entry.paintBox[1]) {
-                    entry.paintBox[0] += dx;
-                    entry.paintBox[1] += dy;
-                    entry.paintBox[2] += dx;
-                    entry.paintBox[3] += dy;
-                }
-                if(entry.hasViewport &&
-                   entry.viewport[2] >= entry.viewport[0] &&
-                   entry.viewport[3] >= entry.viewport[1]) {
-                    entry.viewport[0] += dx;
-                    entry.viewport[1] += dy;
-                    entry.viewport[2] += dx;
-                    entry.viewport[3] += dy;
-                }
-                if(replacementViewport &&
-                   (!entry.hasViewport ||
-                    entry.viewport[2] <= entry.viewport[0] ||
-                    entry.viewport[3] <= entry.viewport[1])) {
-                    entry.viewport = *replacementViewport;
-                    entry.hasViewport = true;
-                }
-                for(size_t i = 0; i + 1 < entry.meshPoints.size(); i += 2) {
-                    entry.meshPoints[i] += dx;
-                    entry.meshPoints[i + 1] += dy;
-                }
-            };
-
-        auto maybeTranslateCenteredChildEntries =
-            [&](PendingChildRenderItems &pending) {
-                if(pending.entries.empty() || !isLikelySdMotion(motionPath)) {
-                    return;
-                }
-
-                std::array<float, 4> parentBounds{0.0f, 0.0f, 0.0f, 0.0f};
-                std::array<float, 4> parentViewport{0.0f, 0.0f, 0.0f, 0.0f};
-                bool haveParentBounds = false;
-                bool haveParentViewport = false;
-                for(const auto &entry : _runtime->preparedRenderItems) {
-                    if(!entry.drawFlag || entry.opacity <= 0) {
-                        continue;
-                    }
-                    unionPreparedPaintBox(parentBounds, entry.paintBox,
-                                          haveParentBounds);
-                    if(entry.hasViewport) {
-                        unionPreparedPaintBox(parentViewport, entry.viewport,
-                                              haveParentViewport);
-                    }
-                }
-                if(!haveParentBounds) {
-                    return;
-                }
-                if(!haveParentViewport) {
-                    parentViewport = parentBounds;
-                    haveParentViewport = true;
-                }
-
-                std::array<float, 4> childBounds{0.0f, 0.0f, 0.0f, 0.0f};
-                bool haveChildBounds = false;
-                for(const auto &entry : pending.entries) {
-                    if(!entry.drawFlag || entry.opacity <= 0) {
-                        continue;
-                    }
-                    unionPreparedPaintBox(childBounds, entry.paintBox,
-                                          haveChildBounds);
-                }
-                if(!haveChildBounds) {
-                    return;
-                }
-
-                const float parentWidth = parentBounds[2] - parentBounds[0];
-                const float parentHeight = parentBounds[3] - parentBounds[1];
-                if(parentWidth <= 0.0f || parentHeight <= 0.0f) {
-                    return;
-                }
-
-                const float parentCenterX =
-                    (parentBounds[0] + parentBounds[2]) * 0.5f;
-                const float parentCenterY =
-                    (parentBounds[1] + parentBounds[3]) * 0.5f;
-                if(!std::isfinite(parentCenterX) ||
-                   !std::isfinite(parentCenterY) ||
-                   (std::fabs(parentCenterX) < 128.0f &&
-                    std::fabs(parentCenterY) < 128.0f)) {
-                    return;
-                }
-
-                const float childCenterX =
-                    (childBounds[0] + childBounds[2]) * 0.5f;
-                const float childCenterY =
-                    (childBounds[1] + childBounds[3]) * 0.5f;
-                const bool childLooksCenterOrigin =
-                    std::fabs(childCenterX) <= parentWidth * 0.75f &&
-                    std::fabs(childCenterY) <= parentHeight * 0.75f;
-                if(!childLooksCenterOrigin) {
-                    return;
-                }
-
-                const std::array<float, 4> translatedChildBounds{
-                    childBounds[0] + parentCenterX,
-                    childBounds[1] + parentCenterY,
-                    childBounds[2] + parentCenterX,
-                    childBounds[3] + parentCenterY
-                };
-                const float margin =
-                    std::max(8.0f, std::min(parentWidth, parentHeight) * 0.12f);
-                const std::array<float, 4> expandedParentBounds{
-                    parentBounds[0] - margin,
-                    parentBounds[1] - margin,
-                    parentBounds[2] + margin,
-                    parentBounds[3] + margin
-                };
-                const bool translatedIntersectsParent =
-                    translatedChildBounds[0] <= expandedParentBounds[2] &&
-                    translatedChildBounds[2] >= expandedParentBounds[0] &&
-                    translatedChildBounds[1] <= expandedParentBounds[3] &&
-                    translatedChildBounds[3] >= expandedParentBounds[1];
-                if(!translatedIntersectsParent) {
-                    return;
-                }
-
-                for(auto &entry : pending.entries) {
-                    translatePreparedEntry(
-                        entry, parentCenterX, parentCenterY,
-                        haveParentViewport ? &parentViewport : nullptr);
-                }
-            };
-
         auto inheritParentClipViewport =
             [&](PendingChildRenderItems &pending) {
                 if(pending.parentNodeIndex < 0 ||
@@ -5574,19 +5391,9 @@ namespace motion {
                        static_cast<int>(_runtime->nodes.size())) {
                     return;
                 }
+
                 const auto &parentNode =
                     _runtime->nodes[pending.parentNodeIndex];
-                const int clipIndex = parentNode.parentClipIndex;
-                if(clipIndex < 0 ||
-                   clipIndex >= static_cast<int>(_runtime->nodes.size())) {
-                    return;
-                }
-                const auto &clipNode = _runtime->nodes[clipIndex];
-                if(clipNode.shapeAABB[2] < clipNode.shapeAABB[0] ||
-                   clipNode.shapeAABB[3] < clipNode.shapeAABB[1]) {
-                    return;
-                }
-
                 const auto &dam = _runtime->drawAffineMatrix;
                 auto transformClipPoint = [&](float x, float y) {
                     return std::array<float, 2>{
@@ -5594,21 +5401,166 @@ namespace motion {
                         static_cast<float>(dam[1] * x + dam[3] * y + dam[5])
                     };
                 };
-                const auto p0 = transformClipPoint(
-                    clipNode.shapeAABB[0], clipNode.shapeAABB[1]);
-                const auto p1 = transformClipPoint(
-                    clipNode.shapeAABB[2], clipNode.shapeAABB[1]);
-                const auto p2 = transformClipPoint(
-                    clipNode.shapeAABB[2], clipNode.shapeAABB[3]);
-                const auto p3 = transformClipPoint(
-                    clipNode.shapeAABB[0], clipNode.shapeAABB[3]);
-                const std::array<float, 4> inheritedViewport{
-                    std::min(std::min(p0[0], p1[0]), std::min(p2[0], p3[0])),
-                    std::min(std::min(p0[1], p1[1]), std::min(p2[1], p3[1])),
-                    std::max(std::max(p0[0], p1[0]), std::max(p2[0], p3[0])),
-                    std::max(std::max(p0[1], p1[1]), std::max(p2[1], p3[1]))
+
+                std::array<float, 4> inheritedViewport{
+                    1.0f, 1.0f, -1.0f, -1.0f
                 };
+                bool haveInheritedViewport = false;
+                bool inheritedFromComposite = false;
+                auto includeViewport = [&](const std::array<float, 4> &box) {
+                    if(!std::isfinite(box[0]) || !std::isfinite(box[1]) ||
+                       !std::isfinite(box[2]) || !std::isfinite(box[3]) ||
+                       box[2] < box[0] || box[3] < box[1]) {
+                        return;
+                    }
+                    if(!haveInheritedViewport) {
+                        inheritedViewport = box;
+                        haveInheritedViewport = true;
+                        return;
+                    }
+                    inheritedViewport[0] = std::max(
+                        inheritedViewport[0], box[0]);
+                    inheritedViewport[1] = std::max(
+                        inheritedViewport[1], box[1]);
+                    inheritedViewport[2] = std::min(
+                        inheritedViewport[2], box[2]);
+                    inheritedViewport[3] = std::min(
+                        inheritedViewport[3], box[3]);
+                };
+
+                // Preserve the existing type-7 shape-chain behavior.
+                const int clipIndex = parentNode.parentClipIndex;
+                if(clipIndex >= 0 &&
+                   clipIndex < static_cast<int>(_runtime->nodes.size())) {
+                    const auto &clipNode = _runtime->nodes[clipIndex];
+                    if(clipNode.shapeAABB[2] >= clipNode.shapeAABB[0] &&
+                       clipNode.shapeAABB[3] >= clipNode.shapeAABB[1]) {
+                        const auto p0 = transformClipPoint(
+                            clipNode.shapeAABB[0], clipNode.shapeAABB[1]);
+                        const auto p1 = transformClipPoint(
+                            clipNode.shapeAABB[2], clipNode.shapeAABB[1]);
+                        const auto p2 = transformClipPoint(
+                            clipNode.shapeAABB[2], clipNode.shapeAABB[3]);
+                        const auto p3 = transformClipPoint(
+                            clipNode.shapeAABB[0], clipNode.shapeAABB[3]);
+                        includeViewport({
+                            std::min(std::min(p0[0], p1[0]),
+                                     std::min(p2[0], p3[0])),
+                            std::min(std::min(p0[1], p1[1]),
+                                     std::min(p2[1], p3[1])),
+                            std::max(std::max(p0[0], p1[0]),
+                                     std::max(p2[0], p3[0])),
+                            std::max(std::max(p0[1], p1[1]),
+                                     std::max(p2[1], p3[1]))
+                        });
+                    }
+                }
+
+                // A type-12 node is rendered by krkrsdl3 into an off-screen
+                // target before that target is composited.  Its final
+                // paintBox is expanded by descendants, so it is not a valid
+                // boundary.  Carry the node's own quad instead; this keeps a
+                // child authored at x<0 invisible until it enters the SD
+                // surface, then reveals only the intersecting part.
+                const int compositeIndex =
+                    pending.externalCompositeClipNodeIndex;
+                if(compositeIndex >= 0 &&
+                   compositeIndex < static_cast<int>(_runtime->nodes.size())) {
+                    const auto &compositeNode = _runtime->nodes[compositeIndex];
+                    std::array<float, 8> compositeCorners{};
+                    bool haveCompositeGeometry = false;
+                    for(const auto &localEntry :
+                        _runtime->preparedRenderItems) {
+                        if(localEntry.nodeIndex != compositeIndex ||
+                           !localEntry.hasOwnSource) {
+                            continue;
+                        }
+                        bool finiteCorners = true;
+                        for(const float value : localEntry.corners) {
+                            if(!std::isfinite(value)) {
+                                finiteCorners = false;
+                                break;
+                            }
+                        }
+                        if(finiteCorners) {
+                            float minX = localEntry.corners[0];
+                            float minY = localEntry.corners[1];
+                            float maxX = minX;
+                            float maxY = minY;
+                            for(int ci = 1; ci < 4; ++ci) {
+                                minX = std::min(minX,
+                                                localEntry.corners[ci * 2]);
+                                minY = std::min(minY,
+                                                localEntry.corners[ci * 2 + 1]);
+                                maxX = std::max(maxX,
+                                                localEntry.corners[ci * 2]);
+                                maxY = std::max(maxY,
+                                                localEntry.corners[ci * 2 + 1]);
+                            }
+                            if(maxX - minX > 1e-5f &&
+                               maxY - minY > 1e-5f) {
+                                compositeCorners = localEntry.corners;
+                                haveCompositeGeometry = true;
+                            }
+                        }
+                        break;
+                    }
+                    if(!haveCompositeGeometry &&
+                       compositeNode.clipW > 0.0 &&
+                       compositeNode.clipH > 0.0) {
+                        for(int ci = 0; ci < 4; ++ci) {
+                            const auto point = transformClipPoint(
+                                compositeNode.vertices[ci * 2],
+                                compositeNode.vertices[ci * 2 + 1]);
+                            compositeCorners[ci * 2] = point[0];
+                            compositeCorners[ci * 2 + 1] = point[1];
+                        }
+                        haveCompositeGeometry = true;
+                    }
+                    if(!haveCompositeGeometry &&
+                       compositeNode.bounds[2] >= compositeNode.bounds[0] &&
+                       compositeNode.bounds[3] >= compositeNode.bounds[1]) {
+                        const auto p0 = transformClipPoint(
+                            compositeNode.bounds[0], compositeNode.bounds[1]);
+                        const auto p1 = transformClipPoint(
+                            compositeNode.bounds[2], compositeNode.bounds[1]);
+                        const auto p2 = transformClipPoint(
+                            compositeNode.bounds[2], compositeNode.bounds[3]);
+                        const auto p3 = transformClipPoint(
+                            compositeNode.bounds[0], compositeNode.bounds[3]);
+                        compositeCorners = {
+                            p0[0], p0[1], p1[0], p1[1],
+                            p2[0], p2[1], p3[0], p3[1]
+                        };
+                        haveCompositeGeometry = true;
+                    }
+                    if(haveCompositeGeometry) {
+                        std::array<float, 4> compositeViewport{
+                            compositeCorners[0], compositeCorners[1],
+                            compositeCorners[0], compositeCorners[1]
+                        };
+                        for(int ci = 1; ci < 4; ++ci) {
+                            compositeViewport[0] = std::min(
+                                compositeViewport[0], compositeCorners[ci * 2]);
+                            compositeViewport[1] = std::min(
+                                compositeViewport[1], compositeCorners[ci * 2 + 1]);
+                            compositeViewport[2] = std::max(
+                                compositeViewport[2], compositeCorners[ci * 2]);
+                            compositeViewport[3] = std::max(
+                                compositeViewport[3], compositeCorners[ci * 2 + 1]);
+                        }
+                        includeViewport(compositeViewport);
+                        inheritedFromComposite = true;
+                    }
+                }
+
+                if(!haveInheritedViewport) {
+                    return;
+                }
                 for(auto &entry : pending.entries) {
+                    entry.viewportInheritedFromComposite =
+                        entry.viewportInheritedFromComposite ||
+                        inheritedFromComposite;
                     if(entry.hasViewport &&
                        entry.viewport[2] >= entry.viewport[0] &&
                        entry.viewport[3] >= entry.viewport[1]) {
@@ -5647,7 +5599,6 @@ namespace motion {
                 continue;
             }
             applyExternalMeshChain(pending);
-            maybeTranslateCenteredChildEntries(pending);
             // A child Player owns a separate node array, so its local
             // parentClipIndex cannot point back into the containing motion.
             // Carry the nearest type-7 clip into the flattened child items.

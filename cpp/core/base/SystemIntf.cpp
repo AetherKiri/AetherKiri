@@ -27,6 +27,8 @@
 #include "Platform.h"
 
 #include <fmt/format.h>
+#include <cstdlib>
+#include <spdlog/spdlog.h>
 
 extern bool TVPStartupSuccess;
 
@@ -229,6 +231,11 @@ tTJSNC_System::tTJSNC_System() : inherited(TJS_W("System")) {
         tjs_int width = 0;
         tjs_int height = 0;
         TVPGetImageSize(ttstr(*param[0]), width, height);
+        if(const char *trace = std::getenv("AETHERKIRI_VIRTUAL_SIZE_TRACE");
+           trace && *trace && *trace != '0') {
+            spdlog::info("VirtualSizeTrace System.fetchImageSize name={} -> {}x{}",
+                         ttstr(*param[0]).AsStdString(), width, height);
+        }
 
         if(result) {
             iTJSDispatch2 *array = TJSCreateArrayObject();

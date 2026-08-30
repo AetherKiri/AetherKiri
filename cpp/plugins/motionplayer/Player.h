@@ -621,10 +621,6 @@ namespace motion {
         bool executeLayerRenderCommands(iTJSDispatch2 *renderLayerObject,
                                          bool skipUpdate);
         bool updateLayerAfterDraw(iTJSDispatch2 *targetLayerObject);
-        bool updateAccurateSLAAfterDraw(iTJSDispatch2 *targetLayerObject);
-        void claimYuzuSdAutoProgress();
-        void releaseYuzuSdAutoProgressClaim();
-        void retireYuzuSdAutoProgress();
         void enableAutoProgress(iTJSDispatch2 *objthis);
         void disableAutoProgress();
         void enablePresentationHold(iTJSDispatch2 *targetLayerObject,
@@ -637,10 +633,6 @@ namespace motion {
         void releaseDeferredEndedTimelineRenderHoldAfterDraw(bool force = false);
         bool hasPlayingChildPlayers() const;
         bool shouldReportPlayingChildPlayers() const;
-        bool isYuzuSdPreviewAnimationFrozen() const;
-        void captureYuzuSdPreviewFrame(iTJSDispatch2 *renderTargetObject,
-                                       const std::string &motionPath);
-        bool restoreFrozenYuzuSdPreviewFrame(iTJSDispatch2 *targetObject);
         void dispatchPendingEvents(iTJSDispatch2 *objthis);
         // updateLayers sub-phases (aligned to libkrkr2.so sub-functions)
         void updateLayersPhase1_PreLoop(double currentTime);
@@ -659,6 +651,12 @@ namespace motion {
         std::shared_ptr<detail::PlayerRuntime> _runtime;
         std::unique_ptr<MotionNativePlayerBackend> _nativeBackend;
         std::string _nativeBackendSourcePath;
+        // A newly-created native E-mote player starts with the SDK's default
+        // pose. Keep the previous presentation until the first timeline
+        // progress has applied the restored/scripted variables, otherwise a
+        // cold expression switch exposes that default pose for one frame.
+        bool _nativeBackendPresentationReady = true;
+        bool _nativeBackendPresentationHoldLogged = false;
         ResourceManager _resourceManagerNative;
         int _completionType = 0;
         tTJSVariant _metadata;
@@ -727,10 +725,6 @@ namespace motion {
         bool _presentationHoldRendering = false;
         std::string _deferredEndedTimelineRenderHoldLabel;
         std::string _completedEndedTimelineRenderHoldLabel;
-        double _yuzuSdChildContinuationFrames = 0.0;
-        std::shared_ptr<tTVPBaseBitmap> _yuzuSdPreviewFrame;
-        std::string _yuzuSdPreviewFrameMotion;
-        std::string _yuzuSdPreviewFrameLabel;
         std::string _endedTimelineRenderHoldRestoreLabel;
         double _endedTimelineRenderHoldRestoreTime = 0.0;
         double _endedTimelineRenderHoldRestoreEvalTime = 0.0;

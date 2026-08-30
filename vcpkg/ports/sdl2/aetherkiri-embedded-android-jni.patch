@@ -1,0 +1,29 @@
+diff --git a/src/core/android/SDL_android.c b/src/core/android/SDL_android.c
+index 9f9b65e4f..000000000 100644
+--- a/src/core/android/SDL_android.c
++++ b/src/core/android/SDL_android.c
+@@ -1828,4 +1828,11 @@ void Android_JNI_AudioSetThreadPriority(int iscapture, int device_id)
+ {
++    /* SDL is embedded in Godot and has no SDLActivity JavaVM. */
++    if (!mJavaVM || !mAudioManagerClass || !midAudioSetThreadPriority) {
++        return;
++    }
+     JNIEnv *env = Android_JNI_GetEnv();
++    if (!env) {
++        return;
++    }
+     (*env)->CallStaticVoidMethod(env, mAudioManagerClass, midAudioSetThreadPriority, iscapture, device_id);
+ }
+@@ -2162,5 +2162,12 @@ void Android_JNI_PollInputDevices(void)
+ void Android_JNI_PollInputDevices(void)
+ {
++    /* SDL is embedded in Godot, which does not initialize SDLActivity JNI. */
++    if (!mJavaVM || !mControllerManagerClass || !midPollInputDevices) {
++        return;
++    }
+     JNIEnv *env = Android_JNI_GetEnv();
++    if (!env) {
++        return;
++    }
+     (*env)->CallStaticVoidMethod(env, mControllerManagerClass, midPollInputDevices);
+ }

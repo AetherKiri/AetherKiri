@@ -42,6 +42,9 @@ namespace motion {
         [[nodiscard]] static tjs_int getEmotePSBDecryptSeed();
         static bool applyEmotePSBDecryptFunc(std::uint8_t *data,
                                              std::size_t size);
+        // Drop process-level warm PSB/TJS objects during an explicit memory
+        // compaction pass. Active players retain their own snapshots.
+        static void trimStaticStateForMemoryPressure();
         [[nodiscard]] static tjs_int getDecryptSeed() {
             return getEmotePSBDecryptSeed();
         }

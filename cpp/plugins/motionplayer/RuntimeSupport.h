@@ -301,6 +301,15 @@ namespace motion::detail {
         std::size_t nextD3DRenderLayer = 0;
         std::size_t lastD3DRenderLayer = 0;
         std::uint64_t lastD3DRasterPublishUs = 0;
+        // Non-emote AffineSourceMotion frames are rasterized into a CPU
+        // layer.  Keep the last completed surface for a short interval so a
+        // 60 Hz script timer cannot immediately repaint the same expensive
+        // full-canvas transition twice before the compositor presents it.
+        tTJSVariant lastMotionRasterTarget;
+        std::string lastMotionRasterMotion;
+        int lastMotionRasterWidth = 0;
+        int lastMotionRasterHeight = 0;
+        std::uint64_t lastMotionRasterPublishUs = 0;
         // Stable visible endpoint for D3DAffineSourceMotion scripts that
         // present Player.draw() directly instead of calling captureCanvas().
         // AssignMotionImages swaps completed scratch textures into this layer
@@ -458,7 +467,6 @@ namespace motion::detail {
         std::vector<MotionNode> nodes;
         bool nodesBuilt = false;
         bool yuzuTitleFinalFrameRendered = false;
-        bool yuzuSdPresentationRetired = false;
         bool yuzuPresentationCenteredOriginConfirmed = false;
         float yuzuPresentationTranslateX = 0.0f;
         float yuzuPresentationTranslateY = 0.0f;
@@ -514,6 +522,11 @@ namespace motion::detail {
             std::array<float, 4> paintBox{0.f, 0.f, 0.f, 0.f};
             std::array<float, 4> viewport{1.f, 1.f, -1.f, -1.f};
             bool hasViewport = false;
+            // A flattened child may inherit a viewport from an enclosing
+            // off-screen composite. That rectangle is already in the
+            // containing player's world coordinates and must not be scaled
+            // or translated with the child's authored geometry.
+            bool viewportInheritedFromComposite = false;
             int opacity = 255;
             int updateCount = 0;
             int visibleAncestorIndex = -1;
@@ -700,6 +713,11 @@ namespace motion::detail {
             nextD3DRenderLayer = 0;
             lastD3DRenderLayer = 0;
             lastD3DRasterPublishUs = 0;
+            lastMotionRasterTarget.Clear();
+            lastMotionRasterMotion.clear();
+            lastMotionRasterWidth = 0;
+            lastMotionRasterHeight = 0;
+            lastMotionRasterPublishUs = 0;
             nativeBackendGpuFrameLifetime.reset();
             nativeBackendGpuFrameCount = 0;
             inheritedVariableInputs.clear();

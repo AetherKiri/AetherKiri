@@ -4,7 +4,7 @@ func _initialize() -> void:
     var player = ClassDB.instantiate("AetherRuntimePlayer")
     root.add_child(player as Node)
 
-    var modes := ["AlphaBlend", "AlphaBlend_d", "AlphaBlend_a", "CopyColor", "FillARGB", "RemoveConstOpacity", "ConstAlphaBlend_d", "PsScreenBlend", "PsMulBlend", "PsAddBlend", "PsSubBlend"]
+    var modes := ["AlphaBlend", "AlphaBlend_d", "AlphaBlend_a", "CopyColor", "FillARGB", "ApplyColorMap_a", "AdditiveAlphaBlend", "AdditiveAlphaBlend_a", "RemoveConstOpacity", "AlphaToAdditiveAlpha", "AdditiveAlphaToAlpha", "ConstAlphaBlend_d", "PsScreenBlend", "PsMulBlend", "PsAddBlend", "PsSubBlend"]
     var failed := false
     for mode in modes:
         var opacities := [255, 192, 96]

@@ -90,6 +90,7 @@ runtimes unrestricted for compatibility development and testing.
 | `cpp/plugins/` | Bundled native plugin implementations and compatibility stubs. |
 | `packages/AetherInternal/` | Optional private E-mote package submodule; public builds work without it. |
 | `packages/OnscripterYuri/` | Public OnscripterYuri git submodule. |
+| `packages/tjs2Decompiler/` | Optional Rust helper for disassembling and analyzing compiled TJS2 bytecode; it is not linked into runtime builds. |
 | `demos/aetherkiri-kag3/` | Source tree for the built-in AetherKiri KAG3 demo. |
 | `tests/profiles/` | Per-game probe profiles. Committed profiles must not contain machine-local game paths. |
 | `tools/` | Developer and compatibility tools built outside iOS/Android targets. |
@@ -199,6 +200,16 @@ Initialize the public ONS runtime after cloning:
 ```bash
 git submodule update --init packages/OnscripterYuri
 ```
+
+Plugin compatibility work that needs compiled TJS2 analysis can additionally
+initialize the optional developer helper:
+
+```bash
+git submodule update --init packages/tjs2Decompiler
+```
+
+See [`doc/development.md`](doc/development.md#compiled-tjs2-analysis) for its
+build and evidence-validation workflow.
 
 The public repository builds and runs CI without access to private packages.
 Maintainers with access to the complete E-mote and native Live2D

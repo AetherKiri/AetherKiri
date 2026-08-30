@@ -516,6 +516,34 @@ syslog/crash logs for iOS release diagnostics. Use `--console` only when
 actively collecting logs, because it waits for the process and can keep a
 terminal session occupied.
 
+### Compiled TJS2 analysis
+
+`packages/tjs2Decompiler` is an optional developer-only Rust helper. It is a
+git submodule and is deliberately not part of any application or native runtime
+target. Initialize and build it with:
+
+```bash
+git submodule update --init packages/tjs2Decompiler
+cargo build --release --manifest-path packages/tjs2Decompiler/Cargo.toml
+```
+
+The resulting `packages/tjs2Decompiler/target/release/tjs2dec` accepts a
+structured `TJS2100` bytecode file. Useful views are:
+
+```bash
+packages/tjs2Decompiler/target/release/tjs2dec disasm /path/to/script.tjs
+packages/tjs2Decompiler/target/release/tjs2dec ssa /path/to/script.tjs
+packages/tjs2Decompiler/target/release/tjs2dec ssa --hlir /path/to/script.tjs
+packages/tjs2Decompiler/target/release/tjs2dec tjs /path/to/script.tjs
+packages/tjs2Decompiler/target/release/tjs2dec emit-tjs /path/to/script.tjs
+```
+
+Treat decompiler output as analysis evidence, not as authoritative source.
+Before implementing a compatibility plugin, cross-check class/object counts,
+call flow, constants, and native method boundaries against the engine's own
+bytecode dump and the original plugin's native disassembly. Do not commit game
+scripts, extracted bytecode, DLLs, or machine-local paths.
+
 ## Code Change Guidelines
 
 - Keep the Godot app as the product shell.
