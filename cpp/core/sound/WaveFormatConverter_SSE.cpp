@@ -14,7 +14,8 @@
 #include "tjsCommHead.h"
 #include "MathAlgorithms.h"
 
-#if defined(_M_IX86) || defined(_M_X64)
+#if defined(_M_IX86) || defined(_M_X64) || defined(__i386__) || \
+    defined(__x86_64__)
 //---------------------------------------------------------------------------
 
 _ALIGN16(const float)
@@ -31,6 +32,7 @@ static inline void Int16ToFloat32_sse2(float *d, const tjs_int16 *s) {
     _mm_store_ps(d + 0, _mm_mul_ps(mlo, PM128(TJS_V_VEC_REDUCE)));
     _mm_store_ps(d + 4, _mm_mul_ps(mhi, PM128(TJS_V_VEC_REDUCE)));
 }
+#if defined(_MSC_VER)
 static inline void Int16ToFloat32_sse41(float *d, const tjs_int16 *s) {
     __m128 mlo = _mm_cvtepi32_ps(
         _mm_cvtepi16_epi32(_mm_loadl_epi64((__m128i const *)(s + 0))));
@@ -39,6 +41,7 @@ static inline void Int16ToFloat32_sse41(float *d, const tjs_int16 *s) {
     _mm_store_ps(d + 0, _mm_mul_ps(mlo, PM128(TJS_V_VEC_REDUCE)));
     _mm_store_ps(d + 4, _mm_mul_ps(mhi, PM128(TJS_V_VEC_REDUCE)));
 }
+#endif
 static inline void Float32ToInt16_sse2(tjs_uint16 *d, const float *s) {
     __m128i mlo = _mm_cvtps_epi32(
         _mm_mul_ps(*(__m128 *)(s + 0), PM128(TJS_V_VEC_MAGNIFY)));

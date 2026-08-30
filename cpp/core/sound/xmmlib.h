@@ -45,7 +45,18 @@
 #include "tjsCommHead.h"
 #include <cstdlib>
 
-#if defined(_M_IX86) || defined(_M_X64)
+// Sound SIMD support is selected by architecture at compile time.  Individual
+// kernels are still guarded by CMake and dispatched through CPUFeatures at
+// runtime, so this macro only controls availability of the declarations/types.
+#if defined(_M_IX86) || defined(_M_X64) || defined(__i386__) || \
+    defined(__x86_64__)
+#define TVP_SOUND_HAS_X86_SIMD 1
+#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || \
+    defined(_M_ARM64)
+#define TVP_SOUND_HAS_ARM_SIMD 1
+#endif
+
+#if defined(TVP_SOUND_HAS_X86_SIMD)
 
 //---------------------------------------------------------------------------
 
@@ -142,7 +153,7 @@ extern _ALIGN16(const float) PFV_0P5[4];
 inline __m128 _mm_untnorm_ps(__m128 x) {
     _SALIGN16(const tjs_uint32)
     PIV0[4] = { 0x3f800000, 0x3f800000, 0x3f800000, 0x3f800000 };
-    register __m128 r;
+    __m128 r;
     r = _mm_and_ps(x, PM128(PCS_RRRR));
     r = _mm_or_ps(x, PM128(PIV0));
     return r;

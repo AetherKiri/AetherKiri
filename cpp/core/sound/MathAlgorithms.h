@@ -180,7 +180,8 @@ void InterleaveOverlappingWindow(float *__restrict dest,
 
 //---------------------------------------------------------------------------
 
-#if defined(_M_IX86) || defined(_M_X64)
+#if defined(_M_IX86) || defined(_M_X64) || defined(__i386__) || \
+    defined(__x86_64__)
 //---------------------------------------------------------------------------
 // 定数など
 //---------------------------------------------------------------------------
@@ -367,7 +368,7 @@ static inline void VFast_sincos_F4_SSE2(__m128 v, __m128 &sin, __m128 &cos) {
     sin = _mm_mul_ps(s1, fixmag1);
     //	sin=madd(s1, fixmag1, (float)(0.0));
 }
-#if defined(_M_IX86)
+#if defined(_M_IX86) || defined(__i386__)
 static inline void VFast_sincos_F4_SSE(__m128 v, __m128 &sin, __m128 &cos) {
     __m128 s1, s2, c1, c2, fixmag1;
 
@@ -462,7 +463,7 @@ static inline void VFast_sincos_F4_SSE(__m128 v, __m128 &sin, __m128 &cos) {
 
     _mm_empty();
 }
-#elif defined(_M_X64)
+#elif defined(_M_X64) || defined(__x86_64__)
 #define VFast_sincos_F4_SSE VFast_sincos_F4_SSE2
 #endif
 //---------------------------------------------------------------------------
@@ -495,7 +496,7 @@ static inline __m128 Wrap_Pi_F4_SSE2(__m128 v) {
     // 戻る
     return v;
 }
-#if defined(_M_IX86)
+#if defined(_M_IX86) || defined(__i386__)
 static inline __m128 Wrap_Pi_F4_SSE(__m128 v) {
     // v を M_PI で割る
     __m128 v_quant = _mm_mul_ps(v, PM128(TVP_V_R_PI)); // v_quant = v/M_PI
@@ -532,7 +533,7 @@ static inline __m128 Wrap_Pi_F4_SSE(__m128 v) {
     // 戻る
     return v;
 }
-#elif defined(_M_X64)
+#elif defined(_M_X64) || defined(__x86_64__)
 // x64 の時はSSE2を使う
 #define Wrap_Pi_F4_SSE Wrap_Pi_F4_SSE2
 #endif

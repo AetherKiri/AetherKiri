@@ -80,6 +80,36 @@ add_library(${PROJECT_NAME} STATIC ${VISUAL_SOURCE_FILES})
 target_include_directories(${PROJECT_NAME} PUBLIC ${VISUAL_HEADERS_DIR})
 target_link_libraries(${PROJECT_NAME} PUBLIC tjs2 PRIVATE core_base_module core_environ_module core_plugin_module core_sound_module core_utils_module)
 
+# The vendored krkrz resamplers are compiled only for x86 targets.  Runtime
+# dispatch in ResampleImage.cpp still checks the actual host feature set, so
+# binaries retain a scalar fallback on older CPUs and on ARM.
+string(TOLOWER
+       "${CMAKE_SYSTEM_PROCESSOR};${CMAKE_OSX_ARCHITECTURES};${ANDROID_ABI};${CMAKE_ANDROID_ARCH_ABI}"
+       _aether_visual_arch)
+if(NOT WEB AND NOT EMSCRIPTEN AND
+   _aether_visual_arch MATCHES "x86_64|amd64|x64|i[3-6]86|x86")
+    target_sources(${PROJECT_NAME} PRIVATE
+        ${VISUAL_PATH}/gl/ResampleImageSSE2_upstream.cpp
+        ${VISUAL_PATH}/gl/ResampleImageAVX2_upstream.cpp
+    )
+    target_compile_definitions(${PROJECT_NAME} PRIVATE AETHER_ENABLE_RESAMPLE_X86_SIMD=1)
+    if(MSVC)
+        set_source_files_properties(
+            ${VISUAL_PATH}/gl/ResampleImageAVX2_upstream.cpp
+            PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
+        set_source_files_properties(
+            ${VISUAL_PATH}/gl/ResampleImageSSE2_upstream.cpp
+            PROPERTIES COMPILE_OPTIONS "")
+    else()
+        set_source_files_properties(
+            ${VISUAL_PATH}/gl/ResampleImageAVX2_upstream.cpp
+            PROPERTIES COMPILE_OPTIONS "-mavx2")
+        set_source_files_properties(
+            ${VISUAL_PATH}/gl/ResampleImageSSE2_upstream.cpp
+            PROPERTIES COMPILE_OPTIONS "-mssse3")
+    endif()
+endif()
+
 target_link_libraries(${PROJECT_NAME} PRIVATE libbpg)
 
 if(ANDROID AND NOT BUILD_GPU_BRIDGE)

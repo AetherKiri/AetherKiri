@@ -22,6 +22,7 @@
 #include "tjsDictionary.h"
 #include "VorbisWaveDecoder.h"
 #include "FFWaveDecoder.h"
+#include "CPUFeatures.h"
 
 static bool TVPWaveIntfAudioTraceEnabled() {
     static int enabled = []() {
@@ -109,7 +110,7 @@ extern void (*PCMConvertLoopInt16ToFloat32)(void *dest, const void *src,
 extern void (*PCMConvertLoopFloat32ToInt16)(void *dest, const void *src,
                                             size_t numsamples);
 
-#if 0
+#if defined(AETHER_ENABLE_SOUND_X86_SIMD)
 extern void PCMConvertLoopInt16ToFloat32_sse(void * __restrict dest, const void * __restrict src, size_t numsamples);
 extern void PCMConvertLoopFloat32ToInt16_sse(void * __restrict dest, const void * __restrict src, size_t numsamples);
 #endif
@@ -127,19 +128,12 @@ static void TVPConvertFloatPCMTo16bits(tjs_int16 *output, const float *input,
 
     if(!downmix) {
         tjs_int total = channels * count;
-#if 0
-        bool use_sse =
-                (TVPCPUType & TVP_CPU_HAS_MMX) &&
-                (TVPCPUType & TVP_CPU_HAS_SSE) &&
-                (TVPCPUType & TVP_CPU_HAS_CMOV);
-
-        if(use_sse)
+#if defined(AETHER_ENABLE_SOUND_X86_SIMD)
+        if(TVPHasCPUFeature(TVPCPUFeature::SSE2))
             PCMConvertLoopFloat32ToInt16_sse(output, input, total);
         else
-            PCMConvertLoopFloat32ToInt16(output, input, total);
-#else
-        PCMConvertLoopFloat32ToInt16(output, input, total);
 #endif
+        PCMConvertLoopFloat32ToInt16(output, input, total);
     } else {
         float nc = 32768.0f / (float)channels;
         while(count--) {
@@ -352,20 +346,13 @@ static void TVPConvertIntegerPCMToFloat(float *output, const void *input,
         tjs_int total = channels * count;
 
         if(validbits == 16) {
-#if 0
+#if defined(AETHER_ENABLE_SOUND_X86_SIMD)
             // most popular
-            bool use_sse =
-                    (TVPCPUType & TVP_CPU_HAS_MMX) &&
-                    (TVPCPUType & TVP_CPU_HAS_SSE) &&
-                    (TVPCPUType & TVP_CPU_HAS_CMOV);
-
-            if(use_sse)
+            if(TVPHasCPUFeature(TVPCPUFeature::SSE2))
                 PCMConvertLoopInt16ToFloat32_sse(output, p, total);
             else
-                PCMConvertLoopInt16ToFloat32(output, p, total);
-#else
-            PCMConvertLoopInt16ToFloat32(output, p, total);
 #endif
+            PCMConvertLoopInt16ToFloat32(output, p, total);
         } else {
             // generic
             tjs_uint16 mask = ~((1 << (16 - validbits)) - 1);

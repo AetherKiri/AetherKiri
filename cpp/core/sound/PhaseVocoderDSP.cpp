@@ -42,9 +42,94 @@
 #include <string.h>
 
 #include "tjsUtils.h"
+#include "CPUFeatures.h"
 
 // #include "tvpgl_ia32_intf.h"
-#include "DetectCPU.h"
+
+#if defined(AETHER_ENABLE_SOUND_X86_SIMD)
+extern void DeinterleaveApplyingWindow_sse(
+    float *__restrict dest[], const float *__restrict src,
+    float *__restrict win, int numch, size_t destofs, size_t len);
+extern void InterleaveOverlappingWindow_sse(
+    float *__restrict dest, const float *__restrict const *__restrict src,
+    float *__restrict win, int numch, size_t srcofs, size_t len);
+extern void rdft_sse(int n, int isgn, float *__restrict a, int *__restrict ip,
+                     float *__restrict w);
+#endif
+
+#if defined(AETHER_ENABLE_SOUND_ARM_SIMD)
+extern void DeinterleaveApplyingWindow_neon(
+    float *__restrict dest[], const float *__restrict src,
+    float *__restrict win, int numch, size_t destofs, size_t len);
+extern void InterleaveOverlappingWindow_neon(
+    float *__restrict dest, const float *__restrict const *__restrict src,
+    float *__restrict win, int numch, size_t srcofs, size_t len);
+extern void rdft_neon(int n, int isgn, float *__restrict a, int *__restrict ip,
+                      float *__restrict w);
+#endif
+
+namespace {
+
+void TVPDeinterleaveApplyingWindow(
+    float *__restrict dest[], const float *__restrict src,
+    const float *__restrict win, int numch, size_t destofs, size_t len) {
+#if defined(AETHER_ENABLE_SOUND_X86_SIMD)
+    static const bool useSSE2 = TVPHasCPUFeature(TVPCPUFeature::SSE2);
+    if(useSSE2) {
+        DeinterleaveApplyingWindow_sse(dest, src, const_cast<float *>(win),
+                                       numch, destofs, len);
+        return;
+    }
+#elif defined(AETHER_ENABLE_SOUND_ARM_SIMD)
+    static const bool useNEON = TVPHasCPUFeature(TVPCPUFeature::NEON);
+    if(useNEON) {
+        DeinterleaveApplyingWindow_neon(dest, src, const_cast<float *>(win),
+                                        numch, destofs, len);
+        return;
+    }
+#endif
+    DeinterleaveApplyingWindow(dest, src, win, numch, destofs, len);
+}
+
+void TVPInterleaveOverlappingWindow(
+    float *__restrict dest, const float *__restrict const *__restrict src,
+    const float *__restrict win, int numch, size_t srcofs, size_t len) {
+#if defined(AETHER_ENABLE_SOUND_X86_SIMD)
+    static const bool useSSE2 = TVPHasCPUFeature(TVPCPUFeature::SSE2);
+    if(useSSE2) {
+        InterleaveOverlappingWindow_sse(
+            dest, src, const_cast<float *>(win), numch, srcofs, len);
+        return;
+    }
+#elif defined(AETHER_ENABLE_SOUND_ARM_SIMD)
+    static const bool useNEON = TVPHasCPUFeature(TVPCPUFeature::NEON);
+    if(useNEON) {
+        InterleaveOverlappingWindow_neon(
+            dest, src, const_cast<float *>(win), numch, srcofs, len);
+        return;
+    }
+#endif
+    InterleaveOverlappingWindow(dest, src, win, numch, srcofs, len);
+}
+
+void TVPRdft(int n, int isgn, float *a, int *ip, float *w) {
+#if defined(AETHER_ENABLE_SOUND_X86_SIMD)
+    static const bool useSSE2 = TVPHasCPUFeature(TVPCPUFeature::SSE2);
+    if(useSSE2) {
+        rdft_sse(n, isgn, a, ip, w);
+        return;
+    }
+#elif defined(AETHER_ENABLE_SOUND_ARM_SIMD)
+    static const bool useNEON = TVPHasCPUFeature(TVPCPUFeature::NEON);
+    if(useNEON) {
+        rdft_neon(n, isgn, a, ip, w);
+        return;
+    }
+#endif
+    rdft(n, isgn, a, ip, w);
+}
+
+} // namespace
 
 //---------------------------------------------------------------------------
 tRisaPhaseVocoderDSP::tRisaPhaseVocoderDSP(unsigned int framesize,
@@ -297,13 +382,6 @@ bool tRisaPhaseVocoderDSP::GetOutputBuffer(size_t numsamplegranules,
 
 //---------------------------------------------------------------------------
 tRisaPhaseVocoderDSP::tStatus tRisaPhaseVocoderDSP::Process() {
-    const static bool use_sse = false;
-#if 0
-    (TVPCPUType & TVP_CPU_HAS_MMX) &&
-    (TVPCPUType & TVP_CPU_HAS_SSE) &&
-    (TVPCPUType & TVP_CPU_HAS_CMOV);
-#endif
-
     // パラメータの再計算の必要がある場合は再計算をする
     if(RebuildParams) {
         // 窓関数の計算(ここではVorbis I 窓)
@@ -362,11 +440,11 @@ tRisaPhaseVocoderDSP::tStatus tRisaPhaseVocoderDSP::Process() {
         InputBuffer.GetReadPointer(FrameSize * Channels, p1, p1len, p2, p2len);
         p1len /= Channels;
         p2len /= Channels;
-        DeinterleaveApplyingWindow(AnalWork, p1, InputWindow, Channels, 0,
-                                   p1len);
+        TVPDeinterleaveApplyingWindow(AnalWork, p1, InputWindow, Channels, 0,
+                                      p1len);
         if(p2)
-            DeinterleaveApplyingWindow(AnalWork, p2, InputWindow + p1len,
-                                       Channels, p1len, p2len);
+            TVPDeinterleaveApplyingWindow(AnalWork, p2, InputWindow + p1len,
+                                          Channels, p1len, p2len);
     }
 
     // チャンネルごとに処理
@@ -388,11 +466,12 @@ tRisaPhaseVocoderDSP::tStatus tRisaPhaseVocoderDSP::Process() {
                                      p2len);
         p1len /= Channels;
         p2len /= Channels;
-        InterleaveOverlappingWindow(p1, SynthWork, OutputWindow, Channels, 0,
-                                    p1len);
+        TVPInterleaveOverlappingWindow(p1, SynthWork, OutputWindow, Channels,
+                                       0, p1len);
         if(p2)
-            InterleaveOverlappingWindow(p2, SynthWork, OutputWindow + p1len,
-                                        Channels, p1len, p2len);
+            TVPInterleaveOverlappingWindow(p2, SynthWork,
+                                           OutputWindow + p1len, Channels,
+                                           p1len, p2len);
     }
 
     // LastSynthPhase を再調整するか
@@ -437,7 +516,7 @@ void tRisaPhaseVocoderDSP::ProcessCore(int ch) {
     float *synthwork = SynthWork[ch];
 
     // FFT を実行する
-    rdft(FrameSize, 1, analwork, FFTWorkIp, FFTWorkW); // Real DFT
+    TVPRdft(FrameSize, 1, analwork, FFTWorkIp, FFTWorkW); // Real DFT
     analwork[1] = 0.0; // analwork[1] = nyquist freq. power
                        // (どっちみち使えないので0に)
 
@@ -629,8 +708,8 @@ void tRisaPhaseVocoderDSP::ProcessCore(int ch) {
     // FFT を実行する
     synthwork[1] = 0.0; // synthwork[1] = nyquist freq. power
                         // (どっちみち使えないので0に)
-    rdft(FrameSize, -1, SynthWork[ch], FFTWorkIp,
-         FFTWorkW); // Inverse Real DFT
+    TVPRdft(FrameSize, -1, SynthWork[ch], FFTWorkIp,
+            FFTWorkW); // Inverse Real DFT
 }
 //---------------------------------------------------------------------------
 

@@ -3,6 +3,7 @@ project(core_utils_module LANGUAGES CXX)
 
 set(UTILS_PATH ${CMAKE_CURRENT_LIST_DIR})
 set(UTILS_SOURCE_FILES
+    ${UTILS_PATH}/CPUFeatures.cpp
     ${UTILS_PATH}/ClipboardIntf.cpp
     ${UTILS_PATH}/DebugIntf.cpp
     ${UTILS_PATH}/MathAlgorithms_Default.cpp

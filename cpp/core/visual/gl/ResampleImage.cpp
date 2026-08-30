@@ -15,6 +15,7 @@
 #include <float.h>
 #include <math.h>
 #include <cmath>
+#include <mutex>
 #include <vector>
 
 // #include "tvpgl_ia32_intf.h"
@@ -23,16 +24,19 @@
 #include "LayerBitmapImpl.h"
 #include "WeightFunctor.h"
 #include "ThreadIntf.h"
+#include "CPUFeatures.h"
 
 #include "aligned_allocator.h"
 #include "ResampleImageInternal.h"
 
+#if defined(AETHER_ENABLE_RESAMPLE_X86_SIMD)
 extern void TVPResampleImageAVX2(const tTVPResampleClipping &clip,
                                  const tTVPImageCopyFuncBase *blendfunc,
                                  iTVPBaseBitmap *dest, const tTVPRect &destrect,
                                  const iTVPBaseBitmap *src,
                                  const tTVPRect &srcrect,
                                  tTVPBBStretchType type, tjs_real typeopt);
+extern void TVPInitializeResampleAVX2();
 
 extern void TVPResampleImageSSE2(const tTVPResampleClipping &clip,
                                  const tTVPImageCopyFuncBase *blendfunc,
@@ -40,6 +44,8 @@ extern void TVPResampleImageSSE2(const tTVPResampleClipping &clip,
                                  const iTVPBaseBitmap *src,
                                  const tTVPRect &srcrect,
                                  tTVPBBStretchType type, tjs_real typeopt);
+extern void TVPInitializeResampleSSE2();
+#endif
 
 void tTVPBlendParameter::setFunctionFromParam() {
 #define TVP_BLEND_4(basename) /* blend for 4 types (normal, opacity,           \
@@ -822,13 +828,18 @@ void TVPResampleImage(const tTVPRect &cliprect, iTVPBaseBitmap *dest,
     }
 
     try {
-#if 0
-		tjs_uint32 CpuFeature = TVPGetCPUType();
-		if( (CpuFeature & TVP_CPU_HAS_AVX2) ) {
-			TVPResampleImageAVX2( clip, func, dest, destrect, src, srcrect, type, typeopt );
-		} else if( (CpuFeature & TVP_CPU_HAS_SSE2) ) {
-			TVPResampleImageSSE2( clip, func, dest, destrect, src, srcrect, type, typeopt );
-		} else
+#if defined(AETHER_ENABLE_RESAMPLE_X86_SIMD)
+        if(TVPHasCPUFeature(TVPCPUFeature::AVX2)) {
+            static std::once_flag avx2Init;
+            std::call_once(avx2Init, TVPInitializeResampleAVX2);
+            TVPResampleImageAVX2(clip, func, dest, destrect, src, srcrect,
+                                 type, typeopt);
+        } else if(TVPHasCPUFeature(TVPCPUFeature::SSSE3)) {
+            static std::once_flag sse2Init;
+            std::call_once(sse2Init, TVPInitializeResampleSSE2);
+            TVPResampleImageSSE2(clip, func, dest, destrect, src, srcrect,
+                                 type, typeopt);
+        } else
 #endif
         {
             // Cバージョンは固定小数点版なし。遅くなる。
