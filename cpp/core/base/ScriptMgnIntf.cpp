@@ -1109,12 +1109,12 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
                   "\t\t\t\t\tworld.getMotionObject(\"title_bg\") !== void;\r\n"
                   "\t\t\t\tif (!useTitleMotion && Storages.isExistentStorage(\"main/title_bg.png\")) {\r\n"
                   "\t\t\t\t\telm = Scripts.clone(elm);\r\n"
-                  "\t\t\t\t\telm.file = \"main/title_bg.png\";\r\n"
+                  "\t\t\t\t\tinsertTagParam(elm, \"file\", \"main/title_bg.png\");\r\n"
                   "\t\t\t\t}\r\n"
                   "\t\t\t} catch(e) {\r\n"
                   "\t\t\t\tif (Storages.isExistentStorage(\"main/title_bg.png\")) {\r\n"
                   "\t\t\t\t\telm = Scripts.clone(elm);\r\n"
-                  "\t\t\t\t\telm.file = \"main/title_bg.png\";\r\n"
+                  "\t\t\t\t\tinsertTagParam(elm, \"file\", \"main/title_bg.png\");\r\n"
                   "\t\t\t\t}\r\n"
                   "\t\t\t}\r\n"
                   "\t\t}\r\n"),
@@ -2960,6 +2960,42 @@ static void TVPApplyPostScriptCompatibilityPatches(const ttstr &shortname) {
         spdlog::info("Applied compatibility hook for world layer clone state");
     } catch(...) {
         spdlog::warn("Failed to apply compatibility hook for world layer clone state");
+    }
+
+    // CafeStella ships system/world.tjs as compiled bytecode. Its internal
+    // getImageData call is lexical, so wrapping that method cannot change the
+    // selected source. Route title_bg at the KAG update boundary instead,
+    // where the argument is still replaceable with the authored motion.
+    if(patchWorld) try {
+        TVPExecuteScript(
+            TJS_W(
+                "(function() {\r\n"
+                "\tif (typeof global.KAGWorldPlugin != \"undefined\" &&\r\n"
+                "\t\ttypeof global.KAGWorldPlugin.updateImageSource != \"undefined\" &&\r\n"
+                "\t\ttypeof global.KAGWorldPlugin.__aetherKiriOrigKAGUpdateImageSource == \"undefined\") {\r\n"
+                "\t\tglobal.KAGWorldPlugin.__aetherKiriOrigKAGUpdateImageSource = &global.KAGWorldPlugin.updateImageSource;\r\n"
+                "\t\tglobal.KAGWorldPlugin.updateImageSource = function(layer, file, name=\"_image\") {\r\n"
+                "\t\t\tvar replacement = file;\r\n"
+                "\t\t\ttry {\r\n"
+                "\t\t\t\tvar imageName = file;\r\n"
+                "\t\t\t\tif (typeof imageName == \"Object\" && imageName.file !== void) imageName = imageName.file;\r\n"
+                "\t\t\t\tif (typeof imageName == \"String\" && imageName.toLowerCase() == \"title_bg\" && this.enableSceneAnimEffect) {\r\n"
+                "\t\t\t\t\tvar motion = this.getMotionObject(\"title_bg\");\r\n"
+                "\t\t\t\t\tif (motion !== void) {\r\n"
+                "\t\t\t\t\t\tvar ext = Storages.extractStorageExt(motion.storage).toLowerCase();\r\n"
+                "\t\t\t\t\t\tif (ext != \".psb\" || this.enableMotionAnimEffect) replacement = motion;\r\n"
+                "\t\t\t\t\t}\r\n"
+                "\t\t\t\t}\r\n"
+                "\t\t\t} catch(e) {}\r\n"
+                "\t\t\treturn (global.KAGWorldPlugin.__aetherKiriOrigKAGUpdateImageSource incontextof this)(layer, replacement, name);\r\n"
+                "\t\t};\r\n"
+                "\t}\r\n"
+                "})();\r\n"),
+            TJS_W("AetherKiriWorldTitleMotionUpdateResolver"), 0,
+            (tTJSVariant *)nullptr);
+        spdlog::info("Applied compatibility hook for compiled world title motion resolver");
+    } catch(...) {
+        spdlog::warn("Failed to apply compatibility hook for compiled world title motion resolver");
     }
 
     if(patchD3DLayer) try {
