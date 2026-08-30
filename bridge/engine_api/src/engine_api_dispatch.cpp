@@ -175,13 +175,24 @@ engine_result_t Unsupported(DispatchHandle* handle, const char* operation) {
   return ENGINE_RESULT_NOT_SUPPORTED;
 }
 
+// Beta-gated runtimes (Artemis, WHITE ALBUM2) ship compiled into product
+// builds but stay locked until a fresh coffee entitlement re-enables the
+// artemis_beta_allowed grant for the reusable engine handle.
+bool ProviderRequiresBetaAccess(DispatchHandle* handle) {
+  if (handle->backend != BackendKind::kProvider || handle->provider == nullptr) {
+    return false;
+  }
+  const std::string runtime_id = Normalize(handle->provider->runtime_id_utf8);
+  return runtime_id == "artemis" || runtime_id == "wa2";
+}
+
 engine_result_t CheckArtemisBetaAccess(DispatchHandle* handle) {
-  if (handle->backend != BackendKind::kProvider || handle->provider == nullptr ||
-      Normalize(handle->provider->runtime_id_utf8) != "artemis" ||
-      handle->artemis_beta_allowed) {
+  if (handle->artemis_beta_allowed || !ProviderRequiresBetaAccess(handle)) {
     return ENGINE_RESULT_OK;
   }
-  handle->last_error = "Artemis runtime requires active beta access";
+  const std::string runtime_id = Normalize(handle->provider->runtime_id_utf8);
+  const std::string display_name = runtime_id == "wa2" ? "Wa2" : "Artemis";
+  handle->last_error = display_name + " runtime requires active beta access";
   return ThreadError(ENGINE_RESULT_NOT_SUPPORTED, handle->last_error.c_str());
 }
 

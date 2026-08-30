@@ -9993,6 +9993,7 @@ func _start_selected_game_after_iap() -> void:
     var requires_beta_access := (
         _runtime_requires_beta_access(selected_runtime_kind)
         or _selected_game_uses_artemis()
+        or _selected_game_uses_wa2()
     )
     if not requires_beta_access:
         _start_selected_game_after_entitlements()
@@ -10025,6 +10026,16 @@ func _selected_game_uses_artemis() -> bool:
     if library_path.is_empty():
         return false
     return int(player.probe_runtime("artemis", library_path)) > 0
+
+func _selected_game_uses_wa2() -> bool:
+    # WHITE ALBUM2 runs on the KiriKiri host through the compiled Wa2
+    # provider, so it follows the same coffee beta-access policy as Artemis.
+    if player == null or not player.has_method("probe_runtime"):
+        return false
+    var library_path := String(selected_game.get("path", "")).strip_edges()
+    if library_path.is_empty():
+        return false
+    return int(player.probe_runtime("wa2", library_path)) > 0
 
 func _complete_artemis_beta_check() -> void:
     iap_pending_beta_check_id = 0
