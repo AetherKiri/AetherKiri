@@ -9457,13 +9457,13 @@ func _add_game_dictionary(game: Dictionary) -> bool:
     _refresh_games()
     if not replaced:
         _offer_scrape_after_add(final_game)
-        _start_vndb_cover_lookup(final_game)
+        _start_vndb_cover_lookup(final_game, true)
     return true
 
-func _start_vndb_cover_lookup(game: Dictionary) -> void:
+func _start_vndb_cover_lookup(game: Dictionary, force: bool = false) -> void:
     var index := CoverIndex.load_index()
     var key := CoverIndex.key_for(game)
-    if key.is_empty() or index.has(key):
+    if key.is_empty() or (index.has(key) and not force):
         return
     var resolver := get_node_or_null("VNDBCoverResolver")
     if resolver != null:
@@ -9690,7 +9690,7 @@ func _sync_cover_index(games: Array[Dictionary]) -> void:
     if changed:
         CoverIndex.save_index(index)
     for game in pending:
-        _start_vndb_cover_lookup(game)
+        _start_vndb_cover_lookup(game, true)
 
 func _portable_cover_path(game_path: String, cover_path: String) -> String:
     var value := cover_path.strip_edges()
