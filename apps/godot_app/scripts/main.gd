@@ -7252,20 +7252,21 @@ func _detail_cover_with_action(game: Dictionary, cover_size: Vector2) -> VBoxCon
     column.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
     column.add_theme_constant_override("separation", 6)
     column.add_child(_detail_cover(game, cover_size))
-    var action := Button.new()
     var cover_path := _resolve_cover_path(game)
     var has_cover := not cover_path.is_empty() and FileAccess.file_exists(cover_path)
-    action.text = _t("detail.delete_cover") if has_cover else _t("detail.set_cover")
-    action.flat = true
+    var action := _icon_action_button(ICON_DELETE, _t("detail.delete_cover"), _delete_cover_for_selected, false, true) if has_cover else _pill_button(_t("detail.set_cover"))
+    if has_cover:
+        _reveal_icon_action_label_on_hover(action, _t("detail.delete_cover"))
+    else:
+        action.custom_minimum_size = Vector2(180, 40)
     action.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-    action.pressed.connect(_delete_cover_for_selected if has_cover else _set_cover_for_selected)
+    if not has_cover:
+        action.pressed.connect(_set_cover_for_selected)
     column.add_child(action)
     if has_cover:
-        var clear := Button.new()
-        clear.text = _t("detail.clear_cover")
-        clear.flat = true
+        var clear := _icon_action_button(ICON_REFRESH, _t("detail.clear_cover"), _clear_cover_for_selected)
+        _reveal_icon_action_label_on_hover(clear, _t("detail.clear_cover"))
         clear.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-        clear.pressed.connect(_clear_cover_for_selected)
         column.add_child(clear)
     return column
 

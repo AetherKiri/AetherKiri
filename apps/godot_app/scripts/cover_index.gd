@@ -2,7 +2,7 @@ class_name CoverIndex
 extends RefCounted
 
 const FILE_PATH := "user://aetherkiri_covers_v2.json"
-const METADATA_VERSION := 1
+const METADATA_VERSION := 2
 
 static func load_index() -> Dictionary:
     var file := FileAccess.open(FILE_PATH, FileAccess.READ)
