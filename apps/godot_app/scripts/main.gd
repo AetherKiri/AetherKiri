@@ -53,6 +53,7 @@ const RUNTIME_FONT_DIR := "user://runtime_fonts"
 const RUNTIME_DEFAULT_FONT_FILE := "default.otf"
 const RUNTIME_SYMBOL_FONT_FILE := "symbols.ttf"
 const ProbeConfig = preload("res://scripts/probe_config.gd")
+const GameMetadata = preload("res://scripts/game_metadata.gd")
 const GameInputMapping = preload("res://scripts/game_input_mapping.gd")
 const GameVirtualControls = preload("res://scripts/game_virtual_controls.gd")
 const DiagnosticSession = preload("res://scripts/diagnostic_session.gd")
@@ -8646,6 +8647,8 @@ func _refresh_games() -> void:
     var loaded_games := _load_game_list()
     known_games = builtin_demo.reconcile_games(loaded_games)
     var library_changed := JSON.stringify(known_games) != JSON.stringify(loaded_games)
+    if _backfill_game_metadata(known_games):
+        library_changed = true
     if _backfill_default_game_covers(known_games):
         library_changed = true
     if OS.get_name() == "iOS":
@@ -9559,8 +9562,11 @@ func _game_info_from_path(path: String) -> Dictionary:
     if name.to_lower().ends_with(".xp3"):
         name = name.substr(0, name.length() - 4)
     var default_cover_path := _discover_default_cover_path(path)
+    var metadata := GameMetadata.inspect(path)
+    var detected_title := String(metadata.get("title", ""))
+    var detected_engine := String(metadata.get("engine", RUNTIME_KIRIKIRI))
     return {
-        "name": name,
+        "name": detected_title if not detected_title.is_empty() else name,
         "path": path,
         "type": "Archive" if path.to_lower().ends_with(".xp3") else "Directory",
         "lastPlayed": 0,
@@ -9568,8 +9574,11 @@ func _game_info_from_path(path: String) -> Dictionary:
         "coverPath": _portable_cover_path(path, default_cover_path),
         GAME_AUTO_COVER_SCANNED_FIELD: true,
         "developer": "",
-        "title": "",
-        "engine": _game_runtime_kind(path),
+        "title": detected_title,
+        "titleCandidates": metadata.get("titleCandidates", PackedStringArray()),
+        "metadataSignals": metadata.get("signals", PackedStringArray()),
+        "engine": detected_engine,
+        "launchFile": metadata.get("launchFile", ""),
     }
 
 func _game_runtime_root(path: String) -> String:
@@ -9579,13 +9588,33 @@ func _game_runtime_root(path: String) -> String:
     return resolved
 
 func _game_runtime_kind(path: String) -> String:
-    var root := _game_runtime_root(path)
-    if root.is_empty():
-        return RUNTIME_KIRIKIRI
-    for marker in ONSCRIPTER_SCRIPT_MARKERS:
-        if FileAccess.file_exists(root.path_join(marker)):
-            return RUNTIME_ONSCRIPTER
-    return RUNTIME_KIRIKIRI
+    return String(GameMetadata.inspect(_game_runtime_root(path)).get("engine", RUNTIME_KIRIKIRI))
+
+func _backfill_game_metadata(games: Array[Dictionary]) -> bool:
+    var changed := false
+    for game in games:
+        var path := String(game.get("path", ""))
+        if path.is_empty() or builtin_demo.is_game(game):
+            continue
+        var metadata := GameMetadata.inspect(path)
+        var engine := String(metadata.get("engine", RUNTIME_KIRIKIRI))
+        if String(game.get("engine", "")).is_empty() or String(game.get("engine", "")) == RUNTIME_KIRIKIRI:
+            if String(game.get("engine", "")) != engine:
+                game["engine"] = engine
+                changed = true
+        if String(game.get("title", "")).is_empty():
+            var title := String(metadata.get("title", ""))
+            if not title.is_empty():
+                game["title"] = title
+                if String(game.get("name", "")).is_empty():
+                    game["name"] = title
+                changed = true
+        for key in ["titleCandidates", "metadataSignals", "launchFile"]:
+            var value = metadata.get(key, null)
+            if value != null and JSON.stringify(game.get(key, null)) != JSON.stringify(value):
+                game[key] = value
+                changed = true
+    return changed
 
 func _backfill_default_game_covers(games: Array[Dictionary]) -> bool:
     var changed := false
