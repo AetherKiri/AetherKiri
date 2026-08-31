@@ -47,7 +47,7 @@ func resolve(game: Dictionary) -> void:
         )
         cover_request.request(url)
     )
-    var payload := {"search": String(candidates[0]), "fields": "id,title,image.url,image.thumbnail"}
+    var payload := {"filters": ["search", "=", String(candidates[0])], "fields": "id,title,image.url,image.thumbnail"}
     request.request(API_URL, PackedStringArray(["Content-Type: application/json"]), HTTPClient.METHOD_POST, JSON.stringify(payload))
 
 func _finish(game: Dictionary, cover_path: String, vndb_id: String) -> void:
