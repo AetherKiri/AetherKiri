@@ -546,6 +546,40 @@ size_t ScriptParser::loadFileIOBuf( const char *filename )
     string(REPLACE "${envdata_load_original}" "${envdata_load_embedded}"
            parser_source "${parser_source}")
 
+    set(text_token_original [=[
+        else{
+            script_h.addStringBuffer(ch);
+        }
+    }
+}
+
+int ScriptParser::readEffect( EffectLink *effect )
+]=])
+    set(text_token_embedded [=[
+        else{
+            script_h.addStringBuffer(ch);
+        }
+    }
+
+    // Translate after line-page click markers have been appended. The helper
+    // preserves those controls and never writes past ScriptHandler's buffer.
+    if (script_h.isText())
+        aetherkiri_onscripter_transform_text(
+            script_h.getStringBuffer(), 4096);
+    aetherkiri_onscripter_prefetch_text(script_h.getNext());
+}
+
+int ScriptParser::readEffect( EffectLink *effect )
+]=])
+    string(FIND "${parser_source}" "${text_token_original}"
+           text_token_position)
+    if(text_token_position EQUAL -1)
+        message(FATAL_ERROR
+            "OnscripterYuri text token path changed; update the embedded-host overlay.")
+    endif()
+    string(REPLACE "${text_token_original}" "${text_token_embedded}"
+           parser_source "${parser_source}")
+
     set(generated_parser "${generated_dir}/ScriptParser.cpp")
     file(WRITE "${generated_parser}" "${parser_source}")
 

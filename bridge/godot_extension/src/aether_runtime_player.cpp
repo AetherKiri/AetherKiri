@@ -95,6 +95,10 @@ int32_t aether_native_launch_file_picker_present(
 int32_t aether_native_cover_file_picker_present(
     const char *title, const char *initial_directory,
     const char *destination_directory);
+int32_t aether_native_translation_model_file_picker_present(
+    const char *title, const char *initial_directory);
+char *aether_native_translation_model_restore_path(
+    const char *fallback_path);
 char *aether_native_launch_file_picker_copy_result_json();
 void aether_native_launch_file_picker_free_string(char *value);
 }
@@ -8595,6 +8599,56 @@ public:
         return frame_effect_provider_ != nullptr;
     }
 
+    bool is_text_translation_available() const {
+        return engine_is_text_translation_available() != 0;
+    }
+
+    int get_text_translation_state() const {
+        return static_cast<int>(engine_get_text_translation_state());
+    }
+
+    Dictionary get_text_translation_stats() const {
+        Dictionary output;
+        engine_text_translation_stats_t stats{};
+        stats.struct_size = sizeof(stats);
+        if (engine_get_text_translation_stats(&stats) != ENGINE_RESULT_OK) {
+            return output;
+        }
+        output["state"] = static_cast<int64_t>(stats.state);
+        output["backend"] = static_cast<int64_t>(stats.backend);
+        output["active_jobs"] = static_cast<int64_t>(stats.active_jobs);
+        output["model_file_bytes"] = static_cast<int64_t>(stats.model_file_bytes);
+        output["model_tensor_bytes"] = static_cast<int64_t>(stats.model_tensor_bytes);
+        output["context_state_bytes"] = static_cast<int64_t>(stats.context_state_bytes);
+        output["model_resident_bytes_estimate"] =
+            static_cast<int64_t>(stats.model_resident_bytes_estimate);
+        output["priority_queue_entries"] =
+            static_cast<int64_t>(stats.priority_queue_entries);
+        output["prefetch_queue_entries"] =
+            static_cast<int64_t>(stats.prefetch_queue_entries);
+        output["cache_entries"] = static_cast<int64_t>(stats.cache_entries);
+        output["failed_entries"] = static_cast<int64_t>(stats.failed_entries);
+        output["cache_hits"] = static_cast<int64_t>(stats.cache_hits);
+        output["cache_misses"] = static_cast<int64_t>(stats.cache_misses);
+        output["translations_started"] =
+            static_cast<int64_t>(stats.translations_started);
+        output["translations_completed"] =
+            static_cast<int64_t>(stats.translations_completed);
+        output["translations_failed"] =
+            static_cast<int64_t>(stats.translations_failed);
+        output["translations_cancelled"] =
+            static_cast<int64_t>(stats.translations_cancelled);
+        output["model_load_us"] = static_cast<int64_t>(stats.model_load_us);
+        output["last_inference_us"] =
+            static_cast<int64_t>(stats.last_inference_us);
+        output["max_inference_us"] = static_cast<int64_t>(stats.max_inference_us);
+        output["last_synchronous_wait_us"] =
+            static_cast<int64_t>(stats.last_synchronous_wait_us);
+        output["total_synchronous_wait_us"] =
+            static_cast<int64_t>(stats.total_synchronous_wait_us);
+        return output;
+    }
+
     bool is_frame_enhancement_available() const {
         if (frame_effect_provider_ == nullptr) {
             return false;
@@ -10462,6 +10516,37 @@ void main() {
 #endif
     }
 
+    bool native_translation_model_file_picker_open(
+            const String &title, const String &initial_directory) const {
+#if defined(__APPLE__)
+        const CharString title_utf8 = title.utf8();
+        const CharString directory_utf8 = initial_directory.utf8();
+        return aether_native_translation_model_file_picker_present(
+                   title_utf8.get_data(), directory_utf8.get_data()) != 0;
+#else
+        (void)title;
+        (void)initial_directory;
+        return false;
+#endif
+    }
+
+    String native_translation_model_restore_path(
+            const String &fallback_path) const {
+#if defined(__APPLE__)
+        const CharString fallback_utf8 = fallback_path.utf8();
+        char *path = aether_native_translation_model_restore_path(
+            fallback_utf8.get_data());
+        if (path == nullptr) {
+            return fallback_path;
+        }
+        const String result = String::utf8(path);
+        aether_native_launch_file_picker_free_string(path);
+        return result;
+#else
+        return fallback_path;
+#endif
+    }
+
     String native_launch_file_picker_take_result_json() const {
 #if defined(__APPLE__)
         char *json = aether_native_launch_file_picker_copy_result_json();
@@ -10571,6 +10656,12 @@ protected:
                              &AetherRuntimePlayer::get_frame_texture_backend);
         ClassDB::bind_method(D_METHOD("is_frame_enhancement_built"),
                              &AetherRuntimePlayer::is_frame_enhancement_built);
+        ClassDB::bind_method(D_METHOD("is_text_translation_available"),
+                             &AetherRuntimePlayer::is_text_translation_available);
+        ClassDB::bind_method(D_METHOD("get_text_translation_state"),
+                             &AetherRuntimePlayer::get_text_translation_state);
+        ClassDB::bind_method(D_METHOD("get_text_translation_stats"),
+                             &AetherRuntimePlayer::get_text_translation_stats);
         ClassDB::bind_method(D_METHOD("is_frame_enhancement_available"),
                              &AetherRuntimePlayer::is_frame_enhancement_available);
         ClassDB::bind_method(D_METHOD("set_frame_enhancement_enabled", "enabled"),
@@ -10626,6 +10717,13 @@ protected:
             D_METHOD("native_cover_file_picker_open", "title", "initial_directory",
                      "destination_directory"),
             &AetherRuntimePlayer::native_cover_file_picker_open);
+        ClassDB::bind_method(
+            D_METHOD("native_translation_model_file_picker_open", "title",
+                     "initial_directory"),
+            &AetherRuntimePlayer::native_translation_model_file_picker_open);
+        ClassDB::bind_method(
+            D_METHOD("native_translation_model_restore_path", "fallback_path"),
+            &AetherRuntimePlayer::native_translation_model_restore_path);
         ClassDB::bind_method(
             D_METHOD("native_launch_file_picker_take_result_json"),
             &AetherRuntimePlayer::native_launch_file_picker_take_result_json);

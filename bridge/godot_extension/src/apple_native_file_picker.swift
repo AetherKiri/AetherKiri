@@ -13,6 +13,7 @@ private final class AetherNativeLaunchFilePicker: NSObject, @unchecked Sendable 
     private enum Purpose {
         case launchFile
         case coverImage(destinationDirectory: String)
+        case translationModel
     }
 
     private let lock = NSLock()
@@ -22,6 +23,10 @@ private final class AetherNativeLaunchFilePicker: NSObject, @unchecked Sendable 
 #if os(iOS)
     private var documentPicker: UIDocumentPickerViewController?
     private var documentPickerPurpose: Purpose = .launchFile
+    private var activeTranslationModelURL: URL?
+    private var activeTranslationModelUsesSecurityScope = false
+    private let translationModelBookmarksKey =
+        "AetherNativeFilePicker.TranslationModelBookmarks"
 #elseif os(macOS)
     private var openPanel: NSOpenPanel?
 #endif
@@ -72,6 +77,44 @@ private final class AetherNativeLaunchFilePicker: NSObject, @unchecked Sendable 
             initialDirectory: initialDirectory,
             purpose: .coverImage(destinationDirectory: destinationDirectory)
         )
+    }
+
+    func presentTranslationModel(title: String, initialDirectory: String) -> Bool {
+        return present(
+            title: title,
+            initialDirectory: initialDirectory,
+            purpose: .translationModel
+        )
+    }
+
+    func restoreTranslationModelPath(fallbackPath: String) -> String {
+#if os(iOS)
+        guard !fallbackPath.isEmpty else { return "" }
+        let normalizedFallback = URL(
+            fileURLWithPath: fallbackPath,
+            isDirectory: false
+        ).standardizedFileURL.path
+        let stored = UserDefaults.standard.dictionary(
+            forKey: translationModelBookmarksKey
+        ) ?? [:]
+        guard let bookmark = (stored[normalizedFallback] ?? stored[fallbackPath]) as? Data else {
+            return fallbackPath
+        }
+        do {
+            var stale = false
+            let url = try URL(
+                resolvingBookmarkData: bookmark,
+                options: [],
+                relativeTo: nil,
+                bookmarkDataIsStale: &stale
+            )
+            return try retainTranslationModelAccess(to: url)
+        } catch {
+            return fallbackPath
+        }
+#else
+        return fallbackPath
+#endif
     }
 
     func takeResultJSON() -> UnsafeMutablePointer<CChar>? {
@@ -152,6 +195,69 @@ private final class AetherNativeLaunchFilePicker: NSObject, @unchecked Sendable 
     }
 
 #if os(iOS)
+    private func retainTranslationModelAccess(to sourceURL: URL) throws -> String {
+        let url = sourceURL.standardizedFileURL
+        guard url.isFileURL, url.pathExtension.lowercased() == "gguf" else {
+            throw NSError(
+                domain: "AetherNativeFilePicker",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "The selected file is not a GGUF model"]
+            )
+        }
+
+        lock.lock()
+        let alreadyActive = activeTranslationModelURL?.standardizedFileURL == url
+        lock.unlock()
+
+        var startedSecurityScope = false
+        if !alreadyActive {
+            startedSecurityScope = url.startAccessingSecurityScopedResource()
+            guard startedSecurityScope || FileManager.default.isReadableFile(atPath: url.path) else {
+                throw NSError(
+                    domain: "AetherNativeFilePicker",
+                    code: 4,
+                    userInfo: [NSLocalizedDescriptionKey: "Unable to access the selected GGUF model"]
+                )
+            }
+        }
+
+        let bookmark: Data
+        do {
+            bookmark = try url.bookmarkData(
+                options: [],
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
+        } catch {
+            if startedSecurityScope {
+                url.stopAccessingSecurityScopedResource()
+            }
+            throw error
+        }
+
+        lock.lock()
+        let previousURL = activeTranslationModelURL
+        let previousUsesSecurityScope = activeTranslationModelUsesSecurityScope
+        activeTranslationModelURL = url
+        activeTranslationModelUsesSecurityScope = alreadyActive
+            ? previousUsesSecurityScope
+            : startedSecurityScope
+        lock.unlock()
+
+        if !alreadyActive && previousUsesSecurityScope {
+            previousURL?.stopAccessingSecurityScopedResource()
+        }
+
+        var stored = UserDefaults.standard.dictionary(
+            forKey: translationModelBookmarksKey
+        ) ?? [:]
+        stored[url.path] = bookmark
+        UserDefaults.standard.set(stored, forKey: translationModelBookmarksKey)
+        return url.path
+    }
+#endif
+
+#if os(iOS)
     private func presentOnMainThread(
         title: String,
         initialDirectory: String,
@@ -171,6 +277,8 @@ private final class AetherNativeLaunchFilePicker: NSObject, @unchecked Sendable 
                 .jpeg,
                 UTType(filenameExtension: "webp"),
             ].compactMap { $0 }
+        case .translationModel:
+            contentTypes = [UTType(filenameExtension: "gguf")].compactMap { $0 }
         }
         let picker = UIDocumentPickerViewController(
             forOpeningContentTypes: contentTypes,
@@ -226,6 +334,10 @@ private final class AetherNativeLaunchFilePicker: NSObject, @unchecked Sendable 
                 .jpeg,
                 UTType(filenameExtension: "webp"),
             ].compactMap { $0 }
+        case .translationModel:
+            panel.allowedContentTypes = [
+                UTType(filenameExtension: "gguf"),
+            ].compactMap { $0 }
         }
         panel.directoryURL = directoryURL(for: initialDirectory)
         openPanel = panel
@@ -246,6 +358,8 @@ private final class AetherNativeLaunchFilePicker: NSObject, @unchecked Sendable 
                     } catch {
                         self.complete(status: "error", error: error.localizedDescription)
                     }
+                case .translationModel:
+                    self.complete(status: "selected", path: url.standardizedFileURL.path)
                 }
             } else {
                 self.complete(status: "cancelled")
@@ -296,6 +410,13 @@ extension AetherNativeLaunchFilePicker: UIDocumentPickerDelegate {
             } catch {
                 complete(status: "error", error: error.localizedDescription)
             }
+        case .translationModel:
+            do {
+                let path = try retainTranslationModelAccess(to: url)
+                complete(status: "selected", path: path)
+            } catch {
+                complete(status: "error", error: error.localizedDescription)
+            }
         }
     }
 
@@ -333,6 +454,30 @@ public func aetherNativeCoverFilePickerPresent(
         initialDirectory: initialDirectory,
         destinationDirectory: destinationDirectory
     ) ? 1 : 0
+}
+
+@_cdecl("aether_native_translation_model_file_picker_present")
+public func aetherNativeTranslationModelFilePickerPresent(
+    _ titlePointer: UnsafePointer<CChar>?,
+    _ initialDirectoryPointer: UnsafePointer<CChar>?
+) -> Int32 {
+    let title = titlePointer.map { String(cString: $0) } ?? ""
+    let initialDirectory = initialDirectoryPointer.map { String(cString: $0) } ?? ""
+    return AetherNativeLaunchFilePicker.shared.presentTranslationModel(
+        title: title,
+        initialDirectory: initialDirectory
+    ) ? 1 : 0
+}
+
+@_cdecl("aether_native_translation_model_restore_path")
+public func aetherNativeTranslationModelRestorePath(
+    _ fallbackPathPointer: UnsafePointer<CChar>?
+) -> UnsafeMutablePointer<CChar>? {
+    let fallbackPath = fallbackPathPointer.map { String(cString: $0) } ?? ""
+    let path = AetherNativeLaunchFilePicker.shared.restoreTranslationModelPath(
+        fallbackPath: fallbackPath
+    )
+    return path.withCString { strdup($0) }
 }
 
 @_cdecl("aether_native_launch_file_picker_copy_result_json")
