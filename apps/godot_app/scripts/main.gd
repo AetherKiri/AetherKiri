@@ -54,6 +54,7 @@ const RUNTIME_DEFAULT_FONT_FILE := "default.otf"
 const RUNTIME_SYMBOL_FONT_FILE := "symbols.ttf"
 const ProbeConfig = preload("res://scripts/probe_config.gd")
 const GameMetadata = preload("res://scripts/game_metadata.gd")
+const CoverIndex = preload("res://scripts/cover_index.gd")
 const GameInputMapping = preload("res://scripts/game_input_mapping.gd")
 const GameVirtualControls = preload("res://scripts/game_virtual_controls.gd")
 const DiagnosticSession = preload("res://scripts/diagnostic_session.gd")
@@ -8092,6 +8093,12 @@ func _apply_selected_cover(library_path: String, cover_path: String) -> void:
         "coverPath": _portable_cover_path(library_path, cover_path),
         GAME_AUTO_COVER_SCANNED_FIELD: true,
     })
+    var index := CoverIndex.load_index()
+    for game in _load_game_list():
+        if String(game.get("path", "")) == library_path:
+            index[CoverIndex.key_for(game)] = _portable_cover_path(library_path, cover_path)
+            break
+    CoverIndex.save_index(index)
     _show_detail(selected_game)
 
 func _game_launch_entry_label(game: Dictionary) -> String:
@@ -8651,6 +8658,7 @@ func _refresh_games() -> void:
         library_changed = true
     if _backfill_default_game_covers(known_games):
         library_changed = true
+    _sync_cover_index(known_games)
     if OS.get_name() == "iOS":
         known_games = _scan_ios_games_dir(known_games)
         _save_game_list(known_games)
@@ -9640,6 +9648,21 @@ func _backfill_default_game_covers(games: Array[Dictionary]) -> bool:
             changed = true
         games[index] = game
     return changed
+
+func _sync_cover_index(games: Array[Dictionary]) -> void:
+    var index := CoverIndex.load_index()
+    var changed := false
+    for game in games:
+        if builtin_demo.is_game(game):
+            continue
+        var key := CoverIndex.key_for(game)
+        if key.is_empty() or index.has(key):
+            continue
+        var cover_path := _resolve_cover_path(game)
+        index[key] = _portable_cover_path(String(game.get("path", "")), cover_path) if not cover_path.is_empty() and FileAccess.file_exists(cover_path) else ""
+        changed = true
+    if changed:
+        CoverIndex.save_index(index)
 
 func _portable_cover_path(game_path: String, cover_path: String) -> String:
     var value := cover_path.strip_edges()
