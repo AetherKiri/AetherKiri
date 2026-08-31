@@ -7186,7 +7186,7 @@ func _build_desktop_detail(game: Dictionary, phone_landscape: bool = false) -> C
     var body := HBoxContainer.new()
     body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     body.add_theme_constant_override("separation", 20 if phone_landscape else 32)
-    body.add_child(_detail_cover(game, Vector2(176, 248) if phone_landscape else Vector2(252, 354)))
+    body.add_child(_detail_cover_with_action(game, Vector2(176, 248) if phone_landscape else Vector2(252, 354)))
 
     var information := VBoxContainer.new()
     information.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -7206,7 +7206,7 @@ func _build_compact_detail(game: Dictionary) -> Control:
     summary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     summary.add_theme_constant_override("separation", 16)
     body.add_child(summary)
-    summary.add_child(_detail_cover(game, Vector2(112, 158)))
+    summary.add_child(_detail_cover_with_action(game, Vector2(112, 158)))
 
     var primary := VBoxContainer.new()
     primary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -7242,6 +7242,21 @@ func _detail_cover(game: Dictionary, cover_size: Vector2) -> PanelContainer:
         var icon := _centered_icon(ICON_GAMEPAD, Vector2(48, 48), ui_tokens.accent)
         cover.add_child(icon)
     return cover
+
+func _detail_cover_with_action(game: Dictionary, cover_size: Vector2) -> VBoxContainer:
+    var column := VBoxContainer.new()
+    column.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+    column.add_theme_constant_override("separation", 6)
+    column.add_child(_detail_cover(game, cover_size))
+    var action := Button.new()
+    var cover_path := _resolve_cover_path(game)
+    var has_cover := not cover_path.is_empty() and FileAccess.file_exists(cover_path)
+    action.text = _t("detail.delete_cover") if has_cover else _t("detail.set_cover")
+    action.flat = true
+    action.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+    action.pressed.connect(_delete_cover_for_selected if has_cover else _set_cover_for_selected)
+    column.add_child(action)
+    return column
 
 func _detail_identity(game: Dictionary, compact: bool) -> VBoxContainer:
     var identity := VBoxContainer.new()
@@ -8068,6 +8083,16 @@ func _set_cover_for_selected() -> void:
             native_cover_file_picker_library_path = path
             return
     _show_cover_godot_dialog(path)
+
+func _delete_cover_for_selected() -> void:
+    var path := String(selected_game.get("path", ""))
+    if path.is_empty():
+        return
+    _update_game(path, {"coverPath": "", GAME_AUTO_COVER_SCANNED_FIELD: true})
+    var index := CoverIndex.load_index()
+    index[CoverIndex.key_for(selected_game)] = ""
+    CoverIndex.save_index(index)
+    _show_detail(selected_game)
 
 func _show_cover_godot_dialog(path: String) -> void:
     var dialog := _create_file_dialog(
