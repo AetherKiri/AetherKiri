@@ -329,6 +329,7 @@ const UI_TEXT := {
         "detail.reset_launch_file": "恢复目录自动检测",
         "detail.set_cover": "设置封面",
         "detail.delete_cover": "删除封面",
+        "detail.clear_cover": "清除封面设置",
         "detail.rename": "重命名",
         "detail.remove": "移除视觉小说",
         "detail.delete_builtin": "删除内置 Demo",
@@ -880,6 +881,7 @@ const UI_TEXT := {
         "detail.reset_launch_file": "Restore Folder Auto-detect",
         "detail.set_cover": "Set Cover",
         "detail.delete_cover": "Delete Cover",
+        "detail.clear_cover": "Clear Cover Setting",
         "detail.rename": "Rename",
         "detail.remove": "Remove Visual Novel",
         "detail.delete_builtin": "Delete Built-in Demo",
@@ -7258,6 +7260,13 @@ func _detail_cover_with_action(game: Dictionary, cover_size: Vector2) -> VBoxCon
     action.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
     action.pressed.connect(_delete_cover_for_selected if has_cover else _set_cover_for_selected)
     column.add_child(action)
+    if has_cover:
+        var clear := Button.new()
+        clear.text = _t("detail.clear_cover")
+        clear.flat = true
+        clear.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+        clear.pressed.connect(_clear_cover_for_selected)
+        column.add_child(clear)
     return column
 
 func _detail_identity(game: Dictionary, compact: bool) -> VBoxContainer:
@@ -7329,10 +7338,6 @@ func _detail_tools(game: Dictionary) -> FlowContainer:
             _reveal_icon_action_label_on_hover(reset_launch, _t("detail.reset_launch_file"))
             reset_launch.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
             tools.add_child(reset_launch)
-    var set_cover := _icon_action_button(ICON_PAGE, _t("detail.set_cover"), func(): _set_cover_for_selected())
-    _reveal_icon_action_label_on_hover(set_cover, _t("detail.set_cover"))
-    set_cover.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-    tools.add_child(set_cover)
     var rename := _icon_action_button(ICON_RENAME, _t("detail.rename"), func(): _rename_selected_game())
     _reveal_icon_action_label_on_hover(rename, _t("detail.rename"))
     tools.add_child(rename)
@@ -8087,6 +8092,15 @@ func _set_cover_for_selected() -> void:
     _show_cover_godot_dialog(path)
 
 func _delete_cover_for_selected() -> void:
+    var path := String(selected_game.get("path", ""))
+    if path.is_empty():
+        return
+    var cover_path := _resolve_cover_path(selected_game)
+    if not cover_path.is_empty() and FileAccess.file_exists(cover_path):
+        DirAccess.remove_absolute(cover_path)
+    _clear_cover_for_selected()
+
+func _clear_cover_for_selected() -> void:
     var path := String(selected_game.get("path", ""))
     if path.is_empty():
         return
