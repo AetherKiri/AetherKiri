@@ -8092,7 +8092,7 @@ func _delete_cover_for_selected() -> void:
         return
     _update_game(path, {"coverPath": "", GAME_AUTO_COVER_SCANNED_FIELD: true})
     var index := CoverIndex.load_index()
-    index[CoverIndex.key_for(selected_game)] = ""
+    index[CoverIndex.key_for(selected_game)] = CoverIndex.record("")
     CoverIndex.save_index(index)
     _show_detail(selected_game)
 
@@ -8124,7 +8124,7 @@ func _apply_selected_cover(library_path: String, cover_path: String) -> void:
     var index := CoverIndex.load_index()
     for game in _load_game_list():
         if String(game.get("path", "")) == library_path:
-            index[CoverIndex.key_for(game)] = _portable_cover_path(library_path, cover_path)
+            index[CoverIndex.key_for(game)] = CoverIndex.record(_portable_cover_path(library_path, cover_path))
             break
     CoverIndex.save_index(index)
     _show_detail(selected_game)
@@ -9490,7 +9490,7 @@ func _add_game_dictionary(game: Dictionary) -> bool:
 func _start_vndb_cover_lookup(game: Dictionary, force: bool = false) -> void:
     var index := CoverIndex.load_index()
     var key := CoverIndex.key_for(game)
-    if key.is_empty() or (index.has(key) and not force):
+    if key.is_empty() or (not force and not CoverIndex.needs_recognition(index, key)):
         return
     var resolver := get_node_or_null("VNDBCoverResolver")
     if resolver != null:
@@ -9503,8 +9503,9 @@ func _on_vndb_cover_resolved(game_path: String, cover_path: String, vndb_id: Str
         if String(game.get("path", "")) != game_path:
             continue
         var key := CoverIndex.key_for(game)
-        index[key] = _portable_cover_path(game_path, cover_path) if not cover_path.is_empty() else ""
-        var values := {"coverPath": index[key], "vndbId": vndb_id, GAME_AUTO_COVER_SCANNED_FIELD: true}
+        var resolved_cover := _portable_cover_path(game_path, cover_path) if not cover_path.is_empty() else ""
+        index[key] = CoverIndex.record(resolved_cover)
+        var values := {"coverPath": resolved_cover, "vndbId": vndb_id, GAME_AUTO_COVER_SCANNED_FIELD: true}
         _update_game(game_path, values)
         break
     CoverIndex.save_index(index)
@@ -9708,10 +9709,11 @@ func _sync_cover_index(games: Array[Dictionary]) -> void:
         if builtin_demo.is_game(game):
             continue
         var key := CoverIndex.key_for(game)
-        if key.is_empty() or index.has(key):
+        if key.is_empty() or not CoverIndex.needs_recognition(index, key):
             continue
         var cover_path := _resolve_cover_path(game)
-        index[key] = _portable_cover_path(String(game.get("path", "")), cover_path) if not cover_path.is_empty() and FileAccess.file_exists(cover_path) else ""
+        var stored_path := _portable_cover_path(String(game.get("path", "")), cover_path) if not cover_path.is_empty() and FileAccess.file_exists(cover_path) else ""
+        index[key] = CoverIndex.record(stored_path, false)
         changed = true
         pending.append(game)
     if changed:

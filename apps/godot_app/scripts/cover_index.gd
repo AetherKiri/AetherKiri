@@ -2,13 +2,30 @@ class_name CoverIndex
 extends RefCounted
 
 const FILE_PATH := "user://aetherkiri_covers_v2.json"
+const METADATA_VERSION := 1
 
 static func load_index() -> Dictionary:
     var file := FileAccess.open(FILE_PATH, FileAccess.READ)
     if file == null:
         return {}
     var parsed = JSON.parse_string(file.get_as_text())
-    return parsed if parsed is Dictionary else {}
+    if not parsed is Dictionary:
+        return {}
+    var result := {}
+    for key in parsed:
+        var value = parsed[key]
+        if value is Dictionary:
+            result[key] = value
+        else:
+            result[key] = {"recognized": true, "coverPath": String(value), "metadataVersion": 0}
+    return result
+
+static func record(cover_path: String, recognized: bool = true) -> Dictionary:
+    return {"recognized": recognized, "coverPath": cover_path, "metadataVersion": METADATA_VERSION}
+
+static func needs_recognition(index: Dictionary, key: String) -> bool:
+    var value = index.get(key, null)
+    return not value is Dictionary or not bool(value.get("recognized", false)) or int(value.get("metadataVersion", 0)) < METADATA_VERSION
 
 static func save_index(index: Dictionary) -> void:
     var file := FileAccess.open(FILE_PATH, FileAccess.WRITE)
