@@ -500,3 +500,31 @@ TEST_CASE("plugin debug snapshot is bounded JSON and validates buffers") {
                                        &written) == ENGINE_RESULT_INVALID_ARGUMENT);
   REQUIRE(written == 0);
 }
+
+TEST_CASE("text translation state is disabled without the private provider") {
+  REQUIRE(engine_is_text_translation_available() == 0);
+  REQUIRE(engine_get_text_translation_state() ==
+          ENGINE_TEXT_TRANSLATION_DISABLED);
+  engine_text_translation_stats_t translation_stats{};
+  translation_stats.struct_size = sizeof(translation_stats);
+  REQUIRE(engine_get_text_translation_stats(&translation_stats) ==
+          ENGINE_RESULT_OK);
+  REQUIRE(translation_stats.state == ENGINE_TEXT_TRANSLATION_DISABLED);
+  REQUIRE(translation_stats.backend == ENGINE_TEXT_TRANSLATION_BACKEND_NONE);
+  REQUIRE(translation_stats.model_tensor_bytes == 0);
+  REQUIRE(engine_get_text_translation_stats(nullptr) ==
+          ENGINE_RESULT_INVALID_ARGUMENT);
+  engine_text_translation_stats_t short_translation_stats{};
+  short_translation_stats.struct_size = sizeof(uint32_t);
+  REQUIRE(engine_get_text_translation_stats(&short_translation_stats) ==
+          ENGINE_RESULT_INVALID_ARGUMENT);
+  REQUIRE(engine_prefetch_text_utf8("kirikiri", "テスト") == ENGINE_RESULT_OK);
+  REQUIRE(engine_set_text_translation_skipping("kirikiri", 1) ==
+          ENGINE_RESULT_OK);
+  REQUIRE(engine_prefetch_text_utf8(nullptr, "テスト") ==
+          ENGINE_RESULT_INVALID_ARGUMENT);
+  REQUIRE(engine_prefetch_text_utf8("kirikiri", nullptr) ==
+          ENGINE_RESULT_INVALID_ARGUMENT);
+  REQUIRE(engine_set_text_translation_skipping(nullptr, 1) ==
+          ENGINE_RESULT_INVALID_ARGUMENT);
+}
