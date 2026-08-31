@@ -55,6 +55,7 @@ const RUNTIME_SYMBOL_FONT_FILE := "symbols.ttf"
 const ProbeConfig = preload("res://scripts/probe_config.gd")
 const GameMetadata = preload("res://scripts/game_metadata.gd")
 const CoverIndex = preload("res://scripts/cover_index.gd")
+const VNDBCoverResolver = preload("res://scripts/vndb_cover_resolver.gd")
 const GameInputMapping = preload("res://scripts/game_input_mapping.gd")
 const GameVirtualControls = preload("res://scripts/game_virtual_controls.gd")
 const DiagnosticSession = preload("res://scripts/diagnostic_session.gd")
@@ -9456,7 +9457,30 @@ func _add_game_dictionary(game: Dictionary) -> bool:
     _refresh_games()
     if not replaced:
         _offer_scrape_after_add(final_game)
+        _start_vndb_cover_lookup(final_game)
     return true
+
+func _start_vndb_cover_lookup(game: Dictionary) -> void:
+    var index := CoverIndex.load_index()
+    var key := CoverIndex.key_for(game)
+    if key.is_empty() or index.has(key):
+        return
+    var resolver := get_node_or_null("VNDBCoverResolver")
+    if resolver != null:
+        resolver.resolve(game)
+
+func _on_vndb_cover_resolved(game_path: String, cover_path: String, vndb_id: String) -> void:
+    var games := _load_game_list()
+    var index := CoverIndex.load_index()
+    for game in games:
+        if String(game.get("path", "")) != game_path:
+            continue
+        var key := CoverIndex.key_for(game)
+        index[key] = _portable_cover_path(game_path, cover_path) if not cover_path.is_empty() else ""
+        var values := {"coverPath": index[key], "vndbId": vndb_id, GAME_AUTO_COVER_SCANNED_FIELD: true}
+        _update_game(game_path, values)
+        break
+    CoverIndex.save_index(index)
 
 func _merge_game_dictionary(existing: Dictionary, game: Dictionary) -> Dictionary:
     var merged := existing.duplicate(true)
@@ -9652,6 +9676,7 @@ func _backfill_default_game_covers(games: Array[Dictionary]) -> bool:
 func _sync_cover_index(games: Array[Dictionary]) -> void:
     var index := CoverIndex.load_index()
     var changed := false
+    var pending: Array[Dictionary] = []
     for game in games:
         if builtin_demo.is_game(game):
             continue
@@ -9661,8 +9686,11 @@ func _sync_cover_index(games: Array[Dictionary]) -> void:
         var cover_path := _resolve_cover_path(game)
         index[key] = _portable_cover_path(String(game.get("path", "")), cover_path) if not cover_path.is_empty() and FileAccess.file_exists(cover_path) else ""
         changed = true
+        pending.append(game)
     if changed:
         CoverIndex.save_index(index)
+    for game in pending:
+        _start_vndb_cover_lookup(game)
 
 func _portable_cover_path(game_path: String, cover_path: String) -> String:
     var value := cover_path.strip_edges()
@@ -10429,6 +10457,10 @@ func _return_to_library_after_runtime_exit() -> void:
     runtime_exit_cleanup_pending = false
 
 func _ready() -> void:
+    var vndb_resolver := VNDBCoverResolver.new()
+    vndb_resolver.name = "VNDBCoverResolver"
+    add_child(vndb_resolver)
+    vndb_resolver.resolved.connect(_on_vndb_cover_resolved)
     cli_probe_script = _detect_cli_probe_script()
     _apply_ui_font()
     DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_TRANSPARENT, false)
