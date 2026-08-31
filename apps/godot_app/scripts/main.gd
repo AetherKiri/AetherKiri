@@ -1657,6 +1657,8 @@ var hero_overlay: PanelContainer
 var hero_hidden_target: CanvasItem
 var hero_transition_id := 0
 var known_games: Array[Dictionary] = []
+var vndb_cover_queue: Array[Dictionary] = []
+var vndb_cover_busy := false
 var known_videos: Array[Dictionary] = []
 var home_library_mode := "game"
 var home_search_queries := {"game": "", "video": ""}
@@ -9507,9 +9509,20 @@ func _start_vndb_cover_lookup(game: Dictionary, force: bool = false) -> void:
     var key := CoverIndex.key_for(game)
     if key.is_empty() or (not force and not CoverIndex.needs_recognition(index, key)):
         return
+    for queued in vndb_cover_queue:
+        if String(queued.get("path", "")) == String(game.get("path", "")):
+            return
+    vndb_cover_queue.append(game)
+    _process_next_vndb_cover()
+
+func _process_next_vndb_cover() -> void:
+    if vndb_cover_busy or vndb_cover_queue.is_empty():
+        return
     var resolver := get_node_or_null("VNDBCoverResolver")
-    if resolver != null:
-        resolver.resolve(game)
+    if resolver == null:
+        return
+    vndb_cover_busy = true
+    resolver.resolve(vndb_cover_queue.pop_front())
 
 func _on_vndb_cover_resolved(game_path: String, cover_path: String, vndb_id: String) -> void:
     var games := _load_game_list()
@@ -9524,6 +9537,8 @@ func _on_vndb_cover_resolved(game_path: String, cover_path: String, vndb_id: Str
         _update_game(game_path, values)
         break
     CoverIndex.save_index(index)
+    vndb_cover_busy = false
+    _process_next_vndb_cover()
 
 func _merge_game_dictionary(existing: Dictionary, game: Dictionary) -> Dictionary:
     var merged := existing.duplicate(true)

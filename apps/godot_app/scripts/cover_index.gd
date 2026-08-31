@@ -28,9 +28,12 @@ static func needs_recognition(index: Dictionary, key: String) -> bool:
     return not value is Dictionary or not bool(value.get("recognized", false)) or int(value.get("metadataVersion", 0)) < METADATA_VERSION
 
 static func save_index(index: Dictionary) -> void:
-    var file := FileAccess.open(FILE_PATH, FileAccess.WRITE)
+    var temporary_path := FILE_PATH + ".tmp"
+    var file := FileAccess.open(temporary_path, FileAccess.WRITE)
     if file != null:
         file.store_string(JSON.stringify(index, "  "))
+        file.close()
+        DirAccess.rename_absolute(ProjectSettings.globalize_path(temporary_path), ProjectSettings.globalize_path(FILE_PATH))
 
 static func key_for(game: Dictionary) -> String:
     var title := String(game.get("name", game.get("title", ""))).strip_edges()
