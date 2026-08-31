@@ -118,6 +118,10 @@ void RegisterAetherInternalFrameEffects();
 void UnregisterAetherInternalFrameEffects();
 #endif
 
+#if defined(AETHERKIRI_INTERNAL_UNLOCK_GATE)
+int32_t AetherInternalVerifyUnlockSecret(const char *candidate_utf8);
+#endif
+
 namespace {
 
 #if defined(__ANDROID__)
@@ -10415,6 +10419,19 @@ void main() {
 #endif
     }
 
+    // The compiled-in unlock digest lives in AetherInternal. Public fallbacks
+    // never report a match, so release artifacts without the package cannot
+    // open the secret unlock path.
+    bool verify_unlock_secret(const String &candidate) const {
+#if defined(AETHERKIRI_INTERNAL_UNLOCK_GATE)
+        const CharString candidate_utf8 = candidate.utf8();
+        return AetherInternalVerifyUnlockSecret(candidate_utf8.get_data()) != 0;
+#else
+        (void)candidate;
+        return false;
+#endif
+    }
+
     bool native_launch_file_picker_open(
             const String &title, const String &initial_directory) const {
 #if defined(__APPLE__)
@@ -10603,6 +10620,8 @@ protected:
                              &AetherRuntimePlayer::iap_restore);
         ClassDB::bind_method(D_METHOD("iap_get_state_json", "product_id"),
                              &AetherRuntimePlayer::iap_get_state_json);
+        ClassDB::bind_method(D_METHOD("verify_unlock_secret", "candidate"),
+                             &AetherRuntimePlayer::verify_unlock_secret);
         ClassDB::bind_method(
             D_METHOD("native_launch_file_picker_open", "title", "initial_directory"),
             &AetherRuntimePlayer::native_launch_file_picker_open);

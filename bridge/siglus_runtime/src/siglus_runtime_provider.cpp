@@ -250,8 +250,8 @@ namespace aetherkiri::siglus {
             instance->opened = true;
             instance->error.clear();
             LogHost(instance, ENGINE_RUNTIME_LOG_INFO, "siglus game opened");
-            // Wire the kira mixer FIFO to an SDL2 audio device; failure only
-            // downgrades to silence, the game itself stays usable.
+            // Wire the kira mixer FIFO to an OpenAL streaming output; failure
+            // only downgrades to silence, the game itself stays usable.
             std::string audio_error;
             if(!audio::StartOutput(audio_error)) {
                 LogHost(instance, ENGINE_RUNTIME_LOG_WARNING,

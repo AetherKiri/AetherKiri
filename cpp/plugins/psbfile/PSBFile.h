@@ -86,6 +86,15 @@ namespace PSB {
             return _root;
         }
 
+        [[nodiscard]] const tTJSVariant &getCompatRoot() const {
+            return _compatRoot;
+        }
+
+        [[nodiscard]] bool hasCompatRoot() const {
+            return _compatRoot.Type() == tvtObject &&
+                _compatRoot.AsObjectNoAddRef() != nullptr;
+        }
+
         [[nodiscard]] PSBSpec getPlatform() const {
             auto spec = (*getObjects())["spec"];
             std::string specStr = !spec ? "" : spec->toString();
@@ -121,6 +130,7 @@ namespace PSB {
         PreParseCallback _preParseCallback;
         PSBHeader _header{};
         std::shared_ptr<IPSBValue> _root{};
+        tTJSVariant _compatRoot{};
         std::shared_ptr<const std::vector<std::uint8_t>> _objectImage;
         PSBType _type{ PSBType::PSB };
 
