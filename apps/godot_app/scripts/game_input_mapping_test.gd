@@ -101,6 +101,18 @@ func _initialize() -> void:
         _fail("real drag lost its release point: %s" % real_drag)
         return
 
+    if not GameInputMapping.touch_drag_release_is_cancelled(
+        "CatSystem2", true
+    ):
+        _fail("CatSystem2 touch drag did not cancel its trailing click")
+        return
+    if GameInputMapping.touch_drag_release_is_cancelled("catsystem2", false):
+        _fail("CatSystem2 tap was misclassified as a cancelled drag")
+        return
+    if GameInputMapping.touch_drag_release_is_cancelled("artemis", true):
+        _fail("Artemis layer drag unexpectedly lost its release")
+        return
+
     print("game_input_mapping_test: PASS")
     quit(0)
 

@@ -14723,11 +14723,27 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
                 mapped,
                 _touch_drag_distance_threshold()
             )
+        var touch_was_dragged := dragging_touch_points.has(pointer_id)
         active_touch_points.erase(pointer_id)
         touch_down_points.erase(pointer_id)
         dragging_touch_points.erase(pointer_id)
         last_forwarded_touch_move_msec_by_id.erase(pointer_id)
-        _send_game_pointer_event(POINTER_UP, _touch_engine_pointer_id(pointer_id), mapped.x, mapped.y, 0.0, 0.0, 0)
+        var release_modifiers := 0
+        if GameInputMapping.touch_drag_release_is_cancelled(
+            active_runtime_kind,
+            touch_was_dragged
+        ):
+            release_modifiers = POINTER_MOD_CANCEL
+        _send_game_pointer_event(
+            POINTER_UP,
+            _touch_engine_pointer_id(pointer_id),
+            mapped.x,
+            mapped.y,
+            0.0,
+            0.0,
+            0,
+            release_modifiers
+        )
         last_forwarded_touch_up_msec = Time.get_ticks_msec()
         _apply_touch_action_cooldown()
         _arm_black_frame_guard()
