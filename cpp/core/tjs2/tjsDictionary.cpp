@@ -398,6 +398,65 @@ namespace TJS {
         }
         TJS_END_NATIVE_STATIC_METHOD_DECL(/*func.name*/ keys)
         //----------------------------------------------------------------------
+        // Some KiriKiri titles use Dictionary.values as a static helper and
+        // then apply Array helpers such as includes to the returned values.
+        TJS_BEGIN_NATIVE_METHOD_DECL(/*func.name*/ values) {
+            if(numparams < 1 || !param || !param[0])
+                return TJS_E_BADPARAMCOUNT;
+            if(param[0]->Type() != tvtObject)
+                return TJS_E_INVALIDTYPE;
+
+            tTJSVariantClosure &source =
+                param[0]->AsObjectClosureNoAddRef();
+            if(!source.Object)
+                return TJS_E_INVALIDOBJECT;
+            if(!result)
+                return TJS_S_OK;
+
+            struct tValuesCallback final : public tTJSDispatch {
+                explicit tValuesCallback(iTJSDispatch2 *array) : Array(array) {}
+
+                tjs_error FuncCall(tjs_uint32 /*flag*/,
+                                   const tjs_char * /*membername*/,
+                                   tjs_uint32 * /*hint*/, tTJSVariant *result,
+                                   tjs_int numparams, tTJSVariant **param,
+                                   iTJSDispatch2 * /*objthis*/) override {
+                    tjs_error hr = TJS_S_OK;
+                    if(numparams > 2 && param && param[1] && param[2] &&
+                       !(static_cast<tjs_uint32>(param[1]->AsInteger()) &
+                         TJS_HIDDENMEMBER)) {
+                        static tjs_uint addHint = 0;
+                        hr = Array->FuncCall(0, TJS_W("add"), &addHint,
+                                             nullptr, 1, &param[2], Array);
+                    }
+                    if(result)
+                        *result = TJS_SUCCEEDED(hr);
+                    return hr;
+                }
+
+                iTJSDispatch2 *Array;
+            };
+
+            iTJSDispatch2 *array = TJSCreateArrayObject();
+            try {
+                tValuesCallback enumCallback(array);
+                tTJSVariantClosure enumClosure(&enumCallback, nullptr);
+                const tjs_error hr = source.EnumMembers(
+                    TJS_IGNOREPROP, &enumClosure, nullptr);
+                if(TJS_FAILED(hr)) {
+                    array->Release();
+                    return hr;
+                }
+                *result = tTJSVariant(array, array);
+            } catch(...) {
+                array->Release();
+                throw;
+            }
+            array->Release();
+            return TJS_S_OK;
+        }
+        TJS_END_NATIVE_STATIC_METHOD_DECL(/*func.name*/ values)
+        //----------------------------------------------------------------------
         TJS_BEGIN_NATIVE_METHOD_DECL(/*func.name*/ getCount) {
             if(numparams < 1 || !param || !param[0])
                 return TJS_E_BADPARAMCOUNT;

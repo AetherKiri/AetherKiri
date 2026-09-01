@@ -176,7 +176,7 @@ TEST_CASE("TJS arrays support membership checks") {
     CHECK(result.AsInteger() == 1);
 }
 
-TEST_CASE("TJS dictionary static helpers expose sorted keys and count") {
+TEST_CASE("TJS dictionary static helpers expose keys, values, and count") {
     std::unique_ptr<tTJS, TJSReleaser> engine(new tTJS());
     tTJSVariant result;
 
@@ -184,9 +184,17 @@ TEST_CASE("TJS dictionary static helpers expose sorted keys and count") {
         TJS_W("(function() {"
               "  var dictionary = %[ 'z' => 3, 'a' => 1, 'm' => 2 ];"
               "  var keys = Dictionary.keys(dictionary);"
-              "  return keys.join(',') + ':' + "
+              "  var values = Dictionary.values(dictionary);"
+              "  values.sort();"
+              "  return keys.join(',') + ':' + values.join(',') + ':' + "
               "Dictionary.getCount(dictionary);"
               "})()"),
         &result));
-    CHECK(ttstr(result) == TJS_W("a,m,z:3"));
+    CHECK(ttstr(result) == TJS_W("a,m,z:1,2,3:3"));
+
+    REQUIRE_NOTHROW(engine->EvalExpression(
+        TJS_W("Dictionary.values(%[ 'akira' => 'cg_akira_01a' ])"
+              ".includes('cg_akira_01a')"),
+        &result));
+    CHECK(result.AsInteger() == 1);
 }
