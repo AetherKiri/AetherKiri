@@ -4557,6 +4557,11 @@ const char* engine_get_last_error(engine_handle_t handle) {
   return impl->last_error.c_str();
 }
 
+int AetherKiriEnsureRuntimeCore(uint32_t width, uint32_t height) {
+  EnsureRuntimeLoggersInitialized();
+  return EnsureEngineRuntimeInitialized(width, height) ? 1 : 0;
+}
+
 }  // extern "C"
 
 #else

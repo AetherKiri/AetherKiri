@@ -123,6 +123,10 @@ if(AETHERKIRI_ENABLE_INTERNAL)
            NOT COMMAND aetherinternal_extend_psbfile OR
            NOT COMMAND aetherinternal_extend_legacy_plugins OR
            NOT COMMAND aetherinternal_extend_live2d OR
+           NOT COMMAND aetherinternal_extend_catsystem2 OR
+           NOT COMMAND aetherinternal_extend_catsystem2_tests OR
+           NOT COMMAND aetherinternal_add_catsystem2_probe OR
+           NOT COMMAND aetherinternal_add_artemis_tests OR
            NOT COMMAND aetherinternal_extend_artemis OR
            NOT COMMAND aetherinternal_extend_text_translation OR
            NOT COMMAND aetherinternal_extend_godot_extension OR

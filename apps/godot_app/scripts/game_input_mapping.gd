@@ -123,3 +123,15 @@ static func stable_tap_point(
     if up_point.distance_to(down_point) < maxf(0.0, drag_threshold):
         return down_point
     return up_point
+
+
+# CatSystem2's FeScript buttons activate on POINTER_UP. Once the mobile host
+# has classified a direct touch as a drag, that release must only end the
+# physical contact; letting it complete a left click can advance dialogue or
+# activate the control now under the finger. Artemis owns richer layer-drag
+# semantics internally, so keep its existing release path unchanged.
+static func touch_drag_release_is_cancelled(
+    runtime_kind: String,
+    dragged: bool
+) -> bool:
+    return dragged and runtime_kind.strip_edges().to_lower() == "catsystem2"

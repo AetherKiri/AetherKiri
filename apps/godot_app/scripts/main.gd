@@ -266,6 +266,7 @@ const UI_TEXT := {
         "iap.coffee.active_until": "内测功能有效期至：%s",
         "iap.coffee.inactive": "内测功能当前未启用",
         "iap.coffee.purchase_success": "感谢支持！内测功能有效期至：%s",
+        "iap.runtime_unavailable": "此视觉小说兼容正在测试中，请等待后续支持",
         "support.coffee.title": "请作者喝一杯咖啡",
         "support.coffee.desc": "打开支付宝支持作者，不影响游戏导入或启动",
         "support.coffee.open": "打开支付宝",
@@ -278,7 +279,6 @@ const UI_TEXT := {
         "secret.unlock.confirm": "确认",
         "secret.unlock.failed": "密码不正确，请重试。",
         "secret.unlock.success": "内购已解锁，内测功能有效期至：%s",
-        "iap.artemis_unavailable": "此视觉小说兼容正在测试中，请等待后续支持",
         "iap.status.purchased": "已购买",
         "iap.status.not_purchased": "未购买",
         "iap.status.loading": "正在读取商品信息…",
@@ -541,6 +541,7 @@ const UI_TEXT := {
         "iap.coffee.active_until": "測試功能有效期限至：%s",
         "iap.coffee.inactive": "測試功能目前尚未啟用",
         "iap.coffee.purchase_success": "感謝支持！測試功能有效期限至：%s",
+        "iap.runtime_unavailable": "此視覺小說的相容支援仍在測試中，請等待後續支援",
         "support.coffee.title": "請作者喝一杯咖啡",
         "support.coffee.desc": "開啟支付寶支持作者，不影響遊戲匯入或啟動",
         "support.coffee.open": "開啟支付寶",
@@ -553,7 +554,6 @@ const UI_TEXT := {
         "secret.unlock.confirm": "確認",
         "secret.unlock.failed": "密碼不正確，請再試一次。",
         "secret.unlock.success": "內購已解鎖，測試功能有效期限至：%s",
-        "iap.artemis_unavailable": "此視覺小說的相容支援仍在測試中，請等待後續支援",
         "iap.status.purchased": "已購買",
         "iap.status.not_purchased": "尚未購買",
         "iap.status.loading": "正在載入商品資訊…",
@@ -816,6 +816,7 @@ const UI_TEXT := {
         "iap.coffee.active_until": "Beta feature access expires: %s",
         "iap.coffee.inactive": "Beta feature access is not active",
         "iap.coffee.purchase_success": "Thank you! Beta feature access expires: %s",
+        "iap.runtime_unavailable": "Compatibility for this visual novel is still being tested. Please wait for a future update.",
         "support.coffee.title": "Buy the Author a Coffee",
         "support.coffee.desc": "Open Alipay to support the author; game import and launch are unaffected",
         "support.coffee.open": "Open Alipay",
@@ -828,7 +829,6 @@ const UI_TEXT := {
         "secret.unlock.confirm": "Confirm",
         "secret.unlock.failed": "Incorrect passphrase. Please try again.",
         "secret.unlock.success": "Purchases unlocked; beta feature access expires: %s",
-        "iap.artemis_unavailable": "Compatibility for this visual novel is still being tested. Please wait for a future update.",
         "iap.status.purchased": "Purchased",
         "iap.status.not_purchased": "Not purchased",
         "iap.status.loading": "Loading product information…",
@@ -1091,6 +1091,7 @@ const UI_TEXT := {
         "iap.coffee.active_until": "ベータ機能の有効期限：%s",
         "iap.coffee.inactive": "ベータ機能は現在有効ではありません",
         "iap.coffee.purchase_success": "ご支援ありがとうございます！ベータ機能の有効期限：%s",
+        "iap.runtime_unavailable": "このビジュアルノベルの互換対応はテスト中です。今後の対応をお待ちください。",
         "support.coffee.title": "作者にコーヒーを一杯贈る",
         "support.coffee.desc": "Alipay を開いて作者を支援します。ゲームの読み込みや起動には影響しません",
         "support.coffee.open": "Alipay を開く",
@@ -1103,7 +1104,6 @@ const UI_TEXT := {
         "secret.unlock.confirm": "確認",
         "secret.unlock.failed": "パスフレーズが正しくありません。もう一度お試しください。",
         "secret.unlock.success": "課金が解錠されました。ベータ機能の有効期限：%s",
-        "iap.artemis_unavailable": "このビジュアルノベルの互換対応はテスト中です。今後の対応をお待ちください。",
         "iap.status.purchased": "購入済み",
         "iap.status.not_purchased": "未購入",
         "iap.status.loading": "商品情報を読み込み中…",
@@ -1366,6 +1366,7 @@ const UI_TEXT := {
         "iap.coffee.active_until": "베타 기능 만료일: %s",
         "iap.coffee.inactive": "베타 기능이 현재 활성화되어 있지 않습니다",
         "iap.coffee.purchase_success": "후원해 주셔서 감사합니다! 베타 기능 만료일: %s",
+        "iap.runtime_unavailable": "이 비주얼 노벨의 호환성은 아직 테스트 중입니다. 추후 지원을 기다려 주세요.",
         "support.coffee.title": "작가에게 커피 한 잔 사주기",
         "support.coffee.desc": "Alipay를 열어 작가를 후원합니다. 게임 가져오기나 실행에는 영향을 주지 않습니다",
         "support.coffee.open": "Alipay 열기",
@@ -1378,7 +1379,6 @@ const UI_TEXT := {
         "secret.unlock.confirm": "확인",
         "secret.unlock.failed": "암호가 올바르지 않습니다. 다시 시도해 주세요.",
         "secret.unlock.success": "인앱 구매가 잠금 해제되었습니다. 베타 기능 만료일: %s",
-        "iap.artemis_unavailable": "이 비주얼 노벨의 호환성은 아직 테스트 중입니다. 추후 지원을 기다려 주세요.",
         "iap.status.purchased": "구입 완료",
         "iap.status.not_purchased": "구입하지 않음",
         "iap.status.loading": "상품 정보 불러오는 중…",
@@ -1512,6 +1512,7 @@ const POINTER_MOD_CANCEL := 1 << 30
 const KEY_MOD_CONTROL := 0x04
 const RUNTIME_KIRIKIRI := "kirikiri"
 const RUNTIME_ONSCRIPTER := "onscripter"
+const BETA_PROVIDER_RUNTIME_IDS := ["artemis", "catsystem2"]
 const RUNTIME_PLAYER_CLASS := "AetherRuntimePlayer"
 const ONSCRIPTER_SCRIPT_MARKERS := [
     "0.txt",
@@ -7819,7 +7820,7 @@ func _process_iap(delta: float) -> void:
     if iap_pending_beta_check_id > 0 and int(coffee_state.get(
         "entitlement_check_completed", 0
     )) >= iap_pending_beta_check_id:
-        _complete_artemis_beta_check()
+        _complete_runtime_beta_check()
 
     var operation_state_source := (
         coffee_state
@@ -9488,12 +9489,22 @@ func _path_exists(path: String) -> bool:
     return DirAccess.dir_exists_absolute(candidate) or FileAccess.file_exists(candidate)
 
 func _resolve_game_path(path: String) -> String:
-    var normalized := path.strip_edges()
-    if normalized.is_empty():
-        return normalized
+    # Native file pickers return authoritative filesystem paths.  A trailing
+    # space is a valid filename character on POSIX (and occurs in real game
+    # folders), so try the exact value before treating surrounding whitespace
+    # as accidental user input.
+    var normalized := path
+    if normalized.is_empty() or normalized.strip_edges().is_empty():
+        return ""
     if OS.get_name() == "Android":
         normalized = _android_external_storage_path_from_tree_uri(normalized)
-    if _path_exists(normalized) or OS.get_name() != "iOS":
+    if _path_exists(normalized):
+        return normalized
+
+    var trimmed := normalized.strip_edges()
+    if trimmed != normalized and _path_exists(trimmed):
+        return trimmed
+    if OS.get_name() != "iOS":
         return normalized
 
     var current_root := ProjectSettings.globalize_path("user://Games")
@@ -10175,7 +10186,7 @@ func _start_selected_game_after_iap() -> void:
         return
     var selected_runtime_kind := _game_runtime_kind(library_path)
     # Development artifacts and Android releases do not use the Apple-only
-    # beta entitlement flow. Keep the Artemis grant enabled for both paths.
+    # beta entitlement flow. Keep provider beta access enabled for both paths.
     if not _beta_access_enforcement_enabled():
         if (
             selected_runtime_kind == RUNTIME_KIRIKIRI
@@ -10184,7 +10195,7 @@ func _start_selected_game_after_iap() -> void:
         ):
             return
         if player.has_method("set_engine_option"):
-            player.set_engine_option("artemis_beta_allowed", "1")
+            player.set_engine_option("beta_runtime_allowed", "1")
         _start_selected_game_after_entitlements()
         return
 
@@ -10198,10 +10209,10 @@ func _start_selected_game_after_iap() -> void:
     if player.has_method("set_engine_option"):
         # Reset a grant left on the reusable engine handle before every Release
         # launch. A fresh verified coffee entitlement enables it again below.
-        player.set_engine_option("artemis_beta_allowed", "0")
+        player.set_engine_option("beta_runtime_allowed", "0")
     var requires_beta_access := (
         _runtime_requires_beta_access(selected_runtime_kind)
-        or _selected_game_uses_artemis()
+        or _selected_game_uses_beta_provider()
     )
     if not requires_beta_access:
         _start_selected_game_after_entitlements()
@@ -10209,40 +10220,46 @@ func _start_selected_game_after_iap() -> void:
 
     iap_pending_beta_game = selected_game.duplicate(true)
     if not _iap_supported_platform() or not player.has_method("iap_refresh_entitlement"):
-        _deny_artemis_beta_launch()
+        _deny_runtime_beta_launch()
         return
     iap_pending_beta_check_id = int(player.iap_refresh_entitlement(
         IAP_COFFEE_PRODUCT_ID
     ))
     if iap_pending_beta_check_id <= 0:
-        _deny_artemis_beta_launch()
+        _deny_runtime_beta_launch()
 
 func _runtime_requires_beta_access(runtime_kind: String) -> bool:
-    # ONS support follows the same Apple release policy as Artemis: unrestricted
-    # in Debug and Android builds, and gated by an active coffee entitlement on
-    # iOS and macOS distribution builds.
+    # ONS support follows the same Apple release policy as provider-based beta
+    # runtimes: unrestricted in Debug and Android builds, and gated by an
+    # active coffee entitlement on iOS and macOS distribution builds.
     return runtime_kind == RUNTIME_ONSCRIPTER
 
 func _beta_access_enforcement_enabled(platform_name: String = "") -> bool:
     var effective_platform := platform_name if not platform_name.is_empty() else OS.get_name()
     return effective_platform in ["iOS", "macOS"] and not OS.is_debug_build()
 
-func _selected_game_uses_artemis() -> bool:
+func _provider_runtime_requires_beta_access(runtime_id: String) -> bool:
+    return BETA_PROVIDER_RUNTIME_IDS.has(runtime_id.strip_edges().to_lower())
+
+func _selected_game_uses_beta_provider() -> bool:
     if player == null or not player.has_method("probe_runtime"):
         return false
     var library_path := String(selected_game.get("path", "")).strip_edges()
     if library_path.is_empty():
         return false
-    return int(player.probe_runtime("artemis", library_path)) > 0
+    for runtime_id in BETA_PROVIDER_RUNTIME_IDS:
+        if int(player.probe_runtime(runtime_id, library_path)) > 0:
+            return true
+    return false
 
-func _complete_artemis_beta_check() -> void:
+func _complete_runtime_beta_check() -> void:
     iap_pending_beta_check_id = 0
     if iap_pending_beta_game.is_empty():
         return
     var pending_game: Dictionary = iap_pending_beta_game.duplicate(true)
     iap_pending_beta_game.clear()
     if not bool(iap_coffee_state.get("entitled", false)) and not _secret_coffee_active():
-        _deny_artemis_beta_launch()
+        _deny_runtime_beta_launch()
         return
     selected_game = pending_game
     if (
@@ -10250,16 +10267,16 @@ func _complete_artemis_beta_check() -> void:
         == RUNTIME_KIRIKIRI
         and player.has_method("set_engine_option")
     ):
-        player.set_engine_option("artemis_beta_allowed", "1")
+        player.set_engine_option("beta_runtime_allowed", "1")
     _start_selected_game_after_entitlements()
 
-func _deny_artemis_beta_launch() -> void:
+func _deny_runtime_beta_launch() -> void:
     iap_pending_beta_check_id = 0
     iap_pending_beta_game.clear()
     if player != null and player.has_method("set_engine_option"):
-        player.set_engine_option("artemis_beta_allowed", "0")
+        player.set_engine_option("beta_runtime_allowed", "0")
     _show_system_alert(
-        _t("iap.artemis_unavailable"),
+        _t("iap.runtime_unavailable"),
         _t("alert.warning_title")
     )
 
@@ -10895,6 +10912,7 @@ func _show_runtime_dialog(values: Dictionary) -> void:
         runtime_dialog_input.custom_minimum_size = Vector2(0, 68)
         runtime_dialog_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
         runtime_dialog_input.add_theme_font_size_override("font_size", 25)
+        runtime_dialog_input.text = String(values.get("text", ""))
         var maximum_characters := int(
             String(values.get("maximum_characters", "0"))
         )
@@ -10908,14 +10926,20 @@ func _show_runtime_dialog(values: Dictionary) -> void:
     box.add_child(buttons)
 
     if yes_no:
-        var no := _pill_button("No")
+        var no_label := String(values.get("no_label", ""))
+        if no_label.is_empty():
+            no_label = _t("debug.value.no")
+        var no := _pill_button(no_label)
         no.custom_minimum_size = Vector2(150, 60)
         no.pressed.connect(
             _complete_runtime_dialog.bind(0, runtime_dialog_input)
         )
         buttons.add_child(no)
 
-    var ok := _pill_button("Yes" if yes_no else "OK")
+    var ok_label := String(values.get("yes_label" if yes_no else "ok_label", ""))
+    if ok_label.is_empty():
+        ok_label = _t("debug.value.yes") if yes_no else _t("dialog.ok")
+    var ok := _pill_button(ok_label)
     ok.custom_minimum_size = Vector2(150, 60)
     ok.pressed.connect(
         _complete_runtime_dialog.bind(1, runtime_dialog_input)
@@ -10928,6 +10952,7 @@ func _show_runtime_dialog(values: Dictionary) -> void:
                 _complete_runtime_dialog(1, runtime_dialog_input)
         )
         runtime_dialog_input.call_deferred("grab_focus")
+        runtime_dialog_input.call_deferred("select_all")
     else:
         ok.call_deferred("grab_focus")
 
@@ -12588,6 +12613,9 @@ func _process(delta: float) -> void:
                 current_surface_size.x,
                 current_surface_size.y,
             ]
+            var runtime_debug := String(player.get_plugin_debug_info())
+            if not runtime_debug.is_empty():
+                state_line += " runtime=%s" % runtime_debug
             print(state_line)
             _write_probe_marker(state_line)
             if perf_log_file != null:
@@ -13146,7 +13174,7 @@ func _renderer_summary(renderer: String) -> String:
 func _on_open_game() -> void:
     if not _require_legal_documents_for_media():
         return
-    var requested_path := game_path.text.strip_edges()
+    var requested_path := game_path.text
     var path := _resolve_game_path(requested_path)
     if path != requested_path:
         _write_probe_marker("open_game remapped_path=%s requested=%s" % [path, requested_path])
@@ -13593,13 +13621,66 @@ func _clear_game_input_capture() -> void:
     black_frame_last_log_msec = 0
 
 func _run_auto_probe() -> void:
+    var awaited_script := _runtime_string("AETHERKIRI_AUTO_PROBE_WAIT_RUNTIME_SCRIPT")
+    if not awaited_script.is_empty():
+        await _auto_probe_wait_for_runtime_script(awaited_script)
     await _auto_probe_wait_frames(_runtime_int("AETHERKIRI_AUTO_PROBE_WARMUP_FRAMES", 180))
     await _save_auto_probe_step(0, "startup")
     var step := 1
     for pos in auto_probe_clicks:
+        _send_probe_motion(pos)
+        await _auto_probe_wait_frames(2)
         _send_probe_click(pos)
-        await _auto_probe_wait_frames(_runtime_int("AETHERKIRI_AUTO_PROBE_AFTER_CLICK_FRAMES", 180))
+        var after_click_frames: int = max(1, _runtime_int("AETHERKIRI_AUTO_PROBE_AFTER_CLICK_FRAMES", 180))
+        var post_click_move_frames: int = clampi(
+            _runtime_int("AETHERKIRI_AUTO_PROBE_POST_CLICK_MOVE_FRAMES", 0),
+            0,
+            after_click_frames - 1
+        )
+        if post_click_move_frames > 0:
+            await _auto_probe_wait_frames(post_click_move_frames)
+            _send_probe_motion(pos + Vector2(2.0, 0.0))
+            await _auto_probe_wait_frames(after_click_frames - post_click_move_frames)
+        else:
+            await _auto_probe_wait_frames(after_click_frames)
         await _save_auto_probe_step(step, "click_%d_%d" % [int(pos.x), int(pos.y)])
+        step += 1
+    var dialog_steps_spec := _runtime_string("AETHERKIRI_AUTO_PROBE_DIALOG_STEPS")
+    var dialog_steps = (
+        JSON.parse_string(dialog_steps_spec)
+        if not dialog_steps_spec.is_empty()
+        else []
+    )
+    if dialog_steps is Array:
+        for value in dialog_steps:
+            var dialog_step: Dictionary = value if value is Dictionary else {}
+            var dialog_result := int(dialog_step.get("result", 1))
+            var dialog_text := String(dialog_step.get("text", ""))
+            var after_dialog_frames := int(dialog_step.get(
+                "after_frames",
+                _runtime_int("AETHERKIRI_AUTO_PROBE_AFTER_DIALOG_FRAMES", 180)
+            ))
+            if not await _auto_probe_complete_runtime_dialog(
+                dialog_result, dialog_text, after_dialog_frames
+            ):
+                break
+            await _save_auto_probe_step(step, "dialog_%d" % dialog_result)
+            step += 1
+    var post_dialog_clicks := _parse_click_points(
+        _runtime_string("AETHERKIRI_AUTO_PROBE_POST_DIALOG_CLICKS")
+    )
+    for pos in post_dialog_clicks:
+        _send_probe_motion(pos)
+        await _auto_probe_wait_frames(2)
+        _send_probe_click(pos)
+        await _auto_probe_wait_frames(max(
+            1,
+            _runtime_int("AETHERKIRI_AUTO_PROBE_AFTER_CLICK_FRAMES", 180)
+        ))
+        await _save_auto_probe_step(step, "post_dialog_click_%d_%d" % [
+            int(pos.x),
+            int(pos.y),
+        ])
         step += 1
     auto_probe_done = true
     auto_probe_running = false
@@ -13687,6 +13768,12 @@ func _can_write_probe_files() -> bool:
     return not cli_probe_script.is_empty() or _runtime_flag("AETHERKIRI_IOS_FILE_LOG")
 
 func _send_startup_probe_mouse_click(pos: Vector2) -> bool:
+    var motion := InputEventMouseMotion.new()
+    motion.position = pos
+    motion.global_position = pos
+    motion.relative = Vector2(1.0, 0.0)
+    _handle_game_pointer_event(motion)
+
     var down := InputEventMouseButton.new()
     down.button_index = MOUSE_BUTTON_LEFT
     down.pressed = true
@@ -13729,6 +13816,44 @@ func _auto_probe_wait_frames(frames: int) -> void:
     for i in range(max(1, frames)):
         await get_tree().process_frame
 
+func _auto_probe_wait_for_runtime_script(script_name: String) -> void:
+    var frame_budget: int = max(1, _runtime_int("AETHERKIRI_AUTO_PROBE_WAIT_RUNTIME_FRAMES", 3600))
+    var required_objects: int = max(0, _runtime_int("AETHERKIRI_AUTO_PROBE_WAIT_RUNTIME_OBJECTS", 0))
+    for i in range(frame_budget):
+        var state = JSON.parse_string(player.get_plugin_debug_info())
+        if state is Dictionary and String(state.get("vmScript", "")) == script_name and int(state.get("fesObjects", 0)) >= required_objects:
+            _write_probe_marker("auto_wait_runtime matched script=%s objects=%d frame=%d" % [
+                script_name,
+                int(state.get("fesObjects", 0)),
+                i,
+            ])
+            return
+        await get_tree().process_frame
+    _write_probe_marker("auto_wait_runtime timeout script=%s frames=%d" % [script_name, frame_budget])
+
+func _auto_probe_complete_runtime_dialog(
+    result: int, text: String, after_frames: int
+) -> bool:
+    var frame_budget: int = max(
+        1, _runtime_int("AETHERKIRI_AUTO_PROBE_DIALOG_WAIT_FRAMES", 1800)
+    )
+    for i in range(frame_budget):
+        if modal_layer != null and bool(
+            modal_layer.get_meta("runtime_platform_dialog", false)
+        ):
+            var input := runtime_dialog_input
+            if input != null and is_instance_valid(input):
+                input.text = text
+            _write_probe_marker(
+                "auto_dialog result=%d text=%s frame=%d" % [result, text, i]
+            )
+            _complete_runtime_dialog(result, input)
+            await _auto_probe_wait_frames(max(1, after_frames))
+            return true
+        await get_tree().process_frame
+    _write_probe_marker("auto_dialog timeout frames=%d" % frame_budget)
+    return false
+
 func _save_auto_probe_step(index: int, label: String) -> void:
     await get_tree().process_frame
     await get_tree().process_frame
@@ -13768,6 +13893,38 @@ func _save_auto_probe_step(index: int, label: String) -> void:
         perf_log_file.flush()
 
 func _send_probe_click(window_pos: Vector2) -> void:
+    if _runtime_flag("AETHERKIRI_AUTO_PROBE_DISPATCH_INPUT"):
+        var motion := InputEventMouseMotion.new()
+        motion.position = window_pos
+        motion.global_position = window_pos
+        motion.relative = Vector2(1.0, 0.0)
+        Input.parse_input_event(motion)
+
+        var down := InputEventMouseButton.new()
+        down.button_index = MOUSE_BUTTON_LEFT
+        down.pressed = true
+        down.position = window_pos
+        down.global_position = window_pos
+        Input.parse_input_event(down)
+
+        var up := InputEventMouseButton.new()
+        up.button_index = MOUSE_BUTTON_LEFT
+        up.pressed = false
+        up.position = window_pos
+        up.global_position = window_pos
+        Input.parse_input_event(up)
+        _write_probe_marker("auto_click window=%s route=input_dispatch" % window_pos)
+        return
+    if _runtime_flag("AETHERKIRI_AUTO_PROBE_ROUTE_GAME_INPUT"):
+        if not _can_forward_game_input():
+            _write_probe_marker("auto_click_blocked window=%s route=game_input" % window_pos)
+            return
+        var forwarded := _send_startup_probe_mouse_click(window_pos)
+        _write_probe_marker("auto_click window=%s route=game_input forwarded=%s" % [
+            window_pos,
+            str(forwarded),
+        ])
+        return
     var mapped := _map_probe_window_point(window_pos)
     if mapped.x < 0.0 or mapped.y < 0.0:
         _write_probe_marker("auto_click_skipped window=%s mapped=%s" % [window_pos, mapped])
@@ -13780,6 +13937,21 @@ func _send_probe_click(window_pos: Vector2) -> void:
     player.send_pointer_event(POINTER_UP, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
     _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
     _write_probe_marker("auto_click window=%s mapped=%s" % [window_pos, mapped])
+
+func _send_probe_motion(window_pos: Vector2) -> void:
+    var motion := InputEventMouseMotion.new()
+    motion.position = window_pos
+    motion.global_position = window_pos
+    motion.relative = Vector2(2.0, 0.0)
+    if _runtime_flag("AETHERKIRI_AUTO_PROBE_DISPATCH_INPUT"):
+        Input.parse_input_event(motion)
+    elif _runtime_flag("AETHERKIRI_AUTO_PROBE_ROUTE_GAME_INPUT"):
+        _handle_game_pointer_event(motion)
+    else:
+        var mapped := _map_probe_window_point(window_pos)
+        if mapped.x >= 0.0 and mapped.y >= 0.0:
+            player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, 2.0, 0.0, 0)
+    _write_probe_marker("auto_motion window=%s" % window_pos)
 
 func _map_probe_window_point(pos: Vector2) -> Vector2:
     var panel_size := Vector2(
@@ -14822,11 +14994,27 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
                 mapped,
                 _touch_drag_distance_threshold()
             )
+        var touch_was_dragged := dragging_touch_points.has(pointer_id)
         active_touch_points.erase(pointer_id)
         touch_down_points.erase(pointer_id)
         dragging_touch_points.erase(pointer_id)
         last_forwarded_touch_move_msec_by_id.erase(pointer_id)
-        _send_game_pointer_event(POINTER_UP, _touch_engine_pointer_id(pointer_id), mapped.x, mapped.y, 0.0, 0.0, 0)
+        var release_modifiers := 0
+        if GameInputMapping.touch_drag_release_is_cancelled(
+            active_runtime_kind,
+            touch_was_dragged
+        ):
+            release_modifiers = POINTER_MOD_CANCEL
+        _send_game_pointer_event(
+            POINTER_UP,
+            _touch_engine_pointer_id(pointer_id),
+            mapped.x,
+            mapped.y,
+            0.0,
+            0.0,
+            0,
+            release_modifiers
+        )
         last_forwarded_touch_up_msec = Time.get_ticks_msec()
         _apply_touch_action_cooldown()
         _arm_black_frame_guard()

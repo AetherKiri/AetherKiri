@@ -400,6 +400,12 @@ namespace motion {
         void skipToSync();
         void passTimelinesLike_0x67A100();
         void setStereovisionCameraPosition(double x, double y, double z);
+        void setAutomaticBlinkEnabled(bool enabled) {
+            _automaticBlinkEnabled = enabled;
+        }
+        bool getAutomaticBlinkEnabled() const {
+            return _automaticBlinkEnabled;
+        }
 
         // Timeline/variable queries
         void setVariable(ttstr label, double value, double transition = 0.0,
@@ -822,6 +828,9 @@ namespace motion {
         bool _physicsDisabled = false;   // player+1159
         bool _emoteAnimatorFlag = false; // player+1161
         bool _emoteDirty = false;        // player+1162
+        // CatSystem2's ObjEmote EnableBlink message gates the metadata-driven
+        // automatic eye controller without disabling other E-mote physics.
+        bool _automaticBlinkEnabled = true;
         // Script-side setters can update many selector variables before the
         // next draw/query (a gallery page updates every slot this way).  Keep
         // node evaluation deferred and coalesced instead of rebuilding the

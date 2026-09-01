@@ -125,7 +125,7 @@ iOS 和 Android 导出配置会引用 `apps/godot_app/assets/icons/` 下的生�
 
 | 平台 | 最低版本 | 说明 |
 | --- | --- | --- |
-| macOS | macOS 13.0（Ventura） | Godot App 导出配置为 Universal，但当前 native 构建 triplet 只有 `arm64`；Intel 支持还需要单独构建 `x86_64` native 产物。 |
+| macOS | macOS 13.0（Ventura） | 内部 E-mote 构建使用官方 SDK 的 `x86_64` 驱动，在 Apple Silicon 上通过 Rosetta 运行。 |
 | iOS / iPadOS | iOS / iPadOS 16.0 | 真机为 `arm64`；开发环境可构建 `arm64` 和 `x86_64` 模拟器版本。 |
 | Android | Android 7.0（API 24） | 当前产品导出只打包 `arm64-v8a`。 |
 | Web | 不限定操作系统版本 | 浏览器必须支持 WebAssembly SIMD、WebAssembly threads 和 `SharedArrayBuffer`，并通过配置了跨源隔离（COOP/COEP）的 HTTP 服务访问。 |
@@ -136,6 +136,7 @@ iOS 和 Android 导出配置会引用 `apps/godot_app/assets/icons/` 下的生�
 
 - CMake 3.28+
 - Ninja
+- NASM（native FFmpeg 依赖需要）
 - vcpkg，位于 `.devtools/vcpkg` 或通过 `VCPKG_ROOT` 指定
 - Godot 位于 `/Applications/Godot.app`，或通过 `GODOT_BIN=/path/to/Godot` 指定
 - macOS/iOS 导出需要 Xcode
@@ -148,6 +149,9 @@ iOS 和 Android 导出配置会引用 `apps/godot_app/assets/icons/` 下的生�
 - Web 的 GDExtension 导出需要 Godot dlink 模板，文件名为
   `web_dlink_debug.zip` 和 `web_dlink_release.zip`。
 - 本地 Web dev server 使用 TypeScript/Vite，需要 Node.js 和 npm。
+- 内部 Artemis 与 CatSystem2 的 E-mote 构建需要官方 E-mote SDK；必须在
+  CMake 配置或测试前运行
+  `packages/AetherInternal/tools/install_emote_sdk.sh` 完成安装。
 
 ## 构建
 
@@ -170,19 +174,23 @@ git submodule update --init packages/tjs2Decompiler
 
 ```bash
 git submodule update --init packages/AetherInternal
+packages/AetherInternal/tools/install_emote_sdk.sh
 ```
 
-CMake 检测到 package 后会自动启用。使用
+CMake 检测到 package 后会自动启用。安装脚本会校验 SDK，并且只在私有
+package 内生成被 Git 忽略的文件；不要提交这些头文件或静态库。macOS 官方
+驱动仅提供 `x86_64`，因此常规内部构建会生成该架构，并在 Apple Silicon 上
+通过 Rosetta 运行。使用
 `-DAETHERKIRI_ENABLE_INTERNAL=OFF` 可强制验证公开 fallback；也可通过
 `-DAETHERKIRI_INTERNAL_DIR=/absolute/path/to/AetherInternal` 指定独立检出目录。
 GitHub Actions 的 `Build` workflow 会在可信运行中使用仓库 Secret
 `AETHERSECRET` 作为只读 SSH 密钥，递归初始化私有 submodule。来自 fork
 或 Dependabot 的 PR 无法访问仓库 Secret，因此这些不可信运行仍使用公开 fallback。
 
-私有 package 只扩展 `motionplayer`，不会替换公开 target 或公开源码列表。
-公开 backend 始终是脚本侧的唯一实现；检测到私库时，仅通过版本化扩展接口加入
-本次新增的 E-mote 模块识别、眨眼/物理元数据、自动眨眼、胸部/头发/尾巴物理、
-重复标签的精确遮罩策略及私有状态存档。私库不复制公开源码，也不使用补丁覆盖。
+私有 package 扩展现有的 `motionplayer`、运行时和 `krkr2plugin` target，
+不会替换公开 target 或复制公开源码。KiriRuntime、Artemis 和 CatSystem2 共用
+官方 GPU E-mote SDK bridge；受支持的移动端保留原生共享 GPU 帧，macOS 则在
+OpenGL 与 MoltenVK 边界之间使用 SDK 的异步传输路径。
 两种构建运行同一套公开 motionplayer 测试。package/API 版本不一致时 CMake 会
 直接停止配置，不会静默产出不兼容的组合。
 

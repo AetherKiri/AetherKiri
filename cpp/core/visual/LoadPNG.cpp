@@ -79,7 +79,7 @@ static png_voidp PNG_malloc(png_structp ps, png_size_t size) {
 //---------------------------------------------------------------------------
 // user_free_fn
 static void PNG_free(png_structp ps, void * /* png_structp*/ mem) {
-    if(TVPDecodeArenaActive() && TVPDecodeArenaOwns(mem)) return;
+    if(TVPDecodeArenaOwns(mem)) return;
     free(mem);
 }
 //---------------------------------------------------------------------------

@@ -811,7 +811,7 @@ jobs:
             --path apps/godot_app \
             --script res://scripts/smoke_test.gd
 
-      - name: Run native motionplayer contract tests
+      - name: Run complete public and integrated private unit tests
         run: |
           set -euo pipefail
           test_build_dir="${GITHUB_WORKSPACE}/out/macos-x64/ci-tests"
@@ -836,7 +836,12 @@ jobs:
           fi
 
           cmake --build "$test_build_dir" --parallel 4
-          ctest --test-dir "$test_build_dir" --output-on-failure --parallel 4
+          ctest --test-dir "$test_build_dir" --show-only=human
+          ctest \
+            --test-dir "$test_build_dir" \
+            --output-on-failure \
+            --no-tests=error \
+            --parallel 4
 
       - name: Verify built .app
         run: |

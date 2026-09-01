@@ -166,6 +166,16 @@ engine_result_t FakeGetTextInputState(void* runtime,
   return ENGINE_RESULT_OK;
 }
 
+engine_result_t FakeGetMemoryStats(void* runtime,
+                                  engine_memory_stats_t* stats) {
+  if (runtime == nullptr || stats == nullptr ||
+      stats->struct_size < sizeof(engine_memory_stats_t)) {
+    return ENGINE_RESULT_INVALID_ARGUMENT;
+  }
+  stats->graphic_cache_bytes = 4096u;
+  return ENGINE_RESULT_OK;
+}
+
 const engine_runtime_provider_v1_t kFakeProvider = [] {
   engine_runtime_provider_v1_t provider{};
   provider.struct_size = sizeof(provider);
@@ -185,6 +195,7 @@ const engine_runtime_provider_v1_t kFakeProvider = [] {
   provider.get_last_error = FakeLastError;
   provider.submit_platform_response = FakeSubmitPlatformResponse;
   provider.get_text_input_state = FakeGetTextInputState;
+  provider.get_memory_stats = FakeGetMemoryStats;
   return provider;
 }();
 
@@ -192,6 +203,14 @@ const engine_runtime_provider_v1_t kArtemisGateProvider = [] {
   engine_runtime_provider_v1_t provider = kFakeProvider;
   provider.runtime_id_utf8 = "artemis";
   provider.display_name_utf8 = "Artemis Debug gate test provider";
+  provider.probe = ArtemisGateProbe;
+  return provider;
+}();
+
+const engine_runtime_provider_v1_t kCatSystem2GateProvider = [] {
+  engine_runtime_provider_v1_t provider = kFakeProvider;
+  provider.runtime_id_utf8 = "catsystem2";
+  provider.display_name_utf8 = "CatSystem2 gate test provider";
   provider.probe = ArtemisGateProbe;
   return provider;
 }();
@@ -247,28 +266,56 @@ TEST_CASE("primary click queue gate preserves every secondary pointer edge") {
   gate.on_dequeued(queued_primary_release);
 }
 
-TEST_CASE("Artemis runtime is compiled but beta-gated in product builds") {
-  const engine_result_t registration =
-      engine_register_runtime_provider(&kArtemisGateProvider);
-  REQUIRE(registration == ENGINE_RESULT_OK);
+TEST_CASE("Beta runtime providers require active coffee access") {
+  REQUIRE(engine_register_runtime_provider(&kArtemisGateProvider) ==
+          ENGINE_RESULT_OK);
+  REQUIRE(engine_register_runtime_provider(&kCatSystem2GateProvider) ==
+          ENGINE_RESULT_OK);
 
-  Handle handle;
-  engine_option_t runtime_option{};
-  runtime_option.key_utf8 = "runtime";
-  runtime_option.value_utf8 = "artemis";
-  REQUIRE(engine_set_option(handle.value, &runtime_option) == ENGINE_RESULT_OK);
+  const std::array<std::array<const char*, 2>, 2> runtimes{{
+      {{"artemis", "Artemis runtime requires active beta access"}},
+      {{"catsystem2", "CatSystem2 runtime requires active beta access"}},
+  }};
+  for (const auto& runtime : runtimes) {
+    {
+      Handle default_handle;
+      engine_option_t default_runtime_option{};
+      default_runtime_option.key_utf8 = "runtime";
+      default_runtime_option.value_utf8 = runtime[0];
+      REQUIRE(engine_set_option(default_handle.value, &default_runtime_option) ==
+              ENGINE_RESULT_OK);
 #if defined(NDEBUG)
-  REQUIRE(engine_open_game(handle.value, ".artemis-debug-gate-test",
-                           "first.iet") == ENGINE_RESULT_NOT_SUPPORTED);
-  REQUIRE(std::string(engine_get_last_error(handle.value)) ==
-          "Artemis runtime requires active beta access");
-  engine_option_t beta_option{};
-  beta_option.key_utf8 = "artemis_beta_allowed";
-  beta_option.value_utf8 = "1";
-  REQUIRE(engine_set_option(handle.value, &beta_option) == ENGINE_RESULT_OK);
+      REQUIRE(engine_open_game(default_handle.value,
+                               ".artemis-debug-gate-test", "first.iet") ==
+              ENGINE_RESULT_NOT_SUPPORTED);
+      REQUIRE(std::string(engine_get_last_error(default_handle.value)) ==
+              runtime[1]);
+#else
+      REQUIRE(engine_open_game(default_handle.value,
+                               ".artemis-debug-gate-test", "first.iet") ==
+              ENGINE_RESULT_OK);
 #endif
-  REQUIRE(engine_open_game(handle.value, ".artemis-debug-gate-test",
-                           "first.iet") == ENGINE_RESULT_OK);
+    }
+
+    Handle handle;
+    engine_option_t runtime_option{};
+    runtime_option.key_utf8 = "runtime";
+    runtime_option.value_utf8 = runtime[0];
+    REQUIRE(engine_set_option(handle.value, &runtime_option) == ENGINE_RESULT_OK);
+
+    engine_option_t beta_option{};
+    beta_option.key_utf8 = "beta_runtime_allowed";
+    beta_option.value_utf8 = "0";
+    REQUIRE(engine_set_option(handle.value, &beta_option) == ENGINE_RESULT_OK);
+    REQUIRE(engine_open_game(handle.value, ".artemis-debug-gate-test",
+                             "first.iet") == ENGINE_RESULT_NOT_SUPPORTED);
+    REQUIRE(std::string(engine_get_last_error(handle.value)) == runtime[1]);
+
+    beta_option.value_utf8 = "1";
+    REQUIRE(engine_set_option(handle.value, &beta_option) == ENGINE_RESULT_OK);
+    REQUIRE(engine_open_game(handle.value, ".artemis-debug-gate-test",
+                             "first.iet") == ENGINE_RESULT_OK);
+  }
 }
 
 TEST_CASE("versioned runtime provider is selected and routed end to end") {
@@ -338,6 +385,30 @@ TEST_CASE("surface request made before provider selection is replayed") {
   REQUIRE(frame.width == 1920u);
   REQUIRE(frame.height == 1080u);
   REQUIRE(frame.stride_bytes == 1920u * 4u);
+}
+
+TEST_CASE("runtime providers receive host process memory statistics") {
+  REQUIRE(engine_register_runtime_provider(&kFakeProvider) == ENGINE_RESULT_OK);
+  Handle handle;
+  engine_option_t runtime_option{};
+  runtime_option.key_utf8 = "runtime";
+  runtime_option.value_utf8 = "fake-artemis-test";
+  REQUIRE(engine_set_option(handle.value, &runtime_option) == ENGINE_RESULT_OK);
+  REQUIRE(engine_open_game(handle.value, ".artemis-test", "first.iet") ==
+          ENGINE_RESULT_OK);
+
+  engine_memory_stats_t stats{};
+  stats.struct_size = sizeof(stats);
+  REQUIRE(engine_get_memory_stats(handle.value, &stats) == ENGINE_RESULT_OK);
+  CHECK(stats.graphic_cache_bytes == 4096u);
+#if defined(__APPLE__)
+  CHECK(stats.self_used_mb > 0u);
+  CHECK(stats.system_total_mb > 0u);
+  CHECK(stats.process_resident_bytes > 0u);
+  CHECK(stats.process_physical_footprint_bytes > 0u);
+  CHECK(stats.process_peak_physical_footprint_bytes >=
+        stats.process_physical_footprint_bytes);
+#endif
 }
 
 TEST_CASE("standalone media is routed through the legacy host service") {

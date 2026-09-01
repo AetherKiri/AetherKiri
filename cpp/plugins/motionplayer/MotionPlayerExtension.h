@@ -234,6 +234,20 @@ namespace motion {
 
     inline constexpr std::uint32_t kMotionPlayerExtensionAbiVersion = 4;
 
+    // Some engines share the public MotionPlayer backend without sharing the
+    // vendor-specific behavior supplied by an optional extension. Suppress the
+    // registered extension for synchronous work on the current thread only.
+    class ScopedMotionPlayerExtensionSuppression final {
+    public:
+        ScopedMotionPlayerExtensionSuppression();
+        ~ScopedMotionPlayerExtensionSuppression();
+
+        ScopedMotionPlayerExtensionSuppression(
+            const ScopedMotionPlayerExtensionSuppression &) = delete;
+        ScopedMotionPlayerExtensionSuppression &operator=(
+            const ScopedMotionPlayerExtensionSuppression &) = delete;
+    };
+
     bool registerMotionPlayerExtension(
         const MotionPlayerExtensionV4 *extension);
     const MotionPlayerExtensionV4 *motionPlayerExtension();
