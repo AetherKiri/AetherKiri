@@ -10839,6 +10839,12 @@ private:
         frame_present_pending_slot_ = 0;
         frame_present_has_current_ = false;
         frame_present_has_pending_ = false;
+        // The copy op may still be queued on Godot's render thread. Keep the
+        // shared_ptr alive until the queued operation reaches the release
+        // fence below, then drop our reference. The queue owns its own
+        // reference, so clearing this member is safe after RunGodotGpuOpSync
+        // has ordered the releases behind all preceding work.
+        frame_present_pending_op_.reset();
         frame_present_pending_draw_frame_ = 0;
         frame_present_serial_ = UINT64_MAX;
         if (frame_texture_backend_ == "godot_native_gpu_presented" ||
@@ -10979,18 +10985,34 @@ private:
             ? static_cast<uint64_t>(engine->get_frames_drawn())
             : 0;
         if (frame_present_has_pending_) {
+            bool pending_done = false;
+            bool pending_result = false;
+            if (frame_present_pending_op_) {
+                std::lock_guard<std::mutex> done_lock(
+                    frame_present_pending_op_->done_mutex);
+                pending_done = frame_present_pending_op_->done;
+                pending_result = frame_present_pending_op_->result;
+            }
             const bool pending_complete =
                 drawn_frame > frame_present_pending_draw_frame_;
-            if (pending_complete) {
+            if (pending_complete && pending_done && pending_result) {
                 frame_present_current_slot_ = frame_present_pending_slot_;
                 frame_present_has_current_ = true;
                 frame_present_has_pending_ = false;
+                frame_present_pending_op_.reset();
                 // The RD storage stays stable while its pixels change. Notify
                 // TextureRect/Canvas explicitly so the already-bound
                 // Texture2DRD is invalidated without replacing the Resource
                 // object that the scene owns.
                 frame_present_textures_[frame_present_current_slot_]
                     ->emit_changed();
+            } else if (pending_complete && pending_done) {
+                // A failed asynchronous copy must not permanently block the
+                // presentation ring. Drop the failed slot and enqueue a fresh
+                // copy below; the current slot (if any) remains valid while
+                // that retry is in flight.
+                frame_present_has_pending_ = false;
+                frame_present_pending_op_.reset();
             } else {
                 frame_texture_serial_ = serial;
                 frame_texture_backend_ = backend_name;
@@ -11010,7 +11032,15 @@ private:
         op->src_pos = Vector3();
         op->dst_pos = Vector3();
         op->size = Vector3(width, height, 1);
-        if (!RunGodotGpuOpSync(op)) {
+        // Do not wait for the render thread here. This method runs from the
+        // Godot main thread, while the copy is encoded on the RenderingServer
+        // render thread. A synchronous wait couples a game-script frame to
+        // the next render submission and turns a character/face texture burst
+        // into a 100+ ms main-thread spike. The ring already delays promotion
+        // until a later drawn frame; retaining the op lets us additionally
+        // verify that the asynchronous copy really completed before exposing
+        // the destination texture.
+        if (!RunGodotGpuOpAsync(op)) {
             frame_texture_backend_ = "godot_native_gpu_present_timeout";
             if (frame_present_textures_[frame_present_current_slot_].is_valid()) {
                 return frame_present_textures_[frame_present_current_slot_];
@@ -11019,6 +11049,7 @@ private:
         }
         frame_present_pending_slot_ = next_slot;
         frame_present_has_pending_ = true;
+        frame_present_pending_op_ = std::move(op);
         frame_present_pending_draw_frame_ = drawn_frame;
         frame_present_serial_ = serial;
         frame_texture_serial_ = serial;
@@ -11175,6 +11206,7 @@ private:
     size_t frame_present_pending_slot_ = 0;
     bool frame_present_has_current_ = false;
     bool frame_present_has_pending_ = false;
+    std::shared_ptr<GodotGpuOp> frame_present_pending_op_;
     uint64_t frame_present_pending_draw_frame_ = 0;
     uint64_t frame_present_serial_ = UINT64_MAX;
     uint64_t frame_texture_serial_ = UINT64_MAX;
