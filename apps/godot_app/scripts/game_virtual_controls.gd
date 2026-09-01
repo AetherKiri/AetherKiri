@@ -83,6 +83,7 @@ var _panel_controls: Array[Control] = []
 var _interactive_controls: Array[Control] = []
 var _cursor_touch_index := -1
 var _cursor_mouse_dragging := false
+var _cursor_initialized := false
 var _cursor_drag_has_position := false
 var _cursor_drag_last_screen_position := Vector2.ZERO
 var _menu_touch_index := -1
@@ -393,12 +394,14 @@ func layout(_window_size: Vector2, safe_rect: Rect2) -> void:
     scroll_down_button.position = Vector2(scroll_x, scroll_top + diameter + gap)
     scroll_down_button.size = key_size
 
-    if (
-        cursor_handle.position == Vector2.ZERO
-        or not safe_rect.has_point(cursor_handle.position + CURSOR_HOTSPOT)
-    ):
+    if not _cursor_initialized:
         cursor_handle.position = safe_rect.get_center() - CURSOR_HOTSPOT
+        _cursor_initialized = true
     cursor_handle.size = Vector2.ONE * CURSOR_SIZE
+    # Preserve the pointer across repeated safe-area layouts. Rect2.has_point()
+    # excludes its right and bottom edges, so using it here used to recenter a
+    # cursor whose hotspot was correctly clamped exactly onto either edge.
+    # _clamp_cursor() constrains the hotspot itself and keeps the arrow there.
     _clamp_cursor()
 
 func owns_viewport_pointer(event: InputEvent) -> bool:

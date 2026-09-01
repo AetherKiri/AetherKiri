@@ -27,7 +27,7 @@ extern "C" {
 #endif
 
 /* ABI version: major(8bit), minor(8bit), patch(16bit). */
-#define ENGINE_API_VERSION 0x01050000u
+#define ENGINE_API_VERSION 0x01060000u
 #define ENGINE_API_MAKE_VERSION(major, minor, patch) \
   ((((uint32_t)(major)&0xFFu) << 24u) | (((uint32_t)(minor)&0xFFu) << 16u) | \
    ((uint32_t)(patch)&0xFFFFu))
@@ -344,6 +344,84 @@ ENGINE_API_EXPORT engine_result_t engine_resume(engine_handle_t handle);
  */
 ENGINE_API_EXPORT engine_result_t engine_set_option(engine_handle_t handle,
                                                     const engine_option_t* option);
+
+/* Returns 1 when the private local-model text transformer is linked. */
+ENGINE_API_EXPORT uint32_t engine_is_text_translation_available(void);
+
+typedef enum engine_text_translation_state_t {
+  ENGINE_TEXT_TRANSLATION_DISABLED = 0,
+  ENGINE_TEXT_TRANSLATION_LOADING = 1,
+  ENGINE_TEXT_TRANSLATION_READY = 2,
+  ENGINE_TEXT_TRANSLATION_FAILED = 3,
+} engine_text_translation_state_t;
+
+typedef enum engine_text_translation_backend_t {
+  ENGINE_TEXT_TRANSLATION_BACKEND_NONE = 0,
+  ENGINE_TEXT_TRANSLATION_BACKEND_CPU = 1,
+  ENGINE_TEXT_TRANSLATION_BACKEND_GPU = 2,
+} engine_text_translation_backend_t;
+
+/*
+ * Process-wide local translation model statistics. Model tensor/file sizes
+ * describe the logical model storage, while model_resident_bytes_estimate is
+ * the observed process-memory increase during model/context initialization.
+ */
+typedef struct engine_text_translation_stats_t {
+  uint32_t struct_size;
+  uint32_t state;
+  uint32_t backend;
+  uint32_t active_jobs;
+
+  uint64_t model_file_bytes;
+  uint64_t model_tensor_bytes;
+  uint64_t context_state_bytes;
+  uint64_t model_resident_bytes_estimate;
+
+  uint32_t priority_queue_entries;
+  uint32_t prefetch_queue_entries;
+  uint32_t cache_entries;
+  uint32_t failed_entries;
+
+  uint64_t cache_hits;
+  uint64_t cache_misses;
+  uint64_t translations_started;
+  uint64_t translations_completed;
+  uint64_t translations_failed;
+  uint64_t translations_cancelled;
+
+  uint64_t model_load_us;
+  uint64_t last_inference_us;
+  uint64_t max_inference_us;
+  uint64_t last_synchronous_wait_us;
+  uint64_t total_synchronous_wait_us;
+
+  uint64_t reserved_u64[4];
+  void* reserved_ptr[4];
+} engine_text_translation_stats_t;
+
+/* Returns the process-wide state of the optional external translation model. */
+ENGINE_API_EXPORT uint32_t engine_get_text_translation_state(void);
+
+/* Gets a process-wide snapshot of local translation resource usage/timing. */
+ENGINE_API_EXPORT engine_result_t engine_get_text_translation_stats(
+    engine_text_translation_stats_t* out_stats);
+
+/*
+ * Applies the configured text transformer to one UTF-8 runtime string.
+ * out_required_size includes the trailing NUL.  A null/short buffer is a
+ * successful size query and leaves the buffer untouched.
+ */
+ENGINE_API_EXPORT engine_result_t engine_transform_text_utf8(
+    const char* runtime_id_utf8, const char* input_utf8, char* out_buffer,
+    uint32_t buffer_size, uint32_t* out_required_size);
+
+/* Queues a low-priority translation without waiting for inference. */
+ENGINE_API_EXPORT engine_result_t engine_prefetch_text_utf8(
+    const char* runtime_id_utf8, const char* input_utf8);
+
+/* Cancels/suppresses queued translation work while a runtime is skipping. */
+ENGINE_API_EXPORT engine_result_t engine_set_text_translation_skipping(
+    const char* runtime_id_utf8, uint32_t skipping);
 
 /*
  * Sets the host presentation surface size in pixels. Runtime-specific game

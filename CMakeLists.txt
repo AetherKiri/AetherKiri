@@ -112,7 +112,7 @@ if(AETHERKIRI_ENABLE_INTERNAL)
     find_package(AetherInternal CONFIG QUIET
         NO_DEFAULT_PATH)
     if(AetherInternal_FOUND)
-        if(NOT AETHERINTERNAL_PACKAGE_API_VERSION EQUAL 6 OR
+        if(NOT AETHERINTERNAL_PACKAGE_API_VERSION EQUAL 7 OR
            NOT AETHERINTERNAL_REQUIRED_MOTIONPLAYER_API_VERSION EQUAL
                AETHERKIRI_MOTIONPLAYER_BACKEND_API_VERSION OR
            NOT AETHERINTERNAL_REQUIRED_LIVE2D_HOST_API_VERSION EQUAL
@@ -128,6 +128,7 @@ if(AETHERKIRI_ENABLE_INTERNAL)
            NOT COMMAND aetherinternal_add_catsystem2_probe OR
            NOT COMMAND aetherinternal_add_artemis_tests OR
            NOT COMMAND aetherinternal_extend_artemis OR
+           NOT COMMAND aetherinternal_extend_text_translation OR
            NOT COMMAND aetherinternal_extend_godot_extension OR
            NOT COMMAND aetherinternal_extend_krkr2plugin OR
            NOT COMMAND aetherinternal_extend_krkr2plugin_tests)

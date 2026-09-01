@@ -81,6 +81,15 @@
 /** Internal plugin startup policy ("krkrsdl3" / "aether_all"). */
 #define ENGINE_OPTION_PLUGIN_LOAD_MODE "plugin_load_mode"
 
+/** External GGUF-backed text translation.  These generic options are handled
+ *  only when the private translation provider is linked. */
+#define ENGINE_OPTION_TEXT_TRANSLATION_ENABLED \
+  "text_translation.enabled"
+#define ENGINE_OPTION_TEXT_TRANSLATION_MODEL_PATH \
+  "text_translation.model_path"
+#define ENGINE_OPTION_TEXT_TRANSLATION_TARGET_LANGUAGE \
+  "text_translation.target_language"
+
 /** Enable/disable appending recent engine logs to fatal error dialogs
  *  ("0"/"1", default "0"). */
 #define ENGINE_OPTION_ERROR_DIALOG_LOGS "error_dialog_logs"

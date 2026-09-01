@@ -439,7 +439,7 @@ patch_ios_export_project() {
     for archive in "${FORCE_LOAD_PLUGIN_ARCHIVES[@]}"; do
         flags+=" -Wl,-force_load,Aether/bin/ios/$export_build_type/$archive"
     done
-    flags+=' -framework AudioToolbox -framework AVFoundation -framework CoreBluetooth -framework CoreHaptics -framework CoreMedia -framework CoreMotion -framework CoreVideo -framework GameController -framework VideoToolbox -framework CoreGraphics -framework QuartzCore -framework Metal -framework MetalKit -framework OpenGLES -framework Security -framework StoreKit -framework SystemConfiguration -framework MobileCoreServices'
+    flags+=' -framework Accelerate -framework AudioToolbox -framework AVFoundation -framework CoreBluetooth -framework CoreHaptics -framework CoreMedia -framework CoreMotion -framework CoreVideo -framework GameController -framework VideoToolbox -framework CoreGraphics -framework QuartzCore -framework Metal -framework MetalKit -framework OpenGLES -framework Security -framework StoreKit -framework SystemConfiguration -framework MobileCoreServices'
 
     if [[ -f "$project_file" ]]; then
         FLAGS="$flags" perl -0pi -e 's/OTHER_LDFLAGS = "[^"]*";/"OTHER_LDFLAGS = \"" . $ENV{FLAGS} . "\";"/eg' "$project_file"

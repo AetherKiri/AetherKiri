@@ -100,6 +100,7 @@ uint64_t g_published_frame_serial = 0;
 std::atomic<bool> g_system_list_scroll_active{false};
 std::atomic<uint32_t> g_system_list_scroll_y{0};
 std::atomic<uint64_t> g_system_list_view_revision{0};
+std::atomic<ONScripter *> g_translation_ons{nullptr};
 
 void ResetPublishedFrame() {
     std::lock_guard<std::mutex> lock(g_published_frame_mutex);
@@ -200,6 +201,80 @@ extern "C" void aetherkiri_onscripter_end_system_list_scroll() {
     g_system_list_scroll_active.store(false);
     g_system_list_scroll_y.store(0);
     g_system_list_view_revision.fetch_add(1);
+}
+
+extern "C" void aetherkiri_onscripter_transform_text(char *buffer,
+                                                       size_t capacity) {
+    if (buffer == nullptr || capacity == 0 || buffer[0] == '\0') return;
+    ONScripter *active = g_translation_ons.load(std::memory_order_acquire);
+    const bool skipping =
+        active != nullptr &&
+        (active->skip_mode != ONScripter::SKIP_NONE ||
+         active->ctrl_pressed_status);
+    engine_set_text_translation_skipping("onscripter", skipping ? 1u : 0u);
+    if (skipping) {
+        return;
+    }
+    uint32_t required = 0;
+    if (engine_transform_text_utf8("onscripter", buffer, nullptr, 0,
+                                   &required) != ENGINE_RESULT_OK ||
+        required == 0 || required > capacity) {
+        return;
+    }
+    std::vector<char> transformed(required, '\0');
+    uint32_t written = 0;
+    if (engine_transform_text_utf8("onscripter", buffer,
+                                   transformed.data(), required,
+                                   &written) == ENGINE_RESULT_OK &&
+        written == required) {
+        std::memcpy(buffer, transformed.data(), required);
+    }
+}
+
+extern "C" void aetherkiri_onscripter_prefetch_text(const char *script) {
+    if (script == nullptr || *script == '\0') return;
+    ONScripter *active = g_translation_ons.load(std::memory_order_acquire);
+    const bool skipping =
+        active != nullptr &&
+        (active->skip_mode != ONScripter::SKIP_NONE ||
+         active->ctrl_pressed_status);
+    engine_set_text_translation_skipping("onscripter", skipping ? 1u : 0u);
+    if (skipping) return;
+
+    // ONS keeps the decoded script in one stable buffer. Scan a bounded
+    // number of subsequent physical lines and enqueue only lines containing
+    // non-ASCII text. Exact parser output is still promoted by transform_text
+    // when the line is reached; dynamic expressions simply miss this hint.
+    constexpr size_t kMaximumScanBytes = 16 * 1024;
+    constexpr size_t kMaximumLineBytes = 4095;
+    constexpr int kMaximumPrefetchLines = 12;
+    const char *cursor = script;
+    size_t scanned = 0;
+    int queued = 0;
+    while (*cursor != '\0' && scanned < kMaximumScanBytes &&
+           queued < kMaximumPrefetchLines) {
+        const char *line_end = cursor;
+        bool has_non_ascii = false;
+        while (*line_end != '\0' && *line_end != '\n' &&
+               scanned + static_cast<size_t>(line_end - cursor) <
+                   kMaximumScanBytes) {
+            has_non_ascii = has_non_ascii ||
+                static_cast<unsigned char>(*line_end) >= 0x80u;
+            ++line_end;
+        }
+        const size_t length = static_cast<size_t>(line_end - cursor);
+        if (has_non_ascii && length > 0 && length <= kMaximumLineBytes) {
+            std::string line(cursor, length);
+            engine_prefetch_text_utf8("onscripter", line.c_str());
+            ++queued;
+        }
+        scanned += length;
+        if (*line_end == '\n') {
+            ++line_end;
+            ++scanned;
+        }
+        cursor = line_end;
+    }
 }
 
 extern "C" int aetherkiri_onscripter_wait_event(SDL_Event *event) {
@@ -1144,6 +1219,7 @@ struct Runtime::Impl final : EmbeddedMovieHost {
             load_game_options(root);
             configure_encoding();
             ons = new (static_cast<void *>(&::ons)) ONScripter();
+            g_translation_ons.store(ons, std::memory_order_release);
             ons->setWindowMode();
             ons->setVsyncOff();
             ons->setArchivePath(root.u8string().c_str());
@@ -1317,6 +1393,7 @@ struct Runtime::Impl final : EmbeddedMovieHost {
         // explicitly before another object is placement-constructed in the
         // same ABI-visible storage.
         if (ons != nullptr) {
+            g_translation_ons.store(nullptr, std::memory_order_release);
             ons->~ONScripter();
             ons = nullptr;
         }

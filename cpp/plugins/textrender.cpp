@@ -12,6 +12,7 @@
 #include "FontBaseline.h"
 #include "LayerIntf.h"
 #include "RectItf.h"
+#include "TextTransform.h"
 #include "textrender_timing.h"
 #include "tvpfontstruc.h"
 #include "WindowIntf.h"
@@ -1064,6 +1065,10 @@ std::optional<double> TextRenderBase::resolveDelayLabel(
 bool TextRenderBase::render(tTJSString text, int autoIndent, int diff, int all,
                             bool same, bool plain,
                             iTJSDispatch2 *callbackThis) {
+  const std::string originalText = text.AsStdString();
+  const std::string translatedText =
+      TVPTransformText("kirikiri", originalText);
+  if (translatedText != originalText) text = tTJSString(translatedText);
   // A new message keeps the already laid-out glyphs, but their reveal time is
   // reset to zero.  This is how MsgwinRender appends a new line while only
   // animating the newly supplied text.  `same` is used by synchronized

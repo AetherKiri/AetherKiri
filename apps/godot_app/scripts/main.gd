@@ -159,6 +159,12 @@ const UI_TEXT := {
         "settings.section.purchases": "内购项目",
         "settings.language": "语言",
         "settings.language_desc": "默认跟随系统；也可以固定为简体中文、繁体中文、英语、日语或韩语",
+        "settings.translation_model": "本地翻译模型",
+        "settings.translation_model_desc": "选择外部 GGUF 模型。游戏启动时加载；检测到文本不是当前界面语言时自动翻译",
+        "settings.translation_model_select": "选择 GGUF 模型",
+        "settings.translation_model_selected": "已选模型",
+        "settings.translation_model_clear": "停用本地翻译",
+        "settings.translation_model_clear_desc": "清除模型路径；不会删除磁盘上的模型文件",
         "settings.style": "风格",
         "settings.style_desc": "可在当前深色风格和旧版原始浅色风格之间切换",
         "settings.ui_scale": "界面比例",
@@ -370,7 +376,9 @@ const UI_TEXT := {
         "alert.warning_title": "Aether 警告",
         "alert.runtime_class_missing": "运行时扩展加载失败：AetherRuntimePlayer 不可用",
         "alert.runtime_create_failed": "运行时扩展加载失败：无法创建 AetherRuntimePlayer",
-        "loading.title": "正在启动视觉小说..."
+        "loading.title": "正在启动视觉小说...",
+        "loading.translation_model": "正在加载本地翻译模型...",
+        "loading.translation_model_detail": "首次加载可能出现短暂卡顿，请耐心等待。"
     },
     LANG_ZH_HANT: {
         "home.subtitle": "多功能媒體播放器",
@@ -426,6 +434,12 @@ const UI_TEXT := {
         "settings.section.purchases": "App 內購買",
         "settings.language": "語言",
         "settings.language_desc": "預設跟隨系統；也可以固定為簡體中文、繁體中文、英語、日語或韓語",
+        "settings.translation_model": "本機翻譯模型",
+        "settings.translation_model_desc": "選擇外部 GGUF 模型。遊戲啟動時載入；偵測到文字不是目前介面語言時自動翻譯",
+        "settings.translation_model_select": "選擇 GGUF 模型",
+        "settings.translation_model_selected": "已選模型",
+        "settings.translation_model_clear": "停用本機翻譯",
+        "settings.translation_model_clear_desc": "清除模型路徑；不會刪除磁碟上的模型檔案",
         "settings.style": "風格",
         "settings.style_desc": "可在目前深色風格和舊版原始淺色風格之間切換",
         "settings.ui_scale": "介面比例",
@@ -637,7 +651,9 @@ const UI_TEXT := {
         "alert.warning_title": "Aether 警告",
         "alert.runtime_class_missing": "執行時擴充載入失敗：AetherRuntimePlayer 不可用",
         "alert.runtime_create_failed": "執行時擴充載入失敗：無法建立 AetherRuntimePlayer",
-        "loading.title": "正在啟動視覺小說..."
+        "loading.title": "正在啟動視覺小說...",
+        "loading.translation_model": "正在載入本機翻譯模型...",
+        "loading.translation_model_detail": "首次載入可能會短暫停頓，請耐心等候。"
     },
     LANG_EN: {
         "home.subtitle": "Multifunction Media Player",
@@ -693,6 +709,12 @@ const UI_TEXT := {
         "settings.section.purchases": "In-App Purchases",
         "settings.language": "Language",
         "settings.language_desc": "Defaults to the system language; you can pin Simplified Chinese, Traditional Chinese, English, Japanese, or Korean",
+        "settings.translation_model": "Local Translation Model",
+        "settings.translation_model_desc": "Choose an external GGUF model. It loads when a game starts and translates text that does not match the interface language",
+        "settings.translation_model_select": "Choose GGUF Model",
+        "settings.translation_model_selected": "Selected Model",
+        "settings.translation_model_clear": "Disable Local Translation",
+        "settings.translation_model_clear_desc": "Clear the model path without deleting the model file from disk",
         "settings.style": "Style",
         "settings.style_desc": "Switch between the current dark style and the original classic light style",
         "settings.ui_scale": "Interface Scale",
@@ -904,7 +926,9 @@ const UI_TEXT := {
         "alert.warning_title": "Aether Warning",
         "alert.runtime_class_missing": "Runtime extension failed to load: AetherRuntimePlayer is unavailable",
         "alert.runtime_create_failed": "Runtime extension failed to load: could not create AetherRuntimePlayer",
-        "loading.title": "Launching visual novel..."
+        "loading.title": "Launching visual novel...",
+        "loading.translation_model": "Loading local translation model...",
+        "loading.translation_model_detail": "The first load may pause briefly. Please wait."
     },
     LANG_JA: {
         "home.subtitle": "多機能メディアプレーヤー",
@@ -960,6 +984,12 @@ const UI_TEXT := {
         "settings.section.purchases": "アプリ内課金",
         "settings.language": "言語",
         "settings.language_desc": "既定ではシステムに従います。簡体字中国語、繁体字中国語、英語、日本語、韓国語に固定できます",
+        "settings.translation_model": "ローカル翻訳モデル",
+        "settings.translation_model_desc": "外部 GGUF モデルを選択します。ゲーム開始時に読み込み、UI 言語と異なるテキストを自動翻訳します",
+        "settings.translation_model_select": "GGUF モデルを選択",
+        "settings.translation_model_selected": "選択中のモデル",
+        "settings.translation_model_clear": "ローカル翻訳を無効化",
+        "settings.translation_model_clear_desc": "モデルファイルを削除せず、設定済みのパスだけを消去します",
         "settings.style": "スタイル",
         "settings.style_desc": "現在のダークスタイルと旧来のクラシックライトスタイルを切り替えます",
         "settings.ui_scale": "UI スケール",
@@ -1171,7 +1201,9 @@ const UI_TEXT := {
         "alert.warning_title": "Aether 警告",
         "alert.runtime_class_missing": "ランタイム拡張の読み込みに失敗しました：AetherRuntimePlayer は利用できません",
         "alert.runtime_create_failed": "ランタイム拡張の読み込みに失敗しました：AetherRuntimePlayer を作成できません",
-        "loading.title": "ビジュアルノベルを起動中..."
+        "loading.title": "ビジュアルノベルを起動中...",
+        "loading.translation_model": "ローカル翻訳モデルを読み込み中...",
+        "loading.translation_model_detail": "初回の読み込みは一時的に停止することがあります。しばらくお待ちください。"
     },
     LANG_KO: {
         "home.subtitle": "다기능 미디어 플레이어",
@@ -1227,6 +1259,12 @@ const UI_TEXT := {
         "settings.section.purchases": "앱 내 구입",
         "settings.language": "언어",
         "settings.language_desc": "기본값은 시스템 언어입니다. 중국어 간체, 중국어 번체, 영어, 일본어, 한국어로 고정할 수 있습니다",
+        "settings.translation_model": "로컬 번역 모델",
+        "settings.translation_model_desc": "외부 GGUF 모델을 선택합니다. 게임 시작 시 불러오며 UI 언어와 다른 텍스트를 자동 번역합니다",
+        "settings.translation_model_select": "GGUF 모델 선택",
+        "settings.translation_model_selected": "선택한 모델",
+        "settings.translation_model_clear": "로컬 번역 사용 안 함",
+        "settings.translation_model_clear_desc": "디스크의 모델 파일은 삭제하지 않고 설정된 경로만 지웁니다",
         "settings.style": "스타일",
         "settings.style_desc": "현재 다크 스타일과 기존 클래식 라이트 스타일을 전환합니다",
         "settings.ui_scale": "인터페이스 크기",
@@ -1438,7 +1476,9 @@ const UI_TEXT := {
         "alert.warning_title": "Aether 경고",
         "alert.runtime_class_missing": "런타임 확장 로드 실패: AetherRuntimePlayer를 사용할 수 없습니다",
         "alert.runtime_create_failed": "런타임 확장 로드 실패: AetherRuntimePlayer를 만들 수 없습니다",
-        "loading.title": "비주얼 노벨 실행 중..."
+        "loading.title": "비주얼 노벨 실행 중...",
+        "loading.translation_model": "로컬 번역 모델을 불러오는 중...",
+        "loading.translation_model_detail": "처음 불러올 때 잠시 멈출 수 있습니다. 기다려 주세요."
     }
 }
 
@@ -1455,6 +1495,10 @@ const STARTUP_IDLE := 0
 const STARTUP_RUNNING := 1
 const STARTUP_SUCCEEDED := 2
 const STARTUP_FAILED := 3
+const TEXT_TRANSLATION_DISABLED := 0
+const TEXT_TRANSLATION_LOADING := 1
+const TEXT_TRANSLATION_READY := 2
+const TEXT_TRANSLATION_FAILED := 3
 
 const POINTER_DOWN := 1
 const POINTER_MOVE := 2
@@ -1512,6 +1556,7 @@ const SETTINGS_DRAFT_KEYS := [
     "plugin_load_mode",
     "mock_enabled",
     "error_dialog_logs",
+    "text_translation_model_path",
 ]
 const DIAGNOSTIC_PROFILES := ["off", "baseline", "input", "render", "storage", "script", "audio", "video", "plugin", "system", "full"]
 const DEBUG_OVERLAY_MODES := ["off", "summary", "detail"]
@@ -1595,6 +1640,8 @@ var home_layout_initialized := false
 var home_header_compact := false
 var home_header_layout_initialized := false
 var loading_title_label: Label
+var loading_detail_label: Label
+var translation_loading_notice_active := false
 var selected_game := {}
 var detail_hero_cover: Control
 var hero_source_rect := Rect2()
@@ -1629,6 +1676,7 @@ var console_log_file := false
 var trace_log := false
 var export_scripts := false
 var error_dialog_logs := OS.is_debug_build()
+var text_translation_model_path := ""
 var advanced_tool_expanded := false
 var advanced_expiry_msec := {}
 var diagnostic_env_originals := {}
@@ -1676,6 +1724,7 @@ var native_launch_file_picker_pending := false
 var native_launch_file_picker_library_path := ""
 var native_cover_file_picker_pending := false
 var native_cover_file_picker_library_path := ""
+var native_translation_model_file_picker_pending := false
 var active_game_path := ""
 var active_game_started_msec := 0
 var active_runtime_kind := RUNTIME_KIRIKIRI
@@ -3047,6 +3096,9 @@ func _layout_shell(window_size: Vector2) -> void:
 func _load_shell_settings() -> void:
     var cfg := ConfigFile.new()
     var env_style := _runtime_string("AETHERKIRI_STYLE_MODE", "")
+    var env_translation_model_path := _runtime_string(
+        "AETHERKIRI_TRANSLATION_MODEL", ""
+    )
     var env_frame_enhancement_kind := _runtime_string(
         "AETHERKIRI_FRAME_ENHANCEMENT_KIND",
         ""
@@ -3056,6 +3108,7 @@ func _load_shell_settings() -> void:
         ""
     )
     if cfg.load(SETTINGS_FILE) != OK:
+        text_translation_model_path = env_translation_model_path
         var env_surface_mode := _runtime_string("AETHERKIRI_SURFACE_MODE", "")
         if not env_surface_mode.is_empty():
             _select_config_surface_mode(env_surface_mode)
@@ -3078,6 +3131,11 @@ func _load_shell_settings() -> void:
         _apply_style_mode()
         return
     language_mode = _normalize_language_mode(String(cfg.get_value("interface", "language", language_mode)))
+    text_translation_model_path = String(cfg.get_value(
+        "translation", "model_path", text_translation_model_path
+    ))
+    if not env_translation_model_path.is_empty():
+        text_translation_model_path = env_translation_model_path
     _apply_language_mode()
     style_mode = _normalize_style_mode(String(cfg.get_value("interface", "style", style_mode)))
     ios_ui_scale_mode = String(cfg.get_value("interface", "ios_ui_scale_mode", ios_ui_scale_mode))
@@ -3203,6 +3261,7 @@ func _save_shell_settings() -> void:
     cfg.set_value("interface", "language", language_mode)
     cfg.set_value("interface", "style", style_mode)
     cfg.set_value("interface", "ios_ui_scale_mode", ios_ui_scale_mode)
+    cfg.set_value("translation", "model_path", text_translation_model_path)
     cfg.set_value("rendering", "backend", selected_backend)
     cfg.set_value("rendering", "upscale_algorithm", upscale_algorithm)
     cfg.set_value("rendering", "output_resolution", output_resolution)
@@ -3271,6 +3330,7 @@ func _current_settings_snapshot() -> Dictionary:
         "plugin_load_mode": plugin_load_mode,
         "mock_enabled": mock_enabled,
         "error_dialog_logs": error_dialog_logs,
+        "text_translation_model_path": text_translation_model_path,
     }
 
 func _settings_snapshots_equal(left: Dictionary, right: Dictionary) -> bool:
@@ -3443,6 +3503,9 @@ func _apply_settings_snapshot(snapshot: Dictionary) -> void:
         plugin_load_mode = "krkrsdl3"
     mock_enabled = bool(snapshot.get("mock_enabled", mock_enabled))
     error_dialog_logs = bool(snapshot.get("error_dialog_logs", error_dialog_logs))
+    text_translation_model_path = String(snapshot.get(
+        "text_translation_model_path", text_translation_model_path
+    ))
 
 func _save_settings_draft() -> void:
     if settings_draft.is_empty() or not dirty_settings:
@@ -3514,6 +3577,18 @@ func _apply_engine_options() -> void:
     player.set_engine_option("console_log_file", "1" if console_log_file else "0")
     player.set_engine_option("trace_log", "1" if effective_trace_log else "0")
     player.set_engine_option("input_trace", "1" if effective_input_trace else "0")
+    if player.has_method("is_text_translation_available") and player.is_text_translation_available():
+        _restore_native_translation_model_access()
+        player.set_engine_option(
+            "text_translation.model_path", text_translation_model_path
+        )
+        player.set_engine_option(
+            "text_translation.target_language", active_language
+        )
+        player.set_engine_option(
+            "text_translation.enabled",
+            "0" if text_translation_model_path.is_empty() else "1"
+        )
     # A synchronous Artemis resource load can make the next Godot frame carry
     # hundreds of milliseconds. Keep visual evolution incremental so authored
     # E-mote expressions and fades cannot collapse into a one-frame flash.
@@ -3892,9 +3967,10 @@ func _layout_perf_overlay(safe_rect: Rect2) -> void:
         return
     var horizontal_margin := 16.0
     perf_panel.position = safe_rect.position + Vector2(horizontal_margin, 12.0)
+    var translation_height := 36.0 if _translation_model_configured() else 0.0
     perf_panel.size = Vector2(
         maxf(240.0, safe_rect.size.x - horizontal_margin * 2.0),
-        136.0 if debug_overlay_mode == "detail" else 104.0
+        (136.0 if debug_overlay_mode == "detail" else 104.0) + translation_height
     )
 
 func _set_perf_visible(visible: bool) -> void:
@@ -4607,6 +4683,27 @@ func _rebuild_settings_view() -> void:
     var compatibility_group := _settings_group(secondary_column, _t("settings.section.compatibility"), ICON_PLUGIN, animate_page, 0.105)
     _add_settings_row(compatibility_group, _settings_block(_t("settings.plugin_load_mode"), _t("settings.plugin_load_mode_desc"), _plugin_load_mode_select(), stack_settings_controls))
     _add_settings_row(compatibility_group, _settings_toggle_row(_t("settings.mock"), _t("settings.mock_desc"), _settings_draft_bool("mock_enabled", mock_enabled), "mock"))
+    if player != null and player.has_method("is_text_translation_available") and player.is_text_translation_available():
+        _add_settings_row(compatibility_group, _settings_action_row(
+            _t("settings.translation_model"),
+            _t("settings.translation_model_desc"),
+            _t("settings.translation_model_select"),
+            _choose_translation_model
+        ))
+        var draft_model_path := _settings_draft_string(
+            "text_translation_model_path", text_translation_model_path
+        )
+        if not draft_model_path.is_empty():
+            _add_settings_row(compatibility_group, _settings_value_row(
+                _t("settings.translation_model_selected"),
+                draft_model_path.get_file()
+            ))
+            _add_settings_row(compatibility_group, _settings_action_row(
+                _t("settings.translation_model_clear"),
+                _t("settings.translation_model_clear_desc"),
+                _t("settings.translation_model_clear"),
+                _clear_translation_model
+            ))
 
     var advanced_group := _settings_group(secondary_column, _t("settings.section.advanced"), ICON_PLUGIN, animate_page, 0.13)
     var advanced_disclosure = AetherDisclosure.new()
@@ -5128,6 +5225,14 @@ func _build_loading_panel() -> void:
     loading_title_label.add_theme_font_size_override("font_size", 18)
     loading_title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     loading_labels.add_child(loading_title_label)
+
+    loading_detail_label = Label.new()
+    loading_detail_label.text = ""
+    loading_detail_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    loading_detail_label.add_theme_font_size_override("font_size", 13)
+    loading_detail_label.add_theme_color_override("font_color", ui_tokens.text_secondary)
+    loading_detail_label.visible = false
+    loading_labels.add_child(loading_detail_label)
     if not ui_motion.reduced_motion:
         var spinner_tween := loading_spinner.create_tween().set_loops()
         # Mirror the counter-clockwise refresh glyph so it follows this
@@ -5154,6 +5259,26 @@ func _show_loading_overlay(immediate: bool = false) -> void:
     loading_panel.move_to_front()
     if loading_card != null:
         ui_motion.loading_in(loading_panel, loading_card, immediate)
+
+func _translation_model_configured() -> bool:
+    return (
+        not text_translation_model_path.is_empty()
+        and player != null
+        and player.has_method("is_text_translation_available")
+        and player.is_text_translation_available()
+    )
+
+func _set_translation_loading_notice(active: bool) -> void:
+    translation_loading_notice_active = active
+    if is_instance_valid(loading_title_label):
+        loading_title_label.text = _t(
+            "loading.translation_model" if active else "loading.title"
+        )
+    if is_instance_valid(loading_detail_label):
+        loading_detail_label.text = (
+            _t("loading.translation_model_detail") if active else ""
+        )
+        loading_detail_label.visible = active
 
 func _hide_loading_overlay(finished: Callable = Callable()) -> void:
     if loading_panel == null or not loading_panel.visible:
@@ -6775,7 +6900,7 @@ func _refresh_language_texts() -> void:
         _set_pill_button_text(empty_primary_button, _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import"))
     _sync_home_action_labels()
     if is_instance_valid(loading_title_label):
-        loading_title_label.text = _t("loading.title")
+        _set_translation_loading_notice(translation_loading_notice_active)
 
 func _empty_help_text() -> String:
     if OS.get_name() == "iOS":
@@ -7840,6 +7965,58 @@ func _create_file_dialog(title: String, file_mode: int, filters: PackedStringArr
     dialog.files_selected.connect(func(_paths: PackedStringArray): call_deferred("_release_file_dialog", dialog))
     return dialog
 
+func _choose_translation_model() -> void:
+    _finish_hero_overlay()
+    var current_path := _settings_draft_string(
+        "text_translation_model_path", text_translation_model_path
+    )
+    var initial_directory := (
+        current_path.get_base_dir() if not current_path.is_empty() else ""
+    )
+    if player != null \
+            and player.has_method("native_translation_model_file_picker_open") \
+            and bool(player.native_translation_model_file_picker_open(
+                _t("settings.translation_model_select"), initial_directory
+            )):
+        native_translation_model_file_picker_pending = true
+        return
+    _show_translation_model_native_dialog(current_path)
+
+func _show_translation_model_native_dialog(current_path: String) -> void:
+    var dialog := _create_file_dialog(
+        _t("settings.translation_model_select"),
+        FileDialog.FILE_MODE_OPEN_FILE,
+        PackedStringArray(["*.gguf ; GGUF model"])
+    )
+    if not current_path.is_empty():
+        dialog.current_dir = current_path.get_base_dir()
+        dialog.current_file = current_path.get_file()
+    dialog.file_selected.connect(func(path: String):
+        _set_settings_draft_value("text_translation_model_path", path)
+        call_deferred("_rebuild_settings_view")
+    )
+    add_child(dialog)
+    dialog.popup_centered(Vector2i(900, 640))
+
+func _restore_native_translation_model_access() -> void:
+    if OS.get_name() not in ["iOS", "macOS"] \
+            or text_translation_model_path.is_empty() \
+            or not _runtime_string("AETHERKIRI_TRANSLATION_MODEL", "").is_empty() \
+            or player == null \
+            or not player.has_method("native_translation_model_restore_path"):
+        return
+    var restored_path := String(player.native_translation_model_restore_path(
+        text_translation_model_path
+    ))
+    if restored_path.is_empty() or restored_path == text_translation_model_path:
+        return
+    text_translation_model_path = restored_path
+    _save_shell_settings()
+
+func _clear_translation_model() -> void:
+    _set_settings_draft_value("text_translation_model_path", "")
+    call_deferred("_rebuild_settings_view")
+
 func _release_file_dialog(dialog: FileDialog) -> void:
     if dialog != null and is_instance_valid(dialog):
         dialog.queue_free()
@@ -8027,6 +8204,39 @@ func _poll_native_cover_file_picker() -> void:
     match String(result.get("status", "error")):
         "selected":
             _apply_selected_cover(library_path, String(result.get("path", "")))
+        "cancelled":
+            pass
+        _:
+            _show_system_alert(
+                String(result.get("error", "System file picker failed")),
+                _t("alert.warning_title")
+            )
+
+func _poll_native_translation_model_file_picker() -> void:
+    if not native_translation_model_file_picker_pending \
+            or player == null \
+            or not player.has_method("native_launch_file_picker_take_result_json"):
+        return
+    var result_json := String(player.native_launch_file_picker_take_result_json())
+    if result_json.is_empty():
+        return
+    native_translation_model_file_picker_pending = false
+    var parsed = JSON.parse_string(result_json)
+    if typeof(parsed) != TYPE_DICTIONARY:
+        _show_system_alert(result_json, _t("alert.warning_title"))
+        return
+    var result: Dictionary = parsed
+    match String(result.get("status", "error")):
+        "selected":
+            var path := String(result.get("path", ""))
+            if path.get_extension().to_lower() != "gguf":
+                _show_system_alert(
+                    "The selected file is not a GGUF model.",
+                    _t("alert.warning_title")
+                )
+                return
+            _set_settings_draft_value("text_translation_model_path", path)
+            call_deferred("_rebuild_settings_view")
         "cancelled":
             pass
         _:
@@ -10118,6 +10328,7 @@ func _start_selected_game_after_entitlements() -> void:
     # expose its black/empty first surface. Diagnostics stay hidden until the
     # first successful game frame replaces this overlay.
     _set_perf_visible(false)
+    _set_translation_loading_notice(_translation_model_configured())
     _show_loading_overlay(true)
     restart_notice.visible = true
     _on_open_game()
@@ -10264,6 +10475,7 @@ func _ready() -> void:
 
     if not _create_runtime_player():
         return
+    _restore_native_translation_model_access()
     _initialize_iap()
 
     diagnostic_session = DiagnosticSession.new()
@@ -12218,6 +12430,7 @@ func _process(delta: float) -> void:
     _poll_android_storage_permission_request()
     _poll_native_launch_file_picker()
     _poll_native_cover_file_picker()
+    _poll_native_translation_model_file_picker()
     _fit_full_rects()
     _sync_game_virtual_controls()
     _process_iap(delta)
@@ -12246,6 +12459,23 @@ func _process(delta: float) -> void:
             startup_state = cached_startup_state
             _sync_game_virtual_controls()
         if startup_state == STARTUP_SUCCEEDED:
+            if (
+                _translation_model_configured()
+                and player.has_method("get_text_translation_state")
+            ):
+                var translation_state := int(player.get_text_translation_state())
+                if translation_state == TEXT_TRANSLATION_LOADING:
+                    _set_translation_loading_notice(true)
+                    return
+                # A failed optional model remains fail-open: the runtime keeps
+                # running with authored text and its error is available in the
+                # startup log instead of trapping the user behind this overlay.
+                if translation_state in [
+                    TEXT_TRANSLATION_READY,
+                    TEXT_TRANSLATION_FAILED,
+                    TEXT_TRANSLATION_DISABLED,
+                ]:
+                    _set_translation_loading_notice(false)
             restart_notice.text = ""
             if loading_panel != null and loading_panel.visible:
                 _hide_loading_overlay(func():
@@ -12347,6 +12577,7 @@ func _process(delta: float) -> void:
                 _return_to_library_after_runtime_exit()
                 return
             restart_notice.text = "Game startup failed."
+            _set_translation_loading_notice(false)
             _hide_loading_overlay()
             _set_game_background(false)
             shell_root.visible = true
@@ -12445,6 +12676,46 @@ func _process(delta: float) -> void:
             _format_monitor_bytes(int(memory.get("gpu_buffer_bytes", 0))),
             _format_monitor_bytes(int(memory.get("cache_bytes", 0))),
         ]
+        if player.has_method("get_text_translation_stats"):
+            var translation: Dictionary = player.get_text_translation_stats()
+            var translation_state := int(translation.get("state", TEXT_TRANSLATION_DISABLED))
+            if translation_state != TEXT_TRANSLATION_DISABLED or _translation_model_configured():
+                var state_label := String({
+                    TEXT_TRANSLATION_DISABLED: "Off",
+                    TEXT_TRANSLATION_LOADING: "Loading",
+                    TEXT_TRANSLATION_READY: "Ready",
+                    TEXT_TRANSLATION_FAILED: "Failed",
+                }.get(translation_state, "Unknown"))
+                var backend_label := String({
+                    0: "-",
+                    1: "CPU",
+                    2: "GPU",
+                }.get(int(translation.get("backend", 0)), "Unknown"))
+                var model_bytes := int(translation.get(
+                    "model_tensor_bytes",
+                    int(translation.get("model_file_bytes", 0))
+                ))
+                var cache_hits := int(translation.get("cache_hits", 0))
+                var cache_misses := int(translation.get("cache_misses", 0))
+                var cache_requests := cache_hits + cache_misses
+                var hit_percent := (
+                    float(cache_hits) * 100.0 / float(cache_requests)
+                    if cache_requests > 0 else 0.0
+                )
+                summary_text += "\nTranslation: %s/%s | Model %s | Context %s | Resident(est.) %s | Work %d+%d/%d | Cache %d (hit %.0f%%) | Wait/Infer %.0f/%.0f ms" % [
+                    state_label,
+                    backend_label,
+                    _format_monitor_bytes(model_bytes),
+                    _format_monitor_bytes(int(translation.get("context_state_bytes", 0))),
+                    _format_monitor_bytes(int(translation.get("model_resident_bytes_estimate", 0))),
+                    int(translation.get("active_jobs", 0)),
+                    int(translation.get("priority_queue_entries", 0)),
+                    int(translation.get("prefetch_queue_entries", 0)),
+                    int(translation.get("cache_entries", 0)),
+                    hit_percent,
+                    float(translation.get("last_synchronous_wait_us", 0)) / 1000.0,
+                    float(translation.get("last_inference_us", 0)) / 1000.0,
+                ]
         if debug_overlay_mode == "detail" and diagnostic_session != null:
             var frame_summary: Dictionary = diagnostic_session.latest_frame_summary
             summary_text += "\nTick: %.2f ms | Update: %.2f ms | P50/P95/P99/Max: %.2f / %.2f / %.2f / %.2f ms | Dropped: %d" % [
