@@ -2141,6 +2141,12 @@ namespace TJS {
                         code += 3;
                         break;
 
+                    case VM_CHKIN:
+                        InMember(TJS_GET_VM_REG(ra, code[1]),
+                                 TJS_GET_VM_REG(ra, code[2]));
+                        code += 3;
+                        break;
+
                     case VM_CALL:
                     case VM_NEW:
                         code += CallFunction(ra, code, args, numargs);
@@ -3916,6 +3922,35 @@ namespace TJS {
             return;
         }
         targ = false;
+    }
+
+    //---------------------------------------------------------------------------
+    void tTJSInterCodeContext::InMember(tTJSVariant &name, tTJSVariant &obj) {
+        // checks whether the object contains the named member.
+        tTJSVariantString *str = name.AsString();
+        if(str) {
+            tjs_error hr;
+            try {
+                tTJSVariant tmp;
+                hr = obj.AsObjectClosureNoAddRef().PropGet(
+                    TJS_MEMBERMUSTEXIST, *str, nullptr, &tmp,
+                    obj.AsObjectThisNoAddRef());
+            } catch(...) {
+                str->Release();
+                throw;
+            }
+            str->Release();
+            if(hr == TJS_E_MEMBERNOTFOUND) {
+                name = false;
+                return;
+            }
+            if(TJS_FAILED(hr))
+                TJSThrowFrom_tjs_error(hr);
+
+            name = (hr == TJS_S_OK);
+            return;
+        }
+        name = false;
     }
 
     //---------------------------------------------------------------------------

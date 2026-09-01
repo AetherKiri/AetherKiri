@@ -836,9 +836,9 @@ namespace TJS {
         m[VM_CCL] = { 3, 1, false, nullptr };
 
         // two-reg ops (size=3)
-        constexpr int twoRegs[] = { VM_CP,   VM_CEQ,    VM_CDEQ,  VM_CLT,
-                                    VM_CGT,  VM_CHKINS, VM_CONST, VM_SETP,
-                                    VM_GETP, VM_ADDCI };
+        constexpr int twoRegs[] = { VM_CP,    VM_CEQ,   VM_CDEQ,  VM_CLT,
+                                    VM_CGT,   VM_CHKINS, VM_CHKIN, VM_CONST,
+                                    VM_SETP,  VM_GETP,  VM_ADDCI };
         for(int op : twoRegs)
             m[op] = { 3, 2, false, nullptr };
 

@@ -176,6 +176,19 @@ TEST_CASE("TJS arrays support membership checks") {
     CHECK(result.AsInteger() == 1);
 }
 
+TEST_CASE("TJS in operator checks object members") {
+    STATIC_REQUIRE(TJS::VM_CHKIN == 128);
+    std::unique_ptr<tTJS, TJSReleaser> engine(new tTJS());
+    tTJSVariant result;
+
+    REQUIRE_NOTHROW(engine->EvalExpression(
+        TJS_W("'attribute' in %[ 'attribute' => 1 ]"), &result));
+    CHECK(result.AsInteger() == 1);
+    REQUIRE_NOTHROW(engine->EvalExpression(
+        TJS_W("'missing' in %[ 'attribute' => 1 ]"), &result));
+    CHECK(result.AsInteger() == 0);
+}
+
 TEST_CASE("TJS dictionary static helpers expose keys, values, and count") {
     std::unique_ptr<tTJS, TJSReleaser> engine(new tTJS());
     tTJSVariant result;

@@ -1764,6 +1764,27 @@ namespace TJS // following is in the namespace
                 return resaddr1;
             }
 
+            case parser::token_kind_type::T_IN: // 'in' operator
+            {
+                // in operator
+                tjs_int resaddr1, resaddr2;
+                resaddr1 = _GenNodeCode(frame, (*node)[0], TJS_RT_NEEDED, 0,
+                                        tSubParam());
+                if(!TJSIsFrame(resaddr1)) {
+                    PutCode(VM_CP, node_pos);
+                    PutCode(TJS_TO_VM_REG_ADDR(frame), node_pos);
+                    PutCode(TJS_TO_VM_REG_ADDR(resaddr1), node_pos);
+                    resaddr1 = frame;
+                    frame++;
+                }
+                resaddr2 = _GenNodeCode(frame, (*node)[1], TJS_RT_NEEDED, 0,
+                                        tSubParam());
+                PutCode(VM_CHKIN, node_pos);
+                PutCode(TJS_TO_VM_REG_ADDR(resaddr1), node_pos);
+                PutCode(TJS_TO_VM_REG_ADDR(resaddr2), node_pos);
+                return resaddr1;
+            }
+
             case parser::token_kind_type::T_VERTLINE: // '|' operator
             case parser::token_kind_type::T_CHEVRON: // '^' operator
             case parser::token_kind_type::T_AMPERSAND: // binary '&'

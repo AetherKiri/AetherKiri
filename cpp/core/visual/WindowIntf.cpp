@@ -12,6 +12,7 @@
 #include "tjsCommHead.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include "MsgIntf.h"
 #include "WindowIntf.h"
 #include "LayerIntf.h"
@@ -28,6 +29,7 @@
 #include "godot/GodotGpuBridge.h"
 
 #include "Application.h"
+#include "spdlog/spdlog.h"
 
 //---------------------------------------------------------------------------
 // Window List
@@ -117,6 +119,49 @@ tTJSNI_Window *TVPGetWindowListAt(tjs_int idx) { return TVPWindowVector[idx]; }
 tjs_int TVPGetWindowCount() { return (tjs_int)TVPWindowVector.size(); }
 //---------------------------------------------------------------------------
 namespace {
+bool TVPWindowInputTraceEnabled() {
+    const char *value = std::getenv("AETHERKIRI_INPUT_TRACE");
+    return value && *value && *value != '0';
+}
+
+bool TVPRouteCanvasExtraCgPreviewRightClick() {
+    try {
+        tTJSVariant is_canvas_cg_preview;
+        TVPExecuteExpression(
+            TJS_W("typeof mdk == \"Object\" && mdk && "
+                  "typeof mdk.screen_ == \"Object\" && mdk.screen_ && "
+                  "typeof mdk.screen_.currentScreen == \"Object\" && "
+                  "mdk.screen_.currentScreen && "
+                  "mdk.screen_.currentScreen instanceof \"ExtraScreen\" && "
+                  "mdk.screen_.currentScreen.activeWidget_ === "
+                  "mdk.screen_.currentScreen.cg_"),
+            &is_canvas_cg_preview);
+        if(!is_canvas_cg_preview.operator bool())
+            return false;
+
+        tTJSVariant result;
+        TVPExecuteExpression(
+            TJS_W("mdk.screen_.currentScreen.activeWidget_.onCgFinished()"),
+            &result);
+        if(TVPWindowInputTraceEnabled()) {
+            spdlog::info(
+                "Window routed canvas extra CG right click to onCgFinished");
+        }
+        return true;
+    } catch(const eTJS &e) {
+        if(TVPWindowInputTraceEnabled()) {
+            spdlog::info(
+                "Window canvas extra CG right click route failed: {}",
+                ttstr(e.GetMessage()).AsStdString());
+        }
+    } catch(...) {
+        if(TVPWindowInputTraceEnabled()) {
+            spdlog::info("Window canvas extra CG right click route failed");
+        }
+    }
+    return false;
+}
+
 void TVPCallCanvasLifecycle(const tTJSVariant &canvas,
                             const tjs_char *membername) {
     if(canvas.Type() != tvtObject || membername == nullptr)
@@ -594,6 +639,8 @@ void tTJSNI_BaseWindow::OnPointerUp(tjs_int type, tjs_real x, tjs_real y,
         static ttstr eventname(TJS_W("onPointerUp"));
         TVPPostEvent(Owner, Owner, eventname, 0, TVP_EPT_IMMEDIATE, 7, arg);
     }
+    if(type == static_cast<tjs_int>(tTVPPointerType::ptMouseRight))
+        TVPRouteCanvasExtraCgPreviewRightClick();
 }
 //---------------------------------------------------------------------------
 void tTJSNI_BaseWindow::OnTouchScaling(tjs_real startdist, tjs_real curdist,

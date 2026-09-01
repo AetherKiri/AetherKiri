@@ -125,6 +125,7 @@ namespace TJS {
         VM_ADDCI,
         VM_REGMEMBER,
         VM_DEBUGGER,
+        VM_CHKIN,
 
         __VM_LAST /* = last mark ; this is not a real operation code
                    */
@@ -771,6 +772,8 @@ namespace TJS {
         static void CharacterCodeFrom(tTJSVariant &val);
 
         static void InstanceOf(const tTJSVariant &name, tTJSVariant &targ);
+
+        static void InMember(tTJSVariant &name, tTJSVariant &obj);
 
         void RegisterObjectMember(iTJSDispatch2 *dest);
 
