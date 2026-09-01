@@ -136,3 +136,57 @@ TEST_CASE(
         CHECK(error.GetSourceLine() == 0);
     }
 }
+
+TEST_CASE("TJS strings support prefix and suffix checks") {
+    std::unique_ptr<tTJS, TJSReleaser> engine(new tTJS());
+    tTJSVariant result;
+
+    REQUIRE_NOTHROW(engine->EvalExpression(
+        TJS_W("'scenario/start.ks'.startsWith('scenario/')"), &result));
+    CHECK(result.AsInteger() == 1);
+    REQUIRE_NOTHROW(engine->EvalExpression(
+        TJS_W("'scenario/start.ks'.startsWith('start')"), &result));
+    CHECK(result.AsInteger() == 0);
+    REQUIRE_NOTHROW(engine->EvalExpression(
+        TJS_W("'scenario/start.ks'.endsWith('.ks')"), &result));
+    CHECK(result.AsInteger() == 1);
+    REQUIRE_NOTHROW(engine->EvalExpression(
+        TJS_W("'scenario/start.ks'.endsWith('.tjs')"), &result));
+    CHECK(result.AsInteger() == 0);
+    REQUIRE_NOTHROW(
+        engine->EvalExpression(TJS_W("''.endsWith('')"), &result));
+    CHECK(result.AsInteger() == 1);
+}
+
+TEST_CASE("TJS arrays support membership checks") {
+    std::unique_ptr<tTJS, TJSReleaser> engine(new tTJS());
+    tTJSVariant result;
+
+    REQUIRE_NOTHROW(engine->EvalExpression(
+        TJS_W("(const)[1, 2, 3].includes(2)"), &result));
+    CHECK(result.AsInteger() == 1);
+    REQUIRE_NOTHROW(engine->EvalExpression(
+        TJS_W("(const)[1, 2, 3].includes(4)"), &result));
+    CHECK(result.AsInteger() == 0);
+    REQUIRE_NOTHROW(engine->EvalExpression(
+        TJS_W("(const)[1, 2, 3].includes(1, 1)"), &result));
+    CHECK(result.AsInteger() == 0);
+    REQUIRE_NOTHROW(engine->EvalExpression(
+        TJS_W("(const)[1, 2, 3].includes(3, -1)"), &result));
+    CHECK(result.AsInteger() == 1);
+}
+
+TEST_CASE("TJS dictionary static helpers expose sorted keys and count") {
+    std::unique_ptr<tTJS, TJSReleaser> engine(new tTJS());
+    tTJSVariant result;
+
+    REQUIRE_NOTHROW(engine->EvalExpression(
+        TJS_W("(function() {"
+              "  var dictionary = %[ 'z' => 3, 'a' => 1, 'm' => 2 ];"
+              "  var keys = Dictionary.keys(dictionary);"
+              "  return keys.join(',') + ':' + "
+              "Dictionary.getCount(dictionary);"
+              "})()"),
+        &result));
+    CHECK(ttstr(result) == TJS_W("a,m,z:3"));
+}

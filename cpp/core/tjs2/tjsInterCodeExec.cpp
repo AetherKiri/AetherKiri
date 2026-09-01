@@ -3429,7 +3429,7 @@ namespace TJS {
         TJS_W("toLowerCase"), TJS_W("substring"), TJS_W("substr"),
         TJS_W("sprintf"),     TJS_W("replace"),   TJS_W("escape"),
         TJS_W("split"),       TJS_W("trim"),      TJS_W("reverse"),
-        TJS_W("repeat")
+        TJS_W("repeat"),      TJS_W("startsWith"), TJS_W("endsWith")
     };
 
     enum tTJSStringMethodNameIndex {
@@ -3445,7 +3445,9 @@ namespace TJS {
         TJSStrMethod_split,
         TJSStrMethod_trim,
         TJSStrMethod_reverse,
-        TJSStrMethod_repeat
+        TJSStrMethod_repeat,
+        TJSStrMethod_startsWith,
+        TJSStrMethod_endsWith
     };
 
 #define TJS_STRFUNC_MAX (sizeof(StrFuncs) / sizeof(StrFuncs[0]))
@@ -3755,6 +3757,30 @@ namespace TJS {
             }
             *result = new_str;
 
+            return;
+        } else if(TJS_STR_METHOD_IS(startsWith)) {
+            if(numargs != 1)
+                TJSThrowFrom_tjs_error(TJS_E_BADPARAMCOUNT);
+            if(!result)
+                return;
+            *result = target.StartsWith(args[0]->AsStringNoAddRef()) ? 1 : 0;
+            return;
+        } else if(TJS_STR_METHOD_IS(endsWith)) {
+            if(numargs != 1)
+                TJSThrowFrom_tjs_error(TJS_E_BADPARAMCOUNT);
+            if(!result)
+                return;
+
+            tTJSVariantString *suffix = args[0]->AsStringNoAddRef();
+            const tjs_int suffix_len = suffix->GetLength();
+            if(suffix_len > s_len) {
+                *result = 0;
+                return;
+            }
+
+            const tjs_char *suffix_chars = *suffix;
+            const tjs_char *tail = s + s_len - suffix_len;
+            *result = TJS_strcmp(tail, suffix_chars) == 0 ? 1 : 0;
             return;
         }
 
