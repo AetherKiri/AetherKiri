@@ -233,7 +233,6 @@ bool IsGpuRectFastPathEnabled(const char *name) {
                std::strcmp(name, "UnivTransBlend_d") == 0 ||
                std::strcmp(name, "UnivTransBlend_a") == 0 ||
                std::strcmp(name, "CopyColor") == 0 ||
-               std::strcmp(name, "ApplyColorMap_a") == 0 ||
                std::strcmp(name, "AdditiveAlphaBlend") == 0 ||
                std::strcmp(name, "AdditiveAlphaBlend_a") == 0 ||
                std::strcmp(name, "PsAddBlend") == 0 ||
@@ -713,6 +712,7 @@ void GodotTexture2D::ReleaseGpuHandle() {
 }
 
 void GodotTexture2D::EnsureCpuReadable() {
+    ScopedRenderTiming cpu_read_timing("EnsureCpuReadable");
     if (cpu_dirty_) {
         EnsureCpuStorage();
         return;
@@ -1532,6 +1532,14 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         return;
     }
 
+    // Color-map operations are frequently emitted as thousands of tiny
+    // rectangles while a KAG character/expression is replaced.  Each GPU
+    // dispatch allocates a bridge op, descriptor set, and barrier; on mobile
+    // and MoltenVK that CPU submission cost dominates the actual color-map
+    // shader and creates a single 100ms+ timer tick.  Keep this path opt-in
+    // through AETHERKIRI_GODOT_GPU_RECT_FASTPATH=ApplyColorMap_a.  The normal
+    // software delegate is safe here because these source layers are CPU
+    // backed before the operation and avoids the per-rectangle GPU roundtrip.
     if (method_name == "ApplyColorMap_a" && dst != nullptr && src != nullptr &&
         IsGpuRectFastPathEnabled("ApplyColorMap_a") &&
         RectAbsSizeMatches(rctar, textures[0].second) &&
