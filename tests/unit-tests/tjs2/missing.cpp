@@ -144,6 +144,9 @@ TEST_CASE("TJS strings support prefix and suffix checks") {
     REQUIRE_NOTHROW(engine->EvalExpression(
         TJS_W("'scenario/start.ks'.startsWith('scenario/')"), &result));
     CHECK(result.AsInteger() == 1);
+    REQUIRE_NOTHROW(engine->EvalExpression(TJS_W("''.startsWith('')"),
+                                            &result));
+    CHECK(result.AsInteger() == 1);
     REQUIRE_NOTHROW(engine->EvalExpression(
         TJS_W("'scenario/start.ks'.startsWith('start')"), &result));
     CHECK(result.AsInteger() == 0);

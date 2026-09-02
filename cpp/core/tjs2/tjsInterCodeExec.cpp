@@ -3769,7 +3769,11 @@ namespace TJS {
                 TJSThrowFrom_tjs_error(TJS_E_BADPARAMCOUNT);
             if(!result)
                 return;
-            *result = target.StartsWith(args[0]->AsStringNoAddRef()) ? 1 : 0;
+            // Empty TJS strings use a null variant-string pointer internally.
+            // Convert through ttstr so c_str() still supplies a valid empty
+            // string to the prefix comparison.
+            const ttstr prefix(args[0]->AsStringNoAddRef());
+            *result = target.StartsWith(prefix.c_str()) ? 1 : 0;
             return;
         } else if(TJS_STR_METHOD_IS(endsWith)) {
             if(numargs != 1)
@@ -3777,14 +3781,17 @@ namespace TJS {
             if(!result)
                 return;
 
-            tTJSVariantString *suffix = args[0]->AsStringNoAddRef();
-            const tjs_int suffix_len = suffix->GetLength();
+            // Empty TJS strings use a null variant-string pointer internally.
+            // Keep the comparison null-safe while preserving normal string
+            // argument type checking above.
+            const ttstr suffix(args[0]->AsStringNoAddRef());
+            const tjs_int suffix_len = suffix.GetLen();
             if(suffix_len > s_len) {
                 *result = 0;
                 return;
             }
 
-            const tjs_char *suffix_chars = *suffix;
+            const tjs_char *suffix_chars = suffix.c_str();
             const tjs_char *tail = s + s_len - suffix_len;
             *result = TJS_strcmp(tail, suffix_chars) == 0 ? 1 : 0;
             return;
