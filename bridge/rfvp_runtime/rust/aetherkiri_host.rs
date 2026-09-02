@@ -328,10 +328,15 @@ impl Core {
                 gd.save_manager
                     .finalize_save_write(nls, w, h, thumbnail.as_raw(), Some(&state))?;
                 save_global_savedata_v1(gd)?;
+                gd.save_manager.consume_save_write_result();
             }
         }
         if gd.save_manager.try_commit_local_savedata(nls)? {
             save_global_savedata_v1(gd)?;
+            // Match upstream's application loop: completing one write must
+            // release the request so a later menu SaveWrite can commit again.
+            // Keep local_saved intact; it is the pre-menu gameplay snapshot.
+            gd.save_manager.consume_save_write_result();
         }
         Ok(())
     }

@@ -117,9 +117,19 @@ int main(int argc, char** argv) {
                 if (entry.path().filename() == "rfvp_s000.bin") saved = fs::file_size(entry.path()) > 16000;
             }
             check(saved, "script saves snapshot and thumbnail under host writable root");
+            game.key(117); // F6: a later menu SaveWrite reuses the prepared payload
+            bool second_saved = false;
+            for (const auto& entry : fs::recursive_directory_iterator(scratch / "rfvp")) {
+                if (entry.path().filename() == "rfvp_s001.bin") second_saved = fs::file_size(entry.path()) > 16000;
+            }
+            check(second_saved, "completed save must not block a subsequent SaveWrite");
             game.pointer(ENGINE_INPUT_EVENT_POINTER_DOWN, 1); game.step(2);
             game.pointer(ENGINE_INPUT_EVENT_POINTER_UP, 1); game.step(2);
             check(game.pixels()[pixel] > 200, "right pointer erases");
+            game.key(118); game.step(80); // F7: load the menu-written slot
+            check(game.pixels()[pixel] < 40, "second slot restores the prepared gameplay snapshot");
+            game.pointer(ENGINE_INPUT_EVENT_POINTER_DOWN, 1); game.step(2);
+            game.pointer(ENGINE_INPUT_EVENT_POINTER_UP, 1); game.step(2);
             game.key(120); game.step(80); // F9: restore black tile, allow dissolve to finish
             check(game.pixels()[pixel] < 40, "script load restores drawn tile");
             game.pointer(ENGINE_INPUT_EVENT_POINTER_DOWN, 1); game.step();

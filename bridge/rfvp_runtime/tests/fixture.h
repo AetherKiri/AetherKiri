@@ -50,11 +50,13 @@ inline void write_input_fixture(const std::filesystem::path& path) {
         integer(20); integer(20); syscall("PrimSetTile", 6);
         patch(skip, uint32_t(b.size()));
     }
-    for (auto [bit, action] : {std::pair{17, "SaveCreate"}, std::pair{21, "Load"}}) {
+    for (auto [bit, action] : {std::pair{17, "SaveCreate"}, std::pair{18, "SaveWrite"},
+                              std::pair{19, "Load"}, std::pair{21, "Load"}}) {
         syscall("InputGetDown", 0); b.push_back(20);
         integer(bit); b.push_back(31);
         b.push_back(7); const auto skip = b.size(); word(0, 4);
         if (bit == 17) call(action, {3, 0}); // capture and commit slot 0
+        else if (bit == 18 || bit == 19) call(action, {1}); // reuse prepared payload / load slot 1
         else call(action, {0});
         patch(skip, uint32_t(b.size()));
     }
