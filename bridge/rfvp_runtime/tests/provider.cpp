@@ -7,6 +7,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 #include "fixture.h"
 
@@ -35,6 +36,17 @@ struct Instance {
     ~Instance() { if (value) provider->destroy(value); }
     void ok(engine_result_t code) {
         if (code != ENGINE_RESULT_OK) throw std::runtime_error(provider->get_last_error(value));
+    }
+    void open(const fs::path& path) {
+        // Match engine_open_game_async: macOS gives std::thread a much smaller
+        // stack than main(). Tick, input and destruction stay on the host thread.
+        engine_result_t result = ENGINE_RESULT_INTERNAL_ERROR;
+        const auto utf8 = path.u8string();
+        std::thread startup([&] {
+            result = provider->open_game(value, utf8.c_str(), nullptr);
+        });
+        startup.join();
+        ok(result);
     }
     void step(int count = 1) { while (count--) ok(provider->tick(value, 16)); }
     engine_frame_desc_t frame() {
@@ -76,7 +88,7 @@ int main(int argc, char** argv) {
         }
         {
             Instance painter(scratch);
-            painter.ok(provider->open_game(painter.value, demo.u8string().c_str(), nullptr));
+            painter.open(demo);
             painter.step(2);
             auto pixels = painter.pixels();
             check(pixels[(200 * 1024 + 200) * 4] > 200, "upstream painter renders its canvas");
@@ -88,7 +100,7 @@ int main(int argc, char** argv) {
             engine_option_t option{}; option.key_utf8 = "rfvp_encoding"; option.value_utf8 = "invalid";
             check(provider->set_option(game.value, &option) == ENGINE_RESULT_INVALID_ARGUMENT, "invalid encoding");
             option.value_utf8 = "sjis"; game.ok(provider->set_option(game.value, &option));
-            game.ok(provider->open_game(game.value, fixture.u8string().c_str(), nullptr));
+            game.open(fixture);
             game.step(8);
             auto frame = game.frame();
             check(frame.width == 1024 && frame.height == 640 && frame.stride_bytes == 4096, "native RGBA layout");
@@ -138,7 +150,7 @@ int main(int argc, char** argv) {
         check(!fs::exists(demo / "save"), "do not write saves into the read-only game fixture");
         {
             Instance reopened(scratch);
-            reopened.ok(provider->open_game(reopened.value, fixture.u8string().c_str(), nullptr));
+            reopened.open(fixture);
             reopened.step(2);
             reopened.key(120); reopened.step(80);
             check(reopened.pixels()[(200 * 1024 + 200) * 4] < 40, "save survives close and reopen");

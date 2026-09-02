@@ -75,10 +75,26 @@ pub fn reset_host_state() {
     file(COPY "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../rust/video_host.rs"
         DESTINATION "${src}/subsystem/resources")
     file(APPEND "${src}/subsystem/resources/videoplayer.rs" "\ninclude!(\"video_host.rs\");\n")
+    # SePlayer::new materializes several 256-element arrays even when GameData
+    # itself is initialized in place. Those temporaries overflow the macOS
+    # async-startup thread's stack. Collect the large slot buffers directly on
+    # the heap; boxed slices retain fixed lengths and the existing slot indices.
+    set(se_player "${src}/audio_player/se_player.rs")
+    foreach(type TrackHandle "Option<StaticSoundHandle>" "Option<StaticSoundData>" "Option<String>")
+        rfvp_replace("${se_player}" "[${type}; SE_SLOT_COUNT]" "Box<[${type}]>")
+    endforeach()
+    rfvp_replace("${se_player}" "let se_tracks = [(); SE_SLOT_COUNT].map(|_| {"
+        "let se_tracks = (0..SE_SLOT_COUNT).map(|_| {")
+    rfvp_replace("${se_player}" ".expect(\"Failed to create se track\")\n        });"
+        ".expect(\"Failed to create se track\")\n        }).collect::<Vec<_>>().into_boxed_slice();")
+    foreach(field se_slots se_datas se_names)
+        rfvp_replace("${se_player}" "${field}: [(); SE_SLOT_COUNT].map(|_| None),"
+            "${field}: (0..SE_SLOT_COUNT).map(|_| None).collect::<Vec<_>>().into_boxed_slice(),")
+    endforeach()
     foreach(player Bgm Se)
         string(TOLOWER "${player}" lower)
         rfvp_replace("${src}/audio_player/${lower}_player.rs"
             "impl ${player}Player {"
-            "impl ${player}Player {\n    pub fn pause_host(&mut self, paused: bool) {\n        for track in &mut self.${lower}_tracks {\n            if paused { track.pause(Tween::default()); } else { track.resume(Tween::default()); }\n        }\n    }")
+            "impl ${player}Player {\n    pub fn pause_host(&mut self, paused: bool) {\n        for track in self.${lower}_tracks.iter_mut() {\n            if paused { track.pause(Tween::default()); } else { track.resume(Tween::default()); }\n        }\n    }")
     endforeach()
 endfunction()
