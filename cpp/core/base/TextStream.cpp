@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <uchardet.h>
 #include <zlib.h>
+#include <array>
 #include <optional>
 #include <algorithm>
 #include <cctype>
@@ -165,6 +166,68 @@ static std::optional<size_t> findEmbeddedBmpTextOffset(
     if(!utf16Bom && !utf8Bom && !kirikiriCipher)
         return std::nullopt;
     return imageSize;
+}
+
+std::optional<tjs_uint64> TVPFindEmbeddedBmpPayloadOffset(
+    tTJSBinaryStream *stream) {
+    if(stream == nullptr) {
+        return std::nullopt;
+    }
+
+    tjs_uint64 originalPosition = 0;
+    try {
+        originalPosition = stream->GetPosition();
+        const tjs_uint64 totalSize = stream->GetSize();
+        if(totalSize < 17u) {
+            stream->SetPosition(originalPosition);
+            return std::nullopt;
+        }
+
+        std::array<std::uint8_t, 14> header{};
+        stream->SetPosition(0);
+        if(stream->Read(header.data(), static_cast<tjs_uint>(header.size())) !=
+           header.size() || header[0] != 'B' || header[1] != 'M') {
+            stream->SetPosition(originalPosition);
+            return std::nullopt;
+        }
+
+        const tjs_uint64 imageSize = static_cast<tjs_uint64>(header[2]) |
+            (static_cast<tjs_uint64>(header[3]) << 8u) |
+            (static_cast<tjs_uint64>(header[4]) << 16u) |
+            (static_cast<tjs_uint64>(header[5]) << 24u);
+        if(imageSize < 14u || imageSize >= totalSize ||
+           totalSize - imageSize < 3u) {
+            stream->SetPosition(originalPosition);
+            return std::nullopt;
+        }
+
+        std::array<std::uint8_t, 3> payloadHeader{};
+        stream->SetPosition(imageSize);
+        if(stream->Read(payloadHeader.data(),
+                        static_cast<tjs_uint>(payloadHeader.size())) !=
+           payloadHeader.size()) {
+            stream->SetPosition(originalPosition);
+            return std::nullopt;
+        }
+        const bool utf16Bom =
+            (payloadHeader[0] == 0xff && payloadHeader[1] == 0xfe) ||
+            (payloadHeader[0] == 0xfe && payloadHeader[1] == 0xff);
+        const bool utf8Bom = payloadHeader[0] == 0xef &&
+            payloadHeader[1] == 0xbb && payloadHeader[2] == 0xbf;
+        const bool kirikiriCipher = payloadHeader[0] == 0xfe &&
+            payloadHeader[1] == 0xfe && payloadHeader[2] <= 2u;
+        stream->SetPosition(originalPosition);
+        if(!utf16Bom && !utf8Bom && !kirikiriCipher) {
+            return std::nullopt;
+        }
+        return imageSize;
+    } catch(...) {
+        try {
+            stream->SetPosition(originalPosition);
+        } catch(...) {
+        }
+        return std::nullopt;
+    }
 }
 
 static bool selectLegacyBmpTextPayload(const ttstr &requested,
