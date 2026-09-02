@@ -400,8 +400,7 @@ func layout(_window_size: Vector2, safe_rect: Rect2) -> void:
     cursor_handle.size = Vector2.ONE * CURSOR_SIZE
     # Preserve the pointer across repeated safe-area layouts. Rect2.has_point()
     # excludes its right and bottom edges, so using it here used to recenter a
-    # cursor whose hotspot was correctly clamped exactly onto either edge.
-    # _clamp_cursor() constrains the hotspot itself and keeps the arrow there.
+    # cursor whose image origin was correctly clamped exactly onto either edge.
     _clamp_cursor()
 
 func owns_viewport_pointer(event: InputEvent) -> bool:
@@ -1236,8 +1235,8 @@ func _clamp_cursor() -> void:
     )
     cursor_handle.position.y = clampf(
         cursor_handle.position.y,
-        _safe_rect.position.y - CURSOR_HOTSPOT.y,
-        _safe_rect.end.y - CURSOR_HOTSPOT.y
+        _safe_rect.position.y,
+        _safe_rect.end.y
     )
 
 func _event_position(event: InputEvent) -> Vector2:

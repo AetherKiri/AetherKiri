@@ -393,10 +393,13 @@ func _run() -> void:
     controls._move_cursor_by(Vector2(0.0, safe_rect.size.y * 2.0))
     var cursor_at_bottom := controls.cursor_screen_position()
     if (
-        not is_equal_approx(cursor_at_bottom.y, safe_rect.end.y)
-        or controls.cursor_handle.get_global_rect().end.y <= safe_rect.end.y
+        not is_equal_approx(
+            controls.cursor_handle.get_global_rect().position.y,
+            safe_rect.end.y
+        )
+        or cursor_at_bottom.y <= safe_rect.end.y
     ):
-        _fail("cursor bottom limit must use the arrow hotspot, not the image edge")
+        _fail("cursor origin must be able to reach the bottom edge")
         return
     var bottom_move_count := _pointer_moves.size()
     controls._move_cursor_by(Vector2(0.0, 80.0))
@@ -404,7 +407,7 @@ func _run() -> void:
         not controls.cursor_screen_position().is_equal_approx(cursor_at_bottom)
         or _pointer_moves.size() != bottom_move_count
     ):
-        _fail("cursor kept moving after its hotspot reached the bottom edge")
+        _fail("cursor kept moving after its origin reached the bottom edge")
         return
     controls.layout(Vector2(844, 390), safe_rect)
     if not controls.cursor_screen_position().is_equal_approx(cursor_at_bottom):

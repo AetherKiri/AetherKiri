@@ -2693,6 +2693,7 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
     }
     TVPRepairKagNoTransWait();
     TVPRepairKagEnvironmentWorldReset();
+    TVPDeliverWindowCanvasDrawEvents();
   }
   const auto after_application_run = std::chrono::steady_clock::now();
   ::TVPDrawSceneOnce(0);

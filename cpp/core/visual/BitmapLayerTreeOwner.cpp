@@ -16,11 +16,13 @@
 
 #include "BitmapLayerTreeOwner.h"
 #include "MsgIntf.h"
+#include "RectItf.h"
 
 #include <cassert>
 
 tTJSNI_BitmapLayerTreeOwner::tTJSNI_BitmapLayerTreeOwner() :
-    Owner(nullptr), BitmapObject(nullptr), BitmapNI(nullptr) {}
+    Owner(nullptr), BitmapObject(nullptr), BitmapNI(nullptr), IsDirty(false),
+    DirtyRectInstance(nullptr) {}
 tTJSNI_BitmapLayerTreeOwner::~tTJSNI_BitmapLayerTreeOwner() = default;
 
 // tTJSNativeInstance
@@ -36,15 +38,53 @@ tjs_error tTJSNI_BitmapLayerTreeOwner::Construct(tjs_int numparams,
            (iTJSNativeInstance **)&BitmapNI)))
         return TJS_E_INVALIDPARAM;
 
+    iTJSDispatch2 *rect = nullptr;
+    try {
+        rect = TVPCreateRectObject(0, 0, 0, 0);
+        SetDirtyRectObject(tTJSVariant(rect, rect));
+    } catch(...) {
+        if(rect)
+            rect->Release();
+        throw;
+    }
+    if(rect)
+        rect->Release();
+
     return TJS_S_OK;
 }
 void tTJSNI_BitmapLayerTreeOwner::Invalidate() {
+    SetDirtyRectObject(tTJSVariant());
+
     // invalidate bitmap object
     BitmapNI = nullptr;
     if(BitmapObject) {
         BitmapObject->Invalidate(0, nullptr, nullptr, BitmapObject);
         BitmapObject->Release();
         BitmapObject = nullptr;
+    }
+}
+
+void tTJSNI_BitmapLayerTreeOwner::SetDirtyRectObject(
+    const tTJSVariant &value) {
+    if(DirtyRectObject.Type() == tvtObject) {
+        auto closure = DirtyRectObject.AsObjectClosureNoAddRef();
+        closure.Invalidate(0, nullptr, nullptr,
+                           DirtyRectObject.AsObjectNoAddRef());
+    }
+
+    DirtyRectObject = value;
+    DirtyRectInstance = nullptr;
+    if(DirtyRectObject.Type() != tvtObject)
+        return;
+
+    auto closure = DirtyRectObject.AsObjectClosureNoAddRef();
+    if(!closure.Object)
+        return;
+    if(TJS_FAILED(closure.Object->NativeInstanceSupport(
+           TJS_NIS_GETINSTANCE, tTJSNC_Rect::ClassID,
+           reinterpret_cast<iTJSNativeInstance **>(&DirtyRectInstance)))) {
+        DirtyRectInstance = nullptr;
+        TVPThrowExceptionMessage(TJS_W("Cannot retrieve rect instance."));
     }
 }
 
@@ -65,11 +105,12 @@ void tTJSNI_BitmapLayerTreeOwner::NotifyBitmapCompleted(
     tjs_int opacity) {
     assert(BitmapNI);
 
+    if(!BitmapNI || !bitmapinfo)
+        return;
+
     tjs_int w, h;
     GetPrimaryLayerSize(w, h);
-    if(BitmapNI) {
-        BitmapNI->SetSize(w, h);
-    }
+    BitmapNI->SetSize(w, h);
     auto *dstbits = (tjs_uint8 *)BitmapNI->GetPixelBufferForWrite();
     tjs_int dstpitch = BitmapNI->GetPixelBufferPitch();
     // cliprect がはみ出していいないことを確認
@@ -78,6 +119,21 @@ void tTJSNI_BitmapLayerTreeOwner::NotifyBitmapCompleted(
        !(cliprect.left < 0 || cliprect.top < 0 ||
          cliprect.right > bitmapinfo->GetWidth() ||
          cliprect.bottom > bitmapinfo->GetHeight())) {
+        const tTVPRect destination_rect(
+            x, y, x + cliprect.get_width(), y + cliprect.get_height());
+        if(!IsDirty) {
+            if(DirtyRectInstance) {
+                DirtyRectInstance->Set(destination_rect.left,
+                                       destination_rect.top,
+                                       destination_rect.right,
+                                       destination_rect.bottom);
+                IsDirty = true;
+            }
+        } else if(DirtyRectInstance) {
+            TVPUnionRect(&DirtyRectInstance->Get(), DirtyRectInstance->Get(),
+                         destination_rect);
+        }
+
         // bitmapinfo で表された cliprect の領域を x,y にコピーする
         long src_y = cliprect.top;
         long src_y_limit = cliprect.bottom;
@@ -85,22 +141,13 @@ void tTJSNI_BitmapLayerTreeOwner::NotifyBitmapCompleted(
         long width_bytes = cliprect.get_width() * 4; // 32bit
         long dest_y = y;
         long dest_x = x;
-        const auto *src_p = (const tjs_uint8 *)bitmapinfo->GetScanLine(0);
-        long src_pitch;
-#if 0
-		if(bitmapinfo->GetHeight() < 0) {
-			// bottom-down
-			src_pitch = bitmapinfo->GetWidth() * 4;
-		} else
-#endif
-        {
-            // bottom-up
-            src_pitch = -(int)bitmapinfo->GetWidth() * 4;
-            src_p += bitmapinfo->GetWidth() * 4 * (bitmapinfo->GetHeight() - 1);
-        }
 
         for(; src_y < src_y_limit; src_y++, dest_y++) {
-            const void *srcp = src_p + src_pitch * src_y + src_x * 4;
+            const auto *src_line = static_cast<const tjs_uint8 *>(
+                bitmapinfo->GetScanLine(src_y));
+            if(!src_line)
+                break;
+            const void *srcp = src_line + src_x * 4;
             void *destp = dstbits + dstpitch * dest_y + dest_x * 4;
             memcpy(destp, srcp, width_bytes);
         }
@@ -435,6 +482,15 @@ TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ fireRecheckInputState) {
 }
 TJS_END_NATIVE_METHOD_DECL(/*func. name*/ fireRecheckInputState)
 //----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ clearDirtyRect) {
+    TJS_GET_NATIVE_INSTANCE(
+        /*var. name*/ _this,
+        /*var. type*/ tTJSNI_BitmapLayerTreeOwner);
+    _this->ClearDirtyRect();
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_METHOD_DECL(/*func. name*/ clearDirtyRect)
+//----------------------------------------------------------------------
 
 //-- events
 
@@ -562,6 +618,33 @@ TJS_END_NATIVE_PROP_GETTER
 TJS_DENY_NATIVE_PROP_SETTER
 }
 TJS_END_NATIVE_PROP_DECL(bitmap)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_PROP_DECL(dirtyRect){
+    TJS_BEGIN_NATIVE_PROP_GETTER{ TJS_GET_NATIVE_INSTANCE(
+        /*var. name*/ _this,
+        /*var. type*/ tTJSNI_BitmapLayerTreeOwner);
+*result = _this->GetDirtyRectObject();
+return TJS_S_OK;
+}
+TJS_END_NATIVE_PROP_GETTER
+
+TJS_DENY_NATIVE_PROP_SETTER
+}
+TJS_END_NATIVE_PROP_DECL(dirtyRect)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_PROP_DECL(isUpdated){
+    TJS_BEGIN_NATIVE_PROP_GETTER{ TJS_GET_NATIVE_INSTANCE(
+        /*var. name*/ _this,
+        /*var. type*/ tTJSNI_BitmapLayerTreeOwner);
+*result = _this->IsUpdated() ? static_cast<tjs_int>(1)
+                             : static_cast<tjs_int>(0);
+return TJS_S_OK;
+}
+TJS_END_NATIVE_PROP_GETTER
+
+TJS_DENY_NATIVE_PROP_SETTER
+}
+TJS_END_NATIVE_PROP_DECL(isUpdated)
 //----------------------------------------------------------------------
 TJS_BEGIN_NATIVE_PROP_DECL(layerTreeOwnerInterface){
     TJS_BEGIN_NATIVE_PROP_GETTER{ TJS_GET_NATIVE_INSTANCE(

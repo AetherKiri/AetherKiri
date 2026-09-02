@@ -2,7 +2,7 @@
 
 [简体中文](verified_games.zh-CN.md)
 
-Last updated: 2026-08-19
+Last updated: 2026-09-01
 
 This document tracks games that have been manually smoke-tested with
 AetherKiri. It is a compatibility notebook, not a guarantee that every route,
@@ -49,6 +49,7 @@ movie, plugin path, or save state in a title has been exhaustively validated.
 | ワガママハイスペック OC | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, continue/load flow, scene/text rendering, music playback, lock-screen audio recovery, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | 淫母マンション～ママは、性処理肉便器～ | macOS debug and release apps; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, scene/text rendering, audio playback, basic input, and frame-enhanced 4:3 continue/menu flow with aligned hover and back-button input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | 天色＊アイルノーツ | macOS debug app | Startup, title/menu rendering, continue/load flow, background and character rendering, SD CG transition stability, scene/text rendering, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| LOVE³ -ラヴキューブ- | macOS x64 debug app | Startup, title/menu rendering, visible-coordinate CanvasWindow input on a 1920×1080 host surface, and the GAME START transition into the initial scene background | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Uses KiriKiri's OpenGL-era Canvas/Live2D plug-in interfaces. Local game files are not committed. |
 | GINKA | Windows x64 debug app | Import, startup, title/menu rendering, game-data loading, background and character rendering, and basic input | Smoke verified | [@KYoiRyi](https://github.com/KYoiRyi) | Local game files are not committed. |
 | 恋爱、初邂逅 | Linux x64 debug app | Import, startup, title/menu rendering, new-game transition, scene and dialogue rendering, Opus playback, and basic input | Smoke verified | [@KYoiRyi](https://github.com/KYoiRyi) | Original native plug-ins and local game files are not committed. |
 | NEKOPARA Vol. 1 | macOS debug app | Startup, title/menu rendering, data-load and first-save flow, scene/text rendering, E-mote character rendering and animation, rapid dialogue input, and character-layer click forwarding | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
