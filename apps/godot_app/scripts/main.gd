@@ -14009,12 +14009,11 @@ func _game_input_content_size() -> Vector2:
     return Vector2(maxi(1, last_texture_size.x), maxi(1, last_texture_size.y))
 
 func _game_input_surface_size() -> Vector2:
-    # ONS and Minori consume coordinates in their published content space.
-    if active_runtime_kind in [RUNTIME_ONSCRIPTER, RUNTIME_MINORI]:
-        return _game_input_content_size()
-    if current_surface_size.x > 0 and current_surface_size.y > 0:
-        return Vector2(current_surface_size)
-    return _game_input_content_size()
+    return GameInputMapping.input_surface_size(
+        active_runtime_kind,
+        _game_input_content_size(),
+        Vector2(current_surface_size)
+    )
 
 func _update_frame() -> void:
     if present_hold_frames > 0:

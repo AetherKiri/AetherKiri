@@ -24,6 +24,35 @@ func _initialize() -> void:
         _fail("frame coordinate was rescaled to the stale surface")
         return
 
+    # RFVP, ONScripter, and Minori consume native content coordinates rather
+    # than the presentation surface. Using the shell surface moves clicks out
+    # of the logical frame and makes controls appear unresponsive.
+    var native_frame := Vector2(1024, 640)
+    for runtime_kind in ["minori", "onscripter", "rfvp"]:
+        var input_surface := GameInputMapping.input_surface_size(
+            runtime_kind, native_frame, requested_surface
+        )
+        var menu_point := GameInputMapping.map_point_to_surface(
+            Vector2(490, 744), Rect2(0, 0, 1920, 1080),
+            native_frame, input_surface
+        )
+        if not menu_point.is_equal_approx(Vector2(233.48148, 440.88889)):
+            _fail("%s menu point left native frame coordinates: %s" % [runtime_kind, menu_point])
+            return
+        var drag_delta := GameInputMapping.map_delta_to_surface(
+            Vector2(168.75, 84.375), Vector2(1920, 1080),
+            native_frame, input_surface
+        )
+        if not drag_delta.is_equal_approx(Vector2(100, 50)):
+            _fail("%s drag delta left native frame coordinates: %s" % [runtime_kind, drag_delta])
+            return
+    if GameInputMapping.input_surface_size("kirikiri", native_frame, requested_surface) != requested_surface:
+        _fail("KiriKiri lost its requested surface coordinate space")
+        return
+    if GameInputMapping.input_surface_size("kirikiri", native_frame, Vector2.ZERO) != native_frame:
+        _fail("missing requested surface did not fall back to the frame")
+        return
+
     var letterboxed := GameInputMapping.map_point(
         Vector2(1000, 540),
         Rect2(40, 20, 1920, 1080),
