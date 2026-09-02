@@ -53,6 +53,9 @@ const RUNTIME_FONT_DIR := "user://runtime_fonts"
 const RUNTIME_DEFAULT_FONT_FILE := "default.otf"
 const RUNTIME_SYMBOL_FONT_FILE := "symbols.ttf"
 const ProbeConfig = preload("res://scripts/probe_config.gd")
+const GameMetadata = preload("res://scripts/game_metadata.gd")
+const CoverIndex = preload("res://scripts/cover_index.gd")
+const VNDBCoverResolver = preload("res://scripts/vndb_cover_resolver.gd")
 const GameInputMapping = preload("res://scripts/game_input_mapping.gd")
 const GameVirtualControls = preload("res://scripts/game_virtual_controls.gd")
 const DiagnosticSession = preload("res://scripts/diagnostic_session.gd")
@@ -325,6 +328,8 @@ const UI_TEXT := {
         "detail.set_launch_file": "切换启动文件",
         "detail.reset_launch_file": "恢复目录自动检测",
         "detail.set_cover": "设置封面",
+        "detail.delete_cover": "删除封面",
+        "detail.clear_cover": "清除封面",
         "detail.rename": "重命名",
         "detail.remove": "移除视觉小说",
         "detail.delete_builtin": "删除内置 Demo",
@@ -875,6 +880,8 @@ const UI_TEXT := {
         "detail.set_launch_file": "Change Launch File",
         "detail.reset_launch_file": "Restore Folder Auto-detect",
         "detail.set_cover": "Set Cover",
+        "detail.delete_cover": "Delete Cover",
+        "detail.clear_cover": "Clear Cover",
         "detail.rename": "Rename",
         "detail.remove": "Remove Visual Novel",
         "detail.delete_builtin": "Delete Built-in Demo",
@@ -1650,6 +1657,8 @@ var hero_overlay: PanelContainer
 var hero_hidden_target: CanvasItem
 var hero_transition_id := 0
 var known_games: Array[Dictionary] = []
+var vndb_cover_queue: Array[Dictionary] = []
+var vndb_cover_busy := false
 var known_videos: Array[Dictionary] = []
 var home_library_mode := "game"
 var home_search_queries := {"game": "", "video": ""}
@@ -7183,7 +7192,7 @@ func _build_desktop_detail(game: Dictionary, phone_landscape: bool = false) -> C
     var body := HBoxContainer.new()
     body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     body.add_theme_constant_override("separation", 20 if phone_landscape else 32)
-    body.add_child(_detail_cover(game, Vector2(176, 248) if phone_landscape else Vector2(252, 354)))
+    body.add_child(_detail_cover_with_action(game, Vector2(176, 248) if phone_landscape else Vector2(252, 354)))
 
     var information := VBoxContainer.new()
     information.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -7203,7 +7212,7 @@ func _build_compact_detail(game: Dictionary) -> Control:
     summary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     summary.add_theme_constant_override("separation", 16)
     body.add_child(summary)
-    summary.add_child(_detail_cover(game, Vector2(112, 158)))
+    summary.add_child(_detail_cover_with_action(game, Vector2(112, 158)))
 
     var primary := VBoxContainer.new()
     primary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -7239,6 +7248,31 @@ func _detail_cover(game: Dictionary, cover_size: Vector2) -> PanelContainer:
         var icon := _centered_icon(ICON_GAMEPAD, Vector2(48, 48), ui_tokens.accent)
         cover.add_child(icon)
     return cover
+
+func _detail_cover_with_action(game: Dictionary, cover_size: Vector2) -> VBoxContainer:
+    var column := VBoxContainer.new()
+    column.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+    column.add_theme_constant_override("separation", 6)
+    column.add_child(_detail_cover(game, cover_size))
+    var cover_path := _resolve_cover_path(game)
+    var has_cover := not cover_path.is_empty() and FileAccess.file_exists(cover_path)
+    var actions := HBoxContainer.new()
+    actions.alignment = BoxContainer.ALIGNMENT_CENTER
+    actions.add_theme_constant_override("separation", 6)
+    column.add_child(actions)
+    var action := _pill_button(_t("detail.set_cover"), ICON_PAGE)
+    action.custom_minimum_size = Vector2(128, 40)
+    action.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+    action.pressed.connect(_set_cover_for_selected)
+    actions.add_child(action)
+    if has_cover:
+        var clear := _icon_action_button(ICON_REFRESH, _t("detail.clear_cover"), _clear_cover_for_selected)
+        clear.text = _t("detail.clear_cover")
+        clear.add_theme_constant_override("h_separation", 8)
+        clear.custom_minimum_size = Vector2(112, 40)
+        clear.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+        actions.add_child(clear)
+    return column
 
 func _detail_identity(game: Dictionary, compact: bool) -> VBoxContainer:
     var identity := VBoxContainer.new()
@@ -7309,10 +7343,6 @@ func _detail_tools(game: Dictionary) -> FlowContainer:
             _reveal_icon_action_label_on_hover(reset_launch, _t("detail.reset_launch_file"))
             reset_launch.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
             tools.add_child(reset_launch)
-    var set_cover := _icon_action_button(ICON_PAGE, _t("detail.set_cover"), func(): _set_cover_for_selected())
-    _reveal_icon_action_label_on_hover(set_cover, _t("detail.set_cover"))
-    set_cover.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-    tools.add_child(set_cover)
     var rename := _icon_action_button(ICON_RENAME, _t("detail.rename"), func(): _rename_selected_game())
     _reveal_icon_action_label_on_hover(rename, _t("detail.rename"))
     tools.add_child(rename)
@@ -8066,6 +8096,25 @@ func _set_cover_for_selected() -> void:
             return
     _show_cover_godot_dialog(path)
 
+func _delete_cover_for_selected() -> void:
+    var path := String(selected_game.get("path", ""))
+    if path.is_empty():
+        return
+    var cover_path := _resolve_cover_path(selected_game)
+    if not cover_path.is_empty() and FileAccess.file_exists(cover_path):
+        DirAccess.remove_absolute(cover_path)
+    _clear_cover_for_selected()
+
+func _clear_cover_for_selected() -> void:
+    var path := String(selected_game.get("path", ""))
+    if path.is_empty():
+        return
+    _update_game(path, {"coverPath": "", GAME_AUTO_COVER_SCANNED_FIELD: true})
+    var index := CoverIndex.load_index()
+    index[CoverIndex.key_for(selected_game)] = CoverIndex.record("")
+    CoverIndex.save_index(index)
+    _show_detail(selected_game)
+
 func _show_cover_godot_dialog(path: String) -> void:
     var dialog := _create_file_dialog(
         _t("dialog.choose_cover"),
@@ -8091,6 +8140,12 @@ func _apply_selected_cover(library_path: String, cover_path: String) -> void:
         "coverPath": _portable_cover_path(library_path, cover_path),
         GAME_AUTO_COVER_SCANNED_FIELD: true,
     })
+    var index := CoverIndex.load_index()
+    for game in _load_game_list():
+        if String(game.get("path", "")) == library_path:
+            index[CoverIndex.key_for(game)] = CoverIndex.record(_portable_cover_path(library_path, cover_path))
+            break
+    CoverIndex.save_index(index)
     _show_detail(selected_game)
 
 func _game_launch_entry_label(game: Dictionary) -> String:
@@ -8646,8 +8701,11 @@ func _refresh_games() -> void:
     var loaded_games := _load_game_list()
     known_games = builtin_demo.reconcile_games(loaded_games)
     var library_changed := JSON.stringify(known_games) != JSON.stringify(loaded_games)
+    if _backfill_game_metadata(known_games):
+        library_changed = true
     if _backfill_default_game_covers(known_games):
         library_changed = true
+    _sync_cover_index(known_games)
     if OS.get_name() == "iOS":
         known_games = _scan_ios_games_dir(known_games)
         _save_game_list(known_games)
@@ -9445,7 +9503,44 @@ func _add_game_dictionary(game: Dictionary) -> bool:
     _refresh_games()
     if not replaced:
         _offer_scrape_after_add(final_game)
+        _start_vndb_cover_lookup(final_game, true)
     return true
+
+func _start_vndb_cover_lookup(game: Dictionary, force: bool = false) -> void:
+    var index := CoverIndex.load_index()
+    var key := CoverIndex.key_for(game)
+    if key.is_empty() or (not force and not CoverIndex.needs_recognition(index, key)):
+        return
+    for queued in vndb_cover_queue:
+        if String(queued.get("path", "")) == String(game.get("path", "")):
+            return
+    vndb_cover_queue.append(game)
+    _process_next_vndb_cover()
+
+func _process_next_vndb_cover() -> void:
+    if vndb_cover_busy or vndb_cover_queue.is_empty():
+        return
+    var resolver := get_node_or_null("VNDBCoverResolver")
+    if resolver == null:
+        return
+    vndb_cover_busy = true
+    resolver.resolve(vndb_cover_queue.pop_front())
+
+func _on_vndb_cover_resolved(game_path: String, cover_path: String, vndb_id: String) -> void:
+    var games := _load_game_list()
+    var index := CoverIndex.load_index()
+    for game in games:
+        if String(game.get("path", "")) != game_path:
+            continue
+        var key := CoverIndex.key_for(game)
+        var resolved_cover := _portable_cover_path(game_path, cover_path) if not cover_path.is_empty() else ""
+        index[key] = CoverIndex.record(resolved_cover)
+        var values := {"coverPath": resolved_cover, "vndbId": vndb_id, GAME_AUTO_COVER_SCANNED_FIELD: true}
+        _update_game(game_path, values)
+        break
+    CoverIndex.save_index(index)
+    vndb_cover_busy = false
+    _process_next_vndb_cover()
 
 func _merge_game_dictionary(existing: Dictionary, game: Dictionary) -> Dictionary:
     var merged := existing.duplicate(true)
@@ -9559,8 +9654,11 @@ func _game_info_from_path(path: String) -> Dictionary:
     if name.to_lower().ends_with(".xp3"):
         name = name.substr(0, name.length() - 4)
     var default_cover_path := _discover_default_cover_path(path)
+    var metadata := GameMetadata.inspect(path)
+    var detected_title := String(metadata.get("title", ""))
+    var detected_engine := String(metadata.get("engine", RUNTIME_KIRIKIRI))
     return {
-        "name": name,
+        "name": detected_title if not detected_title.is_empty() else name,
         "path": path,
         "type": "Archive" if path.to_lower().ends_with(".xp3") else "Directory",
         "lastPlayed": 0,
@@ -9568,8 +9666,11 @@ func _game_info_from_path(path: String) -> Dictionary:
         "coverPath": _portable_cover_path(path, default_cover_path),
         GAME_AUTO_COVER_SCANNED_FIELD: true,
         "developer": "",
-        "title": "",
-        "engine": _game_runtime_kind(path),
+        "title": detected_title,
+        "titleCandidates": metadata.get("titleCandidates", PackedStringArray()),
+        "metadataSignals": metadata.get("signals", PackedStringArray()),
+        "engine": detected_engine,
+        "launchFile": metadata.get("launchFile", ""),
     }
 
 func _game_runtime_root(path: String) -> String:
@@ -9579,13 +9680,33 @@ func _game_runtime_root(path: String) -> String:
     return resolved
 
 func _game_runtime_kind(path: String) -> String:
-    var root := _game_runtime_root(path)
-    if root.is_empty():
-        return RUNTIME_KIRIKIRI
-    for marker in ONSCRIPTER_SCRIPT_MARKERS:
-        if FileAccess.file_exists(root.path_join(marker)):
-            return RUNTIME_ONSCRIPTER
-    return RUNTIME_KIRIKIRI
+    return String(GameMetadata.inspect(_game_runtime_root(path)).get("engine", RUNTIME_KIRIKIRI))
+
+func _backfill_game_metadata(games: Array[Dictionary]) -> bool:
+    var changed := false
+    for game in games:
+        var path := String(game.get("path", ""))
+        if path.is_empty() or builtin_demo.is_game(game):
+            continue
+        var metadata := GameMetadata.inspect(path)
+        var engine := String(metadata.get("engine", RUNTIME_KIRIKIRI))
+        if String(game.get("engine", "")).is_empty() or String(game.get("engine", "")) == RUNTIME_KIRIKIRI:
+            if String(game.get("engine", "")) != engine:
+                game["engine"] = engine
+                changed = true
+        if String(game.get("title", "")).is_empty():
+            var title := String(metadata.get("title", ""))
+            if not title.is_empty():
+                game["title"] = title
+                if String(game.get("name", "")).is_empty():
+                    game["name"] = title
+                changed = true
+        for key in ["titleCandidates", "metadataSignals", "launchFile"]:
+            var value = metadata.get(key, null)
+            if value != null and JSON.stringify(game.get(key, null)) != JSON.stringify(value):
+                game[key] = value
+                changed = true
+    return changed
 
 func _backfill_default_game_covers(games: Array[Dictionary]) -> bool:
     var changed := false
@@ -9611,6 +9732,26 @@ func _backfill_default_game_covers(games: Array[Dictionary]) -> bool:
             changed = true
         games[index] = game
     return changed
+
+func _sync_cover_index(games: Array[Dictionary]) -> void:
+    var index := CoverIndex.load_index()
+    var changed := false
+    var pending: Array[Dictionary] = []
+    for game in games:
+        if builtin_demo.is_game(game):
+            continue
+        var key := CoverIndex.key_for(game)
+        if key.is_empty() or not CoverIndex.needs_recognition(index, key):
+            continue
+        var cover_path := _resolve_cover_path(game)
+        var stored_path := _portable_cover_path(String(game.get("path", "")), cover_path) if not cover_path.is_empty() and FileAccess.file_exists(cover_path) else ""
+        index[key] = CoverIndex.record(stored_path, false)
+        changed = true
+        pending.append(game)
+    if changed:
+        CoverIndex.save_index(index)
+    for game in pending:
+        _start_vndb_cover_lookup(game, true)
 
 func _portable_cover_path(game_path: String, cover_path: String) -> String:
     var value := cover_path.strip_edges()
@@ -10377,6 +10518,10 @@ func _return_to_library_after_runtime_exit() -> void:
     runtime_exit_cleanup_pending = false
 
 func _ready() -> void:
+    var vndb_resolver := VNDBCoverResolver.new()
+    vndb_resolver.name = "VNDBCoverResolver"
+    add_child(vndb_resolver)
+    vndb_resolver.resolved.connect(_on_vndb_cover_resolved)
     cli_probe_script = _detect_cli_probe_script()
     _apply_ui_font()
     DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_TRANSPARENT, false)

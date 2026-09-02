@@ -48,6 +48,7 @@
 | ワガママハイスペック OC | macOS release app；iOS/iPadOS iPad release app build | 启动、标题/菜单渲染、继续/读档流程、场景/文字渲染、音乐播放、锁屏恢复音频和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | 淫母マンション～ママは、性処理肉便器～ | macOS debug 和 release app；iOS/iPadOS iPad release app build | 启动、标题/菜单渲染、场景/文字渲染、音频播放、基础输入，以及开启画面增强后的 4:3 继续/菜单流程、悬停和返回按钮坐标对齐 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | 天色＊アイルノーツ | macOS debug app | 启动、标题/菜单渲染、继续/读档流程、背景与角色立绘渲染、SD CG 切换稳定性、场景/文字渲染和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| LOVE³ -ラヴキューブ- | macOS x64 debug app | 启动、标题/菜单渲染、1920×1080 宿主表面下 CanvasWindow 可见坐标输入，以及 GAME START 到初始场景背景的切换 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 使用 KiriKiri 的 OpenGL-era Canvas/Live2D 插件接口；本地游戏文件不提交到仓库。 |
 | GINKA | Windows x64 debug app | 导入、启动、标题/菜单渲染、游戏数据加载、背景与角色渲染，以及基础输入 | 冒烟验证通过 | [@KYoiRyi](https://github.com/KYoiRyi) | 本地游戏文件不提交到仓库。 |
 | 恋爱、初邂逅 | Linux x64 debug app | 导入、启动、标题/菜单渲染、开始游戏转场、场景与对话渲染、Opus 播放和基础输入 | 冒烟验证通过 | [@KYoiRyi](https://github.com/KYoiRyi) | 原始 native 插件和本地游戏文件不提交到仓库。 |
 | NEKOPARA Vol. 1 | macOS debug app | 启动、标题/菜单渲染、Data Load 与首个存档读取流程、场景/文字渲染、E-mote 角色立绘与动画、快速推进对话，以及立绘区域点击事件转发 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
