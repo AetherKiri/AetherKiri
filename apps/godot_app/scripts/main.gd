@@ -380,7 +380,7 @@ const UI_TEXT := {
         "message.android_storage_permission_required": "需要允许 Aether 访问文件系统后才能导入或启动外部游戏。请在系统弹窗或权限设置中授予文件访问权限，然后再试。",
         "message.android_video_storage_permission_required": "需要允许 Aether 访问文件系统后才能导入视频。请在系统弹窗或权限设置中授予文件访问权限，然后再试。",
         "message.path_missing": "游戏路径不存在",
-        "message.launch_file_unsupported": "启动文件只支持 EXE 或 XP3",
+        "message.launch_file_unsupported": "启动文件只支持 EXE、XP3 或 HCB",
         "message.launch_file_outside_game": "启动文件必须位于当前游戏目录内",
         "message.launch_file_missing": "启动文件不存在：%s",
         "message.cover_file_missing": "无法读取所选封面图片：%s",
@@ -661,7 +661,7 @@ const UI_TEXT := {
         "message.android_storage_permission_required": "需要允許 Aether 存取檔案系統後才能匯入或啟動外部遊戲。請在系統彈窗或權限設定中授予檔案存取權限，然後再試。",
         "message.android_video_storage_permission_required": "需要允許 Aether 存取檔案系統後才能匯入影片。請在系統彈窗或權限設定中授予檔案存取權限，然後再試。",
         "message.path_missing": "遊戲路徑不存在",
-        "message.launch_file_unsupported": "啟動檔案僅支援 EXE 或 XP3",
+        "message.launch_file_unsupported": "啟動檔案僅支援 EXE、XP3 或 HCB",
         "message.launch_file_outside_game": "啟動檔案必須位於目前遊戲目錄內",
         "message.launch_file_missing": "啟動檔案不存在：%s",
         "message.cover_file_missing": "無法讀取所選封面圖片：%s",
@@ -944,7 +944,7 @@ const UI_TEXT := {
         "message.android_storage_permission_required": "Allow Aether to access the file system before importing or launching external games. Grant file access in the system prompt or permission settings, then try again.",
         "message.android_video_storage_permission_required": "Allow Aether to access the file system before importing videos. Grant file access in the system prompt or permission settings, then try again.",
         "message.path_missing": "Game path does not exist",
-        "message.launch_file_unsupported": "The launch file must be an EXE or XP3 file",
+        "message.launch_file_unsupported": "The launch file must be an EXE, XP3 or HCB file",
         "message.launch_file_outside_game": "The launch file must be inside this game folder",
         "message.launch_file_missing": "Launch file does not exist: %s",
         "message.cover_file_missing": "Could not read the selected cover image: %s",
@@ -1225,7 +1225,7 @@ const UI_TEXT := {
         "message.android_storage_permission_required": "外部ゲームのインポートまたは起動には、Aether にファイルシステムへのアクセスを許可する必要があります。システムの権限ダイアログまたは設定でファイルアクセスを許可してから、もう一度お試しください。",
         "message.android_video_storage_permission_required": "動画をインポートするには、Aether にファイルシステムへのアクセスを許可する必要があります。システムの権限ダイアログまたは設定でファイルアクセスを許可してから、もう一度お試しください。",
         "message.path_missing": "ゲームパスが存在しません",
-        "message.launch_file_unsupported": "起動ファイルは EXE または XP3 のみ対応しています",
+        "message.launch_file_unsupported": "起動ファイルは EXE、XP3 または HCB のみ対応しています",
         "message.launch_file_outside_game": "起動ファイルは現在のゲームフォルダー内にある必要があります",
         "message.launch_file_missing": "起動ファイルが存在しません：%s",
         "message.cover_file_missing": "選択したカバー画像を読み込めません：%s",
@@ -1506,7 +1506,7 @@ const UI_TEXT := {
         "message.android_storage_permission_required": "외부 게임을 가져오거나 실행하려면 Aether의 파일 시스템 접근을 허용해야 합니다. 시스템 권한 창 또는 권한 설정에서 파일 접근 권한을 허용한 뒤 다시 시도하세요.",
         "message.android_video_storage_permission_required": "비디오를 가져오려면 Aether의 파일 시스템 접근을 허용해야 합니다. 시스템 권한 창 또는 권한 설정에서 파일 접근 권한을 허용한 뒤 다시 시도하세요.",
         "message.path_missing": "게임 경로가 존재하지 않습니다",
-        "message.launch_file_unsupported": "실행 파일은 EXE 또는 XP3만 지원합니다",
+        "message.launch_file_unsupported": "실행 파일은 EXE, XP3 또는 HCB만 지원합니다",
         "message.launch_file_outside_game": "실행 파일은 현재 게임 폴더 안에 있어야 합니다",
         "message.launch_file_missing": "실행 파일이 존재하지 않습니다: %s",
         "message.cover_file_missing": "선택한 표지 이미지를 읽을 수 없습니다: %s",
@@ -1553,6 +1553,7 @@ const KEY_MOD_CONTROL := 0x04
 const RUNTIME_KIRIKIRI := "kirikiri"
 const RUNTIME_ONSCRIPTER := "onscripter"
 const RUNTIME_MINORI := "minori"
+const RUNTIME_RFVP := "rfvp"
 const RUNTIME_PLAYER_CLASS := "AetherRuntimePlayer"
 const ONSCRIPTER_SCRIPT_MARKERS := [
     "0.txt",
@@ -3703,6 +3704,11 @@ func _apply_engine_options() -> void:
     var onscripter_encoding := OS.get_environment("AETHERKIRI_ONS_ENCODING").strip_edges()
     if not onscripter_encoding.is_empty():
         player.set_engine_option("onscripter_encoding", onscripter_encoding)
+    if current_player_runtime_kind == RUNTIME_RFVP:
+        var rfvp_encoding := OS.get_environment("AETHERKIRI_RFVP_ENCODING").strip_edges()
+        if rfvp_encoding.is_empty():
+            rfvp_encoding = "sjis"
+        player.set_engine_option("rfvp_encoding", rfvp_encoding)
 
 func _apply_frame_enhancement_settings() -> void:
     if player == null or not player.has_method("set_frame_enhancement_enabled"):
@@ -8425,7 +8431,7 @@ func _show_launch_file_godot_dialog(library_path: String) -> void:
     var dialog := _create_file_dialog(
         _t("dialog.choose_launch_file"),
         FileDialog.FILE_MODE_OPEN_FILE,
-        PackedStringArray(["*.exe,*.EXE,*.xp3,*.XP3;Visual novel launch file"])
+        PackedStringArray(["*.exe,*.EXE,*.xp3,*.XP3,*.hcb,*.HCB;Visual novel launch file"])
     )
     if DirAccess.dir_exists_absolute(library_path):
         dialog.current_dir = library_path
@@ -11180,7 +11186,7 @@ func _create_runtime_player(runtime_kind: String = RUNTIME_KIRIKIRI) -> bool:
 
 func _switch_runtime_player(runtime_kind: String) -> bool:
     var normalized := runtime_kind
-    if normalized != RUNTIME_ONSCRIPTER and normalized != RUNTIME_MINORI:
+    if normalized not in [RUNTIME_ONSCRIPTER, RUNTIME_MINORI, RUNTIME_RFVP]:
         normalized = RUNTIME_KIRIKIRI
     if player != null and current_player_runtime_kind == normalized:
         return true
@@ -11207,11 +11213,11 @@ func _switch_runtime_player(runtime_kind: String) -> bool:
             diagnostic_session.finish()
         diagnostic_session.start(player, selected_backend)
     _append_log("Runtime selected: %s" % (
-        "OnscripterYuri"
-        if normalized == RUNTIME_ONSCRIPTER
-        else "MinoriRust"
-        if normalized == RUNTIME_MINORI
-        else "KiriKiri"
+        {
+            RUNTIME_ONSCRIPTER: "OnscripterYuri",
+            RUNTIME_MINORI: "MinoriRust",
+            RUNTIME_RFVP: "rfvp",
+        }.get(normalized, "KiriKiri")
     ))
     return true
 
@@ -11446,7 +11452,7 @@ func _ensure_player_initialized() -> bool:
         return false
 
     var runtime_id := "auto"
-    if current_player_runtime_kind in [RUNTIME_ONSCRIPTER, RUNTIME_MINORI]:
+    if current_player_runtime_kind in [RUNTIME_ONSCRIPTER, RUNTIME_MINORI, RUNTIME_RFVP]:
         runtime_id = current_player_runtime_kind
     var runtime_result := int(player.set_engine_option("runtime", runtime_id))
     if runtime_result != ENGINE_RESULT_OK:
@@ -11459,7 +11465,11 @@ func _ensure_player_initialized() -> bool:
         return false
 
     _append_log("%s engine initialized." % (
-        "OnscripterYuri" if current_player_runtime_kind == RUNTIME_ONSCRIPTER else "AetherKiri"
+        {
+            RUNTIME_ONSCRIPTER: "OnscripterYuri",
+            RUNTIME_MINORI: "MinoriRust",
+            RUNTIME_RFVP: "rfvp",
+        }.get(current_player_runtime_kind, "AetherKiri")
     ))
     return true
 

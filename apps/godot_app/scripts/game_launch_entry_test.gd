@@ -11,6 +11,19 @@ func _init() -> void:
 
     _expect_equal(GameLaunchEntry.resolve({"path": root}), root, "default directory entry")
     _expect_equal(
+        GameLaunchEntry.resolve({"path": root, GameLaunchEntry.FIELD: "Script.HCB"}),
+        root.path_join("Script.HCB"),
+        "FVP script launch path"
+    )
+    _expect_equal(
+        GameLaunchEntry.resolve_for_runtime(
+            {"path": root, GameLaunchEntry.FIELD: "Script.HCB"},
+            "rfvp"
+        ),
+        root.path_join("Script.HCB"),
+        "RFVP configured script launch path"
+    )
+    _expect_equal(
         GameLaunchEntry.relative_path_for_selection(root, exe_path),
         "开始游戏.exe",
         "EXE selection"

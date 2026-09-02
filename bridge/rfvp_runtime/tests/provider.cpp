@@ -1,0 +1,154 @@
+#include "engine_runtime_provider.h"
+#include "rfvp_runtime_provider.h"
+#include <chrono>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <vector>
+#include "fixture.h"
+
+namespace fs = std::filesystem;
+static const engine_runtime_provider_v1_t* provider;
+extern "C" engine_result_t engine_register_runtime_provider(const engine_runtime_provider_v1_t* p) {
+    provider = p; return ENGINE_RESULT_OK;
+}
+static void check(bool value, const char* message) {
+    if (!value) throw std::runtime_error(message);
+}
+struct Instance {
+    void* value = nullptr;
+    explicit Instance(const fs::path& saves) {
+        engine_runtime_host_v1_t host{};
+        host.struct_size = sizeof(host); host.api_version = ENGINE_RUNTIME_PROVIDER_API_VERSION;
+        host.log = [](void*, uint32_t level, const char*, const char* text) {
+            if (level >= ENGINE_RUNTIME_LOG_WARNING || std::getenv("RFVP_TRACE")) std::cerr << text << '\n';
+        };
+        auto writable = saves.u8string();
+        engine_create_desc_t desc{};
+        desc.struct_size = sizeof(desc); desc.api_version = ENGINE_API_VERSION;
+        desc.writable_path_utf8 = writable.c_str();
+        check(provider->create(nullptr, &host, &desc, &value) == ENGINE_RESULT_OK, "create");
+    }
+    ~Instance() { if (value) provider->destroy(value); }
+    void ok(engine_result_t code) {
+        if (code != ENGINE_RESULT_OK) throw std::runtime_error(provider->get_last_error(value));
+    }
+    void step(int count = 1) { while (count--) ok(provider->tick(value, 16)); }
+    engine_frame_desc_t frame() {
+        engine_frame_desc_t d{}; d.struct_size = sizeof(d);
+        ok(provider->get_frame_desc(value, &d)); return d;
+    }
+    std::vector<uint8_t> pixels() {
+        auto d = frame(); std::vector<uint8_t> bytes(d.stride_bytes * d.height);
+        ok(provider->read_frame_rgba(value, bytes.data(), bytes.size())); return bytes;
+    }
+    void pointer(uint32_t type, int button = 0, uint32_t modifiers = 0) {
+        engine_input_event_t e{}; e.struct_size = sizeof(e); e.type = type;
+        e.x = 200; e.y = 200; e.button = button; e.modifiers = modifiers;
+        ok(provider->send_input(value, &e));
+    }
+    void key(int code) {
+        engine_input_event_t e{}; e.struct_size = sizeof(e); e.key_code = code;
+        e.type = ENGINE_INPUT_EVENT_KEY_DOWN; ok(provider->send_input(value, &e));
+        step();
+        e.type = ENGINE_INPUT_EVENT_KEY_UP; ok(provider->send_input(value, &e));
+        step(2);
+    }
+};
+int main(int argc, char** argv) {
+    // Use only open-source and original test fixtures. Commercial games are
+    // exercised through the application's normal library UI, not this runner.
+    const fs::path demo = RFVP_TEST_DEMO;
+    const auto unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const fs::path scratch = fs::temp_directory_path() / fs::u8path("aether-rfvp-test-游戏-" + unique);
+    try {
+        fs::create_directory(scratch);
+        aetherkiri::rfvp::RegisterRuntimeProvider();
+        check(provider && std::string(provider->runtime_id_utf8) == "rfvp", "registration");
+        check(provider->probe(nullptr, demo.u8string().c_str()) > 0, "demo probe");
+        check(provider->probe(nullptr, scratch.u8string().c_str()) == 0, "empty probe");
+        {
+            std::ofstream(scratch / "bad.hcb") << "not an HCB";
+            check(provider->probe(nullptr, scratch.u8string().c_str()) == 0, "invalid HCB probe");
+        }
+        {
+            Instance painter(scratch);
+            painter.ok(provider->open_game(painter.value, demo.u8string().c_str(), nullptr));
+            painter.step(2);
+            auto pixels = painter.pixels();
+            check(pixels[(200 * 1024 + 200) * 4] > 200, "upstream painter renders its canvas");
+        }
+        const auto fixture = scratch / "input.hcb";
+        write_input_fixture(fixture);
+        {
+            Instance game(scratch);
+            engine_option_t option{}; option.key_utf8 = "rfvp_encoding"; option.value_utf8 = "invalid";
+            check(provider->set_option(game.value, &option) == ENGINE_RESULT_INVALID_ARGUMENT, "invalid encoding");
+            option.value_utf8 = "sjis"; game.ok(provider->set_option(game.value, &option));
+            game.ok(provider->open_game(game.value, fixture.u8string().c_str(), nullptr));
+            game.step(8);
+            auto frame = game.frame();
+            check(frame.width == 1024 && frame.height == 640 && frame.stride_bytes == 4096, "native RGBA layout");
+            auto before = game.pixels();
+            const size_t pixel = (200 * frame.width + 200) * 4;
+            check(before[pixel] > 200 && before[pixel+3] == 255, "test canvas is visible");
+            game.pointer(ENGINE_INPUT_EVENT_POINTER_DOWN); game.step(2);
+            game.pointer(ENGINE_INPUT_EVENT_POINTER_UP); game.step(2);
+            auto after = game.pixels();
+            check(after[pixel] < 40, "left pointer draws black");
+            game.key(116); // F5: save black tile and VM state
+            bool saved = false;
+            for (const auto& entry : fs::recursive_directory_iterator(scratch / "rfvp")) {
+                if (entry.path().filename() == "rfvp_s000.bin") saved = fs::file_size(entry.path()) > 16000;
+            }
+            check(saved, "script saves snapshot and thumbnail under host writable root");
+            game.pointer(ENGINE_INPUT_EVENT_POINTER_DOWN, 1); game.step(2);
+            game.pointer(ENGINE_INPUT_EVENT_POINTER_UP, 1); game.step(2);
+            check(game.pixels()[pixel] > 200, "right pointer erases");
+            game.key(120); game.step(80); // F9: restore black tile, allow dissolve to finish
+            check(game.pixels()[pixel] < 40, "script load restores drawn tile");
+            game.pointer(ENGINE_INPUT_EVENT_POINTER_DOWN, 1); game.step();
+            game.pointer(ENGINE_INPUT_EVENT_POINTER_UP, 1); game.step();
+            game.pointer(ENGINE_INPUT_EVENT_POINTER_DOWN);
+            game.pointer(ENGINE_INPUT_EVENT_POINTER_UP, 0, ENGINE_INPUT_MODIFIER_POINTER_CANCEL);
+            game.step();
+            check(game.pixels()[pixel] > 200, "cancelled pointer does not leave a held button");
+            auto serial = game.frame().frame_serial;
+            game.ok(provider->pause(game.value)); game.step(2);
+            check(game.frame().frame_serial == serial, "pause freezes frame clock");
+            game.ok(provider->resume(game.value)); game.step();
+            check(game.frame().frame_serial > serial, "resume advances frame clock");
+            auto small = std::vector<uint8_t>(4);
+            check(provider->read_frame_rgba(game.value, small.data(), small.size()) != ENGINE_RESULT_OK, "short frame buffer rejected");
+            {
+                Instance second(scratch);
+                check(provider->open_game(second.value, demo.u8string().c_str(), nullptr) != ENGINE_RESULT_OK,
+                    "process-global rfvp state must not be shared by simultaneous games");
+            }
+            if (argc == 2) {
+                std::ofstream image(argv[1], std::ios::binary);
+                image << "P6\n" << frame.width << ' ' << frame.height << "\n255\n";
+                auto pixels = game.pixels();
+                for (size_t i = 0; i < pixels.size(); i += 4) image.write(reinterpret_cast<char*>(pixels.data()+i), 3);
+            }
+        }
+        check(!fs::exists(demo / "save"), "do not write saves into the read-only game fixture");
+        {
+            Instance reopened(scratch);
+            reopened.ok(provider->open_game(reopened.value, fixture.u8string().c_str(), nullptr));
+            reopened.step(2);
+            reopened.key(120); reopened.step(80);
+            check(reopened.pixels()[(200 * 1024 + 200) * 4] < 40, "save survives close and reopen");
+        }
+        check(fs::is_directory(scratch / "rfvp"), "host save root used");
+        fs::remove_all(scratch); // Only the unique test-owned directory above.
+        std::cout << "rfvp provider: PASS (probe, pixels, input, save/load, pause, isolation, reopen)\n";
+        return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "rfvp provider: FAIL: " << e.what() << "\nTest artifacts: " << scratch << '\n';
+        return 1;
+    }
+}

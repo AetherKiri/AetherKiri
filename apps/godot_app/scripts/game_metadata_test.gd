@@ -43,6 +43,30 @@ func _init() -> void:
     var exe_only := GameMetadata.inspect(exe_only_root)
     _expect_equal(String(exe_only.launchFile), "game.exe", "KiriKiri executable fallback")
 
+    var rfvp_root := fixture_root.path_join("rfvp")
+    DirAccess.make_dir_recursive_absolute(rfvp_root)
+    _expect_equal(String(GameMetadata.inspect(rfvp_root).engine), "kirikiri", "empty directory")
+    _write(rfvp_root.path_join("0.txt"), "*start\nend\n")
+    _expect_equal(String(GameMetadata.inspect(rfvp_root).engine), "onscripter", "ONS marker unchanged")
+    _write_hcb(rfvp_root.path_join("Script.HCB"), 7)
+    var rfvp := GameMetadata.inspect(rfvp_root)
+    _expect_equal(String(rfvp.engine), "rfvp", "uppercase HCB engine")
+    _expect_equal(String(rfvp.launchFile), "Script.HCB", "uppercase HCB launch file")
+    _write_hcb(rfvp_root.path_join("Other.hcb"), 7)
+    _expect_equal(
+        String(GameMetadata.inspect(rfvp_root.path_join("Script.HCB")).launchFile),
+        "Script.HCB",
+        "explicit HCB wins"
+    )
+    _write_hcb(rfvp_root.path_join("Script.HCB"), 255)
+    _expect_equal(String(GameMetadata.inspect(rfvp_root).launchFile), "Other.hcb", "invalid mode rejected")
+    _write(rfvp_root.path_join("Other.hcb"), "not an HCB")
+    _expect_equal(
+        String(GameMetadata.inspect(rfvp_root).engine),
+        "onscripter",
+        "invalid HCB does not claim another runtime"
+    )
+
     _remove_tree(fixture_root)
     if failures == 0:
         print("game_metadata_test: PASS")
@@ -58,6 +82,25 @@ func _write(path: String, contents: String) -> void:
         failures += 1
         return
     file.store_string(contents)
+
+
+func _write_hcb(path: String, mode: int) -> void:
+    var file := FileAccess.open(path, FileAccess.WRITE)
+    if file == null:
+        push_error("game_metadata_test: could not create %s" % path)
+        failures += 1
+        return
+    file.store_32(8) # descriptor offset
+    file.store_buffer(PackedByteArray([1, 0, 0, 4])) # init_stack; return
+    file.store_32(4) # entry point
+    file.store_16(0)
+    file.store_16(0)
+    file.store_8(mode)
+    file.store_8(0)
+    file.store_8(1)
+    file.store_8(0) # empty title
+    file.store_16(0) # syscalls
+    file.store_16(0) # custom syscalls
 
 
 func _remove_tree(path: String) -> void:

@@ -24,6 +24,7 @@ vcpkg_installed/
 .aetherkiri-cache/
 *.lock
 !package-lock.json
+!bridge/rfvp_runtime/Cargo.lock
 node_modules/
 .vite/
 /stats_server

@@ -1,6 +1,9 @@
 #include "engine_api.h"
 #include "engine_options.h"
 #include "engine_runtime_provider.h"
+#if defined(AETHERKIRI_WITH_RFVP)
+#include "rfvp_runtime_provider.h"
+#endif
 #include "GodotGpuBridge.h"
 #include "GodotGpuBarrierShadowPlanner.h"
 #include "ComplexRect.h"
@@ -12132,6 +12135,9 @@ void InitializeAetherRuntime(ModuleInitializationLevel level) {
     if (aetherkiri_minori_register_runtime_provider() != ENGINE_RESULT_OK) {
         UtilityFunctions::printerr("Failed to register Minori runtime provider");
     }
+#endif
+#if defined(AETHERKIRI_WITH_RFVP)
+    aetherkiri::rfvp::RegisterRuntimeProvider();
 #endif
     const engine_result_t shader_result =
         engine_set_runtime_fragment_shader_executor(

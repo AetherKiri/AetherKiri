@@ -3,6 +3,7 @@ extends RefCounted
 
 const RUNTIME_KIRIKIRI := "kirikiri"
 const RUNTIME_ONSCRIPTER := "onscripter"
+const RUNTIME_RFVP := "rfvp"
 const RUNTIME_ARTEMIS := "artemis"
 const RUNTIME_SIGLUS := "siglus"
 
@@ -22,7 +23,12 @@ static func inspect(path: String) -> Dictionary:
 
     var candidates: PackedStringArray = []
     var files := _file_names(root)
-    if files.has("nscript.dat") or files.has("0.txt") or _has_prefix(files, "onscript.nt"):
+    var hcb := _hcb_launch_file(root, path)
+    if not hcb.is_empty():
+        result.engine = RUNTIME_RFVP
+        result.signals.append("fvp-hcb")
+        result.launchFile = hcb
+    elif files.has("nscript.dat") or files.has("0.txt") or _has_prefix(files, "onscript.nt"):
         result.engine = RUNTIME_ONSCRIPTER
         result.signals.append("onscript-marker")
     elif files.has("system.ini") and _is_artemis_package(
@@ -62,6 +68,55 @@ static func inspect(path: String) -> Dictionary:
     if not candidates.is_empty():
         result.title = candidates[0]
     return result
+
+static func _hcb_launch_file(root: String, requested: String) -> String:
+    var dir := DirAccess.open(root)
+    if dir == null:
+        return ""
+    var entries := dir.get_files()
+    entries.sort()
+    var fallback := ""
+    for entry in entries:
+        if entry.get_extension().to_lower() != "hcb":
+            continue
+        var file := FileAccess.open(root.path_join(entry), FileAccess.READ)
+        if file == null or file.get_length() < 17 or file.get_length() > 64 * 1024 * 1024:
+            continue
+        var descriptor := file.get_32()
+        if descriptor < 4 or descriptor > file.get_length() - 13:
+            continue
+        file.seek(descriptor)
+        var start := file.get_32()
+        if start < 4 or start >= descriptor:
+            continue
+        file.get_16() # nonvolatile globals
+        file.get_16() # volatile globals
+        if file.get_8() > 15:
+            continue
+        file.get_8() # reserved mode byte
+        var title_length := file.get_8()
+        if file.get_position() + title_length + 4 > file.get_length():
+            continue
+        file.seek(file.get_position() + title_length)
+        var syscall_count := file.get_16()
+        var valid := true
+        for _index in range(syscall_count):
+            if file.get_position() + 2 > file.get_length():
+                valid = false
+                break
+            file.get_8() # argument count
+            var name_length := file.get_8()
+            if file.get_position() + name_length + 2 > file.get_length():
+                valid = false
+                break
+            file.seek(file.get_position() + name_length)
+        if not valid or file.get_position() + 2 > file.get_length():
+            continue
+        if requested.get_file() == entry:
+            return entry
+        if fallback.is_empty():
+            fallback = entry
+    return fallback
 
 static func _file_names(root: String) -> PackedStringArray:
     var result: PackedStringArray = []

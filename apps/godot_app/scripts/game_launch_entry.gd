@@ -1,7 +1,7 @@
 extends RefCounted
 
 const FIELD := "launchFile"
-const SUPPORTED_EXTENSIONS := ["exe", "xp3"]
+const SUPPORTED_EXTENSIONS := ["exe", "xp3", "hcb"]
 const DIRECTORY_RUNTIME_KINDS := ["artemis", "minori", "onscripter", "siglus"]
 
 
