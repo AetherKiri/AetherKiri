@@ -126,6 +126,7 @@ namespace TJS // following is in the namespace
                     OP2_DISASM(VM_CLT, "clt");
                     OP2_DISASM(VM_CGT, "cgt");
                     OP2_DISASM(VM_CHKINS, "chkins");
+                    OP2_DISASM(VM_CHKIN, "chkin");
 #undef OP2_DISASM
 
 #define OP2_DISASM(c, x)                                                       \

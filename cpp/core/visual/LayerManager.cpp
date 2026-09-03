@@ -28,6 +28,8 @@
 #include "TickCount.h"
 #include "ScriptMgnIntf.h"
 #include "DebugIntf.h"
+#include "BitmapIntf.h"
+#include "BitmapLayerTreeOwner.h"
 #include "LayerTreeOwner.h"
 #include "WindowIntf.h"
 #include "EngineLoop.h"
@@ -937,6 +939,20 @@ void tTVPLayerManager::DrawCompleted(const tTVPRect &destrect,
     // Window->GetDrawDevice()->GetSrcSize(w, h);
     EnsureDrawBufferSize(w, h, false);
 
+    // The Godot path composes each completion into DrawBuffer before it is
+    // presented.  BitmapLayerTreeOwner is also used as a drawable owner by
+    // LayerOwnerTexture (for message glyphs), so it still needs the legacy
+    // completion notification; otherwise its bitmap remains unchanged and
+    // the script-side Texture never receives the newly rendered text.
+    auto notify_bitmap_owner = [&]() {
+        if(auto *bitmap_owner =
+               dynamic_cast<tTJSNI_BitmapLayerTreeOwner *>(LayerTreeOwner)) {
+            bitmap_owner->NotifyBitmapCompleted(
+                this, destrect.left, destrect.top, bmp, cliprect, type,
+                opacity);
+        }
+    };
+
     if(const char *trace = std::getenv("AETHERKIRI_MESSAGE_FRAME_COMPOSE");
        trace && *trace && *trace != '0' && type == ltAlpha && bmp &&
        destrect.get_width() >= 1000 && destrect.get_height() >= 400) {
@@ -963,11 +979,13 @@ void tTVPLayerManager::DrawCompleted(const tTVPRect &destrect,
                         opacity, HoldAlpha);
         spdlog::info("message-frame compose dst_after=0x{:08x}",
                      DrawBuffer->GetPoint(dx, dy));
+        notify_bitmap_owner();
         return;
     }
 
     DrawBuffer->Blt(destrect.left, destrect.top, bmp, cliprect, type, opacity,
                     HoldAlpha);
+    notify_bitmap_owner();
 #endif
 }
 

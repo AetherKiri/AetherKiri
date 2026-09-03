@@ -743,6 +743,12 @@ void TVPLoadInternalPlugins() {
     spdlog::info("TVPLoadInternalPlugins: plugin_load_mode={}",
                  TVPPluginLoadMode.AsStdString());
     ncbAutoRegister::AllRegist();
+    // A number of older Artemis titles construct Offscreen/Texture objects
+    // from their first startup script, before they explicitly link any GPU
+    // helper script.  Keep the graphics compatibility module available at
+    // the same point as the other internal plug-ins so those global classes
+    // exist during startup in both core and full load modes.
+    ncbAutoRegister::LoadModule(TJS_W("krkrgles.dll"));
     if(TVPIsAetherAllPluginLoadMode()) {
         ncbAutoRegister::LoadAllModules();
     } else {

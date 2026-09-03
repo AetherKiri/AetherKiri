@@ -18,6 +18,7 @@ extern "C" int aetherkiri_onscripter_play_video(
 extern "C" void aetherkiri_onscripter_stop_video();
 extern "C" void aetherkiri_onscripter_shutdown_parallel();
 extern "C" int aetherkiri_onscripter_wait_event(SDL_Event *event);
+extern "C" int aetherkiri_onscripter_poll_host_key_release(SDL_Event *event);
 extern "C" void aetherkiri_onscripter_configure_video(
     int has_position, int x, int y, int width, int height,
     int asynchronous);

@@ -10,6 +10,12 @@ target_sources(${PROJECT_NAME} PRIVATE
     base64.cpp
     encode.cpp
     expat.cpp
+    mdkparser/LexicalAnalyzer.cpp
+    mdkparser/MDKMessages.cpp
+    mdkparser/MDKParser.cpp
+    mdkparser/Parser.cpp
+    mdkparser/ReservedWord.cpp
+    mdkparser/plugin.cpp
     imagesaver.cpp
     lineParser.cpp
     memfile.cpp

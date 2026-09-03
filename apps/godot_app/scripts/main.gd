@@ -53,6 +53,9 @@ const RUNTIME_FONT_DIR := "user://runtime_fonts"
 const RUNTIME_DEFAULT_FONT_FILE := "default.otf"
 const RUNTIME_SYMBOL_FONT_FILE := "symbols.ttf"
 const ProbeConfig = preload("res://scripts/probe_config.gd")
+const GameMetadata = preload("res://scripts/game_metadata.gd")
+const CoverIndex = preload("res://scripts/cover_index.gd")
+const VNDBCoverResolver = preload("res://scripts/vndb_cover_resolver.gd")
 const GameInputMapping = preload("res://scripts/game_input_mapping.gd")
 const GameVirtualControls = preload("res://scripts/game_virtual_controls.gd")
 const DiagnosticSession = preload("res://scripts/diagnostic_session.gd")
@@ -66,6 +69,7 @@ const AetherMotion = preload("res://scripts/ui/aether_motion.gd")
 const AetherWidgets = preload("res://scripts/ui/aether_widgets.gd")
 const AetherSegmentedControl = preload("res://scripts/ui/aether_segmented_control.gd")
 const AetherSwitch = preload("res://scripts/ui/aether_switch.gd")
+const AetherSlider = preload("res://scripts/ui/aether_slider.gd")
 const AetherDisclosure = preload("res://scripts/ui/aether_disclosure.gd")
 const AetherSelect = preload("res://scripts/ui/aether_select.gd")
 const AetherDisplayScale = preload("res://scripts/ui/aether_display_scale.gd")
@@ -169,6 +173,10 @@ const UI_TEXT := {
         "settings.style_desc": "可在当前深色风格和旧版原始浅色风格之间切换",
         "settings.ui_scale": "界面比例",
         "settings.ui_scale_desc": "调整 iPhone 和 iPad 上的界面大小，保存后立即生效",
+        "settings.virtual_control_menu": "游戏内控制菜单",
+        "settings.virtual_control_menu_desc": "在游戏画面右上角显示虚拟控制菜单按钮",
+        "settings.keyboard_control_opacity": "Keyboard 模式按键透明度",
+        "settings.keyboard_control_opacity_desc": "调整屏幕虚拟按键的透明度；鼠标指针保持清晰",
         "ui_scale.compact": "较小",
         "ui_scale.comfortable": "合适",
         "ui_scale.standard": "标准",
@@ -325,6 +333,8 @@ const UI_TEXT := {
         "detail.set_launch_file": "切换启动文件",
         "detail.reset_launch_file": "恢复目录自动检测",
         "detail.set_cover": "设置封面",
+        "detail.delete_cover": "删除封面",
+        "detail.clear_cover": "清除封面",
         "detail.rename": "重命名",
         "detail.remove": "移除视觉小说",
         "detail.delete_builtin": "删除内置 Demo",
@@ -444,6 +454,10 @@ const UI_TEXT := {
         "settings.style_desc": "可在目前深色風格和舊版原始淺色風格之間切換",
         "settings.ui_scale": "介面比例",
         "settings.ui_scale_desc": "調整 iPhone 和 iPad 上的介面大小，儲存後立即生效",
+        "settings.virtual_control_menu": "遊戲內控制選單",
+        "settings.virtual_control_menu_desc": "在遊戲畫面右上角顯示虛擬控制選單按鈕",
+        "settings.keyboard_control_opacity": "Keyboard 模式按鍵透明度",
+        "settings.keyboard_control_opacity_desc": "調整螢幕虛擬按鍵的透明度；滑鼠指標保持清晰",
         "ui_scale.compact": "較小",
         "ui_scale.comfortable": "合適",
         "ui_scale.standard": "標準",
@@ -719,6 +733,10 @@ const UI_TEXT := {
         "settings.style_desc": "Switch between the current dark style and the original classic light style",
         "settings.ui_scale": "Interface Scale",
         "settings.ui_scale_desc": "Adjust the interface size on iPhone and iPad; applies immediately after saving",
+        "settings.virtual_control_menu": "In-Game Controls Menu",
+        "settings.virtual_control_menu_desc": "Show the virtual-controls menu button at the top-right of the game view",
+        "settings.keyboard_control_opacity": "Keyboard Button Opacity",
+        "settings.keyboard_control_opacity_desc": "Adjust on-screen virtual-key opacity while keeping the mouse pointer clear",
         "ui_scale.compact": "Smaller",
         "ui_scale.comfortable": "Comfortable",
         "ui_scale.standard": "Standard",
@@ -875,6 +893,8 @@ const UI_TEXT := {
         "detail.set_launch_file": "Change Launch File",
         "detail.reset_launch_file": "Restore Folder Auto-detect",
         "detail.set_cover": "Set Cover",
+        "detail.delete_cover": "Delete Cover",
+        "detail.clear_cover": "Clear Cover",
         "detail.rename": "Rename",
         "detail.remove": "Remove Visual Novel",
         "detail.delete_builtin": "Delete Built-in Demo",
@@ -994,6 +1014,10 @@ const UI_TEXT := {
         "settings.style_desc": "現在のダークスタイルと旧来のクラシックライトスタイルを切り替えます",
         "settings.ui_scale": "UI スケール",
         "settings.ui_scale_desc": "iPhone と iPad の UI サイズを調整します。保存後すぐに反映されます",
+        "settings.virtual_control_menu": "ゲーム内コントロールメニュー",
+        "settings.virtual_control_menu_desc": "ゲーム画面の右上に仮想コントロールメニューボタンを表示します",
+        "settings.keyboard_control_opacity": "Keyboard モードのキー透明度",
+        "settings.keyboard_control_opacity_desc": "画面上の仮想キーの透明度を調整します。マウスポインターは鮮明なままです",
         "ui_scale.compact": "小さめ",
         "ui_scale.comfortable": "快適",
         "ui_scale.standard": "標準",
@@ -1269,6 +1293,10 @@ const UI_TEXT := {
         "settings.style_desc": "현재 다크 스타일과 기존 클래식 라이트 스타일을 전환합니다",
         "settings.ui_scale": "인터페이스 크기",
         "settings.ui_scale_desc": "iPhone 및 iPad의 인터페이스 크기를 조절하며 저장 후 즉시 적용됩니다",
+        "settings.virtual_control_menu": "게임 내 컨트롤 메뉴",
+        "settings.virtual_control_menu_desc": "게임 화면 오른쪽 위에 가상 컨트롤 메뉴 버튼을 표시합니다",
+        "settings.keyboard_control_opacity": "Keyboard 모드 버튼 투명도",
+        "settings.keyboard_control_opacity_desc": "화면 가상 키의 투명도를 조절하며 마우스 포인터는 선명하게 유지합니다",
         "ui_scale.compact": "작게",
         "ui_scale.comfortable": "적당히",
         "ui_scale.standard": "표준",
@@ -1525,6 +1553,12 @@ const ONSCRIPTER_SCRIPT_MARKERS := [
 ]
 const SHELL_SCROLL_DRAG_THRESHOLD := 4.0
 const SHELL_SCROLL_BUTTON_DRAG_THRESHOLD := 28.0
+const SHELL_SCROLL_SLIDER_AXIS_THRESHOLD := 10.0
+const SHELL_SCROLL_SLIDER_VERTICAL_DOMINANCE := 1.25
+const SHELL_SCROLL_AXIS_NONE := ""
+const SHELL_SCROLL_AXIS_PENDING := "pending"
+const SHELL_SCROLL_AXIS_HORIZONTAL := "horizontal"
+const SHELL_SCROLL_AXIS_VERTICAL := "vertical"
 const SHELL_SCROLL_DRAG_SPEED := 1.0
 const SHELL_SCROLL_TOUCHPAD_SPEED := 12.0
 const SHELL_SCROLL_WHEEL_SPEED := 4.0
@@ -1540,6 +1574,8 @@ const SETTINGS_DRAFT_KEYS := [
     "language",
     "style",
     "ios_ui_scale_mode",
+    "game_virtual_menu_enabled",
+    "game_virtual_keyboard_opacity",
     "backend",
     "upscale_algorithm",
     "output_resolution",
@@ -1602,6 +1638,8 @@ var detail_scroll: ScrollContainer
 var game_view: Control
 var game_virtual_controls
 var game_virtual_input_mode := GameVirtualControls.INPUT_MODE_MOUSE
+var game_virtual_menu_enabled := true
+var game_virtual_keyboard_opacity := 1.0
 var modal_layer: Control
 var active_modal_scrim: ColorRect
 var active_modal_dialog: Control
@@ -1651,6 +1689,8 @@ var hero_overlay: PanelContainer
 var hero_hidden_target: CanvasItem
 var hero_transition_id := 0
 var known_games: Array[Dictionary] = []
+var vndb_cover_queue: Array[Dictionary] = []
+var vndb_cover_busy := false
 var known_videos: Array[Dictionary] = []
 var home_library_mode := "game"
 var home_search_queries := {"game": "", "video": ""}
@@ -1981,6 +2021,9 @@ const VIRTUAL_KEYBOARD_REOPEN_DELAY_MS := 750
 const TOUCH_POINTER_ID_OFFSET := 100000
 const TOUCH_SECONDARY_POINTER_ID := 0
 const VIRTUAL_CONTROLS_POINTER_ID := TOUCH_POINTER_ID_OFFSET + 65535
+const GAME_VIRTUAL_KEYBOARD_OPACITY_MIN := 0.2
+const GAME_VIRTUAL_KEYBOARD_OPACITY_MAX := 1.0
+const GAME_VIRTUAL_KEYBOARD_OPACITY_STEP := 0.05
 const TOUCH_SECONDARY_TAP_WINDOW_MS := 180
 const TOUCH_SECONDARY_QUARANTINE_MS := 320
 const TOUCH_SINGLE_TAP_DELAY_MS := 90
@@ -2301,6 +2344,7 @@ func _build_ui() -> void:
     add_child(game_virtual_controls)
     game_virtual_controls.setup(ui_tokens)
     game_virtual_controls.set_input_mode(game_virtual_input_mode)
+    _apply_game_virtual_control_preferences()
     game_virtual_controls.key_event_requested.connect(
         _on_game_virtual_key_event
     )
@@ -3213,6 +3257,16 @@ func _load_shell_settings() -> void:
     game_virtual_input_mode = _normalize_game_virtual_input_mode(String(
         cfg.get_value("input", "virtual_control_mode", game_virtual_input_mode)
     ))
+    game_virtual_menu_enabled = bool(cfg.get_value(
+        "input", "virtual_control_menu_enabled", game_virtual_menu_enabled
+    ))
+    game_virtual_keyboard_opacity = _normalize_game_virtual_keyboard_opacity(
+        float(cfg.get_value(
+            "input",
+            "virtual_control_keyboard_opacity",
+            game_virtual_keyboard_opacity
+        ))
+    )
     plugin_load_mode = String(cfg.get_value("developer", "plugin_load_mode", plugin_load_mode))
     if not plugin_load_mode in ["krkrsdl3", "aether_all"]:
         plugin_load_mode = "krkrsdl3"
@@ -3256,6 +3310,16 @@ func _normalize_game_virtual_input_mode(value: String) -> String:
         else GameVirtualControls.INPUT_MODE_MOUSE
     )
 
+func _normalize_game_virtual_keyboard_opacity(value: float) -> float:
+    return snappedf(
+        clampf(
+            value,
+            GAME_VIRTUAL_KEYBOARD_OPACITY_MIN,
+            GAME_VIRTUAL_KEYBOARD_OPACITY_MAX
+        ),
+        GAME_VIRTUAL_KEYBOARD_OPACITY_STEP
+    )
+
 func _save_shell_settings() -> void:
     var cfg := ConfigFile.new()
     cfg.set_value("interface", "language", language_mode)
@@ -3280,6 +3344,14 @@ func _save_shell_settings() -> void:
     cfg.set_value("rendering", "force_landscape", lock_landscape)
     cfg.set_value("rendering", "orientation_schema", MOBILE_ORIENTATION_SCHEMA_VERSION)
     cfg.set_value("input", "virtual_control_mode", game_virtual_input_mode)
+    cfg.set_value(
+        "input", "virtual_control_menu_enabled", game_virtual_menu_enabled
+    )
+    cfg.set_value(
+        "input",
+        "virtual_control_keyboard_opacity",
+        game_virtual_keyboard_opacity
+    )
     cfg.set_value("developer", "plugin_load_mode", plugin_load_mode)
     cfg.set_value("developer", "mock_enabled", mock_enabled)
     cfg.set_value("developer", "error_dialog_logs", error_dialog_logs)
@@ -3314,6 +3386,8 @@ func _current_settings_snapshot() -> Dictionary:
         "language": language_mode,
         "style": style_mode,
         "ios_ui_scale_mode": ios_ui_scale_mode,
+        "game_virtual_menu_enabled": game_virtual_menu_enabled,
+        "game_virtual_keyboard_opacity": game_virtual_keyboard_opacity,
         "backend": selected_backend,
         "upscale_algorithm": upscale_algorithm,
         "output_resolution": output_resolution,
@@ -3443,6 +3517,9 @@ func _settings_draft_bool(key: String, fallback: bool) -> bool:
 func _settings_draft_int(key: String, fallback: int) -> int:
     return int(settings_draft.get(key, fallback))
 
+func _settings_draft_float(key: String, fallback: float) -> float:
+    return float(settings_draft.get(key, fallback))
+
 func _settings_draft_custom_chain() -> PackedStringArray:
     return _normalize_frame_enhancement_custom_chain(settings_draft.get(
         "frame_enhancement_custom_chain",
@@ -3457,6 +3534,16 @@ func _apply_settings_snapshot(snapshot: Dictionary) -> void:
     ios_ui_scale_mode = String(snapshot.get("ios_ui_scale_mode", ios_ui_scale_mode))
     if not ios_ui_scale_mode in IOS_UI_SCALE_MODES:
         ios_ui_scale_mode = "comfortable"
+    game_virtual_menu_enabled = bool(snapshot.get(
+        "game_virtual_menu_enabled", game_virtual_menu_enabled
+    ))
+    game_virtual_keyboard_opacity = _normalize_game_virtual_keyboard_opacity(
+        float(snapshot.get(
+            "game_virtual_keyboard_opacity",
+            game_virtual_keyboard_opacity
+        ))
+    )
+    _apply_game_virtual_control_preferences()
 
     selected_backend = _normalize_backend_name(String(snapshot.get("backend", selected_backend)))
     if not selected_backend in BACKENDS:
@@ -4635,6 +4722,20 @@ func _rebuild_settings_view() -> void:
     _add_settings_row(interface_group, _settings_block(_t("settings.style"), _t("settings.style_desc"), _style_select(), stack_settings_controls))
     if OS.get_name() == "iOS":
         _add_settings_row(interface_group, _settings_block(_t("settings.ui_scale"), _t("settings.ui_scale_desc"), _ios_ui_scale_segment(), stack_settings_controls))
+    _add_settings_row(interface_group, _settings_toggle_row(
+        _t("settings.virtual_control_menu"),
+        _t("settings.virtual_control_menu_desc"),
+        _settings_draft_bool(
+            "game_virtual_menu_enabled", game_virtual_menu_enabled
+        ),
+        "game_virtual_menu"
+    ))
+    _add_settings_row(interface_group, _settings_block(
+        _t("settings.keyboard_control_opacity"),
+        _t("settings.keyboard_control_opacity_desc"),
+        _keyboard_controls_opacity_control(),
+        stack_settings_controls
+    ))
 
     var render_group := _settings_group(primary_column, _t("settings.section.render"), ICON_PERFORMANCE, animate_page, 0.055)
     _add_settings_row(render_group, _settings_block(_t("settings.render_backend"), _t("settings.render_backend_desc"), _backend_segment(), stack_settings_controls))
@@ -5438,6 +5539,9 @@ func _start_shell_scroll_drag(key: int, position: Vector2) -> void:
     _stop_shell_scroll_tween(scroll)
     var control := _control_at_pointer(position)
     var button := _nearest_base_button(control) if control != null else null
+    var horizontal_slider := (
+        _nearest_horizontal_slider(control) if control != null else null
+    )
     shell_scroll_drag_states[key] = {
         # Controls can be rebuilt between the touch press and the following
         # drag/release event (for example after changing a settings selector).
@@ -5452,6 +5556,8 @@ func _start_shell_scroll_drag(key: int, position: Vector2) -> void:
         "pending_y": 0.0,
         "dragging": false,
         "threshold": SHELL_SCROLL_BUTTON_DRAG_THRESHOLD if button != null else SHELL_SCROLL_DRAG_THRESHOLD,
+        "axis_lock": SHELL_SCROLL_AXIS_PENDING if horizontal_slider != null else SHELL_SCROLL_AXIS_NONE,
+        "gesture_delta": Vector2.ZERO,
     }
 
 func _update_shell_scroll_drag(
@@ -5485,6 +5591,12 @@ func _update_shell_scroll_drag(
     state["last"] = position
     var distance := float(state.get("distance", 0.0)) + absf(delta.y)
     var pending_y := float(state.get("pending_y", 0.0)) + delta.y
+    var axis_lock := _update_shell_scroll_axis_lock(state, delta)
+    if axis_lock == SHELL_SCROLL_AXIS_PENDING or axis_lock == SHELL_SCROLL_AXIS_HORIZONTAL:
+        state["distance"] = distance
+        state["pending_y"] = pending_y
+        shell_scroll_drag_states[key] = state
+        return false
     var was_dragging := bool(state.get("dragging", false))
     var threshold := float(state.get("threshold", SHELL_SCROLL_DRAG_THRESHOLD))
     var dragging := was_dragging or distance >= threshold
@@ -5559,6 +5671,35 @@ func _nearest_base_button(control: Control) -> BaseButton:
             return current as BaseButton
         current = current.get_parent()
     return null
+
+func _nearest_horizontal_slider(control: Control) -> HSlider:
+    var current: Node = control
+    while current != null:
+        if current is HSlider:
+            return current as HSlider
+        current = current.get_parent()
+    return null
+
+func _update_shell_scroll_axis_lock(state: Dictionary, delta: Vector2) -> String:
+    var axis_lock := String(state.get("axis_lock", SHELL_SCROLL_AXIS_NONE))
+    if axis_lock != SHELL_SCROLL_AXIS_PENDING:
+        return axis_lock
+    var gesture_delta: Vector2 = state.get("gesture_delta", Vector2.ZERO)
+    gesture_delta += delta
+    state["gesture_delta"] = gesture_delta
+    var horizontal_distance := absf(gesture_delta.x)
+    var vertical_distance := absf(gesture_delta.y)
+    if maxf(horizontal_distance, vertical_distance) < SHELL_SCROLL_SLIDER_AXIS_THRESHOLD:
+        return SHELL_SCROLL_AXIS_PENDING
+    # A gesture that begins on a horizontal slider is biased toward the
+    # slider. Only a clearly vertical initial motion may become page scrolling;
+    # once horizontal wins, later vertical wobble cannot change ownership.
+    if vertical_distance > horizontal_distance * SHELL_SCROLL_SLIDER_VERTICAL_DOMINANCE:
+        axis_lock = SHELL_SCROLL_AXIS_VERTICAL
+    else:
+        axis_lock = SHELL_SCROLL_AXIS_HORIZONTAL
+    state["axis_lock"] = axis_lock
+    return axis_lock
 
 func _is_scroll_bar_control(control: Control) -> bool:
     var current: Node = control
@@ -6332,6 +6473,46 @@ func _apple_select(width: float = 220.0):
     select.custom_minimum_size.x = width
     return select
 
+func _keyboard_controls_opacity_control() -> Control:
+    var row := HBoxContainer.new()
+    row.name = "KeyboardControlsOpacityControl"
+    row.custom_minimum_size = Vector2(272.0, 40.0)
+    row.add_theme_constant_override("separation", 8)
+
+    var slider = AetherSlider.new()
+    slider.name = "KeyboardControlsOpacitySlider"
+    slider.min_value = GAME_VIRTUAL_KEYBOARD_OPACITY_MIN
+    slider.max_value = GAME_VIRTUAL_KEYBOARD_OPACITY_MAX
+    slider.step = GAME_VIRTUAL_KEYBOARD_OPACITY_STEP
+    slider.setup(
+        ui_tokens,
+        _normalize_game_virtual_keyboard_opacity(_settings_draft_float(
+            "game_virtual_keyboard_opacity",
+            game_virtual_keyboard_opacity
+        ))
+    )
+    row.add_child(slider)
+
+    var value_label := Label.new()
+    value_label.name = "KeyboardControlsOpacityValue"
+    value_label.custom_minimum_size = Vector2(44.0, 40.0)
+    value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+    value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    value_label.add_theme_font_size_override("font_size", 13)
+    value_label.add_theme_color_override("font_color", ui_tokens.text_secondary)
+    value_label.text = _opacity_percentage_text(slider.value)
+    row.add_child(value_label)
+
+    slider.value_changed.connect(func(value: float):
+        var normalized := _normalize_game_virtual_keyboard_opacity(value)
+        value_label.text = _opacity_percentage_text(normalized)
+        _set_settings_draft_value("game_virtual_keyboard_opacity", normalized)
+    )
+    return row
+
+func _opacity_percentage_text(value: float) -> String:
+    return "%d%%" % int(round(clampf(value, 0.0, 1.0) * 100.0))
+
 func _settings_fps_row() -> Control:
     var margin := MarginContainer.new()
     margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -6676,6 +6857,8 @@ func _backend_segment() -> Control:
 func _on_setting_toggle(key: String, value: bool) -> void:
     if key == "fps_limit":
         _set_settings_draft_value("fps_limit_enabled", value)
+    elif key == "game_virtual_menu":
+        _set_settings_draft_value("game_virtual_menu_enabled", value)
     elif key == "landscape":
         _set_settings_draft_value("force_landscape", value)
     elif key == "mock":
@@ -7184,7 +7367,7 @@ func _build_desktop_detail(game: Dictionary, phone_landscape: bool = false) -> C
     var body := HBoxContainer.new()
     body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     body.add_theme_constant_override("separation", 20 if phone_landscape else 32)
-    body.add_child(_detail_cover(game, Vector2(176, 248) if phone_landscape else Vector2(252, 354)))
+    body.add_child(_detail_cover_with_action(game, Vector2(176, 248) if phone_landscape else Vector2(252, 354)))
 
     var information := VBoxContainer.new()
     information.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -7204,7 +7387,7 @@ func _build_compact_detail(game: Dictionary) -> Control:
     summary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     summary.add_theme_constant_override("separation", 16)
     body.add_child(summary)
-    summary.add_child(_detail_cover(game, Vector2(112, 158)))
+    summary.add_child(_detail_cover_with_action(game, Vector2(112, 158)))
 
     var primary := VBoxContainer.new()
     primary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -7240,6 +7423,31 @@ func _detail_cover(game: Dictionary, cover_size: Vector2) -> PanelContainer:
         var icon := _centered_icon(ICON_GAMEPAD, Vector2(48, 48), ui_tokens.accent)
         cover.add_child(icon)
     return cover
+
+func _detail_cover_with_action(game: Dictionary, cover_size: Vector2) -> VBoxContainer:
+    var column := VBoxContainer.new()
+    column.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+    column.add_theme_constant_override("separation", 6)
+    column.add_child(_detail_cover(game, cover_size))
+    var cover_path := _resolve_cover_path(game)
+    var has_cover := not cover_path.is_empty() and FileAccess.file_exists(cover_path)
+    var actions := HBoxContainer.new()
+    actions.alignment = BoxContainer.ALIGNMENT_CENTER
+    actions.add_theme_constant_override("separation", 6)
+    column.add_child(actions)
+    var action := _pill_button(_t("detail.set_cover"), ICON_PAGE)
+    action.custom_minimum_size = Vector2(128, 40)
+    action.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+    action.pressed.connect(_set_cover_for_selected)
+    actions.add_child(action)
+    if has_cover:
+        var clear := _icon_action_button(ICON_REFRESH, _t("detail.clear_cover"), _clear_cover_for_selected)
+        clear.text = _t("detail.clear_cover")
+        clear.add_theme_constant_override("h_separation", 8)
+        clear.custom_minimum_size = Vector2(112, 40)
+        clear.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+        actions.add_child(clear)
+    return column
 
 func _detail_identity(game: Dictionary, compact: bool) -> VBoxContainer:
     var identity := VBoxContainer.new()
@@ -7310,10 +7518,6 @@ func _detail_tools(game: Dictionary) -> FlowContainer:
             _reveal_icon_action_label_on_hover(reset_launch, _t("detail.reset_launch_file"))
             reset_launch.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
             tools.add_child(reset_launch)
-    var set_cover := _icon_action_button(ICON_PAGE, _t("detail.set_cover"), func(): _set_cover_for_selected())
-    _reveal_icon_action_label_on_hover(set_cover, _t("detail.set_cover"))
-    set_cover.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-    tools.add_child(set_cover)
     var rename := _icon_action_button(ICON_RENAME, _t("detail.rename"), func(): _rename_selected_game())
     _reveal_icon_action_label_on_hover(rename, _t("detail.rename"))
     tools.add_child(rename)
@@ -8067,6 +8271,25 @@ func _set_cover_for_selected() -> void:
             return
     _show_cover_godot_dialog(path)
 
+func _delete_cover_for_selected() -> void:
+    var path := String(selected_game.get("path", ""))
+    if path.is_empty():
+        return
+    var cover_path := _resolve_cover_path(selected_game)
+    if not cover_path.is_empty() and FileAccess.file_exists(cover_path):
+        DirAccess.remove_absolute(cover_path)
+    _clear_cover_for_selected()
+
+func _clear_cover_for_selected() -> void:
+    var path := String(selected_game.get("path", ""))
+    if path.is_empty():
+        return
+    _update_game(path, {"coverPath": "", GAME_AUTO_COVER_SCANNED_FIELD: true})
+    var index := CoverIndex.load_index()
+    index[CoverIndex.key_for(selected_game)] = CoverIndex.record("")
+    CoverIndex.save_index(index)
+    _show_detail(selected_game)
+
 func _show_cover_godot_dialog(path: String) -> void:
     var dialog := _create_file_dialog(
         _t("dialog.choose_cover"),
@@ -8092,6 +8315,12 @@ func _apply_selected_cover(library_path: String, cover_path: String) -> void:
         "coverPath": _portable_cover_path(library_path, cover_path),
         GAME_AUTO_COVER_SCANNED_FIELD: true,
     })
+    var index := CoverIndex.load_index()
+    for game in _load_game_list():
+        if String(game.get("path", "")) == library_path:
+            index[CoverIndex.key_for(game)] = CoverIndex.record(_portable_cover_path(library_path, cover_path))
+            break
+    CoverIndex.save_index(index)
     _show_detail(selected_game)
 
 func _game_launch_entry_label(game: Dictionary) -> String:
@@ -8647,8 +8876,11 @@ func _refresh_games() -> void:
     var loaded_games := _load_game_list()
     known_games = builtin_demo.reconcile_games(loaded_games)
     var library_changed := JSON.stringify(known_games) != JSON.stringify(loaded_games)
+    if _backfill_game_metadata(known_games):
+        library_changed = true
     if _backfill_default_game_covers(known_games):
         library_changed = true
+    _sync_cover_index(known_games)
     if OS.get_name() == "iOS":
         known_games = _scan_ios_games_dir(known_games)
         _save_game_list(known_games)
@@ -9446,7 +9678,44 @@ func _add_game_dictionary(game: Dictionary) -> bool:
     _refresh_games()
     if not replaced:
         _offer_scrape_after_add(final_game)
+        _start_vndb_cover_lookup(final_game, true)
     return true
+
+func _start_vndb_cover_lookup(game: Dictionary, force: bool = false) -> void:
+    var index := CoverIndex.load_index()
+    var key := CoverIndex.key_for(game)
+    if key.is_empty() or (not force and not CoverIndex.needs_recognition(index, key)):
+        return
+    for queued in vndb_cover_queue:
+        if String(queued.get("path", "")) == String(game.get("path", "")):
+            return
+    vndb_cover_queue.append(game)
+    _process_next_vndb_cover()
+
+func _process_next_vndb_cover() -> void:
+    if vndb_cover_busy or vndb_cover_queue.is_empty():
+        return
+    var resolver := get_node_or_null("VNDBCoverResolver")
+    if resolver == null:
+        return
+    vndb_cover_busy = true
+    resolver.resolve(vndb_cover_queue.pop_front())
+
+func _on_vndb_cover_resolved(game_path: String, cover_path: String, vndb_id: String) -> void:
+    var games := _load_game_list()
+    var index := CoverIndex.load_index()
+    for game in games:
+        if String(game.get("path", "")) != game_path:
+            continue
+        var key := CoverIndex.key_for(game)
+        var resolved_cover := _portable_cover_path(game_path, cover_path) if not cover_path.is_empty() else ""
+        index[key] = CoverIndex.record(resolved_cover)
+        var values := {"coverPath": resolved_cover, "vndbId": vndb_id, GAME_AUTO_COVER_SCANNED_FIELD: true}
+        _update_game(game_path, values)
+        break
+    CoverIndex.save_index(index)
+    vndb_cover_busy = false
+    _process_next_vndb_cover()
 
 func _merge_game_dictionary(existing: Dictionary, game: Dictionary) -> Dictionary:
     var merged := existing.duplicate(true)
@@ -9570,8 +9839,11 @@ func _game_info_from_path(path: String) -> Dictionary:
     if name.to_lower().ends_with(".xp3"):
         name = name.substr(0, name.length() - 4)
     var default_cover_path := _discover_default_cover_path(path)
+    var metadata := GameMetadata.inspect(path)
+    var detected_title := String(metadata.get("title", ""))
+    var detected_engine := String(metadata.get("engine", RUNTIME_KIRIKIRI))
     return {
-        "name": name,
+        "name": detected_title if not detected_title.is_empty() else name,
         "path": path,
         "type": "Archive" if path.to_lower().ends_with(".xp3") else "Directory",
         "lastPlayed": 0,
@@ -9579,8 +9851,11 @@ func _game_info_from_path(path: String) -> Dictionary:
         "coverPath": _portable_cover_path(path, default_cover_path),
         GAME_AUTO_COVER_SCANNED_FIELD: true,
         "developer": "",
-        "title": "",
-        "engine": _game_runtime_kind(path),
+        "title": detected_title,
+        "titleCandidates": metadata.get("titleCandidates", PackedStringArray()),
+        "metadataSignals": metadata.get("signals", PackedStringArray()),
+        "engine": detected_engine,
+        "launchFile": metadata.get("launchFile", ""),
     }
 
 func _game_runtime_root(path: String) -> String:
@@ -9590,13 +9865,33 @@ func _game_runtime_root(path: String) -> String:
     return resolved
 
 func _game_runtime_kind(path: String) -> String:
-    var root := _game_runtime_root(path)
-    if root.is_empty():
-        return RUNTIME_KIRIKIRI
-    for marker in ONSCRIPTER_SCRIPT_MARKERS:
-        if FileAccess.file_exists(root.path_join(marker)):
-            return RUNTIME_ONSCRIPTER
-    return RUNTIME_KIRIKIRI
+    return String(GameMetadata.inspect(_game_runtime_root(path)).get("engine", RUNTIME_KIRIKIRI))
+
+func _backfill_game_metadata(games: Array[Dictionary]) -> bool:
+    var changed := false
+    for game in games:
+        var path := String(game.get("path", ""))
+        if path.is_empty() or builtin_demo.is_game(game):
+            continue
+        var metadata := GameMetadata.inspect(path)
+        var engine := String(metadata.get("engine", RUNTIME_KIRIKIRI))
+        if String(game.get("engine", "")).is_empty() or String(game.get("engine", "")) == RUNTIME_KIRIKIRI:
+            if String(game.get("engine", "")) != engine:
+                game["engine"] = engine
+                changed = true
+        if String(game.get("title", "")).is_empty():
+            var title := String(metadata.get("title", ""))
+            if not title.is_empty():
+                game["title"] = title
+                if String(game.get("name", "")).is_empty():
+                    game["name"] = title
+                changed = true
+        for key in ["titleCandidates", "metadataSignals", "launchFile"]:
+            var value = metadata.get(key, null)
+            if value != null and JSON.stringify(game.get(key, null)) != JSON.stringify(value):
+                game[key] = value
+                changed = true
+    return changed
 
 func _backfill_default_game_covers(games: Array[Dictionary]) -> bool:
     var changed := false
@@ -9622,6 +9917,26 @@ func _backfill_default_game_covers(games: Array[Dictionary]) -> bool:
             changed = true
         games[index] = game
     return changed
+
+func _sync_cover_index(games: Array[Dictionary]) -> void:
+    var index := CoverIndex.load_index()
+    var changed := false
+    var pending: Array[Dictionary] = []
+    for game in games:
+        if builtin_demo.is_game(game):
+            continue
+        var key := CoverIndex.key_for(game)
+        if key.is_empty() or not CoverIndex.needs_recognition(index, key):
+            continue
+        var cover_path := _resolve_cover_path(game)
+        var stored_path := _portable_cover_path(String(game.get("path", "")), cover_path) if not cover_path.is_empty() and FileAccess.file_exists(cover_path) else ""
+        index[key] = CoverIndex.record(stored_path, false)
+        changed = true
+        pending.append(game)
+    if changed:
+        CoverIndex.save_index(index)
+    for game in pending:
+        _start_vndb_cover_lookup(game, true)
 
 func _portable_cover_path(game_path: String, cover_path: String) -> String:
     var value := cover_path.strip_edges()
@@ -10394,6 +10709,10 @@ func _return_to_library_after_runtime_exit() -> void:
     runtime_exit_cleanup_pending = false
 
 func _ready() -> void:
+    var vndb_resolver := VNDBCoverResolver.new()
+    vndb_resolver.name = "VNDBCoverResolver"
+    add_child(vndb_resolver)
+    vndb_resolver.resolved.connect(_on_vndb_cover_resolved)
     cli_probe_script = _detect_cli_probe_script()
     _apply_ui_font()
     DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_TRANSPARENT, false)
@@ -10863,14 +11182,10 @@ func _show_runtime_dialog(values: Dictionary) -> void:
     modal_layer.add_child(dim)
 
     var dialog := PanelContainer.new()
-    dialog.anchor_left = 0.5
-    dialog.anchor_top = 0.5
-    dialog.anchor_right = 0.5
-    dialog.anchor_bottom = 0.5
-    dialog.offset_left = -390.0
-    dialog.offset_top = -220.0
-    dialog.offset_right = 390.0
-    dialog.offset_bottom = 220.0
+    dialog.name = "ArtemisRuntimeDialog"
+    dialog.clip_contents = true
+    _mark_centered_safe_dialog(dialog, Vector2(780, 520))
+    _layout_safe_dialog(dialog, _ui_safe_rect(get_viewport_rect().size))
     dialog.mouse_filter = Control.MOUSE_FILTER_STOP
     dialog.add_theme_stylebox_override(
         "panel",
@@ -10878,7 +11193,15 @@ func _show_runtime_dialog(values: Dictionary) -> void:
     )
     modal_layer.add_child(dialog)
 
+    _build_runtime_dialog_content(dialog, values)
+
+func _build_runtime_dialog_content(
+    dialog: PanelContainer,
+    values: Dictionary
+) -> void:
+
     var margin := MarginContainer.new()
+    margin.name = "ArtemisDialogMargin"
     margin.add_theme_constant_override("margin_left", 30)
     margin.add_theme_constant_override("margin_top", 26)
     margin.add_theme_constant_override("margin_right", 30)
@@ -10886,22 +11209,37 @@ func _show_runtime_dialog(values: Dictionary) -> void:
     dialog.add_child(margin)
 
     var box := VBoxContainer.new()
+    box.name = "ArtemisDialogContent"
     box.add_theme_constant_override("separation", 20)
     margin.add_child(box)
 
     var title := Label.new()
     title.text = String(values.get("title", ""))
+    title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     title.add_theme_font_size_override("font_size", 30)
     title.add_theme_color_override("font_color", color_text)
     box.add_child(title)
 
+    var message_scroll := ScrollContainer.new()
+    message_scroll.name = "ArtemisDialogMessageScroll"
+    message_scroll.custom_minimum_size = Vector2(0, 64)
+    message_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    message_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    message_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+    message_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+    message_scroll.scroll_deadzone = 0
+    message_scroll.mouse_force_pass_scroll_events = false
+    box.add_child(message_scroll)
+
     var message := Label.new()
+    message.name = "ArtemisDialogMessage"
     message.text = String(values.get("message", ""))
+    message.custom_minimum_size = Vector2.ZERO
+    message.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    message.size_flags_vertical = Control.SIZE_EXPAND_FILL
     message.add_theme_font_size_override("font_size", 23)
     message.add_theme_color_override("font_color", color_text)
-    box.add_child(message)
+    message_scroll.add_child(message)
 
     var text_field := String(values.get("text_field", "0")) == "1"
     var yes_no := String(values.get("yes_no", "0")) == "1"
@@ -10921,6 +11259,7 @@ func _show_runtime_dialog(values: Dictionary) -> void:
         box.add_child(runtime_dialog_input)
 
     var buttons := HBoxContainer.new()
+    buttons.name = "ArtemisDialogButtons"
     buttons.alignment = BoxContainer.ALIGNMENT_END
     buttons.add_theme_constant_override("separation", 14)
     box.add_child(buttons)
@@ -14674,12 +15013,21 @@ func _can_forward_game_input() -> bool:
 func _sync_game_virtual_controls() -> void:
     if game_virtual_controls == null:
         return
+    _apply_game_virtual_control_preferences()
     game_virtual_controls.set_enabled(
         _should_enable_game_virtual_controls(
             _is_touch_platform(),
             _can_forward_game_input(),
             app_lifecycle_paused
         )
+    )
+
+func _apply_game_virtual_control_preferences() -> void:
+    if game_virtual_controls == null:
+        return
+    game_virtual_controls.set_menu_button_enabled(game_virtual_menu_enabled)
+    game_virtual_controls.set_keyboard_controls_opacity(
+        game_virtual_keyboard_opacity
     )
 
 func _should_enable_game_virtual_controls(

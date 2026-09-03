@@ -144,6 +144,45 @@ func _initialize() -> void:
     assert(dialog_rect.end.x <= portrait.end.x)
     assert(dialog_rect.end.y <= portrait.end.y)
 
+    var runtime_dialog := PanelContainer.new()
+    runtime_dialog.clip_contents = true
+    root.add_child(runtime_dialog)
+    var runtime_safe_rect := Rect2(40, 24, 852, 382)
+    app._mark_centered_safe_dialog(runtime_dialog, Vector2(780, 520))
+    app._layout_safe_dialog(runtime_dialog, runtime_safe_rect)
+    app._build_runtime_dialog_content(runtime_dialog, {
+        "title": "Help",
+        "message": "\n".join(PackedStringArray(Array(range(120)).map(
+            func(index: int): return "Long Artemis help line %d" % index
+        ))),
+        "yes_no": "0",
+        "text_field": "0",
+    })
+    await process_frame
+    await process_frame
+    var runtime_dialog_rect := runtime_dialog.get_rect()
+    assert(runtime_dialog_rect.position.x >= runtime_safe_rect.position.x)
+    assert(runtime_dialog_rect.position.y >= runtime_safe_rect.position.y)
+    assert(runtime_dialog_rect.end.x <= runtime_safe_rect.end.x)
+    assert(runtime_dialog_rect.end.y <= runtime_safe_rect.end.y)
+    var message_scroll := runtime_dialog.get_node(
+        "ArtemisDialogMargin/ArtemisDialogContent/ArtemisDialogMessageScroll"
+    ) as ScrollContainer
+    var runtime_buttons := runtime_dialog.get_node(
+        "ArtemisDialogMargin/ArtemisDialogContent/ArtemisDialogButtons"
+    ) as HBoxContainer
+    assert(message_scroll != null)
+    assert(runtime_buttons != null)
+    assert(message_scroll.vertical_scroll_mode == ScrollContainer.SCROLL_MODE_AUTO)
+    assert(message_scroll.horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED)
+    assert(not message_scroll.mouse_force_pass_scroll_events)
+    assert(message_scroll.get_rect().end.y <= runtime_buttons.get_rect().position.y)
+    var message_scroll_bar := message_scroll.get_v_scroll_bar()
+    assert(message_scroll_bar.max_value > message_scroll_bar.page)
+    message_scroll.scroll_vertical = 120
+    await process_frame
+    assert(message_scroll.scroll_vertical > 0)
+
     assert(app._edge_back_gesture_qualified(
         Vector2(8, 400),
         Vector2(120, 410),
@@ -240,6 +279,7 @@ func _initialize() -> void:
     launch_shell.free()
     native_scroll_bar.free()
     dialog.free()
+    runtime_dialog.free()
     app.free()
     print("MOBILE_SAFE_AREA_OK")
     quit(0)

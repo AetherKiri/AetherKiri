@@ -210,6 +210,7 @@ TEST_CASE("krkrsdl3 plugin inventory is available") {
     const tjs_char *modules[] = {
         TJS_W("addfont.dll"),
         TJS_W("alphamovie.dll"),
+        TJS_W("glalphamovie.dll"),
         TJS_W("csvparser.dll"),
         TJS_W("dirlist.dll"),
         TJS_W("drawdeviced3d.dll"),
@@ -255,6 +256,46 @@ TEST_CASE("krkrsdl3 plugin inventory is available") {
         CHECK(ncbAutoRegister::HasModule(module));
     }
 }
+
+TEST_CASE("GLAlphaMovie exposes texture-atlas frame upload") {
+    ensurePluginRegistryRuntime();
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("GLAlphaMovie.dll")));
+    const tTJSVariant alphaMovie = getGlobalProp(TJS_W("AlphaMovie"));
+    const tTJSVariant copyFrame =
+        getProp(alphaMovie, TJS_W("copyNextImageToTexture"));
+    CHECK(copyFrame.Type() == tvtObject);
+}
+
+TEST_CASE("krkrgles module loads in every build profile") {
+    ensurePluginRegistryRuntime();
+
+    REQUIRE(ncbAutoRegister::HasModule(TJS_W("krkrgles.dll")));
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("krkrgles.dll")));
+}
+
+// Matrix32 is supplied by the optional Internal graphics backend, not the
+// public fallback. Keep its regression coverage in builds that provide it.
+#if defined(AETHERKIRI_EXPECT_INTERNAL_GRAPHICS)
+TEST_CASE("krkrgles Matrix32 preserves pivot-scaled canvas placement") {
+    ensurePluginRegistryRuntime();
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("krkrgles.dll")));
+    TVPExecuteScript(TJS_W(
+        "var __aetherPivotMatrix = new Matrix32();"
+        "__aetherPivotMatrix.translate(538.4, -84.1);"
+        "__aetherPivotMatrix.translate(200, 250);"
+        "__aetherPivotMatrix.scale(0.3, 0.3);"
+        "__aetherPivotMatrix.translate(-200, -250);"));
+
+    tTJSVariant result;
+    REQUIRE_NOTHROW(TVPExecuteExpression(
+        TJS_W("Math.abs(__aetherPivotMatrix.m31 - 678.4) < 0.001 && "
+              "Math.abs(__aetherPivotMatrix.m32 - 90.9) < 0.001"),
+        &result));
+    CHECK(result.AsInteger() == 1);
+}
+#endif
 
 TEST_CASE("extNagano transition providers survive a module reload") {
     ensurePluginRegistryRuntime();

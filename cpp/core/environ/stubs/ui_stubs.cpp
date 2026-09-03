@@ -775,6 +775,11 @@ extern "C" void TVPHostSetSurfaceSize(uint32_t width, uint32_t height) {
     g_host_surface_height = height;
 }
 
+extern "C" void TVPHostGetSurfaceSize(uint32_t *width, uint32_t *height) {
+    if(width) *width = g_host_surface_width;
+    if(height) *height = g_host_surface_height;
+}
+
 extern "C" void TVPHostResetForGameSession() {
     {
         std::lock_guard<std::mutex> lock(g_host_frame_mutex);
