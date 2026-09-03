@@ -259,7 +259,11 @@ bool IsGpuRectFastPathEnabled(const char *name) {
         const size_t end = setting.find_first_of(",;: ", start);
         const std::string token =
             setting.substr(start, end == std::string::npos ? end : end - start);
-        if (token == name) return true;
+        if (token == name ||
+            ((token == "default" || token == "1" || token == "all") &&
+             is_default_enabled())) {
+            return true;
+        }
         if (end == std::string::npos) break;
         start = end + 1;
     }
