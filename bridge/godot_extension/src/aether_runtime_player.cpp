@@ -5,9 +5,13 @@
 #include "GodotGpuBarrierShadowPlanner.h"
 #include "ComplexRect.h"
 #include "RuntimeTickPacer.h"
+#include "presentation/RuntimePresentationSprite.h"
 #include "frame_effect_host.h"
 #if defined(AETHERKIRI_WITH_ONSCRIPTER)
 #include "onscripter_runtime.h"
+#endif
+#if defined(AETHERKIRI_WITH_MINORI)
+extern "C" engine_result_t aetherkiri_minori_register_runtime_provider();
 #endif
 #if defined(__APPLE__)
 #include "apple_external_texture.h"
@@ -19,15 +23,24 @@
 #include "android_external_texture.h"
 #endif
 
+#include <godot_cpp/classes/audio_effect_panner.hpp>
+#include <godot_cpp/classes/audio_server.hpp>
+#include <godot_cpp/classes/audio_stream_ogg_vorbis.hpp>
+#include <godot_cpp/classes/audio_stream_player.hpp>
+#include <godot_cpp/classes/confirmation_dialog.hpp>
 #include <godot_cpp/classes/engine.hpp>
+#include <godot_cpp/classes/font.hpp>
 #include <godot_cpp/classes/image.hpp>
 #include <godot_cpp/classes/image_texture.hpp>
 #include <godot_cpp/classes/java_class.hpp>
 #include <godot_cpp/classes/java_class_wrapper.hpp>
 #include <godot_cpp/classes/java_object.hpp>
+#include <godot_cpp/classes/label.hpp>
+#include <godot_cpp/classes/line_edit.hpp>
 #include <godot_cpp/classes/node.hpp>
 #include <godot_cpp/classes/os.hpp>
 #include <godot_cpp/classes/project_settings.hpp>
+#include <godot_cpp/classes/resource_loader.hpp>
 #include <godot_cpp/classes/rd_pipeline_color_blend_state.hpp>
 #include <godot_cpp/classes/rd_pipeline_color_blend_state_attachment.hpp>
 #include <godot_cpp/classes/rd_pipeline_depth_stencil_state.hpp>
@@ -44,9 +57,11 @@
 #include <godot_cpp/classes/texture2d.hpp>
 #include <godot_cpp/classes/texture2drd.hpp>
 #include <godot_cpp/classes/time.hpp>
+#include <godot_cpp/classes/viewport.hpp>
 #include <godot_cpp/core/binder_common.hpp>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/core/defs.hpp>
+#include <godot_cpp/core/memory.hpp>
 #include <godot_cpp/godot.hpp>
 #include <godot_cpp/variant/callable_method_pointer.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
@@ -8622,7 +8637,16 @@ class AetherRuntimePlayer final : public Node {
 public:
     AetherRuntimePlayer()
         : frame_effect_provider_(CreateFrameEffectProvider()) {}
-    ~AetherRuntimePlayer() override { destroy_engine(); }
+    ~AetherRuntimePlayer() override {
+        destroy_engine();
+        AudioServer *server = AudioServer::get_singleton();
+        if (server != nullptr) {
+            for (const StringName &bus : runtime_audio_buses_) {
+                const int32_t index = server->get_bus_index(bus);
+                if (index >= 0) server->remove_bus(index);
+            }
+        }
+    }
 
     bool initialize_engine(const String &writable_path, const String &cache_path) {
         if (handle_ != nullptr) {
@@ -8700,6 +8724,9 @@ public:
 
     void destroy_engine() {
         media_close();
+        clear_runtime_message();
+        clear_runtime_save_slots();
+        runtime_presentation_sprite_.Clear();
         reset_runtime_tick_timing();
         if (handle_ == nullptr) {
             return;
@@ -9028,7 +9055,13 @@ public:
         const uint32_t delta_ms =
             runtime_tick_quantizer_.Quantize(runtime_delta_seconds);
         const engine_result_t result = engine_tick(handle_, delta_ms);
+        update_runtime_message_reveal(runtime_delta_seconds);
         drain_platform_requests();
+        update_runtime_message_layout();
+        runtime_presentation_sprite_.Tick(get_viewport(), runtime_delta_seconds);
+        update_runtime_save_slot_layout();
+        update_runtime_audio_fades(runtime_delta_seconds);
+        update_runtime_movie();
         update_last_error(result);
         return result;
     }
@@ -9219,6 +9252,11 @@ public:
                            int modifiers = 0) {
         if (handle_ == nullptr) {
             return ENGINE_RESULT_INVALID_STATE;
+        }
+        if (runtime_movie_active_ && runtime_movie_skippable_ &&
+            type == ENGINE_INPUT_EVENT_POINTER_DOWN) {
+            finish_runtime_movie("result=skipped");
+            return ENGINE_RESULT_OK;
         }
         engine_input_event_t event{};
         event.struct_size = sizeof(event);
@@ -9626,6 +9664,13 @@ public:
     Ref<Texture2D> update_source_frame_texture() {
         if (handle_ == nullptr) {
             return Ref<Texture2D>();
+        }
+        if (runtime_movie_active_) {
+            Ref<Texture2D> texture = media_update_texture();
+            if (texture.is_valid()) {
+                frame_texture_backend_ = "minori_movie";
+                return texture;
+            }
         }
         source_query_ms_ = 0.0;
         present_copy_ms_ = 0.0;
@@ -10908,9 +10953,464 @@ private:
                         "&error_response=-1&error_message="
                         "In%20App%20Billing%20is%20unavailable");
                 }
+            } else if (name == "text_input") {
+                show_runtime_text_input(value);
+            } else if (name == "presentation_sprite") {
+                runtime_presentation_sprite_.Update(this, get_viewport(), value);
+            } else if (name == "minori_save_slots") {
+                update_runtime_save_slots(value);
+            } else if (name == "minori_message") {
+                if (value.is_empty()) {
+                    clear_runtime_message();
+                } else {
+                    const PackedStringArray fields = value.split("\t", true, 3);
+                    if (fields.size() == 4) {
+                        update_runtime_message(
+                            fields[0], fields[1], fields[2].to_int(), fields[3]);
+                    } else {
+                        clear_runtime_message();
+                        UtilityFunctions::printerr("Malformed Minori message payload");
+                    }
+                }
+            } else if (name == "minori_message_reveal") {
+                reveal_runtime_message();
+            } else if (name == "minori_audio") {
+                const PackedStringArray fields = value.split("\t");
+                if (fields.size() != 8 || !update_runtime_audio(fields)) {
+                    submit_platform_response(
+                        name, "result=error&message=audio_playback_failed");
+                }
+            } else if (name == "minori_movie") {
+                const PackedStringArray fields = value.split("\t");
+                if (fields.size() != 6 || !media_open(fields[0]) ||
+                    media_play() != ENGINE_RESULT_OK) {
+                    const String message = last_error_.replace("\n", " ");
+                    submit_platform_response(
+                        name, "result=error&message=" + message);
+                    media_close();
+                } else {
+                    runtime_movie_active_ = true;
+                    runtime_movie_skippable_ = fields[5] == "1";
+                    update_runtime_movie();
+                }
             } else {
                 emit_signal("platform_request", name, value);
             }
+        }
+    }
+
+    void show_runtime_text_input(const String &value) {
+        const PackedStringArray fields = value.split("\t", true, 2);
+        if (fields.size() != 3) {
+            UtilityFunctions::printerr("Malformed text_input payload");
+            submit_platform_response("text_input", "result=cancel");
+            return;
+        }
+        finish_runtime_text_input(false);
+        runtime_text_input_dialog_ = memnew(ConfirmationDialog);
+        runtime_text_input_edit_ = memnew(LineEdit);
+        runtime_text_input_dialog_->set_title(fields[0]);
+        runtime_text_input_dialog_->set_text(fields[1]);
+        runtime_text_input_dialog_->set_size(Vector2i(460, 190));
+        runtime_text_input_edit_->set_text(fields[2]);
+        runtime_text_input_edit_->set_custom_minimum_size(Vector2(0, 42));
+        runtime_text_input_edit_->set_v_size_flags(Control::SIZE_SHRINK_CENTER);
+        runtime_text_input_dialog_->add_child(runtime_text_input_edit_);
+        add_child(runtime_text_input_dialog_);
+        runtime_text_input_dialog_->connect(
+            "confirmed", callable_mp(this, &AetherRuntimePlayer::confirm_runtime_text_input));
+        runtime_text_input_dialog_->connect(
+            "canceled", callable_mp(this, &AetherRuntimePlayer::cancel_runtime_text_input));
+        runtime_text_input_edit_->connect(
+            "text_submitted",
+            callable_mp(this, &AetherRuntimePlayer::submit_runtime_text_input));
+        runtime_text_input_dialog_->popup_centered();
+        runtime_text_input_edit_->grab_focus();
+        runtime_text_input_edit_->select_all();
+    }
+
+    void confirm_runtime_text_input() { finish_runtime_text_input(true); }
+    void cancel_runtime_text_input() { finish_runtime_text_input(false); }
+    void submit_runtime_text_input(const String &) { finish_runtime_text_input(true); }
+
+    void finish_runtime_text_input(bool accepted) {
+        if (runtime_text_input_dialog_ == nullptr) return;
+        String argument = "result=cancel";
+        if (accepted && runtime_text_input_edit_ != nullptr) {
+            argument = "result=ok\t" + runtime_text_input_edit_->get_text();
+        }
+        runtime_text_input_dialog_->queue_free();
+        runtime_text_input_dialog_ = nullptr;
+        runtime_text_input_edit_ = nullptr;
+        submit_platform_response("text_input", argument);
+    }
+
+    void clear_runtime_save_slots() {
+        for (Label *&label : runtime_save_slot_labels_) {
+            if (label != nullptr) label->queue_free();
+            label = nullptr;
+        }
+    }
+
+    void update_runtime_save_slots(const String &value) {
+        clear_runtime_save_slots();
+        if (value.is_empty()) return;
+        const PackedStringArray rows = value.split("\n", false);
+        for (const String &row : rows) {
+            const PackedStringArray fields = row.split("\t", true, 5);
+            if (fields.size() != 6) continue;
+            const int32_t slot = fields[0].to_int();
+            if (slot < 0 || slot >= 10) continue;
+            Label *label = create_runtime_message_label(
+                "MinoriSaveSlot" + String::num_int64(slot + 1), true);
+            label->set_text(
+                "Slot " + String::num_int64(slot + 1) + "\n" + fields[5]);
+            label->add_theme_color_override(
+                "font_color", Color(0.28, 0.20, 0.24, 1.0));
+            runtime_save_slot_positions_[slot] =
+                Vector2(fields[1].to_float(), fields[2].to_float());
+            runtime_save_slot_sizes_[slot] =
+                Vector2(fields[3].to_float(), fields[4].to_float());
+            runtime_save_slot_labels_[slot] = label;
+        }
+        update_runtime_save_slot_layout();
+    }
+
+    void update_runtime_save_slot_layout() {
+        if (get_viewport() == nullptr) return;
+        constexpr double kLogicalWidth = 1280.0;
+        constexpr double kLogicalHeight = 720.0;
+        const Vector2 viewport_size = get_viewport()->get_visible_rect().size;
+        const double scale = std::min(
+            static_cast<double>(viewport_size.x) / kLogicalWidth,
+            static_cast<double>(viewport_size.y) / kLogicalHeight);
+        const Vector2 offset(
+            (viewport_size.x - kLogicalWidth * scale) * 0.5,
+            (viewport_size.y - kLogicalHeight * scale) * 0.5);
+        const int32_t font_size =
+            std::max(1, static_cast<int32_t>(std::lround(18.0 * scale)));
+        for (int32_t slot = 0; slot < 10; ++slot) {
+            Label *label = runtime_save_slot_labels_[slot];
+            if (label == nullptr) continue;
+            const Vector2 logical_position = runtime_save_slot_positions_[slot];
+            const Vector2 logical_size = runtime_save_slot_sizes_[slot];
+            label->set_position(offset + logical_position * scale);
+            label->set_size(logical_size * scale);
+            label->add_theme_font_size_override("font_size", font_size);
+        }
+    }
+
+    void clear_runtime_message() {
+        runtime_message_reveal_active_ = false;
+        runtime_message_reveal_started_ = false;
+        runtime_message_reveal_elapsed_ms_ = 0.0;
+        runtime_message_reveal_step_ = 0;
+        runtime_message_reveal_total_steps_ = 0;
+        runtime_message_reveal_schedule_.clear();
+        if (runtime_message_speaker_label_ != nullptr) {
+            runtime_message_speaker_label_->queue_free();
+            runtime_message_speaker_label_ = nullptr;
+        }
+        if (runtime_message_label_ != nullptr) {
+            runtime_message_label_->queue_free();
+            runtime_message_label_ = nullptr;
+        }
+    }
+
+    Label *create_runtime_message_label(const String &name, bool wrap) {
+        Label *label = memnew(Label);
+        label->set_name(name);
+        label->set_z_index(100);
+        if (wrap) {
+            label->set_autowrap_mode(TextServer::AUTOWRAP_WORD_SMART);
+        }
+        label->set_vertical_alignment(VERTICAL_ALIGNMENT_TOP);
+        label->add_theme_color_override(
+            "font_color", Color(1.0, 1.0, 1.0, 1.0));
+        const Ref<Font> font = ResourceLoader::get_singleton()->load(
+            "res://assets/fonts/aetherkiri-runtime-cjk.otf");
+        if (font.is_valid()) {
+            label->add_theme_font_override("font", font);
+        }
+        add_child(label);
+        return label;
+    }
+
+    void update_runtime_message(
+        const String &speaker,
+        const String &text,
+        int32_t total_steps,
+        const String &schedule
+    ) {
+        if (text.is_empty()) {
+            clear_runtime_message();
+            return;
+        }
+        if (runtime_message_label_ == nullptr) {
+            runtime_message_label_ = create_runtime_message_label(
+                "MinoriMessageText", true);
+        }
+        runtime_message_label_->set_text(text);
+        runtime_message_reveal_schedule_.clear();
+        const PackedStringArray schedule_fields = schedule.split(",", false);
+        for (int32_t index = 0; index < schedule_fields.size(); ++index) {
+            runtime_message_reveal_schedule_.push_back(static_cast<int32_t>(
+                std::max<int64_t>(0, schedule_fields[index].to_int())));
+        }
+        runtime_message_reveal_total_steps_ = std::max(0, total_steps);
+        runtime_message_reveal_step_ = 0;
+        runtime_message_reveal_elapsed_ms_ = 0.0;
+        runtime_message_reveal_started_ = false;
+        runtime_message_reveal_active_ = runtime_message_reveal_total_steps_ > 0;
+        runtime_message_label_->set_visible_characters(
+            runtime_message_reveal_active_ ? 0 : -1);
+        if (speaker.is_empty()) {
+            if (runtime_message_speaker_label_ != nullptr) {
+                runtime_message_speaker_label_->queue_free();
+                runtime_message_speaker_label_ = nullptr;
+            }
+        } else {
+            if (runtime_message_speaker_label_ == nullptr) {
+                runtime_message_speaker_label_ = create_runtime_message_label(
+                    "MinoriMessageSpeaker", false);
+            }
+            runtime_message_speaker_label_->set_text(speaker);
+        }
+        update_runtime_message_layout();
+    }
+
+    void reveal_runtime_message() {
+        runtime_message_reveal_active_ = false;
+        runtime_message_reveal_started_ = true;
+        runtime_message_reveal_step_ = runtime_message_reveal_total_steps_;
+        if (runtime_message_label_ != nullptr) {
+            runtime_message_label_->set_visible_characters(-1);
+        }
+    }
+
+    void update_runtime_message_reveal(double delta_seconds) {
+        if (!runtime_message_reveal_active_ || runtime_message_label_ == nullptr) {
+            return;
+        }
+        if (!runtime_message_reveal_started_) {
+            runtime_message_reveal_started_ = true;
+            runtime_message_reveal_step_ = 1;
+        } else {
+            runtime_message_reveal_elapsed_ms_ +=
+                std::max(0.0, delta_seconds) * 1000.0;
+            while (runtime_message_reveal_elapsed_ms_ >= 100.0 &&
+                   runtime_message_reveal_step_ < runtime_message_reveal_total_steps_) {
+                runtime_message_reveal_elapsed_ms_ -= 100.0;
+                ++runtime_message_reveal_step_;
+            }
+        }
+        int32_t visible_characters = 0;
+        for (const int32_t step : runtime_message_reveal_schedule_) {
+            if (step > runtime_message_reveal_step_) break;
+            ++visible_characters;
+        }
+        runtime_message_label_->set_visible_characters(visible_characters);
+        if (runtime_message_reveal_step_ >= runtime_message_reveal_total_steps_) {
+            runtime_message_reveal_active_ = false;
+            runtime_message_label_->set_visible_characters(-1);
+        }
+    }
+
+    void update_runtime_message_layout() {
+        if (runtime_message_label_ == nullptr || get_viewport() == nullptr) {
+            return;
+        }
+        constexpr double kLogicalWidth = 1280.0;
+        constexpr double kLogicalHeight = 720.0;
+        const Vector2 viewport_size = get_viewport()->get_visible_rect().size;
+        const double scale = std::min(
+            static_cast<double>(viewport_size.x) / kLogicalWidth,
+            static_cast<double>(viewport_size.y) / kLogicalHeight);
+        const Vector2 offset(
+            (viewport_size.x - kLogicalWidth * scale) * 0.5,
+            (viewport_size.y - kLogicalHeight * scale) * 0.5);
+        const int32_t font_size =
+            std::max(1, static_cast<int32_t>(std::lround(26.0 * scale)));
+        const bool has_speaker = runtime_message_speaker_label_ != nullptr;
+        runtime_message_label_->set_position(
+            offset + Vector2(120.0 * scale, (has_speaker ? 590.0 : 552.0) * scale));
+        runtime_message_label_->set_size(Vector2(
+            1040.0 * scale, (has_speaker ? 130.0 : 168.0) * scale));
+        runtime_message_label_->add_theme_font_size_override("font_size", font_size);
+        if (has_speaker) {
+            runtime_message_speaker_label_->set_position(
+                offset + Vector2(120.0 * scale, 552.0 * scale));
+            runtime_message_speaker_label_->set_size(
+                Vector2(1040.0 * scale, 38.0 * scale));
+            runtime_message_speaker_label_->add_theme_font_size_override(
+                "font_size", font_size);
+        }
+    }
+
+    struct RuntimeAudioFade {
+        AudioStreamPlayer *player = nullptr;
+        double interval_ms = 0.0;
+        double elapsed_ms = 0.0;
+        int32_t level = 0;
+        int32_t target = 0;
+        int32_t step = 0;
+        bool stop_after = false;
+    };
+
+    void finish_runtime_audio_fade(RuntimeAudioFade &fade) {
+        if (fade.player != nullptr) {
+            fade.player->set_volume_linear(static_cast<float>(fade.target) / 100.0f);
+            if (fade.stop_after) {
+                fade.player->stop();
+                fade.player->queue_free();
+            }
+        }
+        fade = RuntimeAudioFade{};
+    }
+
+    void update_runtime_audio_fades(double delta_seconds) {
+        RuntimeAudioFade *fades[] = {&runtime_bgm_fade_in_, &runtime_bgm_fade_out_};
+        for (RuntimeAudioFade *fade : fades) {
+            if (fade->player == nullptr) continue;
+            fade->elapsed_ms += delta_seconds * 1000.0;
+            while (fade->elapsed_ms >= fade->interval_ms && fade->level != fade->target) {
+                fade->elapsed_ms -= fade->interval_ms;
+                fade->level += fade->step;
+                if ((fade->step > 0 && fade->level > fade->target) ||
+                    (fade->step < 0 && fade->level < fade->target)) {
+                    fade->level = fade->target;
+                }
+                fade->player->set_volume_linear(
+                    static_cast<float>(fade->level) / 100.0f);
+            }
+            if (fade->level == fade->target) finish_runtime_audio_fade(*fade);
+        }
+    }
+
+    void fade_out_runtime_bgm(int32_t interval_ms) {
+        if (runtime_bgm_fade_out_.player != nullptr) {
+            runtime_bgm_fade_out_.player->stop();
+            runtime_bgm_fade_out_.player->queue_free();
+            runtime_bgm_fade_out_ = RuntimeAudioFade{};
+        }
+        AudioStreamPlayer *player = runtime_audio_players_[0];
+        runtime_audio_players_[0] = nullptr;
+        if (runtime_bgm_fade_in_.player == player) {
+            runtime_bgm_fade_in_ = RuntimeAudioFade{};
+        }
+        if (player == nullptr) return;
+        const int32_t level = std::clamp(
+            static_cast<int32_t>(std::lround(player->get_volume_linear() * 100.0f)),
+            0, 100);
+        if (interval_ms < 1 || level == 0) {
+            player->stop();
+            player->queue_free();
+            return;
+        }
+        runtime_bgm_fade_out_ =
+            RuntimeAudioFade{player, static_cast<double>(interval_ms), 0.0,
+                             level, 0, -1, true};
+    }
+
+    bool update_runtime_audio(const PackedStringArray &fields) {
+        if (fields.size() != 8) return false;
+        const int32_t slot = fields[0].to_int();
+        if (slot < 0 || slot >= static_cast<int32_t>(runtime_audio_players_.size())) {
+            return false;
+        }
+        const int32_t fade_in = fields[6].to_int();
+        const int32_t fade_out = fields[7].to_int();
+        if (slot == 0 && runtime_audio_players_[0] != nullptr &&
+            runtime_audio_names_[0] == fields[5]) {
+            AudioStreamPlayer *player = runtime_audio_players_[0];
+            runtime_bgm_fade_in_ = RuntimeAudioFade{};
+            const int32_t level = std::clamp(
+                static_cast<int32_t>(std::lround(player->get_volume_linear() * 100.0f)),
+                0, 100);
+            const int32_t target = std::clamp(
+                static_cast<int32_t>(fields[3].to_int()), 0, 100);
+            if (fade_in < 1 || level == target) {
+                player->set_volume_linear(static_cast<float>(target) / 100.0f);
+            } else {
+                runtime_bgm_fade_in_ = RuntimeAudioFade{
+                    player, static_cast<double>(fade_in), 0.0, level, target,
+                    target > level ? 1 : -1, false};
+            }
+            return true;
+        }
+        if (slot == 0) {
+            fade_out_runtime_bgm(fade_out);
+            runtime_audio_names_[0] = String();
+            if (fields[1].is_empty()) return true;
+        }
+        AudioStreamPlayer *&player = runtime_audio_players_[slot];
+        AudioServer *server = AudioServer::get_singleton();
+        if (runtime_audio_buses_[slot].is_empty()) {
+            if (server == nullptr) return false;
+            const String bus_name =
+                "MinoriAudio" + String::num_uint64(get_instance_id()) + "_" +
+                String::num_int64(slot);
+            server->add_bus();
+            const int32_t bus_index = server->get_bus_count() - 1;
+            server->set_bus_name(bus_index, bus_name);
+            Ref<AudioEffectPanner> panner;
+            panner.instantiate();
+            server->add_bus_effect(bus_index, panner);
+            runtime_audio_buses_[slot] = StringName(bus_name);
+        }
+        if (player == nullptr) {
+            player = memnew(AudioStreamPlayer);
+            add_child(player);
+            player->set_bus(runtime_audio_buses_[slot]);
+        }
+        player->stop();
+        if (fields[1].is_empty()) return true;
+        Ref<AudioStreamOggVorbis> stream =
+            AudioStreamOggVorbis::load_from_file(fields[1]);
+        if (stream.is_null()) return false;
+        stream->set_loop(fields[2] == "1");
+        player->set_stream(stream);
+        const int32_t target_volume = std::clamp(
+            static_cast<int32_t>(fields[3].to_int()), 0, 100);
+        const int32_t initial_volume = slot == 0 && fade_in >= 1 ? 0 : target_volume;
+        player->set_volume_linear(static_cast<float>(initial_volume) / 100.0f);
+        const int32_t bus_index = server->get_bus_index(runtime_audio_buses_[slot]);
+        Ref<AudioEffectPanner> panner = server->get_bus_effect(bus_index, 0);
+        if (panner.is_valid()) {
+            panner->set_pan(static_cast<float>(fields[4].to_int()) / 100.0f);
+        }
+        player->play();
+        runtime_audio_names_[slot] = fields[5];
+        if (slot == 0 && initial_volume != target_volume) {
+            runtime_bgm_fade_in_ = RuntimeAudioFade{
+                player, static_cast<double>(fade_in), 0.0, initial_volume,
+                target_volume, 1, false};
+        }
+        return true;
+    }
+
+    void finish_runtime_movie(const String &result) {
+        if (!runtime_movie_active_) return;
+        runtime_movie_active_ = false;
+        runtime_movie_skippable_ = false;
+        media_close();
+        submit_platform_response("minori_movie", result);
+    }
+
+    void update_runtime_movie() {
+        if (!runtime_movie_active_ || media_ == nullptr) return;
+        engine_media_state_t state{};
+        state.struct_size = sizeof(state);
+        const engine_result_t result = engine_media_get_state(media_, &state);
+        if (result != ENGINE_RESULT_OK ||
+            state.status == ENGINE_MEDIA_STATUS_ERROR) {
+            finish_runtime_movie("result=error&message=media_playback_failed");
+            return;
+        }
+        media_width_ = state.width;
+        media_height_ = state.height;
+        if (state.status == ENGINE_MEDIA_STATUS_ENDED) {
+            finish_runtime_movie("result=complete");
         }
     }
 
@@ -11365,6 +11865,27 @@ private:
     uint64_t media_frame_serial_ = UINT64_MAX;
     uint32_t media_width_ = 0;
     uint32_t media_height_ = 0;
+    bool runtime_movie_active_ = false;
+    bool runtime_movie_skippable_ = false;
+    Label *runtime_message_speaker_label_ = nullptr;
+    Label *runtime_message_label_ = nullptr;
+    RuntimePresentationSprite runtime_presentation_sprite_;
+    ConfirmationDialog *runtime_text_input_dialog_ = nullptr;
+    LineEdit *runtime_text_input_edit_ = nullptr;
+    std::array<Label *, 10> runtime_save_slot_labels_{};
+    std::array<Vector2, 10> runtime_save_slot_positions_{};
+    std::array<Vector2, 10> runtime_save_slot_sizes_{};
+    bool runtime_message_reveal_active_ = false;
+    bool runtime_message_reveal_started_ = false;
+    double runtime_message_reveal_elapsed_ms_ = 0.0;
+    int32_t runtime_message_reveal_step_ = 0;
+    int32_t runtime_message_reveal_total_steps_ = 0;
+    std::vector<int32_t> runtime_message_reveal_schedule_;
+    std::array<AudioStreamPlayer *, 5> runtime_audio_players_{};
+    std::array<StringName, 5> runtime_audio_buses_{};
+    std::array<String, 5> runtime_audio_names_{};
+    RuntimeAudioFade runtime_bgm_fade_in_{};
+    RuntimeAudioFade runtime_bgm_fade_out_{};
 };
 
 void InitializeAetherRuntime(ModuleInitializationLevel level) {
@@ -11376,6 +11897,11 @@ void InitializeAetherRuntime(ModuleInitializationLevel level) {
 #endif
 #if defined(AETHERKIRI_WITH_ONSCRIPTER)
     aetherkiri::onscripter::RegisterRuntimeProvider();
+#endif
+#if defined(AETHERKIRI_WITH_MINORI)
+    if (aetherkiri_minori_register_runtime_provider() != ENGINE_RESULT_OK) {
+        UtilityFunctions::printerr("Failed to register Minori runtime provider");
+    }
 #endif
     const engine_result_t shader_result =
         engine_set_runtime_fragment_shader_executor(

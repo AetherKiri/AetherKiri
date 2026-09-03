@@ -11,6 +11,8 @@
 !/build/web_export_range_fs.js
 /**/out/
 /**/bin/
+!/rust/minori_runtime/src/bin/
+!/rust/minori_runtime/src/bin/*.rs
 vcpkg_installed/
 
 .idea/
