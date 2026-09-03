@@ -166,6 +166,20 @@ int main(int argc, char** argv) {
             check(reopened.pixels()[(200 * 1024 + 200) * 4] < 40, "save survives close and reopen");
         }
         check(fs::is_directory(scratch / "rfvp"), "host save root used");
+        {
+            const auto fade_fixture = scratch / "fade.hcb";
+            write_input_fixture(fade_fixture, true);
+            Instance game(scratch);
+            game.open(fade_fixture);
+            game.step(2);
+            const size_t pixel = (410 * 1024 + 410) * 4;
+            check(game.pixels()[pixel] > 200, "save point is near the start of the fade");
+            game.key(116); // Save while the tile is still fading in.
+            game.step(80);
+            check(game.pixels()[pixel] < 40, "fade reaches its destination before load");
+            game.key(120); game.step(80);
+            check(game.pixels()[pixel] < 40, "load resumes in-flight fade instead of freezing its alpha");
+        }
         fs::remove_all(scratch); // Only the unique test-owned directory above.
         std::cout << "rfvp provider: PASS (probe, pixels, input, save/load, pause, isolation, reopen)\n";
         return 0;

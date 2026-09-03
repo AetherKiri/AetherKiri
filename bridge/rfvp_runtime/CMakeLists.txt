@@ -80,4 +80,10 @@ if(PROJECT_IS_TOP_LEVEL OR ENABLE_TESTS)
         RFVP_TEST_DEMO="${AETHERKIRI_RFVP_PROJECT_ROOT}/packages/rfvp/win95_painter_demo")
     add_test(NAME rfvp-provider COMMAND rfvp-provider-test)
     set_tests_properties(rfvp-provider PROPERTIES TIMEOUT 60)
+    add_test(NAME rfvp-host-regressions
+        COMMAND "${RFVP_CARGO}" test --locked --manifest-path "${rfvp_prepared}/Cargo.toml"
+            -p rfvp --lib --no-default-features --features "${rfvp_features}"
+            --target "${AETHERKIRI_RFVP_RUST_TARGET}" ${rfvp_profile_args}
+            host_ -- --test-threads=1)
+    set_tests_properties(rfvp-host-regressions PROPERTIES TIMEOUT 180)
 endif()

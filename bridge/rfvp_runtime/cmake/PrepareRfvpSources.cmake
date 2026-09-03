@@ -24,7 +24,7 @@ function(aetherkiri_prepare_rfvp root output)
     file(COPY "${root}/packages/rfvp/LICENSE" "${root}/packages/rfvp/README.md"
          DESTINATION "${output}")
     file(WRITE "${output}/Cargo.toml"
-        "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\n[profile.dev]\ndebug = 0\nopt-level = 1\nincremental = false\n[profile.release]\ndebug = 0\n")
+        "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\n[profile.dev]\ndebug = 0\nopt-level = 1\nincremental = false\n[profile.dev.package.rfvp]\nopt-level = 3\n[profile.release]\ndebug = 0\n")
     configure_file("${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../Cargo.lock" "${output}/Cargo.lock" COPYONLY)
     set(src "${output}/crates/rfvp/src")
     rfvp_replace("${output}/crates/rfvp/Cargo.toml"
@@ -42,6 +42,58 @@ function(aetherkiri_prepare_rfvp root output)
     foreach(file subsystem/resources/save_manager.rs subsystem/global_savedata.rs)
         rfvp_replace("${src}/${file}" "app_base_path" "save_base_path")
     endforeach()
+    # V1 drops active motions and text/VM wait linkage on load. Extend new RFVS
+    # payloads with a V2 envelope without changing the original V1 wire layout.
+    set(motion_src "${src}/subsystem/resources/motion_manager")
+    foreach(file alpha normal_move rotation_move s2_move z_move v3d anim snow lip)
+        file(READ "${motion_src}/${file}.rs" content)
+        string(REGEX REPLACE "#\\[derive\\(([^)]*)\\)\\]"
+            "#[derive(\\1, serde::Serialize, serde::Deserialize)]" content "${content}")
+        file(WRITE "${motion_src}/${file}.rs" "${content}")
+    endforeach()
+    foreach(pair "alpha;AlphaMotionContainer" "normal_move;MoveMotionContainer"
+            "rotation_move;RotationMotionContainer" "s2_move;ScaleMotionContainer"
+            "z_move;ZMotionContainer" "snow;SnowMotionContainer" "lip;LipMotionContainer")
+        list(GET pair 0 file)
+        list(GET pair 1 type)
+        rfvp_replace("${motion_src}/${file}.rs" "pub struct ${type} {"
+            "#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]\npub struct ${type} {")
+    endforeach()
+    rfvp_replace("${motion_src}/anim.rs" "#[derive(Debug, Default,"
+        "#[derive(Debug, Default, Clone,")
+    foreach(field flakes flake_ptrs)
+        rfvp_replace("${motion_src}/snow.rs" "    pub ${field}:"
+            "    #[serde(with = \"crate::subsystem::save_state::host_array\")]\n    pub ${field}:")
+    endforeach()
+    foreach(pair "motion_snapshot;subsystem/resources/motion_manager/mod.rs"
+            "text_snapshot;subsystem/resources/text_manager.rs" "save_snapshot;subsystem/save_state.rs"
+            "soft_render_host;soft_render/renderer.rs")
+        list(GET pair 0 helper)
+        list(GET pair 1 target)
+        get_filename_component(target_dir "${src}/${target}" DIRECTORY)
+        file(COPY "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../rust/${helper}.rs" DESTINATION "${target_dir}")
+        file(APPEND "${src}/${target}" "\ninclude!(\"${helper}.rs\");\n")
+    endforeach()
+    # The common axis-aligned case needs one clipped rectangle, not two
+    # overlapping triangle scans. Keep rotated/sheared quads on the old path.
+    rfvp_replace("${src}/soft_render/renderer.rs"
+        "        let p0 = model.transform_point3(vec3(0.0, dst_h, 0.0)).truncate();"
+        "        if color.w <= 0.0 { return Ok(()); }\n        let p0 = model.transform_point3(vec3(0.0, dst_h, 0.0)).truncate();")
+    rfvp_replace("${src}/soft_render/renderer.rs" "        let v0 = Vertex {"
+        "        if self.try_host_axis_quad(p1, p3, p0, uv0, uv1, color, texture) {\n            self.stats.quad_count += 1;\n            self.stats.draw_calls += 1;\n            return Ok(());\n        }\n        let v0 = Vertex {")
+    set(save_state "${src}/subsystem/save_state.rs")
+    rfvp_replace("${save_state}" "pub struct SaveStateSnapshotV1 {"
+        "pub struct SaveStateSnapshotV1 {\n    #[serde(skip)]\n    pub(crate) host_playback: Option<HostPlaybackSnapshot>,")
+    rfvp_replace("${save_state}" "        SaveStateSnapshotV1 {\n            version: 1,"
+        "        SaveStateSnapshotV1 {\n            host_playback: Some(HostPlaybackSnapshot::capture(game_data)),\n            version: 1,")
+    rfvp_replace("${save_state}" "        tm.apply_snapshot_v1(&self.vm);"
+        "        tm.apply_snapshot_v1(&self.vm);\n        if let Some(playback) = &self.host_playback { playback.apply(game_data); }")
+    rfvp_replace("${save_state}" "        .reject_trailing_bytes()"
+        "        .reject_trailing_bytes()\n        .with_limit(MAX_STATE_PAYLOAD_BYTES as u64)")
+    rfvp_replace("${save_state}" "let payload = bincode_opts()\n            .serialize(snap)"
+        "let payload = encode_host_snapshot(snap)")
+    rfvp_replace("${save_state}" "let snap: SaveStateSnapshotV1 = bincode_opts()\n            .deserialize(payload)"
+        "let snap: SaveStateSnapshotV1 = decode_host_snapshot(payload)")
     # Video extraction is host-owned too; never create caches in the game tree
     # or fall back to the process working directory.
     rfvp_replace("${src}/subsystem/components/syscalls/movie.rs"

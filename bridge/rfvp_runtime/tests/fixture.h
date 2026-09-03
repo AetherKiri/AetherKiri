@@ -11,7 +11,7 @@
 #include <utility>
 #include <vector>
 
-inline void write_input_fixture(const std::filesystem::path& path) {
+inline void write_input_fixture(const std::filesystem::path& path, bool fading = false) {
     std::vector<uint8_t> b(4);
     std::vector<std::pair<std::string, uint8_t>> calls;
     auto word = [&](uint32_t value, int count) {
@@ -39,6 +39,11 @@ inline void write_input_fixture(const std::filesystem::path& path) {
     call("PrimSetTile", {2, 27, 0, 0, 20, 20});
     call("PrimGroupIn", {2, 0});
     call("SaveThumbSize", {80, 50});
+    if (fading) {
+        call("PrimSetTile", {3, 20, 400, 400, 40, 40});
+        call("PrimGroupIn", {3, 0});
+        call("MotionAlpha", {3, 0, 255, 800, 0, 0});
+    }
     const auto loop = b.size();
     for (auto [bit, color] : {std::pair{2, 20}, std::pair{3, 27}}) {
         syscall("InputGetState", 0); b.push_back(20); // push_return
