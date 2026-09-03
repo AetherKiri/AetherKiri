@@ -69,6 +69,7 @@ const AetherMotion = preload("res://scripts/ui/aether_motion.gd")
 const AetherWidgets = preload("res://scripts/ui/aether_widgets.gd")
 const AetherSegmentedControl = preload("res://scripts/ui/aether_segmented_control.gd")
 const AetherSwitch = preload("res://scripts/ui/aether_switch.gd")
+const AetherSlider = preload("res://scripts/ui/aether_slider.gd")
 const AetherDisclosure = preload("res://scripts/ui/aether_disclosure.gd")
 const AetherSelect = preload("res://scripts/ui/aether_select.gd")
 const AetherDisplayScale = preload("res://scripts/ui/aether_display_scale.gd")
@@ -172,6 +173,10 @@ const UI_TEXT := {
         "settings.style_desc": "可在当前深色风格和旧版原始浅色风格之间切换",
         "settings.ui_scale": "界面比例",
         "settings.ui_scale_desc": "调整 iPhone 和 iPad 上的界面大小，保存后立即生效",
+        "settings.virtual_control_menu": "游戏内控制菜单",
+        "settings.virtual_control_menu_desc": "在游戏画面右上角显示虚拟控制菜单按钮",
+        "settings.keyboard_control_opacity": "Keyboard 模式按键透明度",
+        "settings.keyboard_control_opacity_desc": "调整屏幕虚拟按键的透明度；鼠标指针保持清晰",
         "ui_scale.compact": "较小",
         "ui_scale.comfortable": "合适",
         "ui_scale.standard": "标准",
@@ -449,6 +454,10 @@ const UI_TEXT := {
         "settings.style_desc": "可在目前深色風格和舊版原始淺色風格之間切換",
         "settings.ui_scale": "介面比例",
         "settings.ui_scale_desc": "調整 iPhone 和 iPad 上的介面大小，儲存後立即生效",
+        "settings.virtual_control_menu": "遊戲內控制選單",
+        "settings.virtual_control_menu_desc": "在遊戲畫面右上角顯示虛擬控制選單按鈕",
+        "settings.keyboard_control_opacity": "Keyboard 模式按鍵透明度",
+        "settings.keyboard_control_opacity_desc": "調整螢幕虛擬按鍵的透明度；滑鼠指標保持清晰",
         "ui_scale.compact": "較小",
         "ui_scale.comfortable": "合適",
         "ui_scale.standard": "標準",
@@ -724,6 +733,10 @@ const UI_TEXT := {
         "settings.style_desc": "Switch between the current dark style and the original classic light style",
         "settings.ui_scale": "Interface Scale",
         "settings.ui_scale_desc": "Adjust the interface size on iPhone and iPad; applies immediately after saving",
+        "settings.virtual_control_menu": "In-Game Controls Menu",
+        "settings.virtual_control_menu_desc": "Show the virtual-controls menu button at the top-right of the game view",
+        "settings.keyboard_control_opacity": "Keyboard Button Opacity",
+        "settings.keyboard_control_opacity_desc": "Adjust on-screen virtual-key opacity while keeping the mouse pointer clear",
         "ui_scale.compact": "Smaller",
         "ui_scale.comfortable": "Comfortable",
         "ui_scale.standard": "Standard",
@@ -1001,6 +1014,10 @@ const UI_TEXT := {
         "settings.style_desc": "現在のダークスタイルと旧来のクラシックライトスタイルを切り替えます",
         "settings.ui_scale": "UI スケール",
         "settings.ui_scale_desc": "iPhone と iPad の UI サイズを調整します。保存後すぐに反映されます",
+        "settings.virtual_control_menu": "ゲーム内コントロールメニュー",
+        "settings.virtual_control_menu_desc": "ゲーム画面の右上に仮想コントロールメニューボタンを表示します",
+        "settings.keyboard_control_opacity": "Keyboard モードのキー透明度",
+        "settings.keyboard_control_opacity_desc": "画面上の仮想キーの透明度を調整します。マウスポインターは鮮明なままです",
         "ui_scale.compact": "小さめ",
         "ui_scale.comfortable": "快適",
         "ui_scale.standard": "標準",
@@ -1276,6 +1293,10 @@ const UI_TEXT := {
         "settings.style_desc": "현재 다크 스타일과 기존 클래식 라이트 스타일을 전환합니다",
         "settings.ui_scale": "인터페이스 크기",
         "settings.ui_scale_desc": "iPhone 및 iPad의 인터페이스 크기를 조절하며 저장 후 즉시 적용됩니다",
+        "settings.virtual_control_menu": "게임 내 컨트롤 메뉴",
+        "settings.virtual_control_menu_desc": "게임 화면 오른쪽 위에 가상 컨트롤 메뉴 버튼을 표시합니다",
+        "settings.keyboard_control_opacity": "Keyboard 모드 버튼 투명도",
+        "settings.keyboard_control_opacity_desc": "화면 가상 키의 투명도를 조절하며 마우스 포인터는 선명하게 유지합니다",
         "ui_scale.compact": "작게",
         "ui_scale.comfortable": "적당히",
         "ui_scale.standard": "표준",
@@ -1531,6 +1552,12 @@ const ONSCRIPTER_SCRIPT_MARKERS := [
 ]
 const SHELL_SCROLL_DRAG_THRESHOLD := 4.0
 const SHELL_SCROLL_BUTTON_DRAG_THRESHOLD := 28.0
+const SHELL_SCROLL_SLIDER_AXIS_THRESHOLD := 10.0
+const SHELL_SCROLL_SLIDER_VERTICAL_DOMINANCE := 1.25
+const SHELL_SCROLL_AXIS_NONE := ""
+const SHELL_SCROLL_AXIS_PENDING := "pending"
+const SHELL_SCROLL_AXIS_HORIZONTAL := "horizontal"
+const SHELL_SCROLL_AXIS_VERTICAL := "vertical"
 const SHELL_SCROLL_DRAG_SPEED := 1.0
 const SHELL_SCROLL_TOUCHPAD_SPEED := 12.0
 const SHELL_SCROLL_WHEEL_SPEED := 4.0
@@ -1546,6 +1573,8 @@ const SETTINGS_DRAFT_KEYS := [
     "language",
     "style",
     "ios_ui_scale_mode",
+    "game_virtual_menu_enabled",
+    "game_virtual_keyboard_opacity",
     "backend",
     "upscale_algorithm",
     "output_resolution",
@@ -1608,6 +1637,8 @@ var detail_scroll: ScrollContainer
 var game_view: Control
 var game_virtual_controls
 var game_virtual_input_mode := GameVirtualControls.INPUT_MODE_MOUSE
+var game_virtual_menu_enabled := true
+var game_virtual_keyboard_opacity := 1.0
 var modal_layer: Control
 var active_modal_scrim: ColorRect
 var active_modal_dialog: Control
@@ -1989,6 +2020,9 @@ const VIRTUAL_KEYBOARD_REOPEN_DELAY_MS := 750
 const TOUCH_POINTER_ID_OFFSET := 100000
 const TOUCH_SECONDARY_POINTER_ID := 0
 const VIRTUAL_CONTROLS_POINTER_ID := TOUCH_POINTER_ID_OFFSET + 65535
+const GAME_VIRTUAL_KEYBOARD_OPACITY_MIN := 0.2
+const GAME_VIRTUAL_KEYBOARD_OPACITY_MAX := 1.0
+const GAME_VIRTUAL_KEYBOARD_OPACITY_STEP := 0.05
 const TOUCH_SECONDARY_TAP_WINDOW_MS := 180
 const TOUCH_SECONDARY_QUARANTINE_MS := 320
 const TOUCH_SINGLE_TAP_DELAY_MS := 90
@@ -2309,6 +2343,7 @@ func _build_ui() -> void:
     add_child(game_virtual_controls)
     game_virtual_controls.setup(ui_tokens)
     game_virtual_controls.set_input_mode(game_virtual_input_mode)
+    _apply_game_virtual_control_preferences()
     game_virtual_controls.key_event_requested.connect(
         _on_game_virtual_key_event
     )
@@ -3221,6 +3256,16 @@ func _load_shell_settings() -> void:
     game_virtual_input_mode = _normalize_game_virtual_input_mode(String(
         cfg.get_value("input", "virtual_control_mode", game_virtual_input_mode)
     ))
+    game_virtual_menu_enabled = bool(cfg.get_value(
+        "input", "virtual_control_menu_enabled", game_virtual_menu_enabled
+    ))
+    game_virtual_keyboard_opacity = _normalize_game_virtual_keyboard_opacity(
+        float(cfg.get_value(
+            "input",
+            "virtual_control_keyboard_opacity",
+            game_virtual_keyboard_opacity
+        ))
+    )
     plugin_load_mode = String(cfg.get_value("developer", "plugin_load_mode", plugin_load_mode))
     if not plugin_load_mode in ["krkrsdl3", "aether_all"]:
         plugin_load_mode = "krkrsdl3"
@@ -3264,6 +3309,16 @@ func _normalize_game_virtual_input_mode(value: String) -> String:
         else GameVirtualControls.INPUT_MODE_MOUSE
     )
 
+func _normalize_game_virtual_keyboard_opacity(value: float) -> float:
+    return snappedf(
+        clampf(
+            value,
+            GAME_VIRTUAL_KEYBOARD_OPACITY_MIN,
+            GAME_VIRTUAL_KEYBOARD_OPACITY_MAX
+        ),
+        GAME_VIRTUAL_KEYBOARD_OPACITY_STEP
+    )
+
 func _save_shell_settings() -> void:
     var cfg := ConfigFile.new()
     cfg.set_value("interface", "language", language_mode)
@@ -3288,6 +3343,14 @@ func _save_shell_settings() -> void:
     cfg.set_value("rendering", "force_landscape", lock_landscape)
     cfg.set_value("rendering", "orientation_schema", MOBILE_ORIENTATION_SCHEMA_VERSION)
     cfg.set_value("input", "virtual_control_mode", game_virtual_input_mode)
+    cfg.set_value(
+        "input", "virtual_control_menu_enabled", game_virtual_menu_enabled
+    )
+    cfg.set_value(
+        "input",
+        "virtual_control_keyboard_opacity",
+        game_virtual_keyboard_opacity
+    )
     cfg.set_value("developer", "plugin_load_mode", plugin_load_mode)
     cfg.set_value("developer", "mock_enabled", mock_enabled)
     cfg.set_value("developer", "error_dialog_logs", error_dialog_logs)
@@ -3322,6 +3385,8 @@ func _current_settings_snapshot() -> Dictionary:
         "language": language_mode,
         "style": style_mode,
         "ios_ui_scale_mode": ios_ui_scale_mode,
+        "game_virtual_menu_enabled": game_virtual_menu_enabled,
+        "game_virtual_keyboard_opacity": game_virtual_keyboard_opacity,
         "backend": selected_backend,
         "upscale_algorithm": upscale_algorithm,
         "output_resolution": output_resolution,
@@ -3451,6 +3516,9 @@ func _settings_draft_bool(key: String, fallback: bool) -> bool:
 func _settings_draft_int(key: String, fallback: int) -> int:
     return int(settings_draft.get(key, fallback))
 
+func _settings_draft_float(key: String, fallback: float) -> float:
+    return float(settings_draft.get(key, fallback))
+
 func _settings_draft_custom_chain() -> PackedStringArray:
     return _normalize_frame_enhancement_custom_chain(settings_draft.get(
         "frame_enhancement_custom_chain",
@@ -3465,6 +3533,16 @@ func _apply_settings_snapshot(snapshot: Dictionary) -> void:
     ios_ui_scale_mode = String(snapshot.get("ios_ui_scale_mode", ios_ui_scale_mode))
     if not ios_ui_scale_mode in IOS_UI_SCALE_MODES:
         ios_ui_scale_mode = "comfortable"
+    game_virtual_menu_enabled = bool(snapshot.get(
+        "game_virtual_menu_enabled", game_virtual_menu_enabled
+    ))
+    game_virtual_keyboard_opacity = _normalize_game_virtual_keyboard_opacity(
+        float(snapshot.get(
+            "game_virtual_keyboard_opacity",
+            game_virtual_keyboard_opacity
+        ))
+    )
+    _apply_game_virtual_control_preferences()
 
     selected_backend = _normalize_backend_name(String(snapshot.get("backend", selected_backend)))
     if not selected_backend in BACKENDS:
@@ -4643,6 +4721,20 @@ func _rebuild_settings_view() -> void:
     _add_settings_row(interface_group, _settings_block(_t("settings.style"), _t("settings.style_desc"), _style_select(), stack_settings_controls))
     if OS.get_name() == "iOS":
         _add_settings_row(interface_group, _settings_block(_t("settings.ui_scale"), _t("settings.ui_scale_desc"), _ios_ui_scale_segment(), stack_settings_controls))
+    _add_settings_row(interface_group, _settings_toggle_row(
+        _t("settings.virtual_control_menu"),
+        _t("settings.virtual_control_menu_desc"),
+        _settings_draft_bool(
+            "game_virtual_menu_enabled", game_virtual_menu_enabled
+        ),
+        "game_virtual_menu"
+    ))
+    _add_settings_row(interface_group, _settings_block(
+        _t("settings.keyboard_control_opacity"),
+        _t("settings.keyboard_control_opacity_desc"),
+        _keyboard_controls_opacity_control(),
+        stack_settings_controls
+    ))
 
     var render_group := _settings_group(primary_column, _t("settings.section.render"), ICON_PERFORMANCE, animate_page, 0.055)
     _add_settings_row(render_group, _settings_block(_t("settings.render_backend"), _t("settings.render_backend_desc"), _backend_segment(), stack_settings_controls))
@@ -5446,6 +5538,9 @@ func _start_shell_scroll_drag(key: int, position: Vector2) -> void:
     _stop_shell_scroll_tween(scroll)
     var control := _control_at_pointer(position)
     var button := _nearest_base_button(control) if control != null else null
+    var horizontal_slider := (
+        _nearest_horizontal_slider(control) if control != null else null
+    )
     shell_scroll_drag_states[key] = {
         # Controls can be rebuilt between the touch press and the following
         # drag/release event (for example after changing a settings selector).
@@ -5460,6 +5555,8 @@ func _start_shell_scroll_drag(key: int, position: Vector2) -> void:
         "pending_y": 0.0,
         "dragging": false,
         "threshold": SHELL_SCROLL_BUTTON_DRAG_THRESHOLD if button != null else SHELL_SCROLL_DRAG_THRESHOLD,
+        "axis_lock": SHELL_SCROLL_AXIS_PENDING if horizontal_slider != null else SHELL_SCROLL_AXIS_NONE,
+        "gesture_delta": Vector2.ZERO,
     }
 
 func _update_shell_scroll_drag(
@@ -5493,6 +5590,12 @@ func _update_shell_scroll_drag(
     state["last"] = position
     var distance := float(state.get("distance", 0.0)) + absf(delta.y)
     var pending_y := float(state.get("pending_y", 0.0)) + delta.y
+    var axis_lock := _update_shell_scroll_axis_lock(state, delta)
+    if axis_lock == SHELL_SCROLL_AXIS_PENDING or axis_lock == SHELL_SCROLL_AXIS_HORIZONTAL:
+        state["distance"] = distance
+        state["pending_y"] = pending_y
+        shell_scroll_drag_states[key] = state
+        return false
     var was_dragging := bool(state.get("dragging", false))
     var threshold := float(state.get("threshold", SHELL_SCROLL_DRAG_THRESHOLD))
     var dragging := was_dragging or distance >= threshold
@@ -5567,6 +5670,35 @@ func _nearest_base_button(control: Control) -> BaseButton:
             return current as BaseButton
         current = current.get_parent()
     return null
+
+func _nearest_horizontal_slider(control: Control) -> HSlider:
+    var current: Node = control
+    while current != null:
+        if current is HSlider:
+            return current as HSlider
+        current = current.get_parent()
+    return null
+
+func _update_shell_scroll_axis_lock(state: Dictionary, delta: Vector2) -> String:
+    var axis_lock := String(state.get("axis_lock", SHELL_SCROLL_AXIS_NONE))
+    if axis_lock != SHELL_SCROLL_AXIS_PENDING:
+        return axis_lock
+    var gesture_delta: Vector2 = state.get("gesture_delta", Vector2.ZERO)
+    gesture_delta += delta
+    state["gesture_delta"] = gesture_delta
+    var horizontal_distance := absf(gesture_delta.x)
+    var vertical_distance := absf(gesture_delta.y)
+    if maxf(horizontal_distance, vertical_distance) < SHELL_SCROLL_SLIDER_AXIS_THRESHOLD:
+        return SHELL_SCROLL_AXIS_PENDING
+    # A gesture that begins on a horizontal slider is biased toward the
+    # slider. Only a clearly vertical initial motion may become page scrolling;
+    # once horizontal wins, later vertical wobble cannot change ownership.
+    if vertical_distance > horizontal_distance * SHELL_SCROLL_SLIDER_VERTICAL_DOMINANCE:
+        axis_lock = SHELL_SCROLL_AXIS_VERTICAL
+    else:
+        axis_lock = SHELL_SCROLL_AXIS_HORIZONTAL
+    state["axis_lock"] = axis_lock
+    return axis_lock
 
 func _is_scroll_bar_control(control: Control) -> bool:
     var current: Node = control
@@ -6340,6 +6472,46 @@ func _apple_select(width: float = 220.0):
     select.custom_minimum_size.x = width
     return select
 
+func _keyboard_controls_opacity_control() -> Control:
+    var row := HBoxContainer.new()
+    row.name = "KeyboardControlsOpacityControl"
+    row.custom_minimum_size = Vector2(272.0, 40.0)
+    row.add_theme_constant_override("separation", 8)
+
+    var slider = AetherSlider.new()
+    slider.name = "KeyboardControlsOpacitySlider"
+    slider.min_value = GAME_VIRTUAL_KEYBOARD_OPACITY_MIN
+    slider.max_value = GAME_VIRTUAL_KEYBOARD_OPACITY_MAX
+    slider.step = GAME_VIRTUAL_KEYBOARD_OPACITY_STEP
+    slider.setup(
+        ui_tokens,
+        _normalize_game_virtual_keyboard_opacity(_settings_draft_float(
+            "game_virtual_keyboard_opacity",
+            game_virtual_keyboard_opacity
+        ))
+    )
+    row.add_child(slider)
+
+    var value_label := Label.new()
+    value_label.name = "KeyboardControlsOpacityValue"
+    value_label.custom_minimum_size = Vector2(44.0, 40.0)
+    value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+    value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    value_label.add_theme_font_size_override("font_size", 13)
+    value_label.add_theme_color_override("font_color", ui_tokens.text_secondary)
+    value_label.text = _opacity_percentage_text(slider.value)
+    row.add_child(value_label)
+
+    slider.value_changed.connect(func(value: float):
+        var normalized := _normalize_game_virtual_keyboard_opacity(value)
+        value_label.text = _opacity_percentage_text(normalized)
+        _set_settings_draft_value("game_virtual_keyboard_opacity", normalized)
+    )
+    return row
+
+func _opacity_percentage_text(value: float) -> String:
+    return "%d%%" % int(round(clampf(value, 0.0, 1.0) * 100.0))
+
 func _settings_fps_row() -> Control:
     var margin := MarginContainer.new()
     margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -6684,6 +6856,8 @@ func _backend_segment() -> Control:
 func _on_setting_toggle(key: String, value: bool) -> void:
     if key == "fps_limit":
         _set_settings_draft_value("fps_limit_enabled", value)
+    elif key == "game_virtual_menu":
+        _set_settings_draft_value("game_virtual_menu_enabled", value)
     elif key == "landscape":
         _set_settings_draft_value("force_landscape", value)
     elif key == "mock":
@@ -14667,12 +14841,21 @@ func _can_forward_game_input() -> bool:
 func _sync_game_virtual_controls() -> void:
     if game_virtual_controls == null:
         return
+    _apply_game_virtual_control_preferences()
     game_virtual_controls.set_enabled(
         _should_enable_game_virtual_controls(
             _is_touch_platform(),
             _can_forward_game_input(),
             app_lifecycle_paused
         )
+    )
+
+func _apply_game_virtual_control_preferences() -> void:
+    if game_virtual_controls == null:
+        return
+    game_virtual_controls.set_menu_button_enabled(game_virtual_menu_enabled)
+    game_virtual_controls.set_keyboard_controls_opacity(
+        game_virtual_keyboard_opacity
     )
 
 func _should_enable_game_virtual_controls(

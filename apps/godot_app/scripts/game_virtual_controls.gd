@@ -30,8 +30,11 @@ const POINTER_MOD_RIGHT := 0x10
 const OVERLAY_LAYER := 120
 const BUTTON_MIN_SIZE := 44.0
 const BUTTON_MAX_SIZE := 68.0
+const MENU_BUTTON_SIZE := Vector2(44.0, 40.0)
 const CURSOR_SIZE := 44.0
 const CURSOR_HOTSPOT := Vector2(15.0, 10.0)
+const CURSOR_TAP_DRAG_THRESHOLD := 10.0
+const CURSOR_TWO_FINGER_TAP_WINDOW_MSEC := 220
 const MENU_DRAG_THRESHOLD := 6.0
 const SCROLL_HOLD_DELAY_MSEC := 360
 const SCROLL_HOLD_REPEAT_MSEC := 90
@@ -42,6 +45,8 @@ const INPUT_DEVICE_ID_EMULATION := -1
 const INPUT_MODE_MOUSE := "mouse"
 const INPUT_MODE_TOUCH := "touch"
 const INPUT_MODES := [INPUT_MODE_MOUSE, INPUT_MODE_TOUCH]
+const KEYBOARD_CONTROLS_OPACITY_MIN := 0.2
+const KEYBOARD_CONTROLS_OPACITY_MAX := 1.0
 
 const REFERENCE_FILL := Color(0.30, 0.31, 0.33, 0.58)
 const REFERENCE_FILL_HOVER := Color(0.36, 0.37, 0.39, 0.72)
@@ -74,6 +79,8 @@ var dpad_center: Panel
 var _root: Control
 var _tokens
 var _enabled := false
+var _menu_button_enabled := true
+var _keyboard_controls_opacity := 1.0
 var _panel_open := false
 var _menu_open := false
 var _safe_rect := Rect2()
@@ -86,6 +93,14 @@ var _cursor_mouse_dragging := false
 var _cursor_initialized := false
 var _cursor_drag_has_position := false
 var _cursor_drag_last_screen_position := Vector2.ZERO
+var _cursor_touch_start_screen_position := Vector2.ZERO
+var _cursor_touch_down_msec := 0
+var _cursor_touch_tap_candidate := false
+var _cursor_touch_released := false
+var _cursor_secondary_touch_index := -1
+var _cursor_secondary_touch_start_screen_position := Vector2.ZERO
+var _cursor_secondary_touch_released := false
+var _cursor_two_finger_tap_candidate := false
 var _menu_touch_index := -1
 var _menu_mouse_dragging := false
 var _menu_drag_start_pointer_y := 0.0
@@ -204,11 +219,12 @@ func setup(tokens) -> void:
     _interactive_controls.append(menu_button)
     _interactive_controls.append(keyboard_button)
     _interactive_controls.append(virtual_controls_button)
+    _apply_keyboard_controls_opacity()
     set_enabled(false)
 
 func set_enabled(enabled: bool) -> void:
     if _enabled == enabled:
-        visible = enabled
+        visible = enabled and _menu_button_enabled
         _sync_visibility()
         return
     _enabled = enabled
@@ -216,7 +232,7 @@ func set_enabled(enabled: bool) -> void:
         release_all()
         _panel_open = false
         _menu_open = false
-        _cursor_touch_index = -1
+        _reset_cursor_touch_gesture()
         _cursor_mouse_dragging = false
         _reset_cursor_drag_position()
         _menu_touch_index = -1
@@ -225,8 +241,42 @@ func set_enabled(enabled: bool) -> void:
         _dpad_touch_index = -1
         _dpad_mouse_dragging = false
         _mouse_mode_blocked_touch_indices.clear()
-    visible = enabled
+    visible = enabled and _menu_button_enabled
     _sync_visibility()
+
+func set_menu_button_enabled(enabled: bool) -> void:
+    if _menu_button_enabled == enabled:
+        visible = _enabled and enabled
+        _sync_visibility()
+        return
+    _menu_button_enabled = enabled
+    if not enabled:
+        release_all()
+        _panel_open = false
+        _menu_open = false
+        _reset_cursor_touch_gesture()
+        _cursor_mouse_dragging = false
+        _reset_cursor_drag_position()
+        _mouse_mode_blocked_touch_indices.clear()
+        _menu_touch_index = -1
+        _menu_mouse_dragging = false
+        _menu_drag_moved = false
+    visible = _enabled and enabled
+    _sync_visibility()
+
+func is_menu_button_enabled() -> bool:
+    return _menu_button_enabled
+
+func set_keyboard_controls_opacity(opacity: float) -> void:
+    _keyboard_controls_opacity = clampf(
+        opacity,
+        KEYBOARD_CONTROLS_OPACITY_MIN,
+        KEYBOARD_CONTROLS_OPACITY_MAX
+    )
+    _apply_keyboard_controls_opacity()
+
+func keyboard_controls_opacity() -> float:
+    return _keyboard_controls_opacity
 
 func is_panel_open() -> bool:
     return _panel_open
@@ -247,7 +297,7 @@ func set_input_mode(mode: String, notify: bool = false) -> void:
         _sync_visibility()
         return
     release_all()
-    _cursor_touch_index = -1
+    _reset_cursor_touch_gesture()
     _cursor_mouse_dragging = false
     _reset_cursor_drag_position()
     _mouse_mode_blocked_touch_indices.clear()
@@ -258,7 +308,7 @@ func set_input_mode(mode: String, notify: bool = false) -> void:
         input_mode_changed.emit(_input_mode)
 
 func show_virtual_controls() -> void:
-    if not _enabled:
+    if not _enabled or not _menu_button_enabled:
         return
     _menu_open = false
     _panel_open = true
@@ -288,7 +338,9 @@ func layout(_window_size: Vector2, safe_rect: Rect2) -> void:
     var safe_end := safe_rect.end
     var key_size := Vector2(diameter, diameter)
 
-    var menu_size := Vector2(maxf(46.0, diameter), maxf(42.0, diameter * 0.92))
+    # Keep the edge affordance close to the 40 px standard-button token from
+    # DESIGN.md instead of scaling it up with the larger virtual key caps.
+    var menu_size := MENU_BUTTON_SIZE
     var menu_y_range := maxf(0.0, safe_rect.size.y - menu_size.y)
     menu_button.position = Vector2(
         safe_end.x - menu_size.x,
@@ -431,6 +483,7 @@ func routes_pointer(event: InputEvent) -> bool:
             and _panel_open
             and _dpad_contains_point(touch.position)
         ):
+            _cancel_cursor_tap_for_additional_touch(touch.index)
             if _dpad_touch_index == -1:
                 _dpad_touch_index = touch.index
                 # iOS may synthesize a mouse press before exposing the same
@@ -442,7 +495,17 @@ func routes_pointer(event: InputEvent) -> bool:
             if not touch.pressed:
                 _mouse_mode_blocked_touch_indices.erase(touch.index)
             return true
-        if touch.pressed and menu_button.get_global_rect().has_point(touch.position):
+        if touch.index == _cursor_secondary_touch_index:
+            if not touch.pressed:
+                _finish_cursor_secondary_touch()
+            return true
+        if touch.pressed and _visible_interactive_control_at(touch.position):
+            _cancel_cursor_tap_for_additional_touch(touch.index)
+        if (
+            touch.pressed
+            and menu_button.visible
+            and menu_button.get_global_rect().has_point(touch.position)
+        ):
             _begin_menu_drag(touch.position.y)
             _menu_touch_index = touch.index
             return true
@@ -458,21 +521,23 @@ func routes_pointer(event: InputEvent) -> bool:
             and not _visible_interactive_control_at(touch.position)
         ):
             if _cursor_touch_index == -1:
-                _cursor_touch_index = touch.index
+                if _cursor_two_finger_tap_candidate:
+                    _cancel_cursor_two_finger_tap()
+                    _mouse_mode_blocked_touch_indices[touch.index] = true
+                    return true
                 # iOS can deliver the same finger as both a mouse track and a
                 # ScreenTouch track. Their positions are not guaranteed to be
                 # in the same coordinate space, so the real touch must always
                 # take ownership before its first ScreenDrag.
                 if _cursor_mouse_dragging:
                     _cursor_mouse_dragging = false
-                _begin_cursor_drag(touch.position)
+                _begin_cursor_touch(touch.index, touch.position)
             elif _cursor_touch_index != touch.index:
-                _mouse_mode_blocked_touch_indices[touch.index] = true
+                _begin_cursor_secondary_touch(touch.index, touch.position)
             return true
         if touch.index == _cursor_touch_index:
             if not touch.pressed:
-                _cursor_touch_index = -1
-                _finish_cursor_drag_if_inactive()
+                _finish_cursor_primary_touch()
             return true
     elif event is InputEventScreenDrag:
         var drag := event as InputEventScreenDrag
@@ -481,11 +546,14 @@ func routes_pointer(event: InputEvent) -> bool:
             return true
         if _mouse_mode_blocked_touch_indices.has(drag.index):
             return true
+        if drag.index == _cursor_secondary_touch_index:
+            _update_cursor_secondary_touch(drag.position)
+            return true
         if drag.index == _menu_touch_index:
             _drag_menu_to(drag.position.y)
             return true
         if drag.index == _cursor_touch_index:
-            _drag_cursor_to(drag.position)
+            _update_cursor_primary_touch(drag.position)
             return true
     elif event is InputEventMouseButton:
         var mouse_button := event as InputEventMouseButton
@@ -508,6 +576,7 @@ func routes_pointer(event: InputEvent) -> bool:
                 mouse_button.device != INPUT_DEVICE_ID_EMULATION
                 and
                 mouse_button.pressed
+                and menu_button.visible
                 and menu_button.get_global_rect().has_point(mouse_button.position)
             ):
                 _begin_menu_drag(mouse_button.position.y)
@@ -1066,13 +1135,15 @@ func _clear_menu_drag_flag() -> void:
         _menu_drag_moved = false
 
 func _toggle_menu() -> void:
-    if not _enabled:
+    if not _enabled or not _menu_button_enabled:
         return
     if _menu_drag_moved:
         _menu_drag_moved = false
         return
     if _panel_open:
         release_all()
+        _reset_cursor_touch_gesture()
+        _mouse_mode_blocked_touch_indices.clear()
         _panel_open = false
         _menu_open = true
     else:
@@ -1080,9 +1151,11 @@ func _toggle_menu() -> void:
     _sync_visibility()
 
 func _request_keyboard() -> void:
-    if not _enabled:
+    if not _enabled or not _menu_button_enabled:
         return
     release_all()
+    _reset_cursor_touch_gesture()
+    _mouse_mode_blocked_touch_indices.clear()
     _menu_open = false
     _panel_open = false
     _sync_visibility()
@@ -1109,15 +1182,23 @@ func _sync_input_mode_presentation() -> void:
 func _sync_visibility() -> void:
     if menu_button == null:
         return
-    menu_button.visible = _enabled
-    keyboard_button.visible = _enabled and _menu_open
-    virtual_controls_button.visible = _enabled and _menu_open
+    var controls_visible := _enabled and _menu_button_enabled
+    menu_button.visible = controls_visible
+    keyboard_button.visible = controls_visible and _menu_open
+    virtual_controls_button.visible = controls_visible and _menu_open
     for control in _panel_controls:
-        control.visible = _enabled and _panel_open
-    var show_virtual_mouse := _enabled and _panel_open and not is_touch_mode()
+        control.visible = controls_visible and _panel_open
+    var show_virtual_mouse := controls_visible and _panel_open and not is_touch_mode()
     mouse_left_button.visible = show_virtual_mouse
     mouse_right_button.visible = show_virtual_mouse
     cursor_handle.visible = show_virtual_mouse
+
+func _apply_keyboard_controls_opacity() -> void:
+    for control in _panel_controls:
+        # The pointer must remain precise even when the surrounding virtual
+        # key caps are intentionally subdued.
+        var opacity := 1.0 if control == cursor_handle else _keyboard_controls_opacity
+        control.self_modulate = Color(1.0, 1.0, 1.0, opacity)
 
 func _press_key(key_code: int) -> void:
     if not _enabled or not _panel_open or _held_keys.has(key_code):
@@ -1204,6 +1285,129 @@ func _move_cursor_by(screen_delta: Vector2) -> void:
     var delta := current - previous
     if not delta.is_zero_approx():
         pointer_move_requested.emit(current, delta)
+
+func _begin_cursor_touch(index: int, screen_position: Vector2) -> void:
+    _cursor_touch_index = index
+    _cursor_touch_start_screen_position = screen_position
+    _cursor_touch_down_msec = Time.get_ticks_msec()
+    _cursor_touch_tap_candidate = true
+    _cursor_touch_released = false
+    _cursor_secondary_touch_index = -1
+    _cursor_secondary_touch_start_screen_position = Vector2.ZERO
+    _cursor_secondary_touch_released = false
+    _cursor_two_finger_tap_candidate = false
+    _begin_cursor_drag(screen_position)
+
+func _begin_cursor_secondary_touch(index: int, screen_position: Vector2) -> void:
+    if _cursor_secondary_touch_index != -1:
+        _cancel_cursor_two_finger_tap()
+        _mouse_mode_blocked_touch_indices[index] = true
+        return
+    var age_msec := Time.get_ticks_msec() - _cursor_touch_down_msec
+    if (
+        not _cursor_touch_tap_candidate
+        or age_msec > CURSOR_TWO_FINGER_TAP_WINDOW_MSEC
+    ):
+        _cursor_touch_tap_candidate = false
+        _mouse_mode_blocked_touch_indices[index] = true
+        return
+    _cursor_touch_tap_candidate = false
+    _cursor_secondary_touch_index = index
+    _cursor_secondary_touch_start_screen_position = screen_position
+    _cursor_secondary_touch_released = false
+    _cursor_two_finger_tap_candidate = true
+
+func _update_cursor_primary_touch(screen_position: Vector2) -> void:
+    var moved_distance := screen_position.distance_to(
+        _cursor_touch_start_screen_position
+    )
+    if _cursor_two_finger_tap_candidate:
+        if moved_distance >= CURSOR_TAP_DRAG_THRESHOLD:
+            _cancel_cursor_two_finger_tap()
+            _drag_cursor_to(screen_position)
+        return
+    if moved_distance >= CURSOR_TAP_DRAG_THRESHOLD:
+        _cursor_touch_tap_candidate = false
+    _drag_cursor_to(screen_position)
+
+func _update_cursor_secondary_touch(screen_position: Vector2) -> void:
+    if (
+        _cursor_two_finger_tap_candidate
+        and screen_position.distance_to(
+            _cursor_secondary_touch_start_screen_position
+        ) >= CURSOR_TAP_DRAG_THRESHOLD
+    ):
+        _cancel_cursor_two_finger_tap()
+
+func _finish_cursor_primary_touch() -> void:
+    _cursor_touch_index = -1
+    _cursor_touch_released = true
+    _finish_cursor_drag_if_inactive()
+    if _cursor_two_finger_tap_candidate:
+        _finish_cursor_two_finger_tap_if_ready()
+        return
+    var should_click := _cursor_touch_tap_candidate
+    _reset_cursor_touch_gesture()
+    if should_click:
+        _click_cursor_button(0, 0)
+
+func _finish_cursor_secondary_touch() -> void:
+    _cursor_secondary_touch_index = -1
+    _cursor_secondary_touch_released = true
+    _finish_cursor_two_finger_tap_if_ready()
+
+func _finish_cursor_two_finger_tap_if_ready() -> void:
+    if (
+        not _cursor_two_finger_tap_candidate
+        or not _cursor_touch_released
+        or not _cursor_secondary_touch_released
+    ):
+        return
+    _reset_cursor_touch_gesture()
+    _click_cursor_button(1, POINTER_MOD_RIGHT)
+
+func _cancel_cursor_two_finger_tap() -> void:
+    _cursor_two_finger_tap_candidate = false
+    _cursor_touch_tap_candidate = false
+    if _cursor_secondary_touch_index != -1:
+        _mouse_mode_blocked_touch_indices[_cursor_secondary_touch_index] = true
+    _cursor_secondary_touch_index = -1
+    _cursor_secondary_touch_released = false
+    _cursor_secondary_touch_start_screen_position = Vector2.ZERO
+    if _cursor_touch_released:
+        _reset_cursor_touch_gesture()
+
+func _cancel_cursor_tap_for_additional_touch(index: int) -> void:
+    if index == _cursor_touch_index or index == _cursor_secondary_touch_index:
+        return
+    if _cursor_two_finger_tap_candidate:
+        _cancel_cursor_two_finger_tap()
+    elif _cursor_touch_index != -1:
+        _cursor_touch_tap_candidate = false
+
+func _reset_cursor_touch_gesture() -> void:
+    _cursor_touch_index = -1
+    _cursor_touch_start_screen_position = Vector2.ZERO
+    _cursor_touch_down_msec = 0
+    _cursor_touch_tap_candidate = false
+    _cursor_touch_released = false
+    _cursor_secondary_touch_index = -1
+    _cursor_secondary_touch_start_screen_position = Vector2.ZERO
+    _cursor_secondary_touch_released = false
+    _cursor_two_finger_tap_candidate = false
+    if not _cursor_mouse_dragging:
+        _reset_cursor_drag_position()
+
+func _click_cursor_button(button: int, modifiers: int) -> void:
+    if (
+        not _enabled
+        or not _panel_open
+        or is_touch_mode()
+        or _held_mouse_buttons.has(modifiers)
+    ):
+        return
+    _press_mouse_button(button, modifiers)
+    _release_mouse_button(button, modifiers)
 
 func _begin_cursor_drag(screen_position: Vector2) -> void:
     _cursor_drag_last_screen_position = screen_position

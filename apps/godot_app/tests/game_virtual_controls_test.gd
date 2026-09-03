@@ -82,6 +82,11 @@ func _run() -> void:
     ):
         _fail("Menu does not start at the top edge")
         return
+    if not controls.menu_button.size.is_equal_approx(
+        GameVirtualControls.MENU_BUTTON_SIZE
+    ):
+        _fail("edge Menu does not use the compact DESIGN.md button size")
+        return
     if (
         not controls.menu_button.text.is_empty()
         or controls.menu_button.get_node_or_null("MenuIcon") == null
@@ -100,6 +105,32 @@ func _run() -> void:
         or menu_style.corner_radius_bottom_right != 0
     ):
         _fail("edge Menu is missing its visible right-edge semicircle")
+        return
+
+    var hidden_menu_position: Vector2 = (
+        controls.menu_button.get_global_rect().get_center()
+    )
+    controls.set_menu_button_enabled(false)
+    await process_frame
+    if (
+        controls.visible
+        or controls.menu_button.visible
+        or controls.is_menu_open()
+        or controls.is_panel_open()
+    ):
+        _fail("disabled edge Menu still renders virtual controls")
+        return
+    var hidden_menu_touch := InputEventScreenTouch.new()
+    hidden_menu_touch.index = 30
+    hidden_menu_touch.pressed = true
+    hidden_menu_touch.position = hidden_menu_position
+    if controls.routes_pointer(hidden_menu_touch):
+        _fail("disabled edge Menu retained an invisible input target")
+        return
+    controls.set_menu_button_enabled(true)
+    await process_frame
+    if not controls.visible or not controls.menu_button.visible:
+        _fail("default-enabled edge Menu did not return after re-enabling")
         return
 
     var menu_x: float = controls.menu_button.position.x
@@ -162,6 +193,23 @@ func _run() -> void:
     if not controls.is_panel_open() or _virtual_requests != 1:
         _fail("virtual-control panel did not open")
         return
+    controls.set_keyboard_controls_opacity(0.55)
+    if (
+        not is_equal_approx(controls.keyboard_controls_opacity(), 0.55)
+        or not is_equal_approx(controls.escape_button.self_modulate.a, 0.55)
+        or not is_equal_approx(controls.dpad_backdrop.self_modulate.a, 0.55)
+        or not is_equal_approx(controls.cursor_handle.self_modulate.a, 1.0)
+    ):
+        _fail("keyboard-control opacity did not apply without dimming the cursor")
+        return
+    controls.set_keyboard_controls_opacity(0.0)
+    if not is_equal_approx(
+        controls.keyboard_controls_opacity(),
+        GameVirtualControls.KEYBOARD_CONTROLS_OPACITY_MIN
+    ):
+        _fail("keyboard-control opacity did not clamp to its safe minimum")
+        return
+    controls.set_keyboard_controls_opacity(1.0)
     var required_controls: Array[Control] = [
         controls.escape_button, controls.control_button,
         controls.w_button, controls.a_button, controls.s_button, controls.d_button,
@@ -564,6 +612,119 @@ func _run() -> void:
         _fail("switching back did not restore mouse-mode controls")
         return
 
+    _pointer_buttons.clear()
+    var button_area_down := InputEventScreenTouch.new()
+    button_area_down.index = 20
+    button_area_down.pressed = true
+    button_area_down.position = controls.escape_button.get_global_rect().get_center()
+    var button_area_up := InputEventScreenTouch.new()
+    button_area_up.index = button_area_down.index
+    button_area_up.pressed = false
+    button_area_up.position = button_area_down.position
+    controls.routes_pointer(button_area_down)
+    controls.routes_pointer(button_area_up)
+    if not _pointer_buttons.is_empty():
+        _fail("a virtual-key touch was misclassified as a trackpad click")
+        return
+
+    var tap_position := (
+        safe_rect.position + safe_rect.size * Vector2(0.55, 0.28)
+    )
+    var click_cursor_position := controls.cursor_screen_position()
+    var single_tap_down := InputEventScreenTouch.new()
+    single_tap_down.index = 21
+    single_tap_down.pressed = true
+    single_tap_down.position = tap_position
+    var single_tap_up := InputEventScreenTouch.new()
+    single_tap_up.index = single_tap_down.index
+    single_tap_up.pressed = false
+    single_tap_up.position = tap_position
+    if (
+        not controls.routes_pointer(single_tap_down)
+        or not controls.routes_pointer(single_tap_up)
+        or _pointer_buttons.size() != 2
+        or not _pointer_buttons[0].pressed
+        or _pointer_buttons[0].button != 0
+        or _pointer_buttons[0].modifiers != 0
+        or _pointer_buttons[1].pressed
+        or _pointer_buttons[1].button != 0
+        or not _pointer_buttons[0].position.is_equal_approx(
+            click_cursor_position
+        )
+        or not _pointer_buttons[1].position.is_equal_approx(
+            click_cursor_position
+        )
+    ):
+        _fail("single-finger trackpad tap did not emit a left click")
+        return
+
+    _pointer_buttons.clear()
+    var two_finger_first_down := InputEventScreenTouch.new()
+    two_finger_first_down.index = 22
+    two_finger_first_down.pressed = true
+    two_finger_first_down.position = tap_position
+    var two_finger_second_down := InputEventScreenTouch.new()
+    two_finger_second_down.index = 23
+    two_finger_second_down.pressed = true
+    two_finger_second_down.position = tap_position + Vector2(-32.0, 0.0)
+    controls.routes_pointer(two_finger_first_down)
+    controls.routes_pointer(two_finger_second_down)
+    var two_finger_first_up := InputEventScreenTouch.new()
+    two_finger_first_up.index = two_finger_first_down.index
+    two_finger_first_up.pressed = false
+    two_finger_first_up.position = two_finger_first_down.position
+    controls.routes_pointer(two_finger_first_up)
+    if not _pointer_buttons.is_empty():
+        _fail("two-finger tap clicked before both fingers were released")
+        return
+    var two_finger_second_up := InputEventScreenTouch.new()
+    two_finger_second_up.index = two_finger_second_down.index
+    two_finger_second_up.pressed = false
+    two_finger_second_up.position = two_finger_second_down.position
+    controls.routes_pointer(two_finger_second_up)
+    if (
+        _pointer_buttons.size() != 2
+        or not _pointer_buttons[0].pressed
+        or _pointer_buttons[0].button != 1
+        or _pointer_buttons[0].modifiers != 0x10
+        or _pointer_buttons[1].pressed
+        or _pointer_buttons[1].button != 1
+        or _pointer_buttons[1].modifiers != 0x10
+        or not _pointer_buttons[0].position.is_equal_approx(
+            click_cursor_position
+        )
+        or not _pointer_buttons[1].position.is_equal_approx(
+            click_cursor_position
+        )
+    ):
+        _fail("two-finger trackpad tap did not emit a right click")
+        return
+
+    _pointer_buttons.clear()
+    two_finger_first_down.index = 24
+    two_finger_second_down.index = 25
+    controls.routes_pointer(two_finger_first_down)
+    controls.routes_pointer(two_finger_second_down)
+    var two_finger_drag := InputEventScreenDrag.new()
+    two_finger_drag.index = two_finger_second_down.index
+    two_finger_drag.position = (
+        two_finger_second_down.position
+        + Vector2(GameVirtualControls.CURSOR_TAP_DRAG_THRESHOLD + 2.0, 0.0)
+    )
+    two_finger_drag.relative = Vector2(
+        GameVirtualControls.CURSOR_TAP_DRAG_THRESHOLD + 2.0,
+        0.0
+    )
+    controls.routes_pointer(two_finger_drag)
+    two_finger_second_up.index = two_finger_second_down.index
+    two_finger_second_up.position = two_finger_drag.position
+    two_finger_first_up.index = two_finger_first_down.index
+    controls.routes_pointer(two_finger_second_up)
+    controls.routes_pointer(two_finger_first_up)
+    if not _pointer_buttons.is_empty():
+        _fail("a two-finger drag was misclassified as a right click")
+        return
+
     controls.escape_button.emit_signal("button_down")
     controls.escape_button.emit_signal("button_down")
     controls.escape_button.emit_signal("button_up")
@@ -625,6 +786,9 @@ func _run() -> void:
     cursor_up.position = cursor_drag.position
     if not controls.routes_pointer(cursor_up):
         _fail("cursor release was not captured")
+        return
+    if not _pointer_buttons.is_empty():
+        _fail("cursor drag was misclassified as a left click")
         return
 
     controls.mouse_left_button.emit_signal("button_down")
