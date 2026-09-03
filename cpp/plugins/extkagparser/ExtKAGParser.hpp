@@ -14,6 +14,7 @@
 //---------------------------------------------------------------------------
 
 #include "ExttjsHashSearch.h"
+#include <deque>
 #include <vector>
 #include "TJSAry.h"
 #include "TJSDic.h"
@@ -284,6 +285,10 @@ private:
 
 	bool Interrupted;
 
+	// Tags produced from one translated explicit-character run.  Keep the
+	// parser's per-character contract while translating with sentence context.
+	std::deque<iTJSDispatch2 *> TextTagQueue;
+
 	// ExtKAGParser extends
 	bool MultiLineTagEnabled;
 	bool NumericMacroArgumentsEnabled;
@@ -367,6 +372,9 @@ public:
 
 private:
 	iTJSDispatch2 * _GetNextTag();
+	iTJSDispatch2 * CloneTag(iTJSDispatch2 *source);
+	void ClearTextTagQueue();
+	void PrefetchTextLookahead(tjs_int current_run_end);
 
 public:
 	iTJSDispatch2 * GetNextTag();

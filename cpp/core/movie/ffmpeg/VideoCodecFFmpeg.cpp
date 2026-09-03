@@ -852,18 +852,15 @@ bool CDVDVideoCodecFFmpeg::GetPicture(DVDVideoPicture *pDvdVideoPicture) {
     pix_fmt = (AVPixelFormat)m_pFrame->format;
     pDvdVideoPicture->format = CDVDCodecUtils::EFormatFromPixfmt(pix_fmt);
 
-    while(m_pCodecContext->coded_width > 0 &&
-          m_pCodecContext->coded_height > 0) {
-        if(pDvdVideoPicture->format == RENDER_FMT_YUV420P) {
-            int pitch = m_pFrame->linesize[0];
-            if(pitch < m_pCodecContext->coded_width ||
-               pitch > m_pCodecContext->coded_width + 16)
-                break;
-        }
-        m_pFrame->width = m_pCodecContext->coded_width;
-        m_pFrame->height = m_pCodecContext->coded_height;
-        break;
-    }
+    // AVFrame width/height describe the visible frame. coded_width and
+    // coded_height may include codec alignment padding (for example an H.264
+    // 1920x1080 frame can have coded_height == 1088). Passing that padding to
+    // swscale as visible pixels corrupts the conversion. Only use codec
+    // dimensions as a defensive fallback when the decoder omitted a size.
+    if(m_pFrame->width <= 0)
+        m_pFrame->width = m_pCodecContext->width;
+    if(m_pFrame->height <= 0)
+        m_pFrame->height = m_pCodecContext->height;
 
     if(!GetPictureCommon(pDvdVideoPicture))
         return false;

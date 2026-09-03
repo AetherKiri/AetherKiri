@@ -110,6 +110,10 @@ int32_t aether_native_launch_file_picker_present(
 int32_t aether_native_cover_file_picker_present(
     const char *title, const char *initial_directory,
     const char *destination_directory);
+int32_t aether_native_translation_model_file_picker_present(
+    const char *title, const char *initial_directory);
+char *aether_native_translation_model_restore_path(
+    const char *fallback_path);
 char *aether_native_launch_file_picker_copy_result_json();
 void aether_native_launch_file_picker_free_string(char *value);
 }
@@ -259,8 +263,137 @@ struct GodotGpuOp {
     uint32_t native_height = 0;
     uint64_t imported_texture = 0;
     uint64_t queue_sequence = 0;
+    // Timestamp assigned when the operation enters the bridge queue.  This is
+    // intentionally separate from profile_enqueued_at, which is also used to
+    // measure the CPU packing interval for texture updates.
+    std::chrono::steady_clock::time_point profile_submitted_at{};
     std::mutex done_mutex;
     std::condition_variable done_cv;
+};
+
+const char *GodotGpuOpTypeName(GodotGpuOp::Type type) {
+    switch (type) {
+        case GodotGpuOp::Type::Update: return "update";
+        case GodotGpuOp::Type::Clear: return "clear";
+        case GodotGpuOp::Type::Copy: return "copy";
+        case GodotGpuOp::Type::CopySelf: return "copy_self";
+        case GodotGpuOp::Type::CopyTriangles: return "copy_triangles";
+        case GodotGpuOp::Type::DrawTriangles: return "draw_triangles";
+        case GodotGpuOp::Type::DrawMaskedTriangles: return "draw_masked_triangles";
+        case GodotGpuOp::Type::Mosaic: return "mosaic";
+        case GodotGpuOp::Type::Read: return "read";
+        case GodotGpuOp::Type::ReadAsync: return "read_async";
+        case GodotGpuOp::Type::Blend: return "blend";
+        case GodotGpuOp::Type::Blend2: return "blend2";
+        case GodotGpuOp::Type::Blend3: return "blend3";
+        case GodotGpuOp::Type::ArtemisShader: return "artemis_shader";
+        case GodotGpuOp::Type::PrepareNativeWrite: return "prepare_native_write";
+        case GodotGpuOp::Type::PublishNativeWrite: return "publish_native_write";
+        case GodotGpuOp::Type::ImportApplePixelBuffer: return "import_apple_pixel_buffer";
+        case GodotGpuOp::Type::ImportAndroidHardwareBuffer: return "import_android_hardware_buffer";
+        case GodotGpuOp::Type::Release: return "release";
+        case GodotGpuOp::Type::Flush: return "flush";
+    }
+    return "unknown";
+}
+
+bool GodotGpuOpProfileEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_GODOT_GPU_OP_PROFILE");
+        return value != nullptr && value[0] != '\0' &&
+               std::strcmp(value, "0") != 0;
+    }();
+    return enabled;
+}
+
+double GodotGpuOpProfileSlowMs() {
+    static const double threshold = [] {
+        const char *value = std::getenv("AETHERKIRI_GODOT_GPU_OP_SLOW_MS");
+        if (value == nullptr || value[0] == '\0') return 5.0;
+        char *end = nullptr;
+        const double parsed = std::strtod(value, &end);
+        return end != value && std::isfinite(parsed) && parsed > 0.0
+                   ? parsed
+                   : 5.0;
+    }();
+    return threshold;
+}
+
+void LogGodotGpuOpProfile(const char *phase,
+                          const GodotGpuOp *op,
+                          double elapsed_ms) {
+    if (!GodotGpuOpProfileEnabled() || op == nullptr ||
+        elapsed_ms < GodotGpuOpProfileSlowMs()) {
+        return;
+    }
+    const uint32_t width = op->profile_width != 0
+        ? op->profile_width
+        : static_cast<uint32_t>(std::max(0.0f, op->size.x));
+    const uint32_t height = op->profile_height != 0
+        ? op->profile_height
+        : static_cast<uint32_t>(std::max(0.0f, op->size.y));
+    double queue_ms = 0.0;
+    if (op->profile_submitted_at.time_since_epoch().count() != 0) {
+        queue_ms = std::chrono::duration<double, std::milli>(
+                       std::chrono::steady_clock::now() -
+                       op->profile_submitted_at)
+                       .count();
+    }
+    RenderingServer *server = RenderingServer::get_singleton();
+    std::ostringstream message;
+    message << std::fixed << std::setprecision(3)
+            << "godot gpu op profile: phase="
+            << (phase != nullptr ? phase : "unknown")
+            << " type=" << GodotGpuOpTypeName(op->type)
+            << " elapsed_ms=" << elapsed_ms
+            << " queue_ms=" << queue_ms
+            << " size=" << width << "x" << height
+            << " render_thread="
+            << (server != nullptr && server->is_on_render_thread() ? 1 : 0);
+    UtilityFunctions::print(String(message.str().c_str()));
+}
+
+class GodotGpuOpExecutionProfile final {
+public:
+    explicit GodotGpuOpExecutionProfile(
+        const std::shared_ptr<GodotGpuOp> &op)
+        : op_(op.get()), enabled_(GodotGpuOpProfileEnabled()),
+          started_(enabled_ ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{}) {}
+
+    ~GodotGpuOpExecutionProfile() {
+        if (!enabled_) return;
+        const double elapsed_ms = std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() - started_)
+                                      .count();
+        LogGodotGpuOpProfile("execute", op_, elapsed_ms);
+    }
+
+private:
+    const GodotGpuOp *op_ = nullptr;
+    bool enabled_ = false;
+    std::chrono::steady_clock::time_point started_{};
+};
+
+class GodotGpuOpWaitProfile final {
+public:
+    GodotGpuOpWaitProfile(const std::shared_ptr<GodotGpuOp> &op, bool wait)
+        : op_(op.get()), enabled_(wait && GodotGpuOpProfileEnabled()),
+          started_(enabled_ ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{}) {}
+
+    ~GodotGpuOpWaitProfile() {
+        if (!enabled_) return;
+        const double elapsed_ms = std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() - started_)
+                                      .count();
+        LogGodotGpuOpProfile("wait", op_, elapsed_ms);
+    }
+
+private:
+    const GodotGpuOp *op_ = nullptr;
+    bool enabled_ = false;
+    std::chrono::steady_clock::time_point started_{};
 };
 
 struct GodotGpuReadbackRequest {
@@ -5237,6 +5370,7 @@ bool ExecuteGodotGpuMosaic(RenderingDevice *rd,
 
 bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &op) {
     if (rd == nullptr || op == nullptr) return false;
+    GodotGpuOpExecutionProfile execution_profile(op);
     bool result = false;
     bool wrote_texture = false;
     switch (op->type) {
@@ -6034,9 +6168,13 @@ void ForceDrainGodotGpuOpsOnRenderThread(uint64_t sequence_cutoff) {
 }
 
 bool RunGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool wait) {
+    GodotGpuOpWaitProfile wait_profile(op, wait);
     RenderingServer *server = RenderingServer::get_singleton();
     RenderingDevice *rd = MainRenderingDevice();
     if (op == nullptr) return false;
+    if (op->profile_submitted_at.time_since_epoch().count() == 0) {
+        op->profile_submitted_at = std::chrono::steady_clock::now();
+    }
     g_gpu_op_submitted.fetch_add(1, std::memory_order_relaxed);
     if (op->type == GodotGpuOp::Type::Blend ||
         op->type == GodotGpuOp::Type::Blend2 ||
@@ -7742,6 +7880,8 @@ bool BridgeReadRgba(uint64_t texture, void *out_pixels, size_t out_pixels_size,
     auto op = std::make_shared<GodotGpuOp>();
     op->type = GodotGpuOp::Type::Read;
     op->src = record.rid;
+    op->profile_width = record.width;
+    op->profile_height = record.height;
     if (!RunGodotGpuOpSync(op)) return false;
     PackedByteArray data = op->data;
     const uint8_t *src = data.ptr();
@@ -8620,6 +8760,56 @@ public:
 
     bool is_frame_enhancement_built() const {
         return frame_effect_provider_ != nullptr;
+    }
+
+    bool is_text_translation_available() const {
+        return engine_is_text_translation_available() != 0;
+    }
+
+    int get_text_translation_state() const {
+        return static_cast<int>(engine_get_text_translation_state());
+    }
+
+    Dictionary get_text_translation_stats() const {
+        Dictionary output;
+        engine_text_translation_stats_t stats{};
+        stats.struct_size = sizeof(stats);
+        if (engine_get_text_translation_stats(&stats) != ENGINE_RESULT_OK) {
+            return output;
+        }
+        output["state"] = static_cast<int64_t>(stats.state);
+        output["backend"] = static_cast<int64_t>(stats.backend);
+        output["active_jobs"] = static_cast<int64_t>(stats.active_jobs);
+        output["model_file_bytes"] = static_cast<int64_t>(stats.model_file_bytes);
+        output["model_tensor_bytes"] = static_cast<int64_t>(stats.model_tensor_bytes);
+        output["context_state_bytes"] = static_cast<int64_t>(stats.context_state_bytes);
+        output["model_resident_bytes_estimate"] =
+            static_cast<int64_t>(stats.model_resident_bytes_estimate);
+        output["priority_queue_entries"] =
+            static_cast<int64_t>(stats.priority_queue_entries);
+        output["prefetch_queue_entries"] =
+            static_cast<int64_t>(stats.prefetch_queue_entries);
+        output["cache_entries"] = static_cast<int64_t>(stats.cache_entries);
+        output["failed_entries"] = static_cast<int64_t>(stats.failed_entries);
+        output["cache_hits"] = static_cast<int64_t>(stats.cache_hits);
+        output["cache_misses"] = static_cast<int64_t>(stats.cache_misses);
+        output["translations_started"] =
+            static_cast<int64_t>(stats.translations_started);
+        output["translations_completed"] =
+            static_cast<int64_t>(stats.translations_completed);
+        output["translations_failed"] =
+            static_cast<int64_t>(stats.translations_failed);
+        output["translations_cancelled"] =
+            static_cast<int64_t>(stats.translations_cancelled);
+        output["model_load_us"] = static_cast<int64_t>(stats.model_load_us);
+        output["last_inference_us"] =
+            static_cast<int64_t>(stats.last_inference_us);
+        output["max_inference_us"] = static_cast<int64_t>(stats.max_inference_us);
+        output["last_synchronous_wait_us"] =
+            static_cast<int64_t>(stats.last_synchronous_wait_us);
+        output["total_synchronous_wait_us"] =
+            static_cast<int64_t>(stats.total_synchronous_wait_us);
+        return output;
     }
 
     bool is_frame_enhancement_available() const {
@@ -10507,6 +10697,37 @@ void main() {
 #endif
     }
 
+    bool native_translation_model_file_picker_open(
+            const String &title, const String &initial_directory) const {
+#if defined(__APPLE__)
+        const CharString title_utf8 = title.utf8();
+        const CharString directory_utf8 = initial_directory.utf8();
+        return aether_native_translation_model_file_picker_present(
+                   title_utf8.get_data(), directory_utf8.get_data()) != 0;
+#else
+        (void)title;
+        (void)initial_directory;
+        return false;
+#endif
+    }
+
+    String native_translation_model_restore_path(
+            const String &fallback_path) const {
+#if defined(__APPLE__)
+        const CharString fallback_utf8 = fallback_path.utf8();
+        char *path = aether_native_translation_model_restore_path(
+            fallback_utf8.get_data());
+        if (path == nullptr) {
+            return fallback_path;
+        }
+        const String result = String::utf8(path);
+        aether_native_launch_file_picker_free_string(path);
+        return result;
+#else
+        return fallback_path;
+#endif
+    }
+
     String native_launch_file_picker_take_result_json() const {
 #if defined(__APPLE__)
         char *json = aether_native_launch_file_picker_copy_result_json();
@@ -10616,6 +10837,12 @@ protected:
                              &AetherRuntimePlayer::get_frame_texture_backend);
         ClassDB::bind_method(D_METHOD("is_frame_enhancement_built"),
                              &AetherRuntimePlayer::is_frame_enhancement_built);
+        ClassDB::bind_method(D_METHOD("is_text_translation_available"),
+                             &AetherRuntimePlayer::is_text_translation_available);
+        ClassDB::bind_method(D_METHOD("get_text_translation_state"),
+                             &AetherRuntimePlayer::get_text_translation_state);
+        ClassDB::bind_method(D_METHOD("get_text_translation_stats"),
+                             &AetherRuntimePlayer::get_text_translation_stats);
         ClassDB::bind_method(D_METHOD("is_frame_enhancement_available"),
                              &AetherRuntimePlayer::is_frame_enhancement_available);
         ClassDB::bind_method(D_METHOD("set_frame_enhancement_enabled", "enabled"),
@@ -10671,6 +10898,13 @@ protected:
             D_METHOD("native_cover_file_picker_open", "title", "initial_directory",
                      "destination_directory"),
             &AetherRuntimePlayer::native_cover_file_picker_open);
+        ClassDB::bind_method(
+            D_METHOD("native_translation_model_file_picker_open", "title",
+                     "initial_directory"),
+            &AetherRuntimePlayer::native_translation_model_file_picker_open);
+        ClassDB::bind_method(
+            D_METHOD("native_translation_model_restore_path", "fallback_path"),
+            &AetherRuntimePlayer::native_translation_model_restore_path);
         ClassDB::bind_method(
             D_METHOD("native_launch_file_picker_take_result_json"),
             &AetherRuntimePlayer::native_launch_file_picker_take_result_json);
@@ -11241,6 +11475,12 @@ private:
         frame_present_pending_slot_ = 0;
         frame_present_has_current_ = false;
         frame_present_has_pending_ = false;
+        // The copy op may still be queued on Godot's render thread. Keep the
+        // shared_ptr alive until the queued operation reaches the release
+        // fence below, then drop our reference. The queue owns its own
+        // reference, so clearing this member is safe after RunGodotGpuOpSync
+        // has ordered the releases behind all preceding work.
+        frame_present_pending_op_.reset();
         frame_present_pending_draw_frame_ = 0;
         frame_present_serial_ = UINT64_MAX;
         if (frame_texture_backend_ == "godot_native_gpu_presented" ||
@@ -11381,18 +11621,34 @@ private:
             ? static_cast<uint64_t>(engine->get_frames_drawn())
             : 0;
         if (frame_present_has_pending_) {
+            bool pending_done = false;
+            bool pending_result = false;
+            if (frame_present_pending_op_) {
+                std::lock_guard<std::mutex> done_lock(
+                    frame_present_pending_op_->done_mutex);
+                pending_done = frame_present_pending_op_->done;
+                pending_result = frame_present_pending_op_->result;
+            }
             const bool pending_complete =
                 drawn_frame > frame_present_pending_draw_frame_;
-            if (pending_complete) {
+            if (pending_complete && pending_done && pending_result) {
                 frame_present_current_slot_ = frame_present_pending_slot_;
                 frame_present_has_current_ = true;
                 frame_present_has_pending_ = false;
+                frame_present_pending_op_.reset();
                 // The RD storage stays stable while its pixels change. Notify
                 // TextureRect/Canvas explicitly so the already-bound
                 // Texture2DRD is invalidated without replacing the Resource
                 // object that the scene owns.
                 frame_present_textures_[frame_present_current_slot_]
                     ->emit_changed();
+            } else if (pending_complete && pending_done) {
+                // A failed asynchronous copy must not permanently block the
+                // presentation ring. Drop the failed slot and enqueue a fresh
+                // copy below; the current slot (if any) remains valid while
+                // that retry is in flight.
+                frame_present_has_pending_ = false;
+                frame_present_pending_op_.reset();
             } else {
                 frame_texture_serial_ = serial;
                 frame_texture_backend_ = backend_name;
@@ -11412,7 +11668,15 @@ private:
         op->src_pos = Vector3();
         op->dst_pos = Vector3();
         op->size = Vector3(width, height, 1);
-        if (!RunGodotGpuOpSync(op)) {
+        // Do not wait for the render thread here. This method runs from the
+        // Godot main thread, while the copy is encoded on the RenderingServer
+        // render thread. A synchronous wait couples a game-script frame to
+        // the next render submission and turns a character/face texture burst
+        // into a 100+ ms main-thread spike. The ring already delays promotion
+        // until a later drawn frame; retaining the op lets us additionally
+        // verify that the asynchronous copy really completed before exposing
+        // the destination texture.
+        if (!RunGodotGpuOpAsync(op)) {
             frame_texture_backend_ = "godot_native_gpu_present_timeout";
             if (frame_present_textures_[frame_present_current_slot_].is_valid()) {
                 return frame_present_textures_[frame_present_current_slot_];
@@ -11421,6 +11685,7 @@ private:
         }
         frame_present_pending_slot_ = next_slot;
         frame_present_has_pending_ = true;
+        frame_present_pending_op_ = std::move(op);
         frame_present_pending_draw_frame_ = drawn_frame;
         frame_present_serial_ = serial;
         frame_texture_serial_ = serial;
@@ -11577,6 +11842,7 @@ private:
     size_t frame_present_pending_slot_ = 0;
     bool frame_present_has_current_ = false;
     bool frame_present_has_pending_ = false;
+    std::shared_ptr<GodotGpuOp> frame_present_pending_op_;
     uint64_t frame_present_pending_draw_frame_ = 0;
     uint64_t frame_present_serial_ = UINT64_MAX;
     uint64_t frame_texture_serial_ = UINT64_MAX;

@@ -2,12 +2,15 @@
 
 #include "PluginImpl.h"
 #include "ScriptMgnIntf.h"
+#include "TextTransform.h"
 #include "TransIntf.h"
 #include "ncbind.hpp"
 #include "tjsDictionary.h"
 
+#include <algorithm>
 #include <cstring>
 #include <utility>
+#include <vector>
 
 extern tTJS *TVPScriptEngine;
 extern "C" void TVPRegisterLayerExDrawPluginAnchor();
@@ -64,6 +67,37 @@ public:
 private:
     ttstr Scenario;
 };
+
+class TextTransformReset {
+public:
+    ~TextTransformReset() {
+        TVPSetTextTransformCallback(nullptr);
+        TVPSetTextPrefetchCallback(nullptr);
+    }
+};
+
+std::vector<std::string> prefetchedKagTestRuns;
+
+void recordKagTestPrefetch(const char *runtime, const std::string &input) {
+    if(std::strcmp(runtime, "kirikiri") == 0)
+        prefetchedKagTestRuns.push_back(input);
+}
+
+bool translateKagTestRun(const char *runtime, const std::string &input,
+                         std::string *output) {
+    if(std::strcmp(runtime, "kirikiri") != 0 || input != "日本語です")
+        return false;
+    *output = "中文文本";
+    return true;
+}
+
+bool translateSqliteTestRun(const char *runtime, const std::string &input,
+                            std::string *output) {
+    if(std::strcmp(runtime, "kirikiri") != 0 || input != "最初の文章です")
+        return false;
+    *output = "第一句";
+    return true;
+}
 
 tTJSVariant getIndex(const tTJSVariant &object, tjs_int index) {
     REQUIRE(object.Type() == tvtObject);
@@ -176,6 +210,7 @@ TEST_CASE("krkrsdl3 plugin inventory is available") {
     const tjs_char *modules[] = {
         TJS_W("addfont.dll"),
         TJS_W("alphamovie.dll"),
+        TJS_W("glalphamovie.dll"),
         TJS_W("csvparser.dll"),
         TJS_W("dirlist.dll"),
         TJS_W("drawdeviced3d.dll"),
@@ -221,6 +256,46 @@ TEST_CASE("krkrsdl3 plugin inventory is available") {
         CHECK(ncbAutoRegister::HasModule(module));
     }
 }
+
+TEST_CASE("GLAlphaMovie exposes texture-atlas frame upload") {
+    ensurePluginRegistryRuntime();
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("GLAlphaMovie.dll")));
+    const tTJSVariant alphaMovie = getGlobalProp(TJS_W("AlphaMovie"));
+    const tTJSVariant copyFrame =
+        getProp(alphaMovie, TJS_W("copyNextImageToTexture"));
+    CHECK(copyFrame.Type() == tvtObject);
+}
+
+TEST_CASE("krkrgles module loads in every build profile") {
+    ensurePluginRegistryRuntime();
+
+    REQUIRE(ncbAutoRegister::HasModule(TJS_W("krkrgles.dll")));
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("krkrgles.dll")));
+}
+
+// Matrix32 is supplied by the optional Internal graphics backend, not the
+// public fallback. Keep its regression coverage in builds that provide it.
+#if defined(AETHERKIRI_EXPECT_INTERNAL_GRAPHICS)
+TEST_CASE("krkrgles Matrix32 preserves pivot-scaled canvas placement") {
+    ensurePluginRegistryRuntime();
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("krkrgles.dll")));
+    TVPExecuteScript(TJS_W(
+        "var __aetherPivotMatrix = new Matrix32();"
+        "__aetherPivotMatrix.translate(538.4, -84.1);"
+        "__aetherPivotMatrix.translate(200, 250);"
+        "__aetherPivotMatrix.scale(0.3, 0.3);"
+        "__aetherPivotMatrix.translate(-200, -250);"));
+
+    tTJSVariant result;
+    REQUIRE_NOTHROW(TVPExecuteExpression(
+        TJS_W("Math.abs(__aetherPivotMatrix.m31 - 678.4) < 0.001 && "
+              "Math.abs(__aetherPivotMatrix.m32 - 90.9) < 0.001"),
+        &result));
+    CHECK(result.AsInteger() == 1);
+}
+#endif
 
 TEST_CASE("extNagano transition providers survive a module reload") {
     ensurePluginRegistryRuntime();
@@ -358,6 +433,85 @@ TEST_CASE("plugin load mode defaults to krkrsdl3 and can select all modules") {
     CHECK(TVPGetPluginLoadMode() == TJS_W("krkrsdl3"));
 }
 
+TEST_CASE("SQLite scene rows transform text and prefetch following dialogue") {
+    ensurePluginRegistryRuntime();
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("sqlite3.dll")));
+
+    tTJSVariant sqliteClass = getGlobalProp(TJS_W("Sqlite"));
+    iTJSDispatch2 *database = nullptr;
+    tTJSVariant databaseName(TJS_W(":memory:"));
+    tTJSVariant *databaseArgs[] = { &databaseName };
+    REQUIRE(TJS_SUCCEEDED(sqliteClass.AsObjectClosureNoAddRef().CreateNew(
+        0, nullptr, nullptr, &database, 1, databaseArgs, nullptr)));
+    REQUIRE(database != nullptr);
+
+    const auto execSql = [&](const tjs_char *sql) {
+        tTJSVariant statement(sql);
+        tTJSVariant *args[] = { &statement };
+        tTJSVariant result;
+        REQUIRE(TJS_SUCCEEDED(database->FuncCall(
+            0, TJS_W("exec"), nullptr, &result, 1, args, database)));
+        REQUIRE(static_cast<bool>(result));
+    };
+    execSql(TJS_W("CREATE TABLE text (scene INTEGER, idx INTEGER, "
+                  "name INTEGER, disp STRING, text STRING)"));
+    execSql(TJS_W("INSERT INTO text VALUES "
+                  "(7,1,0,'','最初の文章です'),"
+                  "(7,2,0,'','次の文章です'),"
+                  "(7,3,0,'','最後の文章です')"));
+
+    tTJSVariant statementClass = getGlobalProp(TJS_W("SqliteStatement"));
+    tTJSVariant databaseValue(database, database);
+    tTJSVariant selectSql(
+        TJS_W("SELECT scene,idx,name,disp,text FROM text "
+              "WHERE scene=? AND idx=?"));
+    tTJSVariant *statementArgs[] = { &databaseValue, &selectSql };
+    iTJSDispatch2 *statement = nullptr;
+    REQUIRE(TJS_SUCCEEDED(statementClass.AsObjectClosureNoAddRef().CreateNew(
+        0, nullptr, nullptr, &statement, 2, statementArgs, nullptr)));
+    REQUIRE(statement != nullptr);
+
+    iTJSDispatch2 *bindings = TJSCreateArrayObject();
+    REQUIRE(bindings != nullptr);
+    tTJSVariant scene(static_cast<tTVInteger>(7));
+    tTJSVariant index(static_cast<tTVInteger>(1));
+    tTJSVariant *sceneArg[] = { &scene };
+    tTJSVariant *indexArg[] = { &index };
+    REQUIRE(TJS_SUCCEEDED(bindings->FuncCall(
+        0, TJS_W("add"), nullptr, nullptr, 1, sceneArg, bindings)));
+    REQUIRE(TJS_SUCCEEDED(bindings->FuncCall(
+        0, TJS_W("add"), nullptr, nullptr, 1, indexArg, bindings)));
+    tTJSVariant bindingsValue(bindings, bindings);
+    tTJSVariant *bindArgs[] = { &bindingsValue };
+    REQUIRE(TJS_SUCCEEDED(statement->FuncCall(
+        0, TJS_W("bind"), nullptr, nullptr, 1, bindArgs, statement)));
+
+    TextTransformReset transformReset;
+    prefetchedKagTestRuns.clear();
+    TVPSetTextTransformCallback(&translateSqliteTestRun);
+    TVPSetTextPrefetchCallback(&recordKagTestPrefetch);
+
+    tTJSVariant hasRow;
+    REQUIRE(TJS_SUCCEEDED(statement->FuncCall(
+        0, TJS_W("step"), nullptr, &hasRow, 0, nullptr, statement)));
+    REQUIRE(static_cast<bool>(hasRow));
+
+    tTJSVariant row;
+    REQUIRE(TJS_SUCCEEDED(statement->FuncCall(
+        0, TJS_W("get"), nullptr, &row, 0, nullptr, statement)));
+    CHECK(ttstr(getIndex(row, 4)) == TJS_W("第一句"));
+    CHECK(std::find(prefetchedKagTestRuns.begin(),
+                    prefetchedKagTestRuns.end(),
+                    "次の文章です") != prefetchedKagTestRuns.end());
+    CHECK(std::find(prefetchedKagTestRuns.begin(),
+                    prefetchedKagTestRuns.end(),
+                    "最後の文章です") != prefetchedKagTestRuns.end());
+
+    bindings->Release();
+    statement->Release();
+    database->Release();
+}
+
 TEST_CASE("KAGParserEx getNextTag returns ordered taglist") {
     ensurePluginRegistryRuntime();
     ncbAutoRegister::UnloadModule(TJS_W("KAGParserEx.dll"));
@@ -415,6 +569,122 @@ TEST_CASE("KAGParserEx getNextTag returns ordered taglist") {
     for(tjs_int i = 0; i < enumeratedCount; i += 2)
         CHECK(ttstr(getIndex(enumeratedValue, i)) != TJS_W("taglist"));
     enumerated->Release();
+
+    parser->Release();
+    REQUIRE(ncbAutoRegister::UnloadModule(TJS_W("KAGParserEx.dll")));
+    global->DeleteMember(0, TJS_W("KAGParser"), nullptr, global);
+    global->DeleteMember(0, TJS_W("AetherKiriKAGParserEx"), nullptr, global);
+    global->Release();
+}
+
+TEST_CASE("KAGParserEx transforms a complete text run before character tags") {
+    ensurePluginRegistryRuntime();
+    ncbAutoRegister::UnloadModule(TJS_W("KAGParserEx.dll"));
+
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    REQUIRE(global != nullptr);
+    global->DeleteMember(0, TJS_W("KAGParser"), nullptr, global);
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("KAGParserEx.dll")));
+    tTJSVariant parserClass = getGlobalProp(TJS_W("KAGParser"));
+    REQUIRE(parserClass.Type() == tvtObject);
+
+    iTJSDispatch2 *parser = nullptr;
+    tTJSVariantClosure parserClosure = parserClass.AsObjectClosureNoAddRef();
+    REQUIRE(TJS_SUCCEEDED(parserClosure.CreateNew(0, nullptr, nullptr, &parser,
+                                                  0, nullptr, nullptr)));
+    REQUIRE(parser != nullptr);
+
+    ScenarioLoadCallback *callback = new ScenarioLoadCallback(
+        TJS_W("日本語です[p]\n次の文章です[p]\n"));
+    tTJSVariant callbackValue(callback, callback);
+    setProp(parser, TJS_W("onScenarioLoad"), callbackValue);
+    callback->Release();
+
+    TextTransformReset transformReset;
+    prefetchedKagTestRuns.clear();
+    TVPSetTextTransformCallback(&translateKagTestRun);
+    TVPSetTextPrefetchCallback(&recordKagTestPrefetch);
+
+    tTJSVariant storage(TJS_W("translation.ks"));
+    tTJSVariant *loadArgs[] = { &storage };
+    REQUIRE(TJS_SUCCEEDED(parser->FuncCall(0, TJS_W("loadScenario"), nullptr,
+                                           nullptr, 1, loadArgs, parser)));
+
+    ttstr transformed;
+    for(tjs_int i = 0; i < 4; ++i) {
+        tTJSVariant tag;
+        REQUIRE(TJS_SUCCEEDED(parser->FuncCall(
+            0, TJS_W("getNextTag"), nullptr, &tag, 0, nullptr, parser)));
+        REQUIRE(tag.Type() == tvtObject);
+        CHECK(ttstr(getProp(tag, TJS_W("tagname"))) == TJS_W("ch"));
+        transformed += ttstr(getProp(tag, TJS_W("text")));
+    }
+    CHECK(transformed == TJS_W("中文文本"));
+    CHECK(std::find(prefetchedKagTestRuns.begin(),
+                    prefetchedKagTestRuns.end(),
+                    "次の文章です") != prefetchedKagTestRuns.end());
+
+    tTJSVariant pageBreak;
+    REQUIRE(TJS_SUCCEEDED(parser->FuncCall(
+        0, TJS_W("getNextTag"), nullptr, &pageBreak, 0, nullptr, parser)));
+    CHECK(ttstr(getProp(pageBreak, TJS_W("tagname"))) == TJS_W("p"));
+
+    parser->Release();
+    REQUIRE(ncbAutoRegister::UnloadModule(TJS_W("KAGParserEx.dll")));
+    global->DeleteMember(0, TJS_W("KAGParser"), nullptr, global);
+    global->DeleteMember(0, TJS_W("AetherKiriKAGParserEx"), nullptr, global);
+    global->Release();
+}
+
+TEST_CASE("KAGParserEx transforms consecutive explicit character tags") {
+    ensurePluginRegistryRuntime();
+    ncbAutoRegister::UnloadModule(TJS_W("KAGParserEx.dll"));
+
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    REQUIRE(global != nullptr);
+    global->DeleteMember(0, TJS_W("KAGParser"), nullptr, global);
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("KAGParserEx.dll")));
+    tTJSVariant parserClass = getGlobalProp(TJS_W("KAGParser"));
+    REQUIRE(parserClass.Type() == tvtObject);
+
+    iTJSDispatch2 *parser = nullptr;
+    tTJSVariantClosure parserClosure = parserClass.AsObjectClosureNoAddRef();
+    REQUIRE(TJS_SUCCEEDED(parserClosure.CreateNew(0, nullptr, nullptr, &parser,
+                                                  0, nullptr, nullptr)));
+    REQUIRE(parser != nullptr);
+
+    ScenarioLoadCallback *callback = new ScenarioLoadCallback(
+        TJS_W("[ch text='日'][ch text='本'][ch text='語']"
+              "[ch text='で'][ch text='す'][p]\n"));
+    tTJSVariant callbackValue(callback, callback);
+    setProp(parser, TJS_W("onScenarioLoad"), callbackValue);
+    callback->Release();
+
+    TextTransformReset transformReset;
+    TVPSetTextTransformCallback(&translateKagTestRun);
+
+    tTJSVariant storage(TJS_W("compiled-translation.ks"));
+    tTJSVariant *loadArgs[] = { &storage };
+    REQUIRE(TJS_SUCCEEDED(parser->FuncCall(0, TJS_W("loadScenario"), nullptr,
+                                           nullptr, 1, loadArgs, parser)));
+
+    ttstr transformed;
+    for(tjs_int i = 0; i < 4; ++i) {
+        tTJSVariant tag;
+        REQUIRE(TJS_SUCCEEDED(parser->FuncCall(
+            0, TJS_W("getNextTag"), nullptr, &tag, 0, nullptr, parser)));
+        REQUIRE(tag.Type() == tvtObject);
+        CHECK(ttstr(getProp(tag, TJS_W("tagname"))) == TJS_W("ch"));
+        transformed += ttstr(getProp(tag, TJS_W("text")));
+    }
+    CHECK(transformed == TJS_W("中文文本"));
+
+    tTJSVariant pageBreak;
+    REQUIRE(TJS_SUCCEEDED(parser->FuncCall(
+        0, TJS_W("getNextTag"), nullptr, &pageBreak, 0, nullptr, parser)));
+    CHECK(ttstr(getProp(pageBreak, TJS_W("tagname"))) == TJS_W("p"));
 
     parser->Release();
     REQUIRE(ncbAutoRegister::UnloadModule(TJS_W("KAGParserEx.dll")));
@@ -646,6 +916,62 @@ TEST_CASE("ExtKAGParser preserves native local and parameter macro semantics") {
     REQUIRE(restored.Type() == tvtObject);
     CHECK(restored.AsObjectNoAddRef() == original);
 
+    global->DeleteMember(0, TJS_W("KAGParser"), nullptr, global);
+    global->Release();
+}
+
+TEST_CASE("ExtKAGParser transforms consecutive explicit character tags") {
+    ensurePluginRegistryRuntime();
+    ncbAutoRegister::UnloadModule(TJS_W("ExtKAGParser.dll"));
+
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    REQUIRE(global != nullptr);
+    global->DeleteMember(0, TJS_W("KAGParser"), nullptr, global);
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("ExtKAGParser.dll")));
+    tTJSVariant parserClass = getGlobalProp(TJS_W("KAGParser"));
+    REQUIRE(parserClass.Type() == tvtObject);
+
+    iTJSDispatch2 *parser = nullptr;
+    tTJSVariantClosure parserClosure = parserClass.AsObjectClosureNoAddRef();
+    REQUIRE(TJS_SUCCEEDED(parserClosure.CreateNew(0, nullptr, nullptr, &parser,
+                                                  0, nullptr, nullptr)));
+    REQUIRE(parser != nullptr);
+
+    ScenarioLoadCallback *callback = new ScenarioLoadCallback(
+        TJS_W("[ch text='日'][ch text='本'][ch text='語']"
+              "[ch text='で'][ch text='す'][p]\n"));
+    tTJSVariant callbackValue(callback, callback);
+    setProp(parser, TJS_W("onScenarioLoad"), callbackValue);
+    callback->Release();
+
+    TextTransformReset transformReset;
+    TVPSetTextTransformCallback(&translateKagTestRun);
+
+    tTJSVariant storage(TJS_W("ext-compiled-translation.ks"));
+    tTJSVariant *loadArgs[] = { &storage };
+    REQUIRE(TJS_SUCCEEDED(parser->FuncCall(0, TJS_W("loadScenario"), nullptr,
+                                           nullptr, 1, loadArgs, parser)));
+
+    ttstr transformed;
+    for(tjs_int i = 0; i < 4; ++i) {
+        tTJSVariant tag;
+        REQUIRE(TJS_SUCCEEDED(parser->FuncCall(
+            0, TJS_W("getNextTag"), nullptr, &tag, 0, nullptr, parser)));
+        REQUIRE(tag.Type() == tvtObject);
+        CHECK(ttstr(getProp(tag, TJS_W("tagname"))) == TJS_W("ch"));
+        transformed += ttstr(getProp(tag, TJS_W("text")));
+    }
+    CHECK(transformed == TJS_W("中文文本"));
+
+    tTJSVariant pageBreak;
+    REQUIRE(TJS_SUCCEEDED(parser->FuncCall(
+        0, TJS_W("getNextTag"), nullptr, &pageBreak, 0, nullptr, parser)));
+    CHECK(ttstr(getProp(pageBreak, TJS_W("tagname"))) == TJS_W("p"));
+
+    parser->Release();
+    parserClass.Clear();
+    REQUIRE(ncbAutoRegister::UnloadModule(TJS_W("ExtKAGParser.dll")));
     global->DeleteMember(0, TJS_W("KAGParser"), nullptr, global);
     global->Release();
 }

@@ -2141,6 +2141,12 @@ namespace TJS {
                         code += 3;
                         break;
 
+                    case VM_CHKIN:
+                        InMember(TJS_GET_VM_REG(ra, code[1]),
+                                 TJS_GET_VM_REG(ra, code[2]));
+                        code += 3;
+                        break;
+
                     case VM_CALL:
                     case VM_NEW:
                         code += CallFunction(ra, code, args, numargs);
@@ -3429,7 +3435,7 @@ namespace TJS {
         TJS_W("toLowerCase"), TJS_W("substring"), TJS_W("substr"),
         TJS_W("sprintf"),     TJS_W("replace"),   TJS_W("escape"),
         TJS_W("split"),       TJS_W("trim"),      TJS_W("reverse"),
-        TJS_W("repeat")
+        TJS_W("repeat"),      TJS_W("startsWith"), TJS_W("endsWith")
     };
 
     enum tTJSStringMethodNameIndex {
@@ -3445,7 +3451,9 @@ namespace TJS {
         TJSStrMethod_split,
         TJSStrMethod_trim,
         TJSStrMethod_reverse,
-        TJSStrMethod_repeat
+        TJSStrMethod_repeat,
+        TJSStrMethod_startsWith,
+        TJSStrMethod_endsWith
     };
 
 #define TJS_STRFUNC_MAX (sizeof(StrFuncs) / sizeof(StrFuncs[0]))
@@ -3756,6 +3764,37 @@ namespace TJS {
             *result = new_str;
 
             return;
+        } else if(TJS_STR_METHOD_IS(startsWith)) {
+            if(numargs != 1)
+                TJSThrowFrom_tjs_error(TJS_E_BADPARAMCOUNT);
+            if(!result)
+                return;
+            // Empty TJS strings use a null variant-string pointer internally.
+            // Convert through ttstr so c_str() still supplies a valid empty
+            // string to the prefix comparison.
+            const ttstr prefix(args[0]->AsStringNoAddRef());
+            *result = target.StartsWith(prefix.c_str()) ? 1 : 0;
+            return;
+        } else if(TJS_STR_METHOD_IS(endsWith)) {
+            if(numargs != 1)
+                TJSThrowFrom_tjs_error(TJS_E_BADPARAMCOUNT);
+            if(!result)
+                return;
+
+            // Empty TJS strings use a null variant-string pointer internally.
+            // Keep the comparison null-safe while preserving normal string
+            // argument type checking above.
+            const ttstr suffix(args[0]->AsStringNoAddRef());
+            const tjs_int suffix_len = suffix.GetLen();
+            if(suffix_len > s_len) {
+                *result = 0;
+                return;
+            }
+
+            const tjs_char *suffix_chars = suffix.c_str();
+            const tjs_char *tail = s + s_len - suffix_len;
+            *result = TJS_strcmp(tail, suffix_chars) == 0 ? 1 : 0;
+            return;
         }
 
 #undef TJS_STR_METHOD_IS
@@ -3890,6 +3929,35 @@ namespace TJS {
             return;
         }
         targ = false;
+    }
+
+    //---------------------------------------------------------------------------
+    void tTJSInterCodeContext::InMember(tTJSVariant &name, tTJSVariant &obj) {
+        // checks whether the object contains the named member.
+        tTJSVariantString *str = name.AsString();
+        if(str) {
+            tjs_error hr;
+            try {
+                tTJSVariant tmp;
+                hr = obj.AsObjectClosureNoAddRef().PropGet(
+                    TJS_MEMBERMUSTEXIST, *str, nullptr, &tmp,
+                    obj.AsObjectThisNoAddRef());
+            } catch(...) {
+                str->Release();
+                throw;
+            }
+            str->Release();
+            if(hr == TJS_E_MEMBERNOTFOUND) {
+                name = false;
+                return;
+            }
+            if(TJS_FAILED(hr))
+                TJSThrowFrom_tjs_error(hr);
+
+            name = (hr == TJS_S_OK);
+            return;
+        }
+        name = false;
     }
 
     //---------------------------------------------------------------------------
