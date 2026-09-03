@@ -1,0 +1,66 @@
+{
+ "name": "wa2-smoke",
+ "game_path": "/home/kyoiryi/project/wa2-rebirth/game",
+ "backend": "Godot Native",
+ "surface_size": [
+  1280,
+  720
+ ],
+ "window_size": [
+  1280,
+  720
+ ],
+ "coord_size": [
+  1280,
+  720
+ ],
+ "startup_timeout_frames": 2400,
+ "warmup_frames": 10,
+ "after_click_frames": 10,
+ "measure_frames": 10,
+ "gui_probe_frames": 10,
+ "min_visible_frames": 0,
+ "smoke_tick_frames": 5,
+ "export_scripts": false,
+ "actions": [
+  {
+   "type": "move",
+   "pos": [
+    100,
+    310
+   ],
+   "label": "hover_newgame"
+  },
+  {
+   "type": "click",
+   "pos": [
+    100,
+    310
+   ],
+   "label": "click_newgame",
+   "after_frames": 30
+  },
+  {
+   "type": "click_stream",
+   "pos": [
+    640,
+    600
+   ],
+   "frames": 400,
+   "clicks_per_frame": 3,
+   "label": "advance_story",
+   "capture_every": 0,
+   "after_frames": 10
+  },
+  {
+   "type": "click",
+   "pos": [
+    640,
+    600
+   ],
+   "label": "story_text",
+   "after_frames": 20,
+   "capture": true
+  }
+ ]
+}

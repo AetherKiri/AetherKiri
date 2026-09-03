@@ -97,6 +97,7 @@ endif()
 set(AETHERKIRI_GODOT_SOURCES
     src/aether_runtime_player.cpp
     src/frame_effect_host.cpp
+    src/presentation/RuntimePresentationSprite.cpp
 )
 
 if(WEB OR EMSCRIPTEN)
@@ -173,6 +174,30 @@ if(TARGET aether_onscripter_runtime)
         aether_onscripter_runtime)
     target_compile_definitions(aether_kiri_godot PRIVATE
         AETHERKIRI_WITH_ONSCRIPTER=1)
+endif()
+if(TARGET aether_minori_runtime)
+    target_link_libraries(aether_kiri_godot PRIVATE
+        aether_minori_runtime)
+    target_compile_definitions(aether_kiri_godot PRIVATE
+        AETHERKIRI_WITH_MINORI=1)
+    if(IOS)
+        # Godot's iOS exporter links this static extension archive directly
+        # into the app and does not propagate CMake archive dependencies.
+        # Merge Minori's Rust archive so its provider registration symbol is
+        # present in the final Xcode link.
+        find_program(AETHERKIRI_LIBTOOL_EXECUTABLE libtool REQUIRED)
+        set(AETHERKIRI_MERGED_GODOT_ARCHIVE
+            "${CMAKE_CURRENT_BINARY_DIR}/libaether_kiri_godot_merged.a")
+        add_custom_command(TARGET aether_kiri_godot POST_BUILD
+            COMMAND "${AETHERKIRI_LIBTOOL_EXECUTABLE}" -static
+                -o "${AETHERKIRI_MERGED_GODOT_ARCHIVE}"
+                "$<TARGET_FILE:aether_kiri_godot>"
+                "$<TARGET_FILE:aether_minori_runtime>"
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "${AETHERKIRI_MERGED_GODOT_ARCHIVE}"
+                "$<TARGET_FILE:aether_kiri_godot>"
+            VERBATIM)
+    endif()
 endif()
 if(TARGET krkr2plugin)
     if(WEB OR EMSCRIPTEN)

@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "TextStream.h"
+#include "UtilStreams.h"
 
 #include <array>
 #include <chrono>
@@ -211,6 +212,42 @@ TEST_CASE("BMP save thumbnails expose an appended UTF-16 text payload") {
     tTJSString decoded;
     REQUIRE(stream->Read(decoded, 0) == text.size());
     CHECK(ttstr(decoded) == TJS_W("(const) %[\"slot\" => 1]"));
+}
+
+TEST_CASE("compound BMP streams expose their appended data-pack payload") {
+    TemporaryFile file("aetherkiri-bmp-save-payload.bmp");
+    const std::vector<unsigned char> payload = {
+        0xfe, 0xfe, 0x02, 0xff, 0xfe, 0x01, 0x02, 0x03,
+    };
+    writeBytes(file, makeBmpWithTextPayload(payload));
+
+    std::unique_ptr<tTJSBinaryStream> source(
+        TVPCreateStream(ttstr(file.path.string()), TJS_BS_READ));
+    REQUIRE(source != nullptr);
+    CHECK(source->GetPosition() == 0);
+    const auto offset = TVPFindEmbeddedBmpPayloadOffset(source.get());
+    REQUIRE(offset.has_value());
+    CHECK(*offset == 54);
+    CHECK(source->GetPosition() == 0);
+
+    tTVPPartialStream payloadStream(source.release(), *offset,
+                                    payload.size());
+    std::vector<unsigned char> decoded(payload.size());
+    REQUIRE(payloadStream.Read(decoded.data(),
+                               static_cast<tjs_uint>(decoded.size())) ==
+            decoded.size());
+    CHECK(decoded == payload);
+}
+
+TEST_CASE("ordinary BMP streams are not treated as appended data packs") {
+    TemporaryFile file("aetherkiri-bmp-save-plain.bmp");
+    writeBytes(file, makeBmpWithTextPayload({0x01, 0x02, 0x03}));
+
+    std::unique_ptr<tTJSBinaryStream> source(
+        TVPCreateStream(ttstr(file.path.string()), TJS_BS_READ));
+    REQUIRE(source != nullptr);
+    CHECK_FALSE(TVPFindEmbeddedBmpPayloadOffset(source.get()).has_value());
+    CHECK(source->GetPosition() == 0);
 }
 
 TEST_CASE("BMP save thumbnails expose an appended compressed text payload") {
