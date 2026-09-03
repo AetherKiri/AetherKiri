@@ -2,7 +2,7 @@
 
 [English](verified_games.md)
 
-最后更新：2026-09-02
+最后更新：2026-09-03
 
 本文档记录已经用 AetherKiri 手动 smoke test 或 flow test 过的游戏。它是兼容性记录，
 不代表每条路线、每个视频、每个插件路径或每个存档状态都已经完整验证。
@@ -19,6 +19,7 @@
 
 | 游戏 | 已验证平台/构建 | 验证范围 | 结果 | 验证人 | 备注 |
 | --- | --- | --- | --- | --- | --- |
+| Magical Charming! | macOS x64 debug app | 启动时跳过包内缺失的可选开场切入图、标题/菜单渲染、开始游戏按钮分发、首个场景/背景/文字渲染，以及基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 该 iOS 资源包未包含标准 `ab_*` 开场切入图；AetherKiri 只跳过这些缺失开场图对应的等待。本地游戏文件不提交到仓库。 |
 | 恋がさくころ桜どき | Linux x64 release app；macOS app；iOS/iPadOS iPad app build | 导入、启动、初始标题/UI 与文本渲染，以及基础输入 | 冒烟验证通过 | [@KYoiRyi](https://github.com/KYoiRyi)、[@MadCcc](https://github.com/MadCcc) | 本地游戏文件不提交到仓库。 |
 | ましろ色シンフォニー | Linux x64 release app | 导入、启动、初始标题/UI 与文本渲染，以及基础输入 | 冒烟验证通过 | [@KYoiRyi](https://github.com/KYoiRyi) | 本地游戏文件不提交到仓库。 |
 | ましろ色シンフォニー -Love is pure white- Remake for FHD | macOS app；iOS/iPadOS iPad app build | 导入、启动、标题/菜单渲染、场景/文字渲染、音频播放和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
@@ -72,6 +73,7 @@
 | 死に逝く君、館に芽吹く憎悪 | Linux x64 release app；iOS/iPadOS iPad release app build | 导入、启动、标题/菜单渲染、开始游戏流程、场景/文字渲染、音频播放和基础输入 | 流程验证通过 | [@KYoiRyi](https://github.com/KYoiRyi) | 本地游戏文件不提交到仓库。 |
 | 枯れない世界と終わる花 | Linux x64 release app；iOS/iPadOS iPad release app build | 导入、启动、标题/菜单渲染、开始游戏流程、场景/文字渲染、音频播放和基础输入 | 流程验证通过 | [@KYoiRyi](https://github.com/KYoiRyi) | 本地游戏文件不提交到仓库。 |
 | エッチで一途なド田舎兄さまと、古式ゆかしい病弱妹 | Linux x64 release app；iOS/iPadOS iPad release app build | 导入、启动、标题/菜单渲染、开始游戏流程、场景/文字渲染、音频播放和基础输入 | 流程验证通过 | [@KYoiRyi](https://github.com/KYoiRyi) | 本地游戏文件不提交到仓库。 |
+| 大図書館の羊飼い | iOS/iPadOS iPad release app build | ONS 游戏启动与虚拟 Ctrl 按下/松开流程，包括松开后停止快进 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 使用 ONScripterYuri Runtime；本地游戏文件不提交到仓库。 |
 | 穢翼のユースティア | macOS debug app；iOS/iPadOS iPad debug app build | ONS 游戏导入、启动、标题/菜单渲染、开始游戏与第二个存档读取流程、开场字幕和转场、场景/文字渲染、音频播放、快进、存档列表滚动，以及鼠标/触控输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 使用 ONScripterYuri Runtime；本地游戏文件不提交到仓库。 |
 | 美少女万華鏡 -呪われし伝説の少女- | macOS debug app；iOS/iPadOS iPad debug app build | ONS 游戏导入、启动、初始标题/菜单渲染、场景/文字渲染、音频播放和基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 使用 ONScripterYuri Runtime；本地游戏文件不提交到仓库。 |
 

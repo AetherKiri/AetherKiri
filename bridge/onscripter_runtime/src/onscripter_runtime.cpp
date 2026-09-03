@@ -128,6 +128,22 @@ bool PopHostEvent(SDL_Event *event) {
     return true;
 }
 
+bool PopHostKeyRelease(SDL_Event *event) {
+    if (event == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(g_host_event_mutex);
+    const auto release = std::find_if(
+        g_host_events.begin(), g_host_events.end(),
+        [](const SDL_Event &queued) { return queued.type == SDL_KEYUP; });
+    if (release == g_host_events.end()) {
+        return false;
+    }
+    *event = *release;
+    g_host_events.erase(release);
+    return true;
+}
+
 void ClearHostEvents() {
     std::lock_guard<std::mutex> lock(g_host_event_mutex);
     g_host_events.clear();
@@ -297,6 +313,11 @@ extern "C" int aetherkiri_onscripter_wait_event(SDL_Event *event) {
         }
     }
     return 0;
+}
+
+extern "C" int
+aetherkiri_onscripter_poll_host_key_release(SDL_Event *event) {
+    return PopHostKeyRelease(event) ? 1 : 0;
 }
 
 extern "C" void SDLCALL

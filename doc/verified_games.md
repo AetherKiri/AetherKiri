@@ -2,7 +2,7 @@
 
 [简体中文](verified_games.zh-CN.md)
 
-Last updated: 2026-09-02
+Last updated: 2026-09-03
 
 This document tracks games that have been manually smoke-tested with
 AetherKiri. It is a compatibility notebook, not a guarantee that every route,
@@ -20,6 +20,7 @@ movie, plugin path, or save state in a title has been exhaustively validated.
 
 | Game | Verified platforms / builds | Verified scope | Result | Verifier | Notes |
 | --- | --- | --- | --- | --- | --- |
+| Magical Charming! | macOS x64 debug app | Startup through the package's absent optional opening cut-ins, title/menu rendering, new-game button dispatch, first scenario/background/text rendering, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | The iOS package omits the stock `ab_*` opening cut-ins; AetherKiri skips only those missing opening waits. Local game files are not committed. |
 | 恋がさくころ桜どき | Linux x64 release app; macOS app; iOS/iPadOS app build on iPad | Import, startup, initial title/UI and text rendering, and basic input | Smoke verified | [@KYoiRyi](https://github.com/KYoiRyi), [@MadCcc](https://github.com/MadCcc) | Local game files are not committed. |
 | ましろ色シンフォニー | Linux x64 release app | Import, startup, initial title/UI and text rendering, and basic input | Smoke verified | [@KYoiRyi](https://github.com/KYoiRyi) | Local game files are not committed. |
 | ましろ色シンフォニー -Love is pure white- Remake for FHD | macOS app; iOS/iPadOS app build on iPad | Import, startup, title/menu rendering, scene/text rendering, audio playback, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
@@ -73,6 +74,7 @@ movie, plugin path, or save state in a title has been exhaustively validated.
 | 死に逝く君、館に芽吹く憎悪 | Linux x64 release app; iOS/iPadOS release app build on iPad | Import, startup, title/menu rendering, new-game flow, scene/text rendering, audio playback, and basic input | Flow verified | [@KYoiRyi](https://github.com/KYoiRyi) | Local game files are not committed. |
 | 枯れない世界と終わる花 | Linux x64 release app; iOS/iPadOS release app build on iPad | Import, startup, title/menu rendering, new-game flow, scene/text rendering, audio playback, and basic input | Flow verified | [@KYoiRyi](https://github.com/KYoiRyi) | Local game files are not committed. |
 | エッチで一途なド田舎兄さまと、古式ゆかしい病弱妹 | Linux x64 release app; iOS/iPadOS release app build on iPad | Import, startup, title/menu rendering, new-game flow, scene/text rendering, audio playback, and basic input | Flow verified | [@KYoiRyi](https://github.com/KYoiRyi) | Local game files are not committed. |
+| 大図書館の羊飼い | iOS/iPadOS release app build on iPad | ONS game startup and virtual Ctrl press/release flow, including stopping fast-forward after release | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Uses the ONScripterYuri runtime. Local game files are not committed. |
 | 穢翼のユースティア | macOS debug app; iOS/iPadOS debug app build on iPad | ONS game import, startup, title/menu rendering, new-game and second-save load flows, opening subtitles and transitions, scene/text rendering, audio playback, skip mode, save-list scrolling, and mouse/touch input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Uses the ONScripterYuri runtime. Local game files are not committed. |
 | 美少女万華鏡 -呪われし伝説の少女- | macOS debug app; iOS/iPadOS debug app build on iPad | ONS game import, startup, initial title/menu rendering, scene/text rendering, audio playback, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Uses the ONScripterYuri runtime. Local game files are not committed. |
 

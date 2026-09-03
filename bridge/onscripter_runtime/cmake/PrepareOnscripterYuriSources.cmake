@@ -274,6 +274,16 @@ void ONScripter::waitEventSub(int count)
     // ONS_BREAK_EVENT. Avoid the shared queue for that synchronous case and
     // reproduce the exact timeout state handled by runEventLoop.
     if (count == 0) {
+        // Ctrl makes ONS skip timed waits entirely. A Ctrl key-up queued by
+        // the host would otherwise never reach runEventLoop, leaving
+        // ctrl_pressed_status latched forever. Drain key releases without
+        // consuming unrelated pointer/input events before taking the fast
+        // zero-timeout path.
+        SDL_Event host_key_release;
+        while (aetherkiri_onscripter_poll_host_key_release(
+                   &host_key_release)) {
+            keyUpEvent(&host_key_release.key);
+        }
         if (automode_flag || autoclick_time > 0)
             current_button_state.button = 0;
         else if (usewheel_flag) {
