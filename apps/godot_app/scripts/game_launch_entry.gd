@@ -26,6 +26,15 @@ static func resolve(game: Dictionary) -> String:
     return game_path.path_join(relative_path).simplify_path()
 
 
+static func resolve_for_runtime(game: Dictionary, requires_game_root: bool) -> String:
+    # Runtime providers and ONScripter consume a game directory.  A selected
+    # EXE/XP3 is only a legacy KiriKiri entry point and must not replace the
+    # root passed to a provider probe/open pair.
+    if requires_game_root:
+        return _normalize_path(String(game.get("path", "")))
+    return resolve(game)
+
+
 static func is_supported_file(path: String) -> bool:
     return SUPPORTED_EXTENSIONS.has(path.get_extension().to_lower())
 

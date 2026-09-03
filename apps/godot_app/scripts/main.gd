@@ -10643,15 +10643,24 @@ func _start_selected_game_after_entitlements() -> void:
             _t("alert.warning_title")
         )
         return
-    var launch_path := library_path \
-        if active_runtime_kind in [RUNTIME_ONSCRIPTER, RUNTIME_MINORI] \
-        else GameLaunchEntry.resolve(selected_game)
-    if not relative_launch_file.is_empty() and not FileAccess.file_exists(launch_path):
+    var configured_launch_path := GameLaunchEntry.resolve(selected_game)
+    if (
+        not relative_launch_file.is_empty()
+        and not FileAccess.file_exists(configured_launch_path)
+    ):
         _show_system_alert(
             _t("message.launch_file_missing", [relative_launch_file]),
             _t("alert.warning_title")
         )
         return
+    var requires_game_root := (
+        active_runtime_kind in [RUNTIME_ONSCRIPTER, RUNTIME_MINORI]
+        or _selected_game_uses_beta_provider()
+    )
+    var launch_path := GameLaunchEntry.resolve_for_runtime(
+        selected_game,
+        requires_game_root
+    )
     _set_game_runtime_orientation(true)
     var played_game := _mark_game_played(library_path)
     if not played_game.is_empty():

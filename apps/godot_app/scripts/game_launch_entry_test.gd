@@ -21,6 +21,22 @@ func _init() -> void:
         "EXE launch path"
     )
     _expect_equal(
+        GameLaunchEntry.resolve_for_runtime(
+            {"path": root, GameLaunchEntry.FIELD: "开始游戏.exe"},
+            true
+        ),
+        root,
+        "provider runtime keeps directory root"
+    )
+    _expect_equal(
+        GameLaunchEntry.resolve_for_runtime(
+            {"path": root, GameLaunchEntry.FIELD: "开始游戏.exe"},
+            false
+        ),
+        exe_path,
+        "legacy runtime keeps selected launch file"
+    )
+    _expect_equal(
         GameLaunchEntry.relative_path_for_selection(root, archive_path),
         "patch/data.xp3",
         "nested XP3 selection"
