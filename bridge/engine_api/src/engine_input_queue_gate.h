@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <unordered_set>
 
@@ -7,16 +8,18 @@
 
 namespace aetherkiri::engine_api {
 
-// A click can synchronously run an expensive KAG transition. Once a complete
-// primary click is queued for the next engine tick, coalesce further primary
-// gestures instead of replaying stale clicks after the transition finishes.
+// A click can synchronously run an expensive KAG transition. Keep a bounded
+// number of complete primary gestures so taps delivered while the engine is
+// busy are replayed in order, while still preventing an unbounded stale-click
+// backlog after a transition or modal closes.
 class PrimaryClickQueueGate {
  public:
   bool should_enqueue(const engine_input_event_t& event) {
     const bool primary_pointer = event.button == 0;
     if (primary_pointer &&
         event.type == ENGINE_INPUT_EVENT_POINTER_DOWN &&
-        primary_release_pending_) {
+        (primary_down_pending_ ||
+         queued_primary_gestures_ >= kMaxQueuedPrimaryGestures)) {
       suppressed_pointer_ids_.insert(event.pointer_id);
       return false;
     }
@@ -31,24 +34,36 @@ class PrimaryClickQueueGate {
       if (suppressed_pointer_ids_.erase(event.pointer_id) != 0) {
         return false;
       }
-      primary_release_pending_ = true;
+      if (!primary_down_pending_) return false;
+      primary_down_pending_ = false;
+      ++queued_primary_gestures_;
+    }
+    if (primary_pointer && event.type == ENGINE_INPUT_EVENT_POINTER_DOWN) {
+      primary_down_pending_ = true;
     }
     return true;
   }
 
   void on_dequeued(const engine_input_event_t& event) {
+    if (event.type == ENGINE_INPUT_EVENT_POINTER_DOWN &&
+        event.button == 0) {
+      primary_down_pending_ = false;
+    }
     if (event.type == ENGINE_INPUT_EVENT_POINTER_UP && event.button == 0) {
-      primary_release_pending_ = false;
+      if (queued_primary_gestures_ != 0) --queued_primary_gestures_;
     }
   }
 
   void reset() {
-    primary_release_pending_ = false;
+    primary_down_pending_ = false;
+    queued_primary_gestures_ = 0;
     suppressed_pointer_ids_.clear();
   }
 
  private:
-  bool primary_release_pending_ = false;
+  static constexpr size_t kMaxQueuedPrimaryGestures = 8;
+  bool primary_down_pending_ = false;
+  size_t queued_primary_gestures_ = 0;
   std::unordered_set<int32_t> suppressed_pointer_ids_;
 };
 

@@ -10991,14 +10991,10 @@ func _show_runtime_dialog(values: Dictionary) -> void:
     modal_layer.add_child(dim)
 
     var dialog := PanelContainer.new()
-    dialog.anchor_left = 0.5
-    dialog.anchor_top = 0.5
-    dialog.anchor_right = 0.5
-    dialog.anchor_bottom = 0.5
-    dialog.offset_left = -390.0
-    dialog.offset_top = -220.0
-    dialog.offset_right = 390.0
-    dialog.offset_bottom = 220.0
+    dialog.name = "ArtemisRuntimeDialog"
+    dialog.clip_contents = true
+    _mark_centered_safe_dialog(dialog, Vector2(780, 520))
+    _layout_safe_dialog(dialog, _ui_safe_rect(get_viewport_rect().size))
     dialog.mouse_filter = Control.MOUSE_FILTER_STOP
     dialog.add_theme_stylebox_override(
         "panel",
@@ -11006,7 +11002,15 @@ func _show_runtime_dialog(values: Dictionary) -> void:
     )
     modal_layer.add_child(dialog)
 
+    _build_runtime_dialog_content(dialog, values)
+
+func _build_runtime_dialog_content(
+    dialog: PanelContainer,
+    values: Dictionary
+) -> void:
+
     var margin := MarginContainer.new()
+    margin.name = "ArtemisDialogMargin"
     margin.add_theme_constant_override("margin_left", 30)
     margin.add_theme_constant_override("margin_top", 26)
     margin.add_theme_constant_override("margin_right", 30)
@@ -11014,22 +11018,37 @@ func _show_runtime_dialog(values: Dictionary) -> void:
     dialog.add_child(margin)
 
     var box := VBoxContainer.new()
+    box.name = "ArtemisDialogContent"
     box.add_theme_constant_override("separation", 20)
     margin.add_child(box)
 
     var title := Label.new()
     title.text = String(values.get("title", ""))
+    title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     title.add_theme_font_size_override("font_size", 30)
     title.add_theme_color_override("font_color", color_text)
     box.add_child(title)
 
+    var message_scroll := ScrollContainer.new()
+    message_scroll.name = "ArtemisDialogMessageScroll"
+    message_scroll.custom_minimum_size = Vector2(0, 64)
+    message_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    message_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    message_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+    message_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+    message_scroll.scroll_deadzone = 0
+    message_scroll.mouse_force_pass_scroll_events = false
+    box.add_child(message_scroll)
+
     var message := Label.new()
+    message.name = "ArtemisDialogMessage"
     message.text = String(values.get("message", ""))
+    message.custom_minimum_size = Vector2.ZERO
+    message.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    message.size_flags_vertical = Control.SIZE_EXPAND_FILL
     message.add_theme_font_size_override("font_size", 23)
     message.add_theme_color_override("font_color", color_text)
-    box.add_child(message)
+    message_scroll.add_child(message)
 
     var text_field := String(values.get("text_field", "0")) == "1"
     var yes_no := String(values.get("yes_no", "0")) == "1"
@@ -11048,6 +11067,7 @@ func _show_runtime_dialog(values: Dictionary) -> void:
         box.add_child(runtime_dialog_input)
 
     var buttons := HBoxContainer.new()
+    buttons.name = "ArtemisDialogButtons"
     buttons.alignment = BoxContainer.ALIGNMENT_END
     buttons.add_theme_constant_override("separation", 14)
     box.add_child(buttons)

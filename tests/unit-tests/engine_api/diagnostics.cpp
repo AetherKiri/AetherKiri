@@ -198,7 +198,7 @@ const engine_runtime_provider_v1_t kArtemisGateProvider = [] {
 
 }  // namespace
 
-TEST_CASE("primary click queue gate coalesces clicks before the next tick") {
+TEST_CASE("primary click queue gate bounds rapid primary gestures") {
   aetherkiri::engine_api::PrimaryClickQueueGate gate;
   engine_input_event_t event{};
   event.struct_size = sizeof(event);
@@ -212,6 +212,12 @@ TEST_CASE("primary click queue gate coalesces clicks before the next tick") {
   REQUIRE(gate.should_enqueue(event));
   const engine_input_event_t queued_release = event;
 
+  for (size_t click = 0; click < 7; ++click) {
+    event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
+    REQUIRE(gate.should_enqueue(event));
+    event.type = ENGINE_INPUT_EVENT_POINTER_UP;
+    REQUIRE(gate.should_enqueue(event));
+  }
   event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
   REQUIRE_FALSE(gate.should_enqueue(event));
   event.type = ENGINE_INPUT_EVENT_POINTER_MOVE;
