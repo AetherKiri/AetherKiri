@@ -335,6 +335,7 @@ const UI_TEXT := {
         "detail.launch_entry": "启动入口：%s",
         "detail.default_launch_entry": "游戏目录（自动检测）",
         "detail.set_launch_file": "切换启动文件",
+        "detail.rfvp_encoding": "脚本编码（rfvp）",
         "detail.reset_launch_file": "恢复目录自动检测",
         "detail.set_cover": "设置封面",
         "detail.delete_cover": "删除封面",
@@ -618,6 +619,7 @@ const UI_TEXT := {
         "detail.launch_entry": "啟動入口：%s",
         "detail.default_launch_entry": "遊戲目錄（自動偵測）",
         "detail.set_launch_file": "切換啟動檔案",
+        "detail.rfvp_encoding": "腳本編碼（rfvp）",
         "detail.reset_launch_file": "恢復目錄自動偵測",
         "detail.set_cover": "設定封面",
         "detail.rename": "重新命名",
@@ -899,6 +901,7 @@ const UI_TEXT := {
         "detail.launch_entry": "Launch entry: %s",
         "detail.default_launch_entry": "Game folder (auto-detect)",
         "detail.set_launch_file": "Change Launch File",
+        "detail.rfvp_encoding": "Script encoding (rfvp)",
         "detail.reset_launch_file": "Restore Folder Auto-detect",
         "detail.set_cover": "Set Cover",
         "detail.delete_cover": "Delete Cover",
@@ -1182,6 +1185,7 @@ const UI_TEXT := {
         "detail.launch_entry": "起動エントリ：%s",
         "detail.default_launch_entry": "ゲームフォルダー（自動検出）",
         "detail.set_launch_file": "起動ファイルを変更",
+        "detail.rfvp_encoding": "スクリプトの文字コード（rfvp）",
         "detail.reset_launch_file": "フォルダーの自動検出に戻す",
         "detail.set_cover": "カバーを設定",
         "detail.rename": "名前を変更",
@@ -1463,6 +1467,7 @@ const UI_TEXT := {
         "detail.launch_entry": "실행 진입점: %s",
         "detail.default_launch_entry": "게임 폴더(자동 감지)",
         "detail.set_launch_file": "실행 파일 변경",
+        "detail.rfvp_encoding": "스크립트 인코딩 (rfvp)",
         "detail.reset_launch_file": "폴더 자동 감지 복원",
         "detail.set_cover": "표지 설정",
         "detail.rename": "이름 변경",
@@ -3705,10 +3710,9 @@ func _apply_engine_options() -> void:
     if not onscripter_encoding.is_empty():
         player.set_engine_option("onscripter_encoding", onscripter_encoding)
     if current_player_runtime_kind == RUNTIME_RFVP:
-        var rfvp_encoding := OS.get_environment("AETHERKIRI_RFVP_ENCODING").strip_edges()
-        if rfvp_encoding.is_empty():
-            rfvp_encoding = "sjis"
-        player.set_engine_option("rfvp_encoding", rfvp_encoding)
+        player.set_engine_option("rfvp_encoding", GameLaunchEntry.rfvp_encoding(
+            selected_game, OS.get_environment("AETHERKIRI_RFVP_ENCODING")
+        ))
 
 func _apply_frame_enhancement_settings() -> void:
     if player == null or not player.has_method("set_frame_enhancement_enabled"):
@@ -7608,6 +7612,24 @@ func _detail_information_panel(game: Dictionary) -> PanelContainer:
     info.add_child(_detail_line(ICON_LIBRARY, _game_type_label(String(game.get("type", "Directory")))))
     info.add_child(_detail_separator())
     info.add_child(_detail_line(ICON_PLAY, _t("detail.launch_entry", [_game_launch_entry_label(game)])))
+    if _game_runtime_kind(String(game.get("path", ""))) == RUNTIME_RFVP:
+        info.add_child(_detail_separator())
+        var row := _detail_line(ICON_PAGE, _t("detail.rfvp_encoding"))
+        var encoding := OptionButton.new()
+        encoding.name = "RfvpEncoding"
+        encoding.custom_minimum_size = Vector2(140, 40)
+        ui_widgets.secondary_button(encoding)
+        for label in ["Shift-JIS", "GBK", "UTF-8"]:
+            encoding.add_item(label)
+        encoding.select(GameLaunchEntry.RFVP_ENCODINGS.find(GameLaunchEntry.rfvp_encoding(game)))
+        var library_path := String(game.get("path", ""))
+        encoding.item_selected.connect(func(index: int):
+            _update_game(library_path, {
+                GameLaunchEntry.RFVP_ENCODING_FIELD: GameLaunchEntry.RFVP_ENCODINGS[index]
+            })
+        )
+        row.add_child(encoding)
+        info.add_child(row)
     return info_panel
 
 func _detail_remove_button(game: Dictionary) -> Button:
@@ -9961,7 +9983,9 @@ func _backfill_game_metadata(games: Array[Dictionary]) -> bool:
                 if String(game.get("name", "")).is_empty():
                     game["name"] = title
                 changed = true
-        for key in ["titleCandidates", "metadataSignals", "launchFile"]:
+        if GameLaunchEntry.backfill(game, metadata):
+            changed = true
+        for key in ["titleCandidates", "metadataSignals"]:
             var value = metadata.get(key, null)
             if value != null and JSON.stringify(game.get(key, null)) != JSON.stringify(value):
                 game[key] = value
