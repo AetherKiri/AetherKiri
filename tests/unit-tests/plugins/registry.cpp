@@ -267,6 +267,16 @@ TEST_CASE("GLAlphaMovie exposes texture-atlas frame upload") {
     CHECK(copyFrame.Type() == tvtObject);
 }
 
+TEST_CASE("krkrgles module loads in every build profile") {
+    ensurePluginRegistryRuntime();
+
+    REQUIRE(ncbAutoRegister::HasModule(TJS_W("krkrgles.dll")));
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("krkrgles.dll")));
+}
+
+// Matrix32 is supplied by the optional Internal graphics backend, not the
+// public fallback. Keep its regression coverage in builds that provide it.
+#if defined(AETHERKIRI_EXPECT_INTERNAL_GRAPHICS)
 TEST_CASE("krkrgles Matrix32 preserves pivot-scaled canvas placement") {
     ensurePluginRegistryRuntime();
 
@@ -285,6 +295,7 @@ TEST_CASE("krkrgles Matrix32 preserves pivot-scaled canvas placement") {
         &result));
     CHECK(result.AsInteger() == 1);
 }
+#endif
 
 TEST_CASE("extNagano transition providers survive a module reload") {
     ensurePluginRegistryRuntime();
