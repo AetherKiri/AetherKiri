@@ -251,6 +251,75 @@ TEST_CASE("primary click queue gate preserves a cross-tick primary gesture") {
   REQUIRE(gate.should_enqueue(event));
 }
 
+TEST_CASE("primary click queue gate keeps the release after a duplicate down") {
+  aetherkiri::engine_api::PrimaryClickQueueGate gate;
+  engine_input_event_t event{};
+  event.struct_size = sizeof(event);
+  event.button = 0;
+  event.pointer_id = 0;
+
+  event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
+  REQUIRE(gate.should_enqueue(event));
+  gate.on_dequeued(event);
+
+  // macOS can route the same physical mouse event through two Godot input
+  // callbacks. Dropping the duplicate press must not also drop the release.
+  REQUIRE_FALSE(gate.should_enqueue(event));
+  event.type = ENGINE_INPUT_EVENT_POINTER_UP;
+  REQUIRE(gate.should_enqueue(event));
+  gate.on_dequeued(event);
+
+  event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
+  REQUIRE(gate.should_enqueue(event));
+}
+
+TEST_CASE("primary click queue gate isolates a second pointer") {
+  aetherkiri::engine_api::PrimaryClickQueueGate gate;
+  engine_input_event_t event{};
+  event.struct_size = sizeof(event);
+  event.button = 0;
+  event.pointer_id = 4;
+  event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
+  REQUIRE(gate.should_enqueue(event));
+
+  event.pointer_id = 5;
+  REQUIRE_FALSE(gate.should_enqueue(event));
+  event.type = ENGINE_INPUT_EVENT_POINTER_UP;
+  REQUIRE_FALSE(gate.should_enqueue(event));
+
+  event.pointer_id = 4;
+  REQUIRE(gate.should_enqueue(event));
+}
+
+TEST_CASE("primary click queue gate permits reused pointer ids") {
+  aetherkiri::engine_api::PrimaryClickQueueGate gate;
+  engine_input_event_t event{};
+  event.struct_size = sizeof(event);
+  event.button = 0;
+  event.pointer_id = 0;
+
+  // Fill the bounded complete-gesture queue.
+  for (size_t click = 0; click < 8; ++click) {
+    event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
+    REQUIRE(gate.should_enqueue(event));
+    event.type = ENGINE_INPUT_EVENT_POINTER_UP;
+    REQUIRE(gate.should_enqueue(event));
+  }
+
+  // Reject one contact and simulate losing its UP outside the window.
+  event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
+  REQUIRE_FALSE(gate.should_enqueue(event));
+
+  // Once an old queued gesture is consumed, the reused desktop/touch pointer
+  // id must form a complete new gesture instead of inheriting quarantine.
+  event.type = ENGINE_INPUT_EVENT_POINTER_UP;
+  gate.on_dequeued(event);
+  event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
+  REQUIRE(gate.should_enqueue(event));
+  event.type = ENGINE_INPUT_EVENT_POINTER_UP;
+  REQUIRE(gate.should_enqueue(event));
+}
+
 TEST_CASE("primary click queue gate preserves every secondary pointer edge") {
   aetherkiri::engine_api::PrimaryClickQueueGate gate;
   engine_input_event_t event{};
@@ -276,7 +345,7 @@ TEST_CASE("primary click queue gate preserves every secondary pointer edge") {
   gate.on_dequeued(queued_primary_release);
 }
 
-TEST_CASE("Artemis runtime is compiled but beta-gated in product builds") {
+TEST_CASE("Artemis runtime opens without a beta entitlement") {
   const engine_result_t registration =
       engine_register_runtime_provider(&kArtemisGateProvider);
   REQUIRE(registration == ENGINE_RESULT_OK);
@@ -286,16 +355,12 @@ TEST_CASE("Artemis runtime is compiled but beta-gated in product builds") {
   runtime_option.key_utf8 = "runtime";
   runtime_option.value_utf8 = "artemis";
   REQUIRE(engine_set_option(handle.value, &runtime_option) == ENGINE_RESULT_OK);
-#if defined(NDEBUG)
-  REQUIRE(engine_open_game(handle.value, ".artemis-debug-gate-test",
-                           "first.iet") == ENGINE_RESULT_NOT_SUPPORTED);
-  REQUIRE(std::string(engine_get_last_error(handle.value)) ==
-          "Artemis runtime requires active beta access");
+  // Older hosts may still send this option. A false value must no longer
+  // block the generally available runtime.
   engine_option_t beta_option{};
   beta_option.key_utf8 = "artemis_beta_allowed";
-  beta_option.value_utf8 = "1";
+  beta_option.value_utf8 = "0";
   REQUIRE(engine_set_option(handle.value, &beta_option) == ENGINE_RESULT_OK);
-#endif
   REQUIRE(engine_open_game(handle.value, ".artemis-debug-gate-test",
                            "first.iet") == ENGINE_RESULT_OK);
 }
