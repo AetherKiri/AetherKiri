@@ -45,10 +45,6 @@ class PrimaryClickQueueGate {
   }
 
   void on_dequeued(const engine_input_event_t& event) {
-    if (event.type == ENGINE_INPUT_EVENT_POINTER_DOWN &&
-        event.button == 0) {
-      primary_down_pending_ = false;
-    }
     if (event.type == ENGINE_INPUT_EVENT_POINTER_UP && event.button == 0) {
       if (queued_primary_gestures_ != 0) --queued_primary_gestures_;
     }

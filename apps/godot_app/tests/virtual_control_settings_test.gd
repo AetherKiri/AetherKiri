@@ -98,31 +98,19 @@ func _run() -> void:
     var initial_scroll := regression_scroll.scroll_vertical
     var pointer := slider.get_global_rect().get_center()
     var pointer_key := 73
-    app.shell_scroll_drag_states[pointer_key] = {
-        "scroll_id": regression_scroll.get_instance_id(),
-        "control_id": slider.get_instance_id(),
-        "last": pointer,
-        "last_motion_msec": Time.get_ticks_msec(),
-        "velocity_y": 0.0,
-        "distance": 0.0,
-        "pending_y": 0.0,
-        "dragging": false,
-        "threshold": app.SHELL_SCROLL_DRAG_THRESHOLD,
-        "axis_lock": app.SHELL_SCROLL_AXIS_PENDING,
-        "gesture_delta": Vector2.ZERO,
-    }
+    app._start_shell_scroll_drag(pointer_key, pointer)
+    assert(bool(app.shell_scroll_drag_states[pointer_key].get(
+        "scroll_locked",
+        false
+    )))
     assert(not app._update_shell_scroll_drag(
         pointer_key,
-        pointer + Vector2(30.0, 2.0),
-        Vector2(30.0, 2.0)
-    ))
-    assert(not app._update_shell_scroll_drag(
-        pointer_key,
-        pointer + Vector2(30.0, 82.0),
-        Vector2(0.0, 80.0)
+        pointer + Vector2(1.0, 80.0),
+        Vector2(1.0, 80.0)
     ))
     assert(regression_scroll.scroll_vertical == initial_scroll)
     app._finish_shell_scroll_drag(pointer_key)
+    assert(not app.shell_scroll_drag_states.has(pointer_key))
     app.shell_root = null
     app.settings_view = null
     opacity_control.reparent(root)
