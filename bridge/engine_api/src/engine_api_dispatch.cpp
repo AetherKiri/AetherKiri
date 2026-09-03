@@ -58,6 +58,10 @@ extern "C" void AetherInternalSetTextTranslationSkipping(
 extern "C" void AetherInternalRegisterArtemisRuntime(void);
 #endif
 
+#if defined(AETHERKIRI_INTERNAL_WA2) && defined(AETHERKIRI_ENABLE_WA2_RUNTIME)
+extern "C" void AetherInternalRegisterWa2Runtime(void);
+#endif
+
 namespace {
 
 enum class BackendKind { kUndecided, kLegacy, kProvider };
@@ -484,6 +488,9 @@ engine_result_t engine_create(const engine_create_desc_t* desc,
 #if defined(AETHERKIRI_INTERNAL_ARTEMIS) && \
     defined(AETHERKIRI_ENABLE_ARTEMIS_RUNTIME)
   AetherInternalRegisterArtemisRuntime();
+#endif
+#if defined(AETHERKIRI_INTERNAL_WA2) && defined(AETHERKIRI_ENABLE_WA2_RUNTIME)
+  AetherInternalRegisterWa2Runtime();
 #endif
   if (desc->struct_size < sizeof(engine_create_desc_t)) {
     return ThreadError(ENGINE_RESULT_INVALID_ARGUMENT,

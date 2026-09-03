@@ -55,3 +55,5 @@ apps/godot_app/.godot
 plugin_trace.log
 __pycache__/
 *.pyc
+build-linux/
+.aetherkiri-cache

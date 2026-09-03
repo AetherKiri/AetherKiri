@@ -78,6 +78,10 @@ if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_artemis)
     aetherinternal_extend_artemis(engine_api)
 endif()
 
+if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_wa2)
+    aetherinternal_extend_wa2(engine_api)
+endif()
+
 if(AETHERKIRI_INTERNAL_ENABLED AND
    COMMAND aetherinternal_extend_text_translation)
     aetherinternal_extend_text_translation(engine_api)

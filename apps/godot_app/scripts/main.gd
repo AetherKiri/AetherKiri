@@ -2211,6 +2211,7 @@ func _normalize_cli_probe_script(path: String) -> String:
         "res://scripts/step_render_probe.gd",
         "res://scripts/gui_render_probe.gd",
         "res://scripts/perf_input_probe.gd",
+        "res://scripts/wa2_gui.gd",
     ]
     for item in known:
         if normalized == item or normalized.ends_with("/" + item.get_file()):
@@ -10538,6 +10539,7 @@ func _start_selected_game_after_iap() -> void:
     var requires_beta_access := (
         _runtime_requires_beta_access(selected_runtime_kind)
         or _selected_game_uses_artemis()
+        or _selected_game_uses_wa2()
     )
     if not requires_beta_access:
         _start_selected_game_after_entitlements()
@@ -10556,7 +10558,8 @@ func _start_selected_game_after_iap() -> void:
 func _runtime_requires_beta_access(runtime_kind: String) -> bool:
     # ONS and Minori support follow the same Apple release policy as Artemis:
     # unrestricted in Debug and Android builds, and gated by an active coffee
-    # entitlement in iOS and macOS distribution builds.
+    # entitlement in iOS and macOS distribution builds. Provider-backed
+    # runtimes such as WA2 are checked separately by their runtime probe.
     return runtime_kind == RUNTIME_ONSCRIPTER or runtime_kind == RUNTIME_MINORI
 
 func _beta_access_enforcement_enabled(platform_name: String = "") -> bool:
@@ -10570,6 +10573,16 @@ func _selected_game_uses_artemis() -> bool:
     if library_path.is_empty():
         return false
     return int(player.probe_runtime("artemis", library_path)) > 0
+
+func _selected_game_uses_wa2() -> bool:
+    # WHITE ALBUM2 runs on the KiriKiri host through the compiled Wa2
+    # provider, so it follows the same coffee beta-access policy as Artemis.
+    if player == null or not player.has_method("probe_runtime"):
+        return false
+    var library_path := String(selected_game.get("path", "")).strip_edges()
+    if library_path.is_empty():
+        return false
+    return int(player.probe_runtime("wa2", library_path)) > 0
 
 func _complete_artemis_beta_check() -> void:
     iap_pending_beta_check_id = 0
