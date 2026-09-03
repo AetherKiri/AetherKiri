@@ -421,6 +421,7 @@ std::atomic<uint64_t> g_gpu_op_failed{0};
 std::atomic<uint64_t> g_gpu_copy_failed{0};
 std::atomic<uint64_t> g_gpu_copy_triangles_failed{0};
 std::atomic<uint64_t> g_gpu_detail_minify_ops{0};
+std::atomic<uint64_t> g_gpu_native_character_aa_ops{0};
 std::atomic<uint64_t> g_gpu_triangle_pipeline_failed{0};
 std::atomic<uint64_t> g_gpu_triangle_buffer_failed{0};
 std::atomic<uint64_t> g_gpu_triangle_uniform_failed{0};
@@ -1578,6 +1579,8 @@ String GetGodotGpuBridgeDebugInfo() {
         << " bridge_tri_failed=" << g_gpu_copy_triangles_failed.load(std::memory_order_relaxed)
         << " bridge_detail_minify_ops="
         << g_gpu_detail_minify_ops.load(std::memory_order_relaxed)
+        << " bridge_native_character_aa_ops="
+        << g_gpu_native_character_aa_ops.load(std::memory_order_relaxed)
         << " bridge_tri_pipeline_failed=" << g_gpu_triangle_pipeline_failed.load(std::memory_order_relaxed)
         << " bridge_tri_buffer_failed=" << g_gpu_triangle_buffer_failed.load(std::memory_order_relaxed)
         << " bridge_tri_uniform_failed=" << g_gpu_triangle_uniform_failed.load(std::memory_order_relaxed)
@@ -3042,14 +3045,79 @@ vec4 load_bilinear_premul(ivec2 limit, vec2 edge_coord,
     return clamp(premul, vec4(0.0), vec4(1.0));
 }
 
+float premul_luma(vec4 color) {
+    vec3 straight = color.a > 0.00001
+        ? color.rgb / color.a : vec3(0.0);
+    // Include alpha in the edge signal so the same filter also stabilizes
+    // the outline of the transparent native character surface.
+    return dot(straight, vec3(0.299, 0.587, 0.114)) * color.a;
+}
+
+vec4 load_native_character_antialiased(
+        ivec2 limit, vec2 edge_coord, vec2 source_dx, vec2 source_dy) {
+    vec4 center = load_bilinear_premul(limit, edge_coord, true);
+    vec4 nw = load_bilinear_premul(
+        limit, edge_coord - source_dx - source_dy, true);
+    vec4 ne = load_bilinear_premul(
+        limit, edge_coord + source_dx - source_dy, true);
+    vec4 sw = load_bilinear_premul(
+        limit, edge_coord - source_dx + source_dy, true);
+    vec4 se = load_bilinear_premul(
+        limit, edge_coord + source_dx + source_dy, true);
+    float l_center = premul_luma(center);
+    float l_nw = premul_luma(nw);
+    float l_ne = premul_luma(ne);
+    float l_sw = premul_luma(sw);
+    float l_se = premul_luma(se);
+    float range_min = min(
+        l_center, min(min(l_nw, l_ne), min(l_sw, l_se)));
+    float range_max = max(
+        l_center, max(max(l_nw, l_ne), max(l_sw, l_se)));
+    if (range_max - range_min <
+            max(1.0 / 24.0, range_max * (1.0 / 8.0))) {
+        return center;
+    }
+
+    vec2 direction = vec2(
+        -((l_nw + l_ne) - (l_sw + l_se)),
+         ((l_nw + l_sw) - (l_ne + l_se)));
+    float reduce = max(
+        (l_nw + l_ne + l_sw + l_se) * (0.25 / 8.0),
+        1.0 / 128.0);
+    // Two pixels is enough to join the one-pixel E-mote diagonals without
+    // softening broad painted regions or the independently composited text.
+    direction = clamp(
+        direction / (min(abs(direction.x), abs(direction.y)) + reduce),
+        vec2(-2.0), vec2(2.0));
+    vec2 source_direction =
+        source_dx * direction.x + source_dy * direction.y;
+    vec4 sample_a = 0.5 * (
+        load_bilinear_premul(
+            limit, edge_coord + source_direction * (1.0 / 3.0 - 0.5),
+            true) +
+        load_bilinear_premul(
+            limit, edge_coord + source_direction * (2.0 / 3.0 - 0.5),
+            true));
+    vec4 sample_b = sample_a * 0.5 + 0.25 * (
+        load_bilinear_premul(
+            limit, edge_coord - source_direction * 0.5, true) +
+        load_bilinear_premul(
+            limit, edge_coord + source_direction * 0.5, true));
+    float l_b = premul_luma(sample_b);
+    return (l_b < range_min || l_b > range_max) ? sample_a : sample_b;
+}
+
 vec4 load_minified(ivec2 limit, vec2 edge_coord,
                     vec2 source_dx, vec2 source_dy,
                     bool preserve_detail, bool source_premultiplied) {
     float footprint = max(length(source_dx), length(source_dy));
     vec4 premul;
     if (footprint <= 1.0001) {
-        premul = load_bilinear_premul(
-            limit, edge_coord, source_premultiplied);
+        premul = source_premultiplied
+            ? load_native_character_antialiased(
+                  limit, edge_coord, source_dx, source_dy)
+            : load_bilinear_premul(
+                  limit, edge_coord, source_premultiplied);
     } else if (preserve_detail) {
         vec2 dx = source_dx * 0.5;
         vec2 dy = source_dy * 0.5;
@@ -7580,6 +7648,10 @@ bool BridgeDrawTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
     // survives even when global frame enhancement is off.
     const bool native_character_source =
         (blend_mode & TVP_GODOT_GPU_TRIANGLE_SOURCE_PREMULTIPLIED) != 0u;
+    if (native_character_source) {
+        g_gpu_native_character_aa_ops.fetch_add(
+            1, std::memory_order_relaxed);
+    }
     op->preserve_minified_detail = ShouldPreserveMinifiedTriangleDetail(
         triangle_count, dst_points, src_points, native_character_source);
     if (op->preserve_minified_detail) {
