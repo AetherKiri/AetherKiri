@@ -703,6 +703,9 @@ TEST_CASE("Godot texture updates reallocate when the pixel format changes") {
 }
 
 TEST_CASE("Godot render manager applies glyph color maps on the GPU") {
+    // ApplyColorMap_a is intentionally opt-in in production because KAG text
+    // rendering emits thousands of tiny rectangles. The test host explicitly
+    // enables this route so its GPU callback contract remains covered.
     TestGpuBridge bridge;
     const std::array<std::uint8_t, 8> mask = {0, 64, 128, 255, 0, 0, 0, 0};
     const std::array<std::uint8_t, 16> destination = {
@@ -712,16 +715,17 @@ TEST_CASE("Godot render manager applies glyph color maps on the GPU") {
     GodotTexture2D src(mask.data(), 4, 4, 1, TVPTextureFormat::Gray);
     GodotTexture2D dst(destination.data(), 16, 4, 1,
                        TVPTextureFormat::RGBA);
-    GodotRenderMethod method(nullptr);
-    method.SetName("ApplyColorMap_a");
-    method.SetParameterColor4B(-1, 0x00112233u);
-    method.SetParameterOpa(-1, 192);
     const tTVPRect rect(0, 0, 4, 1);
     std::pair<iTVPTexture2D *, tTVPRect> source(&src, rect);
     const tRenderTexRectArray textures(&source, 1);
     GodotRenderManager manager;
+    iTVPRenderMethod *method = manager.GetRenderMethod("ApplyColorMap_a");
+    REQUIRE(method != nullptr);
+    method->SetParameterColor4B(method->EnumParameterID("color"),
+                                0x00112233u);
+    method->SetParameterOpa(method->EnumParameterID("opacity"), 192);
 
-    manager.OperateRect(&method, &dst, nullptr, rect, textures);
+    manager.OperateRect(method, &dst, nullptr, rect, textures);
 
     CHECK(g_blend_rect_calls == 1);
     CHECK(g_last_blend_mode == TVP_GODOT_GPU_BLEND_APPLY_COLOR_MAP_A);

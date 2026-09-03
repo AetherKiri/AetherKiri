@@ -52,6 +52,17 @@
     "libjpeg-turbo",
     "lua",
     {
+      "name": "llama-cpp",
+      "platform": "!emscripten"
+    },
+    {
+      "name": "ggml",
+      "features": [
+        "metal"
+      ],
+      "platform": "osx"
+    },
+    {
       "name": "libogg",
       "platform": "android"
     },

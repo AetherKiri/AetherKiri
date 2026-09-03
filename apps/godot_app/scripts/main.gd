@@ -53,6 +53,9 @@ const RUNTIME_FONT_DIR := "user://runtime_fonts"
 const RUNTIME_DEFAULT_FONT_FILE := "default.otf"
 const RUNTIME_SYMBOL_FONT_FILE := "symbols.ttf"
 const ProbeConfig = preload("res://scripts/probe_config.gd")
+const GameMetadata = preload("res://scripts/game_metadata.gd")
+const CoverIndex = preload("res://scripts/cover_index.gd")
+const VNDBCoverResolver = preload("res://scripts/vndb_cover_resolver.gd")
 const GameInputMapping = preload("res://scripts/game_input_mapping.gd")
 const GameVirtualControls = preload("res://scripts/game_virtual_controls.gd")
 const DiagnosticSession = preload("res://scripts/diagnostic_session.gd")
@@ -66,6 +69,7 @@ const AetherMotion = preload("res://scripts/ui/aether_motion.gd")
 const AetherWidgets = preload("res://scripts/ui/aether_widgets.gd")
 const AetherSegmentedControl = preload("res://scripts/ui/aether_segmented_control.gd")
 const AetherSwitch = preload("res://scripts/ui/aether_switch.gd")
+const AetherSlider = preload("res://scripts/ui/aether_slider.gd")
 const AetherDisclosure = preload("res://scripts/ui/aether_disclosure.gd")
 const AetherSelect = preload("res://scripts/ui/aether_select.gd")
 const AetherDisplayScale = preload("res://scripts/ui/aether_display_scale.gd")
@@ -159,10 +163,20 @@ const UI_TEXT := {
         "settings.section.purchases": "内购项目",
         "settings.language": "语言",
         "settings.language_desc": "默认跟随系统；也可以固定为简体中文、繁体中文、英语、日语或韩语",
+        "settings.translation_model": "本地翻译模型",
+        "settings.translation_model_desc": "选择外部 GGUF 模型。游戏启动时加载；检测到文本不是当前界面语言时自动翻译",
+        "settings.translation_model_select": "选择 GGUF 模型",
+        "settings.translation_model_selected": "已选模型",
+        "settings.translation_model_clear": "停用本地翻译",
+        "settings.translation_model_clear_desc": "清除模型路径；不会删除磁盘上的模型文件",
         "settings.style": "风格",
         "settings.style_desc": "可在当前深色风格和旧版原始浅色风格之间切换",
         "settings.ui_scale": "界面比例",
         "settings.ui_scale_desc": "调整 iPhone 和 iPad 上的界面大小，保存后立即生效",
+        "settings.virtual_control_menu": "游戏内控制菜单",
+        "settings.virtual_control_menu_desc": "在游戏画面右上角显示虚拟控制菜单按钮",
+        "settings.keyboard_control_opacity": "Keyboard 模式按键透明度",
+        "settings.keyboard_control_opacity_desc": "调整屏幕虚拟按键的透明度；鼠标指针保持清晰",
         "ui_scale.compact": "较小",
         "ui_scale.comfortable": "合适",
         "ui_scale.standard": "标准",
@@ -319,6 +333,8 @@ const UI_TEXT := {
         "detail.set_launch_file": "切换启动文件",
         "detail.reset_launch_file": "恢复目录自动检测",
         "detail.set_cover": "设置封面",
+        "detail.delete_cover": "删除封面",
+        "detail.clear_cover": "清除封面",
         "detail.rename": "重命名",
         "detail.remove": "移除视觉小说",
         "detail.delete_builtin": "删除内置 Demo",
@@ -370,7 +386,9 @@ const UI_TEXT := {
         "alert.warning_title": "Aether 警告",
         "alert.runtime_class_missing": "运行时扩展加载失败：AetherRuntimePlayer 不可用",
         "alert.runtime_create_failed": "运行时扩展加载失败：无法创建 AetherRuntimePlayer",
-        "loading.title": "正在启动视觉小说..."
+        "loading.title": "正在启动视觉小说...",
+        "loading.translation_model": "正在加载本地翻译模型...",
+        "loading.translation_model_detail": "首次加载可能出现短暂卡顿，请耐心等待。"
     },
     LANG_ZH_HANT: {
         "home.subtitle": "多功能媒體播放器",
@@ -426,10 +444,20 @@ const UI_TEXT := {
         "settings.section.purchases": "App 內購買",
         "settings.language": "語言",
         "settings.language_desc": "預設跟隨系統；也可以固定為簡體中文、繁體中文、英語、日語或韓語",
+        "settings.translation_model": "本機翻譯模型",
+        "settings.translation_model_desc": "選擇外部 GGUF 模型。遊戲啟動時載入；偵測到文字不是目前介面語言時自動翻譯",
+        "settings.translation_model_select": "選擇 GGUF 模型",
+        "settings.translation_model_selected": "已選模型",
+        "settings.translation_model_clear": "停用本機翻譯",
+        "settings.translation_model_clear_desc": "清除模型路徑；不會刪除磁碟上的模型檔案",
         "settings.style": "風格",
         "settings.style_desc": "可在目前深色風格和舊版原始淺色風格之間切換",
         "settings.ui_scale": "介面比例",
         "settings.ui_scale_desc": "調整 iPhone 和 iPad 上的介面大小，儲存後立即生效",
+        "settings.virtual_control_menu": "遊戲內控制選單",
+        "settings.virtual_control_menu_desc": "在遊戲畫面右上角顯示虛擬控制選單按鈕",
+        "settings.keyboard_control_opacity": "Keyboard 模式按鍵透明度",
+        "settings.keyboard_control_opacity_desc": "調整螢幕虛擬按鍵的透明度；滑鼠指標保持清晰",
         "ui_scale.compact": "較小",
         "ui_scale.comfortable": "合適",
         "ui_scale.standard": "標準",
@@ -637,7 +665,9 @@ const UI_TEXT := {
         "alert.warning_title": "Aether 警告",
         "alert.runtime_class_missing": "執行時擴充載入失敗：AetherRuntimePlayer 不可用",
         "alert.runtime_create_failed": "執行時擴充載入失敗：無法建立 AetherRuntimePlayer",
-        "loading.title": "正在啟動視覺小說..."
+        "loading.title": "正在啟動視覺小說...",
+        "loading.translation_model": "正在載入本機翻譯模型...",
+        "loading.translation_model_detail": "首次載入可能會短暫停頓，請耐心等候。"
     },
     LANG_EN: {
         "home.subtitle": "Multifunction Media Player",
@@ -693,10 +723,20 @@ const UI_TEXT := {
         "settings.section.purchases": "In-App Purchases",
         "settings.language": "Language",
         "settings.language_desc": "Defaults to the system language; you can pin Simplified Chinese, Traditional Chinese, English, Japanese, or Korean",
+        "settings.translation_model": "Local Translation Model",
+        "settings.translation_model_desc": "Choose an external GGUF model. It loads when a game starts and translates text that does not match the interface language",
+        "settings.translation_model_select": "Choose GGUF Model",
+        "settings.translation_model_selected": "Selected Model",
+        "settings.translation_model_clear": "Disable Local Translation",
+        "settings.translation_model_clear_desc": "Clear the model path without deleting the model file from disk",
         "settings.style": "Style",
         "settings.style_desc": "Switch between the current dark style and the original classic light style",
         "settings.ui_scale": "Interface Scale",
         "settings.ui_scale_desc": "Adjust the interface size on iPhone and iPad; applies immediately after saving",
+        "settings.virtual_control_menu": "In-Game Controls Menu",
+        "settings.virtual_control_menu_desc": "Show the virtual-controls menu button at the top-right of the game view",
+        "settings.keyboard_control_opacity": "Keyboard Button Opacity",
+        "settings.keyboard_control_opacity_desc": "Adjust on-screen virtual-key opacity while keeping the mouse pointer clear",
         "ui_scale.compact": "Smaller",
         "ui_scale.comfortable": "Comfortable",
         "ui_scale.standard": "Standard",
@@ -853,6 +893,8 @@ const UI_TEXT := {
         "detail.set_launch_file": "Change Launch File",
         "detail.reset_launch_file": "Restore Folder Auto-detect",
         "detail.set_cover": "Set Cover",
+        "detail.delete_cover": "Delete Cover",
+        "detail.clear_cover": "Clear Cover",
         "detail.rename": "Rename",
         "detail.remove": "Remove Visual Novel",
         "detail.delete_builtin": "Delete Built-in Demo",
@@ -904,7 +946,9 @@ const UI_TEXT := {
         "alert.warning_title": "Aether Warning",
         "alert.runtime_class_missing": "Runtime extension failed to load: AetherRuntimePlayer is unavailable",
         "alert.runtime_create_failed": "Runtime extension failed to load: could not create AetherRuntimePlayer",
-        "loading.title": "Launching visual novel..."
+        "loading.title": "Launching visual novel...",
+        "loading.translation_model": "Loading local translation model...",
+        "loading.translation_model_detail": "The first load may pause briefly. Please wait."
     },
     LANG_JA: {
         "home.subtitle": "多機能メディアプレーヤー",
@@ -960,10 +1004,20 @@ const UI_TEXT := {
         "settings.section.purchases": "アプリ内課金",
         "settings.language": "言語",
         "settings.language_desc": "既定ではシステムに従います。簡体字中国語、繁体字中国語、英語、日本語、韓国語に固定できます",
+        "settings.translation_model": "ローカル翻訳モデル",
+        "settings.translation_model_desc": "外部 GGUF モデルを選択します。ゲーム開始時に読み込み、UI 言語と異なるテキストを自動翻訳します",
+        "settings.translation_model_select": "GGUF モデルを選択",
+        "settings.translation_model_selected": "選択中のモデル",
+        "settings.translation_model_clear": "ローカル翻訳を無効化",
+        "settings.translation_model_clear_desc": "モデルファイルを削除せず、設定済みのパスだけを消去します",
         "settings.style": "スタイル",
         "settings.style_desc": "現在のダークスタイルと旧来のクラシックライトスタイルを切り替えます",
         "settings.ui_scale": "UI スケール",
         "settings.ui_scale_desc": "iPhone と iPad の UI サイズを調整します。保存後すぐに反映されます",
+        "settings.virtual_control_menu": "ゲーム内コントロールメニュー",
+        "settings.virtual_control_menu_desc": "ゲーム画面の右上に仮想コントロールメニューボタンを表示します",
+        "settings.keyboard_control_opacity": "Keyboard モードのキー透明度",
+        "settings.keyboard_control_opacity_desc": "画面上の仮想キーの透明度を調整します。マウスポインターは鮮明なままです",
         "ui_scale.compact": "小さめ",
         "ui_scale.comfortable": "快適",
         "ui_scale.standard": "標準",
@@ -1171,7 +1225,9 @@ const UI_TEXT := {
         "alert.warning_title": "Aether 警告",
         "alert.runtime_class_missing": "ランタイム拡張の読み込みに失敗しました：AetherRuntimePlayer は利用できません",
         "alert.runtime_create_failed": "ランタイム拡張の読み込みに失敗しました：AetherRuntimePlayer を作成できません",
-        "loading.title": "ビジュアルノベルを起動中..."
+        "loading.title": "ビジュアルノベルを起動中...",
+        "loading.translation_model": "ローカル翻訳モデルを読み込み中...",
+        "loading.translation_model_detail": "初回の読み込みは一時的に停止することがあります。しばらくお待ちください。"
     },
     LANG_KO: {
         "home.subtitle": "다기능 미디어 플레이어",
@@ -1227,10 +1283,20 @@ const UI_TEXT := {
         "settings.section.purchases": "앱 내 구입",
         "settings.language": "언어",
         "settings.language_desc": "기본값은 시스템 언어입니다. 중국어 간체, 중국어 번체, 영어, 일본어, 한국어로 고정할 수 있습니다",
+        "settings.translation_model": "로컬 번역 모델",
+        "settings.translation_model_desc": "외부 GGUF 모델을 선택합니다. 게임 시작 시 불러오며 UI 언어와 다른 텍스트를 자동 번역합니다",
+        "settings.translation_model_select": "GGUF 모델 선택",
+        "settings.translation_model_selected": "선택한 모델",
+        "settings.translation_model_clear": "로컬 번역 사용 안 함",
+        "settings.translation_model_clear_desc": "디스크의 모델 파일은 삭제하지 않고 설정된 경로만 지웁니다",
         "settings.style": "스타일",
         "settings.style_desc": "현재 다크 스타일과 기존 클래식 라이트 스타일을 전환합니다",
         "settings.ui_scale": "인터페이스 크기",
         "settings.ui_scale_desc": "iPhone 및 iPad의 인터페이스 크기를 조절하며 저장 후 즉시 적용됩니다",
+        "settings.virtual_control_menu": "게임 내 컨트롤 메뉴",
+        "settings.virtual_control_menu_desc": "게임 화면 오른쪽 위에 가상 컨트롤 메뉴 버튼을 표시합니다",
+        "settings.keyboard_control_opacity": "Keyboard 모드 버튼 투명도",
+        "settings.keyboard_control_opacity_desc": "화면 가상 키의 투명도를 조절하며 마우스 포인터는 선명하게 유지합니다",
         "ui_scale.compact": "작게",
         "ui_scale.comfortable": "적당히",
         "ui_scale.standard": "표준",
@@ -1438,7 +1504,9 @@ const UI_TEXT := {
         "alert.warning_title": "Aether 경고",
         "alert.runtime_class_missing": "런타임 확장 로드 실패: AetherRuntimePlayer를 사용할 수 없습니다",
         "alert.runtime_create_failed": "런타임 확장 로드 실패: AetherRuntimePlayer를 만들 수 없습니다",
-        "loading.title": "비주얼 노벨 실행 중..."
+        "loading.title": "비주얼 노벨 실행 중...",
+        "loading.translation_model": "로컬 번역 모델을 불러오는 중...",
+        "loading.translation_model_detail": "처음 불러올 때 잠시 멈출 수 있습니다. 기다려 주세요."
     }
 }
 
@@ -1455,6 +1523,10 @@ const STARTUP_IDLE := 0
 const STARTUP_RUNNING := 1
 const STARTUP_SUCCEEDED := 2
 const STARTUP_FAILED := 3
+const TEXT_TRANSLATION_DISABLED := 0
+const TEXT_TRANSLATION_LOADING := 1
+const TEXT_TRANSLATION_READY := 2
+const TEXT_TRANSLATION_FAILED := 3
 
 const POINTER_DOWN := 1
 const POINTER_MOVE := 2
@@ -1480,6 +1552,12 @@ const ONSCRIPTER_SCRIPT_MARKERS := [
 ]
 const SHELL_SCROLL_DRAG_THRESHOLD := 4.0
 const SHELL_SCROLL_BUTTON_DRAG_THRESHOLD := 28.0
+const SHELL_SCROLL_SLIDER_AXIS_THRESHOLD := 10.0
+const SHELL_SCROLL_SLIDER_VERTICAL_DOMINANCE := 1.25
+const SHELL_SCROLL_AXIS_NONE := ""
+const SHELL_SCROLL_AXIS_PENDING := "pending"
+const SHELL_SCROLL_AXIS_HORIZONTAL := "horizontal"
+const SHELL_SCROLL_AXIS_VERTICAL := "vertical"
 const SHELL_SCROLL_DRAG_SPEED := 1.0
 const SHELL_SCROLL_TOUCHPAD_SPEED := 12.0
 const SHELL_SCROLL_WHEEL_SPEED := 4.0
@@ -1495,6 +1573,8 @@ const SETTINGS_DRAFT_KEYS := [
     "language",
     "style",
     "ios_ui_scale_mode",
+    "game_virtual_menu_enabled",
+    "game_virtual_keyboard_opacity",
     "backend",
     "upscale_algorithm",
     "output_resolution",
@@ -1511,6 +1591,7 @@ const SETTINGS_DRAFT_KEYS := [
     "plugin_load_mode",
     "mock_enabled",
     "error_dialog_logs",
+    "text_translation_model_path",
 ]
 const DIAGNOSTIC_PROFILES := ["off", "baseline", "input", "render", "storage", "script", "audio", "video", "plugin", "system", "full"]
 const DEBUG_OVERLAY_MODES := ["off", "summary", "detail"]
@@ -1556,6 +1637,8 @@ var detail_scroll: ScrollContainer
 var game_view: Control
 var game_virtual_controls
 var game_virtual_input_mode := GameVirtualControls.INPUT_MODE_MOUSE
+var game_virtual_menu_enabled := true
+var game_virtual_keyboard_opacity := 1.0
 var modal_layer: Control
 var active_modal_scrim: ColorRect
 var active_modal_dialog: Control
@@ -1594,6 +1677,8 @@ var home_layout_initialized := false
 var home_header_compact := false
 var home_header_layout_initialized := false
 var loading_title_label: Label
+var loading_detail_label: Label
+var translation_loading_notice_active := false
 var selected_game := {}
 var detail_hero_cover: Control
 var hero_source_rect := Rect2()
@@ -1603,6 +1688,8 @@ var hero_overlay: PanelContainer
 var hero_hidden_target: CanvasItem
 var hero_transition_id := 0
 var known_games: Array[Dictionary] = []
+var vndb_cover_queue: Array[Dictionary] = []
+var vndb_cover_busy := false
 var known_videos: Array[Dictionary] = []
 var home_library_mode := "game"
 var home_search_queries := {"game": "", "video": ""}
@@ -1628,6 +1715,7 @@ var console_log_file := false
 var trace_log := false
 var export_scripts := false
 var error_dialog_logs := OS.is_debug_build()
+var text_translation_model_path := ""
 var advanced_tool_expanded := false
 var advanced_expiry_msec := {}
 var diagnostic_env_originals := {}
@@ -1675,6 +1763,7 @@ var native_launch_file_picker_pending := false
 var native_launch_file_picker_library_path := ""
 var native_cover_file_picker_pending := false
 var native_cover_file_picker_library_path := ""
+var native_translation_model_file_picker_pending := false
 var active_game_path := ""
 var active_game_started_msec := 0
 var active_runtime_kind := RUNTIME_KIRIKIRI
@@ -1931,6 +2020,9 @@ const VIRTUAL_KEYBOARD_REOPEN_DELAY_MS := 750
 const TOUCH_POINTER_ID_OFFSET := 100000
 const TOUCH_SECONDARY_POINTER_ID := 0
 const VIRTUAL_CONTROLS_POINTER_ID := TOUCH_POINTER_ID_OFFSET + 65535
+const GAME_VIRTUAL_KEYBOARD_OPACITY_MIN := 0.2
+const GAME_VIRTUAL_KEYBOARD_OPACITY_MAX := 1.0
+const GAME_VIRTUAL_KEYBOARD_OPACITY_STEP := 0.05
 const TOUCH_SECONDARY_TAP_WINDOW_MS := 180
 const TOUCH_SECONDARY_QUARANTINE_MS := 320
 const TOUCH_SINGLE_TAP_DELAY_MS := 90
@@ -2252,6 +2344,7 @@ func _build_ui() -> void:
     add_child(game_virtual_controls)
     game_virtual_controls.setup(ui_tokens)
     game_virtual_controls.set_input_mode(game_virtual_input_mode)
+    _apply_game_virtual_control_preferences()
     game_virtual_controls.key_event_requested.connect(
         _on_game_virtual_key_event
     )
@@ -3047,6 +3140,9 @@ func _layout_shell(window_size: Vector2) -> void:
 func _load_shell_settings() -> void:
     var cfg := ConfigFile.new()
     var env_style := _runtime_string("AETHERKIRI_STYLE_MODE", "")
+    var env_translation_model_path := _runtime_string(
+        "AETHERKIRI_TRANSLATION_MODEL", ""
+    )
     var env_frame_enhancement_kind := _runtime_string(
         "AETHERKIRI_FRAME_ENHANCEMENT_KIND",
         ""
@@ -3056,6 +3152,7 @@ func _load_shell_settings() -> void:
         ""
     )
     if cfg.load(SETTINGS_FILE) != OK:
+        text_translation_model_path = env_translation_model_path
         var env_surface_mode := _runtime_string("AETHERKIRI_SURFACE_MODE", "")
         if not env_surface_mode.is_empty():
             _select_config_surface_mode(env_surface_mode)
@@ -3078,6 +3175,11 @@ func _load_shell_settings() -> void:
         _apply_style_mode()
         return
     language_mode = _normalize_language_mode(String(cfg.get_value("interface", "language", language_mode)))
+    text_translation_model_path = String(cfg.get_value(
+        "translation", "model_path", text_translation_model_path
+    ))
+    if not env_translation_model_path.is_empty():
+        text_translation_model_path = env_translation_model_path
     _apply_language_mode()
     style_mode = _normalize_style_mode(String(cfg.get_value("interface", "style", style_mode)))
     ios_ui_scale_mode = String(cfg.get_value("interface", "ios_ui_scale_mode", ios_ui_scale_mode))
@@ -3155,6 +3257,16 @@ func _load_shell_settings() -> void:
     game_virtual_input_mode = _normalize_game_virtual_input_mode(String(
         cfg.get_value("input", "virtual_control_mode", game_virtual_input_mode)
     ))
+    game_virtual_menu_enabled = bool(cfg.get_value(
+        "input", "virtual_control_menu_enabled", game_virtual_menu_enabled
+    ))
+    game_virtual_keyboard_opacity = _normalize_game_virtual_keyboard_opacity(
+        float(cfg.get_value(
+            "input",
+            "virtual_control_keyboard_opacity",
+            game_virtual_keyboard_opacity
+        ))
+    )
     plugin_load_mode = String(cfg.get_value("developer", "plugin_load_mode", plugin_load_mode))
     if not plugin_load_mode in ["krkrsdl3", "aether_all"]:
         plugin_load_mode = "krkrsdl3"
@@ -3198,11 +3310,22 @@ func _normalize_game_virtual_input_mode(value: String) -> String:
         else GameVirtualControls.INPUT_MODE_MOUSE
     )
 
+func _normalize_game_virtual_keyboard_opacity(value: float) -> float:
+    return snappedf(
+        clampf(
+            value,
+            GAME_VIRTUAL_KEYBOARD_OPACITY_MIN,
+            GAME_VIRTUAL_KEYBOARD_OPACITY_MAX
+        ),
+        GAME_VIRTUAL_KEYBOARD_OPACITY_STEP
+    )
+
 func _save_shell_settings() -> void:
     var cfg := ConfigFile.new()
     cfg.set_value("interface", "language", language_mode)
     cfg.set_value("interface", "style", style_mode)
     cfg.set_value("interface", "ios_ui_scale_mode", ios_ui_scale_mode)
+    cfg.set_value("translation", "model_path", text_translation_model_path)
     cfg.set_value("rendering", "backend", selected_backend)
     cfg.set_value("rendering", "upscale_algorithm", upscale_algorithm)
     cfg.set_value("rendering", "output_resolution", output_resolution)
@@ -3221,6 +3344,14 @@ func _save_shell_settings() -> void:
     cfg.set_value("rendering", "force_landscape", lock_landscape)
     cfg.set_value("rendering", "orientation_schema", MOBILE_ORIENTATION_SCHEMA_VERSION)
     cfg.set_value("input", "virtual_control_mode", game_virtual_input_mode)
+    cfg.set_value(
+        "input", "virtual_control_menu_enabled", game_virtual_menu_enabled
+    )
+    cfg.set_value(
+        "input",
+        "virtual_control_keyboard_opacity",
+        game_virtual_keyboard_opacity
+    )
     cfg.set_value("developer", "plugin_load_mode", plugin_load_mode)
     cfg.set_value("developer", "mock_enabled", mock_enabled)
     cfg.set_value("developer", "error_dialog_logs", error_dialog_logs)
@@ -3255,6 +3386,8 @@ func _current_settings_snapshot() -> Dictionary:
         "language": language_mode,
         "style": style_mode,
         "ios_ui_scale_mode": ios_ui_scale_mode,
+        "game_virtual_menu_enabled": game_virtual_menu_enabled,
+        "game_virtual_keyboard_opacity": game_virtual_keyboard_opacity,
         "backend": selected_backend,
         "upscale_algorithm": upscale_algorithm,
         "output_resolution": output_resolution,
@@ -3271,6 +3404,7 @@ func _current_settings_snapshot() -> Dictionary:
         "plugin_load_mode": plugin_load_mode,
         "mock_enabled": mock_enabled,
         "error_dialog_logs": error_dialog_logs,
+        "text_translation_model_path": text_translation_model_path,
     }
 
 func _settings_snapshots_equal(left: Dictionary, right: Dictionary) -> bool:
@@ -3383,6 +3517,9 @@ func _settings_draft_bool(key: String, fallback: bool) -> bool:
 func _settings_draft_int(key: String, fallback: int) -> int:
     return int(settings_draft.get(key, fallback))
 
+func _settings_draft_float(key: String, fallback: float) -> float:
+    return float(settings_draft.get(key, fallback))
+
 func _settings_draft_custom_chain() -> PackedStringArray:
     return _normalize_frame_enhancement_custom_chain(settings_draft.get(
         "frame_enhancement_custom_chain",
@@ -3397,6 +3534,16 @@ func _apply_settings_snapshot(snapshot: Dictionary) -> void:
     ios_ui_scale_mode = String(snapshot.get("ios_ui_scale_mode", ios_ui_scale_mode))
     if not ios_ui_scale_mode in IOS_UI_SCALE_MODES:
         ios_ui_scale_mode = "comfortable"
+    game_virtual_menu_enabled = bool(snapshot.get(
+        "game_virtual_menu_enabled", game_virtual_menu_enabled
+    ))
+    game_virtual_keyboard_opacity = _normalize_game_virtual_keyboard_opacity(
+        float(snapshot.get(
+            "game_virtual_keyboard_opacity",
+            game_virtual_keyboard_opacity
+        ))
+    )
+    _apply_game_virtual_control_preferences()
 
     selected_backend = _normalize_backend_name(String(snapshot.get("backend", selected_backend)))
     if not selected_backend in BACKENDS:
@@ -3443,6 +3590,9 @@ func _apply_settings_snapshot(snapshot: Dictionary) -> void:
         plugin_load_mode = "krkrsdl3"
     mock_enabled = bool(snapshot.get("mock_enabled", mock_enabled))
     error_dialog_logs = bool(snapshot.get("error_dialog_logs", error_dialog_logs))
+    text_translation_model_path = String(snapshot.get(
+        "text_translation_model_path", text_translation_model_path
+    ))
 
 func _save_settings_draft() -> void:
     if settings_draft.is_empty() or not dirty_settings:
@@ -3514,6 +3664,18 @@ func _apply_engine_options() -> void:
     player.set_engine_option("console_log_file", "1" if console_log_file else "0")
     player.set_engine_option("trace_log", "1" if effective_trace_log else "0")
     player.set_engine_option("input_trace", "1" if effective_input_trace else "0")
+    if player.has_method("is_text_translation_available") and player.is_text_translation_available():
+        _restore_native_translation_model_access()
+        player.set_engine_option(
+            "text_translation.model_path", text_translation_model_path
+        )
+        player.set_engine_option(
+            "text_translation.target_language", active_language
+        )
+        player.set_engine_option(
+            "text_translation.enabled",
+            "0" if text_translation_model_path.is_empty() else "1"
+        )
     # A synchronous Artemis resource load can make the next Godot frame carry
     # hundreds of milliseconds. Keep visual evolution incremental so authored
     # E-mote expressions and fades cannot collapse into a one-frame flash.
@@ -3892,9 +4054,10 @@ func _layout_perf_overlay(safe_rect: Rect2) -> void:
         return
     var horizontal_margin := 16.0
     perf_panel.position = safe_rect.position + Vector2(horizontal_margin, 12.0)
+    var translation_height := 36.0 if _translation_model_configured() else 0.0
     perf_panel.size = Vector2(
         maxf(240.0, safe_rect.size.x - horizontal_margin * 2.0),
-        136.0 if debug_overlay_mode == "detail" else 104.0
+        (136.0 if debug_overlay_mode == "detail" else 104.0) + translation_height
     )
 
 func _set_perf_visible(visible: bool) -> void:
@@ -4559,6 +4722,20 @@ func _rebuild_settings_view() -> void:
     _add_settings_row(interface_group, _settings_block(_t("settings.style"), _t("settings.style_desc"), _style_select(), stack_settings_controls))
     if OS.get_name() == "iOS":
         _add_settings_row(interface_group, _settings_block(_t("settings.ui_scale"), _t("settings.ui_scale_desc"), _ios_ui_scale_segment(), stack_settings_controls))
+    _add_settings_row(interface_group, _settings_toggle_row(
+        _t("settings.virtual_control_menu"),
+        _t("settings.virtual_control_menu_desc"),
+        _settings_draft_bool(
+            "game_virtual_menu_enabled", game_virtual_menu_enabled
+        ),
+        "game_virtual_menu"
+    ))
+    _add_settings_row(interface_group, _settings_block(
+        _t("settings.keyboard_control_opacity"),
+        _t("settings.keyboard_control_opacity_desc"),
+        _keyboard_controls_opacity_control(),
+        stack_settings_controls
+    ))
 
     var render_group := _settings_group(primary_column, _t("settings.section.render"), ICON_PERFORMANCE, animate_page, 0.055)
     _add_settings_row(render_group, _settings_block(_t("settings.render_backend"), _t("settings.render_backend_desc"), _backend_segment(), stack_settings_controls))
@@ -4607,6 +4784,27 @@ func _rebuild_settings_view() -> void:
     var compatibility_group := _settings_group(secondary_column, _t("settings.section.compatibility"), ICON_PLUGIN, animate_page, 0.105)
     _add_settings_row(compatibility_group, _settings_block(_t("settings.plugin_load_mode"), _t("settings.plugin_load_mode_desc"), _plugin_load_mode_select(), stack_settings_controls))
     _add_settings_row(compatibility_group, _settings_toggle_row(_t("settings.mock"), _t("settings.mock_desc"), _settings_draft_bool("mock_enabled", mock_enabled), "mock"))
+    if player != null and player.has_method("is_text_translation_available") and player.is_text_translation_available():
+        _add_settings_row(compatibility_group, _settings_action_row(
+            _t("settings.translation_model"),
+            _t("settings.translation_model_desc"),
+            _t("settings.translation_model_select"),
+            _choose_translation_model
+        ))
+        var draft_model_path := _settings_draft_string(
+            "text_translation_model_path", text_translation_model_path
+        )
+        if not draft_model_path.is_empty():
+            _add_settings_row(compatibility_group, _settings_value_row(
+                _t("settings.translation_model_selected"),
+                draft_model_path.get_file()
+            ))
+            _add_settings_row(compatibility_group, _settings_action_row(
+                _t("settings.translation_model_clear"),
+                _t("settings.translation_model_clear_desc"),
+                _t("settings.translation_model_clear"),
+                _clear_translation_model
+            ))
 
     var advanced_group := _settings_group(secondary_column, _t("settings.section.advanced"), ICON_PLUGIN, animate_page, 0.13)
     var advanced_disclosure = AetherDisclosure.new()
@@ -5128,6 +5326,14 @@ func _build_loading_panel() -> void:
     loading_title_label.add_theme_font_size_override("font_size", 18)
     loading_title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     loading_labels.add_child(loading_title_label)
+
+    loading_detail_label = Label.new()
+    loading_detail_label.text = ""
+    loading_detail_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    loading_detail_label.add_theme_font_size_override("font_size", 13)
+    loading_detail_label.add_theme_color_override("font_color", ui_tokens.text_secondary)
+    loading_detail_label.visible = false
+    loading_labels.add_child(loading_detail_label)
     if not ui_motion.reduced_motion:
         var spinner_tween := loading_spinner.create_tween().set_loops()
         # Mirror the counter-clockwise refresh glyph so it follows this
@@ -5154,6 +5360,26 @@ func _show_loading_overlay(immediate: bool = false) -> void:
     loading_panel.move_to_front()
     if loading_card != null:
         ui_motion.loading_in(loading_panel, loading_card, immediate)
+
+func _translation_model_configured() -> bool:
+    return (
+        not text_translation_model_path.is_empty()
+        and player != null
+        and player.has_method("is_text_translation_available")
+        and player.is_text_translation_available()
+    )
+
+func _set_translation_loading_notice(active: bool) -> void:
+    translation_loading_notice_active = active
+    if is_instance_valid(loading_title_label):
+        loading_title_label.text = _t(
+            "loading.translation_model" if active else "loading.title"
+        )
+    if is_instance_valid(loading_detail_label):
+        loading_detail_label.text = (
+            _t("loading.translation_model_detail") if active else ""
+        )
+        loading_detail_label.visible = active
 
 func _hide_loading_overlay(finished: Callable = Callable()) -> void:
     if loading_panel == null or not loading_panel.visible:
@@ -5279,7 +5505,12 @@ func _find_shell_scroll_at_position(position: Vector2) -> ScrollContainer:
     return null
 
 func _control_at_pointer(position: Vector2) -> Control:
-    var hovered := get_viewport().gui_get_hovered_control()
+    var current_viewport := get_viewport()
+    var hovered := (
+        current_viewport.gui_get_hovered_control()
+        if current_viewport != null
+        else null
+    )
     if hovered is Control:
         var control := hovered as Control
         if control.is_visible_in_tree() and control.get_global_rect().has_point(position):
@@ -5313,6 +5544,9 @@ func _start_shell_scroll_drag(key: int, position: Vector2) -> void:
     _stop_shell_scroll_tween(scroll)
     var control := _control_at_pointer(position)
     var button := _nearest_base_button(control) if control != null else null
+    var horizontal_slider := (
+        _nearest_horizontal_slider(control) if control != null else null
+    )
     shell_scroll_drag_states[key] = {
         # Controls can be rebuilt between the touch press and the following
         # drag/release event (for example after changing a settings selector).
@@ -5327,6 +5561,12 @@ func _start_shell_scroll_drag(key: int, position: Vector2) -> void:
         "pending_y": 0.0,
         "dragging": false,
         "threshold": SHELL_SCROLL_BUTTON_DRAG_THRESHOLD if button != null else SHELL_SCROLL_DRAG_THRESHOLD,
+        # A Range control owns its complete press/drag/release gesture. Do not
+        # let vertical finger wobble hand that same pointer to the surrounding
+        # settings ScrollContainer midway through a slider adjustment.
+        "scroll_locked": horizontal_slider != null,
+        "axis_lock": SHELL_SCROLL_AXIS_PENDING if horizontal_slider != null else SHELL_SCROLL_AXIS_NONE,
+        "gesture_delta": Vector2.ZERO,
     }
 
 func _update_shell_scroll_drag(
@@ -5345,6 +5585,8 @@ func _update_shell_scroll_drag(
     if scroll == null or not scroll.is_visible_in_tree():
         shell_scroll_drag_states.erase(key)
         return false
+    if bool(state.get("scroll_locked", false)):
+        return false
     var last_position := state.get("last", position) as Vector2
     var delta := position - last_position
     if delta.is_zero_approx():
@@ -5360,6 +5602,12 @@ func _update_shell_scroll_drag(
     state["last"] = position
     var distance := float(state.get("distance", 0.0)) + absf(delta.y)
     var pending_y := float(state.get("pending_y", 0.0)) + delta.y
+    var axis_lock := _update_shell_scroll_axis_lock(state, delta)
+    if axis_lock == SHELL_SCROLL_AXIS_PENDING or axis_lock == SHELL_SCROLL_AXIS_HORIZONTAL:
+        state["distance"] = distance
+        state["pending_y"] = pending_y
+        shell_scroll_drag_states[key] = state
+        return false
     var was_dragging := bool(state.get("dragging", false))
     var threshold := float(state.get("threshold", SHELL_SCROLL_DRAG_THRESHOLD))
     var dragging := was_dragging or distance >= threshold
@@ -5434,6 +5682,35 @@ func _nearest_base_button(control: Control) -> BaseButton:
             return current as BaseButton
         current = current.get_parent()
     return null
+
+func _nearest_horizontal_slider(control: Control) -> HSlider:
+    var current: Node = control
+    while current != null:
+        if current is HSlider:
+            return current as HSlider
+        current = current.get_parent()
+    return null
+
+func _update_shell_scroll_axis_lock(state: Dictionary, delta: Vector2) -> String:
+    var axis_lock := String(state.get("axis_lock", SHELL_SCROLL_AXIS_NONE))
+    if axis_lock != SHELL_SCROLL_AXIS_PENDING:
+        return axis_lock
+    var gesture_delta: Vector2 = state.get("gesture_delta", Vector2.ZERO)
+    gesture_delta += delta
+    state["gesture_delta"] = gesture_delta
+    var horizontal_distance := absf(gesture_delta.x)
+    var vertical_distance := absf(gesture_delta.y)
+    if maxf(horizontal_distance, vertical_distance) < SHELL_SCROLL_SLIDER_AXIS_THRESHOLD:
+        return SHELL_SCROLL_AXIS_PENDING
+    # A gesture that begins on a horizontal slider is biased toward the
+    # slider. Only a clearly vertical initial motion may become page scrolling;
+    # once horizontal wins, later vertical wobble cannot change ownership.
+    if vertical_distance > horizontal_distance * SHELL_SCROLL_SLIDER_VERTICAL_DOMINANCE:
+        axis_lock = SHELL_SCROLL_AXIS_VERTICAL
+    else:
+        axis_lock = SHELL_SCROLL_AXIS_HORIZONTAL
+    state["axis_lock"] = axis_lock
+    return axis_lock
 
 func _is_scroll_bar_control(control: Control) -> bool:
     var current: Node = control
@@ -6207,6 +6484,46 @@ func _apple_select(width: float = 220.0):
     select.custom_minimum_size.x = width
     return select
 
+func _keyboard_controls_opacity_control() -> Control:
+    var row := HBoxContainer.new()
+    row.name = "KeyboardControlsOpacityControl"
+    row.custom_minimum_size = Vector2(272.0, 40.0)
+    row.add_theme_constant_override("separation", 8)
+
+    var slider = AetherSlider.new()
+    slider.name = "KeyboardControlsOpacitySlider"
+    slider.min_value = GAME_VIRTUAL_KEYBOARD_OPACITY_MIN
+    slider.max_value = GAME_VIRTUAL_KEYBOARD_OPACITY_MAX
+    slider.step = GAME_VIRTUAL_KEYBOARD_OPACITY_STEP
+    slider.setup(
+        ui_tokens,
+        _normalize_game_virtual_keyboard_opacity(_settings_draft_float(
+            "game_virtual_keyboard_opacity",
+            game_virtual_keyboard_opacity
+        ))
+    )
+    row.add_child(slider)
+
+    var value_label := Label.new()
+    value_label.name = "KeyboardControlsOpacityValue"
+    value_label.custom_minimum_size = Vector2(44.0, 40.0)
+    value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+    value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    value_label.add_theme_font_size_override("font_size", 13)
+    value_label.add_theme_color_override("font_color", ui_tokens.text_secondary)
+    value_label.text = _opacity_percentage_text(slider.value)
+    row.add_child(value_label)
+
+    slider.value_changed.connect(func(value: float):
+        var normalized := _normalize_game_virtual_keyboard_opacity(value)
+        value_label.text = _opacity_percentage_text(normalized)
+        _set_settings_draft_value("game_virtual_keyboard_opacity", normalized)
+    )
+    return row
+
+func _opacity_percentage_text(value: float) -> String:
+    return "%d%%" % int(round(clampf(value, 0.0, 1.0) * 100.0))
+
 func _settings_fps_row() -> Control:
     var margin := MarginContainer.new()
     margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -6551,6 +6868,8 @@ func _backend_segment() -> Control:
 func _on_setting_toggle(key: String, value: bool) -> void:
     if key == "fps_limit":
         _set_settings_draft_value("fps_limit_enabled", value)
+    elif key == "game_virtual_menu":
+        _set_settings_draft_value("game_virtual_menu_enabled", value)
     elif key == "landscape":
         _set_settings_draft_value("force_landscape", value)
     elif key == "mock":
@@ -6775,7 +7094,7 @@ func _refresh_language_texts() -> void:
         _set_pill_button_text(empty_primary_button, _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import"))
     _sync_home_action_labels()
     if is_instance_valid(loading_title_label):
-        loading_title_label.text = _t("loading.title")
+        _set_translation_loading_notice(translation_loading_notice_active)
 
 func _empty_help_text() -> String:
     if OS.get_name() == "iOS":
@@ -7059,7 +7378,7 @@ func _build_desktop_detail(game: Dictionary, phone_landscape: bool = false) -> C
     var body := HBoxContainer.new()
     body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     body.add_theme_constant_override("separation", 20 if phone_landscape else 32)
-    body.add_child(_detail_cover(game, Vector2(176, 248) if phone_landscape else Vector2(252, 354)))
+    body.add_child(_detail_cover_with_action(game, Vector2(176, 248) if phone_landscape else Vector2(252, 354)))
 
     var information := VBoxContainer.new()
     information.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -7079,7 +7398,7 @@ func _build_compact_detail(game: Dictionary) -> Control:
     summary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     summary.add_theme_constant_override("separation", 16)
     body.add_child(summary)
-    summary.add_child(_detail_cover(game, Vector2(112, 158)))
+    summary.add_child(_detail_cover_with_action(game, Vector2(112, 158)))
 
     var primary := VBoxContainer.new()
     primary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -7115,6 +7434,31 @@ func _detail_cover(game: Dictionary, cover_size: Vector2) -> PanelContainer:
         var icon := _centered_icon(ICON_GAMEPAD, Vector2(48, 48), ui_tokens.accent)
         cover.add_child(icon)
     return cover
+
+func _detail_cover_with_action(game: Dictionary, cover_size: Vector2) -> VBoxContainer:
+    var column := VBoxContainer.new()
+    column.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+    column.add_theme_constant_override("separation", 6)
+    column.add_child(_detail_cover(game, cover_size))
+    var cover_path := _resolve_cover_path(game)
+    var has_cover := not cover_path.is_empty() and FileAccess.file_exists(cover_path)
+    var actions := HBoxContainer.new()
+    actions.alignment = BoxContainer.ALIGNMENT_CENTER
+    actions.add_theme_constant_override("separation", 6)
+    column.add_child(actions)
+    var action := _pill_button(_t("detail.set_cover"), ICON_PAGE)
+    action.custom_minimum_size = Vector2(128, 40)
+    action.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+    action.pressed.connect(_set_cover_for_selected)
+    actions.add_child(action)
+    if has_cover:
+        var clear := _icon_action_button(ICON_REFRESH, _t("detail.clear_cover"), _clear_cover_for_selected)
+        clear.text = _t("detail.clear_cover")
+        clear.add_theme_constant_override("h_separation", 8)
+        clear.custom_minimum_size = Vector2(112, 40)
+        clear.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+        actions.add_child(clear)
+    return column
 
 func _detail_identity(game: Dictionary, compact: bool) -> VBoxContainer:
     var identity := VBoxContainer.new()
@@ -7185,10 +7529,6 @@ func _detail_tools(game: Dictionary) -> FlowContainer:
             _reveal_icon_action_label_on_hover(reset_launch, _t("detail.reset_launch_file"))
             reset_launch.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
             tools.add_child(reset_launch)
-    var set_cover := _icon_action_button(ICON_PAGE, _t("detail.set_cover"), func(): _set_cover_for_selected())
-    _reveal_icon_action_label_on_hover(set_cover, _t("detail.set_cover"))
-    set_cover.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-    tools.add_child(set_cover)
     var rename := _icon_action_button(ICON_RENAME, _t("detail.rename"), func(): _rename_selected_game())
     _reveal_icon_action_label_on_hover(rename, _t("detail.rename"))
     tools.add_child(rename)
@@ -7840,6 +8180,58 @@ func _create_file_dialog(title: String, file_mode: int, filters: PackedStringArr
     dialog.files_selected.connect(func(_paths: PackedStringArray): call_deferred("_release_file_dialog", dialog))
     return dialog
 
+func _choose_translation_model() -> void:
+    _finish_hero_overlay()
+    var current_path := _settings_draft_string(
+        "text_translation_model_path", text_translation_model_path
+    )
+    var initial_directory := (
+        current_path.get_base_dir() if not current_path.is_empty() else ""
+    )
+    if player != null \
+            and player.has_method("native_translation_model_file_picker_open") \
+            and bool(player.native_translation_model_file_picker_open(
+                _t("settings.translation_model_select"), initial_directory
+            )):
+        native_translation_model_file_picker_pending = true
+        return
+    _show_translation_model_native_dialog(current_path)
+
+func _show_translation_model_native_dialog(current_path: String) -> void:
+    var dialog := _create_file_dialog(
+        _t("settings.translation_model_select"),
+        FileDialog.FILE_MODE_OPEN_FILE,
+        PackedStringArray(["*.gguf ; GGUF model"])
+    )
+    if not current_path.is_empty():
+        dialog.current_dir = current_path.get_base_dir()
+        dialog.current_file = current_path.get_file()
+    dialog.file_selected.connect(func(path: String):
+        _set_settings_draft_value("text_translation_model_path", path)
+        call_deferred("_rebuild_settings_view")
+    )
+    add_child(dialog)
+    dialog.popup_centered(Vector2i(900, 640))
+
+func _restore_native_translation_model_access() -> void:
+    if OS.get_name() not in ["iOS", "macOS"] \
+            or text_translation_model_path.is_empty() \
+            or not _runtime_string("AETHERKIRI_TRANSLATION_MODEL", "").is_empty() \
+            or player == null \
+            or not player.has_method("native_translation_model_restore_path"):
+        return
+    var restored_path := String(player.native_translation_model_restore_path(
+        text_translation_model_path
+    ))
+    if restored_path.is_empty() or restored_path == text_translation_model_path:
+        return
+    text_translation_model_path = restored_path
+    _save_shell_settings()
+
+func _clear_translation_model() -> void:
+    _set_settings_draft_value("text_translation_model_path", "")
+    call_deferred("_rebuild_settings_view")
+
 func _release_file_dialog(dialog: FileDialog) -> void:
     if dialog != null and is_instance_valid(dialog):
         dialog.queue_free()
@@ -7890,6 +8282,25 @@ func _set_cover_for_selected() -> void:
             return
     _show_cover_godot_dialog(path)
 
+func _delete_cover_for_selected() -> void:
+    var path := String(selected_game.get("path", ""))
+    if path.is_empty():
+        return
+    var cover_path := _resolve_cover_path(selected_game)
+    if not cover_path.is_empty() and FileAccess.file_exists(cover_path):
+        DirAccess.remove_absolute(cover_path)
+    _clear_cover_for_selected()
+
+func _clear_cover_for_selected() -> void:
+    var path := String(selected_game.get("path", ""))
+    if path.is_empty():
+        return
+    _update_game(path, {"coverPath": "", GAME_AUTO_COVER_SCANNED_FIELD: true})
+    var index := CoverIndex.load_index()
+    index[CoverIndex.key_for(selected_game)] = CoverIndex.record("")
+    CoverIndex.save_index(index)
+    _show_detail(selected_game)
+
 func _show_cover_godot_dialog(path: String) -> void:
     var dialog := _create_file_dialog(
         _t("dialog.choose_cover"),
@@ -7915,6 +8326,12 @@ func _apply_selected_cover(library_path: String, cover_path: String) -> void:
         "coverPath": _portable_cover_path(library_path, cover_path),
         GAME_AUTO_COVER_SCANNED_FIELD: true,
     })
+    var index := CoverIndex.load_index()
+    for game in _load_game_list():
+        if String(game.get("path", "")) == library_path:
+            index[CoverIndex.key_for(game)] = CoverIndex.record(_portable_cover_path(library_path, cover_path))
+            break
+    CoverIndex.save_index(index)
     _show_detail(selected_game)
 
 func _game_launch_entry_label(game: Dictionary) -> String:
@@ -8027,6 +8444,39 @@ func _poll_native_cover_file_picker() -> void:
     match String(result.get("status", "error")):
         "selected":
             _apply_selected_cover(library_path, String(result.get("path", "")))
+        "cancelled":
+            pass
+        _:
+            _show_system_alert(
+                String(result.get("error", "System file picker failed")),
+                _t("alert.warning_title")
+            )
+
+func _poll_native_translation_model_file_picker() -> void:
+    if not native_translation_model_file_picker_pending \
+            or player == null \
+            or not player.has_method("native_launch_file_picker_take_result_json"):
+        return
+    var result_json := String(player.native_launch_file_picker_take_result_json())
+    if result_json.is_empty():
+        return
+    native_translation_model_file_picker_pending = false
+    var parsed = JSON.parse_string(result_json)
+    if typeof(parsed) != TYPE_DICTIONARY:
+        _show_system_alert(result_json, _t("alert.warning_title"))
+        return
+    var result: Dictionary = parsed
+    match String(result.get("status", "error")):
+        "selected":
+            var path := String(result.get("path", ""))
+            if path.get_extension().to_lower() != "gguf":
+                _show_system_alert(
+                    "The selected file is not a GGUF model.",
+                    _t("alert.warning_title")
+                )
+                return
+            _set_settings_draft_value("text_translation_model_path", path)
+            call_deferred("_rebuild_settings_view")
         "cancelled":
             pass
         _:
@@ -8437,8 +8887,11 @@ func _refresh_games() -> void:
     var loaded_games := _load_game_list()
     known_games = builtin_demo.reconcile_games(loaded_games)
     var library_changed := JSON.stringify(known_games) != JSON.stringify(loaded_games)
+    if _backfill_game_metadata(known_games):
+        library_changed = true
     if _backfill_default_game_covers(known_games):
         library_changed = true
+    _sync_cover_index(known_games)
     if OS.get_name() == "iOS":
         known_games = _scan_ios_games_dir(known_games)
         _save_game_list(known_games)
@@ -9236,7 +9689,44 @@ func _add_game_dictionary(game: Dictionary) -> bool:
     _refresh_games()
     if not replaced:
         _offer_scrape_after_add(final_game)
+        _start_vndb_cover_lookup(final_game, true)
     return true
+
+func _start_vndb_cover_lookup(game: Dictionary, force: bool = false) -> void:
+    var index := CoverIndex.load_index()
+    var key := CoverIndex.key_for(game)
+    if key.is_empty() or (not force and not CoverIndex.needs_recognition(index, key)):
+        return
+    for queued in vndb_cover_queue:
+        if String(queued.get("path", "")) == String(game.get("path", "")):
+            return
+    vndb_cover_queue.append(game)
+    _process_next_vndb_cover()
+
+func _process_next_vndb_cover() -> void:
+    if vndb_cover_busy or vndb_cover_queue.is_empty():
+        return
+    var resolver := get_node_or_null("VNDBCoverResolver")
+    if resolver == null:
+        return
+    vndb_cover_busy = true
+    resolver.resolve(vndb_cover_queue.pop_front())
+
+func _on_vndb_cover_resolved(game_path: String, cover_path: String, vndb_id: String) -> void:
+    var games := _load_game_list()
+    var index := CoverIndex.load_index()
+    for game in games:
+        if String(game.get("path", "")) != game_path:
+            continue
+        var key := CoverIndex.key_for(game)
+        var resolved_cover := _portable_cover_path(game_path, cover_path) if not cover_path.is_empty() else ""
+        index[key] = CoverIndex.record(resolved_cover)
+        var values := {"coverPath": resolved_cover, "vndbId": vndb_id, GAME_AUTO_COVER_SCANNED_FIELD: true}
+        _update_game(game_path, values)
+        break
+    CoverIndex.save_index(index)
+    vndb_cover_busy = false
+    _process_next_vndb_cover()
 
 func _merge_game_dictionary(existing: Dictionary, game: Dictionary) -> Dictionary:
     var merged := existing.duplicate(true)
@@ -9350,8 +9840,11 @@ func _game_info_from_path(path: String) -> Dictionary:
     if name.to_lower().ends_with(".xp3"):
         name = name.substr(0, name.length() - 4)
     var default_cover_path := _discover_default_cover_path(path)
+    var metadata := GameMetadata.inspect(path)
+    var detected_title := String(metadata.get("title", ""))
+    var detected_engine := String(metadata.get("engine", RUNTIME_KIRIKIRI))
     return {
-        "name": name,
+        "name": detected_title if not detected_title.is_empty() else name,
         "path": path,
         "type": "Archive" if path.to_lower().ends_with(".xp3") else "Directory",
         "lastPlayed": 0,
@@ -9359,8 +9852,11 @@ func _game_info_from_path(path: String) -> Dictionary:
         "coverPath": _portable_cover_path(path, default_cover_path),
         GAME_AUTO_COVER_SCANNED_FIELD: true,
         "developer": "",
-        "title": "",
-        "engine": _game_runtime_kind(path),
+        "title": detected_title,
+        "titleCandidates": metadata.get("titleCandidates", PackedStringArray()),
+        "metadataSignals": metadata.get("signals", PackedStringArray()),
+        "engine": detected_engine,
+        "launchFile": metadata.get("launchFile", ""),
     }
 
 func _game_runtime_root(path: String) -> String:
@@ -9370,13 +9866,33 @@ func _game_runtime_root(path: String) -> String:
     return resolved
 
 func _game_runtime_kind(path: String) -> String:
-    var root := _game_runtime_root(path)
-    if root.is_empty():
-        return RUNTIME_KIRIKIRI
-    for marker in ONSCRIPTER_SCRIPT_MARKERS:
-        if FileAccess.file_exists(root.path_join(marker)):
-            return RUNTIME_ONSCRIPTER
-    return RUNTIME_KIRIKIRI
+    return String(GameMetadata.inspect(_game_runtime_root(path)).get("engine", RUNTIME_KIRIKIRI))
+
+func _backfill_game_metadata(games: Array[Dictionary]) -> bool:
+    var changed := false
+    for game in games:
+        var path := String(game.get("path", ""))
+        if path.is_empty() or builtin_demo.is_game(game):
+            continue
+        var metadata := GameMetadata.inspect(path)
+        var engine := String(metadata.get("engine", RUNTIME_KIRIKIRI))
+        if String(game.get("engine", "")).is_empty() or String(game.get("engine", "")) == RUNTIME_KIRIKIRI:
+            if String(game.get("engine", "")) != engine:
+                game["engine"] = engine
+                changed = true
+        if String(game.get("title", "")).is_empty():
+            var title := String(metadata.get("title", ""))
+            if not title.is_empty():
+                game["title"] = title
+                if String(game.get("name", "")).is_empty():
+                    game["name"] = title
+                changed = true
+        for key in ["titleCandidates", "metadataSignals", "launchFile"]:
+            var value = metadata.get(key, null)
+            if value != null and JSON.stringify(game.get(key, null)) != JSON.stringify(value):
+                game[key] = value
+                changed = true
+    return changed
 
 func _backfill_default_game_covers(games: Array[Dictionary]) -> bool:
     var changed := false
@@ -9402,6 +9918,26 @@ func _backfill_default_game_covers(games: Array[Dictionary]) -> bool:
             changed = true
         games[index] = game
     return changed
+
+func _sync_cover_index(games: Array[Dictionary]) -> void:
+    var index := CoverIndex.load_index()
+    var changed := false
+    var pending: Array[Dictionary] = []
+    for game in games:
+        if builtin_demo.is_game(game):
+            continue
+        var key := CoverIndex.key_for(game)
+        if key.is_empty() or not CoverIndex.needs_recognition(index, key):
+            continue
+        var cover_path := _resolve_cover_path(game)
+        var stored_path := _portable_cover_path(String(game.get("path", "")), cover_path) if not cover_path.is_empty() and FileAccess.file_exists(cover_path) else ""
+        index[key] = CoverIndex.record(stored_path, false)
+        changed = true
+        pending.append(game)
+    if changed:
+        CoverIndex.save_index(index)
+    for game in pending:
+        _start_vndb_cover_lookup(game, true)
 
 func _portable_cover_path(game_path: String, cover_path: String) -> String:
     var value := cover_path.strip_edges()
@@ -10112,6 +10648,7 @@ func _start_selected_game_after_entitlements() -> void:
     # expose its black/empty first surface. Diagnostics stay hidden until the
     # first successful game frame replaces this overlay.
     _set_perf_visible(false)
+    _set_translation_loading_notice(_translation_model_configured())
     _show_loading_overlay(true)
     restart_notice.visible = true
     _on_open_game()
@@ -10177,6 +10714,10 @@ func _return_to_library_after_runtime_exit() -> void:
     runtime_exit_cleanup_pending = false
 
 func _ready() -> void:
+    var vndb_resolver := VNDBCoverResolver.new()
+    vndb_resolver.name = "VNDBCoverResolver"
+    add_child(vndb_resolver)
+    vndb_resolver.resolved.connect(_on_vndb_cover_resolved)
     cli_probe_script = _detect_cli_probe_script()
     _apply_ui_font()
     DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_TRANSPARENT, false)
@@ -10258,6 +10799,7 @@ func _ready() -> void:
 
     if not _create_runtime_player():
         return
+    _restore_native_translation_model_access()
     _initialize_iap()
 
     diagnostic_session = DiagnosticSession.new()
@@ -10645,14 +11187,10 @@ func _show_runtime_dialog(values: Dictionary) -> void:
     modal_layer.add_child(dim)
 
     var dialog := PanelContainer.new()
-    dialog.anchor_left = 0.5
-    dialog.anchor_top = 0.5
-    dialog.anchor_right = 0.5
-    dialog.anchor_bottom = 0.5
-    dialog.offset_left = -390.0
-    dialog.offset_top = -220.0
-    dialog.offset_right = 390.0
-    dialog.offset_bottom = 220.0
+    dialog.name = "ArtemisRuntimeDialog"
+    dialog.clip_contents = true
+    _mark_centered_safe_dialog(dialog, Vector2(780, 520))
+    _layout_safe_dialog(dialog, _ui_safe_rect(get_viewport_rect().size))
     dialog.mouse_filter = Control.MOUSE_FILTER_STOP
     dialog.add_theme_stylebox_override(
         "panel",
@@ -10660,7 +11198,15 @@ func _show_runtime_dialog(values: Dictionary) -> void:
     )
     modal_layer.add_child(dialog)
 
+    _build_runtime_dialog_content(dialog, values)
+
+func _build_runtime_dialog_content(
+    dialog: PanelContainer,
+    values: Dictionary
+) -> void:
+
     var margin := MarginContainer.new()
+    margin.name = "ArtemisDialogMargin"
     margin.add_theme_constant_override("margin_left", 30)
     margin.add_theme_constant_override("margin_top", 26)
     margin.add_theme_constant_override("margin_right", 30)
@@ -10668,22 +11214,37 @@ func _show_runtime_dialog(values: Dictionary) -> void:
     dialog.add_child(margin)
 
     var box := VBoxContainer.new()
+    box.name = "ArtemisDialogContent"
     box.add_theme_constant_override("separation", 20)
     margin.add_child(box)
 
     var title := Label.new()
     title.text = String(values.get("title", ""))
+    title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     title.add_theme_font_size_override("font_size", 30)
     title.add_theme_color_override("font_color", color_text)
     box.add_child(title)
 
+    var message_scroll := ScrollContainer.new()
+    message_scroll.name = "ArtemisDialogMessageScroll"
+    message_scroll.custom_minimum_size = Vector2(0, 64)
+    message_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    message_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    message_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+    message_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+    message_scroll.scroll_deadzone = 0
+    message_scroll.mouse_force_pass_scroll_events = false
+    box.add_child(message_scroll)
+
     var message := Label.new()
+    message.name = "ArtemisDialogMessage"
     message.text = String(values.get("message", ""))
+    message.custom_minimum_size = Vector2.ZERO
+    message.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    message.size_flags_vertical = Control.SIZE_EXPAND_FILL
     message.add_theme_font_size_override("font_size", 23)
     message.add_theme_color_override("font_color", color_text)
-    box.add_child(message)
+    message_scroll.add_child(message)
 
     var text_field := String(values.get("text_field", "0")) == "1"
     var yes_no := String(values.get("yes_no", "0")) == "1"
@@ -10702,6 +11263,7 @@ func _show_runtime_dialog(values: Dictionary) -> void:
         box.add_child(runtime_dialog_input)
 
     var buttons := HBoxContainer.new()
+    buttons.name = "ArtemisDialogButtons"
     buttons.alignment = BoxContainer.ALIGNMENT_END
     buttons.add_theme_constant_override("separation", 14)
     box.add_child(buttons)
@@ -12204,6 +12766,7 @@ func _process(delta: float) -> void:
     _poll_android_storage_permission_request()
     _poll_native_launch_file_picker()
     _poll_native_cover_file_picker()
+    _poll_native_translation_model_file_picker()
     _fit_full_rects()
     _sync_game_virtual_controls()
     _process_iap(delta)
@@ -12232,6 +12795,23 @@ func _process(delta: float) -> void:
             startup_state = cached_startup_state
             _sync_game_virtual_controls()
         if startup_state == STARTUP_SUCCEEDED:
+            if (
+                _translation_model_configured()
+                and player.has_method("get_text_translation_state")
+            ):
+                var translation_state := int(player.get_text_translation_state())
+                if translation_state == TEXT_TRANSLATION_LOADING:
+                    _set_translation_loading_notice(true)
+                    return
+                # A failed optional model remains fail-open: the runtime keeps
+                # running with authored text and its error is available in the
+                # startup log instead of trapping the user behind this overlay.
+                if translation_state in [
+                    TEXT_TRANSLATION_READY,
+                    TEXT_TRANSLATION_FAILED,
+                    TEXT_TRANSLATION_DISABLED,
+                ]:
+                    _set_translation_loading_notice(false)
             restart_notice.text = ""
             if loading_panel != null and loading_panel.visible:
                 _hide_loading_overlay(func():
@@ -12333,6 +12913,7 @@ func _process(delta: float) -> void:
                 _return_to_library_after_runtime_exit()
                 return
             restart_notice.text = "Game startup failed."
+            _set_translation_loading_notice(false)
             _hide_loading_overlay()
             _set_game_background(false)
             shell_root.visible = true
@@ -12428,6 +13009,46 @@ func _process(delta: float) -> void:
             _format_monitor_bytes(int(memory.get("gpu_buffer_bytes", 0))),
             _format_monitor_bytes(int(memory.get("cache_bytes", 0))),
         ]
+        if player.has_method("get_text_translation_stats"):
+            var translation: Dictionary = player.get_text_translation_stats()
+            var translation_state := int(translation.get("state", TEXT_TRANSLATION_DISABLED))
+            if translation_state != TEXT_TRANSLATION_DISABLED or _translation_model_configured():
+                var state_label := String({
+                    TEXT_TRANSLATION_DISABLED: "Off",
+                    TEXT_TRANSLATION_LOADING: "Loading",
+                    TEXT_TRANSLATION_READY: "Ready",
+                    TEXT_TRANSLATION_FAILED: "Failed",
+                }.get(translation_state, "Unknown"))
+                var backend_label := String({
+                    0: "-",
+                    1: "CPU",
+                    2: "GPU",
+                }.get(int(translation.get("backend", 0)), "Unknown"))
+                var model_bytes := int(translation.get(
+                    "model_tensor_bytes",
+                    int(translation.get("model_file_bytes", 0))
+                ))
+                var cache_hits := int(translation.get("cache_hits", 0))
+                var cache_misses := int(translation.get("cache_misses", 0))
+                var cache_requests := cache_hits + cache_misses
+                var hit_percent := (
+                    float(cache_hits) * 100.0 / float(cache_requests)
+                    if cache_requests > 0 else 0.0
+                )
+                summary_text += "\nTranslation: %s/%s | Model %s | Context %s | Resident(est.) %s | Work %d+%d/%d | Cache %d (hit %.0f%%) | Wait/Infer %.0f/%.0f ms" % [
+                    state_label,
+                    backend_label,
+                    _format_monitor_bytes(model_bytes),
+                    _format_monitor_bytes(int(translation.get("context_state_bytes", 0))),
+                    _format_monitor_bytes(int(translation.get("model_resident_bytes_estimate", 0))),
+                    int(translation.get("active_jobs", 0)),
+                    int(translation.get("priority_queue_entries", 0)),
+                    int(translation.get("prefetch_queue_entries", 0)),
+                    int(translation.get("cache_entries", 0)),
+                    hit_percent,
+                    float(translation.get("last_synchronous_wait_us", 0)) / 1000.0,
+                    float(translation.get("last_inference_us", 0)) / 1000.0,
+                ]
         if debug_overlay_mode == "detail" and diagnostic_session != null:
             var frame_summary: Dictionary = diagnostic_session.latest_frame_summary
             summary_text += "\nTick: %.2f ms | Update: %.2f ms | P50/P95/P99/Max: %.2f / %.2f / %.2f / %.2f ms | Dropped: %d" % [
@@ -14242,12 +14863,21 @@ func _can_forward_game_input() -> bool:
 func _sync_game_virtual_controls() -> void:
     if game_virtual_controls == null:
         return
+    _apply_game_virtual_control_preferences()
     game_virtual_controls.set_enabled(
         _should_enable_game_virtual_controls(
             _is_touch_platform(),
             _can_forward_game_input(),
             app_lifecycle_paused
         )
+    )
+
+func _apply_game_virtual_control_preferences() -> void:
+    if game_virtual_controls == null:
+        return
+    game_virtual_controls.set_menu_button_enabled(game_virtual_menu_enabled)
+    game_virtual_controls.set_keyboard_controls_opacity(
+        game_virtual_keyboard_opacity
     )
 
 func _should_enable_game_virtual_controls(

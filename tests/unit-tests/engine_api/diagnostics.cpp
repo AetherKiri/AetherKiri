@@ -198,7 +198,7 @@ const engine_runtime_provider_v1_t kArtemisGateProvider = [] {
 
 }  // namespace
 
-TEST_CASE("primary click queue gate coalesces clicks before the next tick") {
+TEST_CASE("primary click queue gate bounds rapid primary gestures") {
   aetherkiri::engine_api::PrimaryClickQueueGate gate;
   engine_input_event_t event{};
   event.struct_size = sizeof(event);
@@ -212,6 +212,12 @@ TEST_CASE("primary click queue gate coalesces clicks before the next tick") {
   REQUIRE(gate.should_enqueue(event));
   const engine_input_event_t queued_release = event;
 
+  for (size_t click = 0; click < 7; ++click) {
+    event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
+    REQUIRE(gate.should_enqueue(event));
+    event.type = ENGINE_INPUT_EVENT_POINTER_UP;
+    REQUIRE(gate.should_enqueue(event));
+  }
   event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
   REQUIRE_FALSE(gate.should_enqueue(event));
   event.type = ENGINE_INPUT_EVENT_POINTER_MOVE;
@@ -224,6 +230,27 @@ TEST_CASE("primary click queue gate coalesces clicks before the next tick") {
   REQUIRE(gate.should_enqueue(event));
 }
 
+TEST_CASE("primary click queue gate preserves a cross-tick primary gesture") {
+  aetherkiri::engine_api::PrimaryClickQueueGate gate;
+  engine_input_event_t event{};
+  event.struct_size = sizeof(event);
+  event.button = 0;
+  event.pointer_id = 7;
+
+  event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
+  REQUIRE(gate.should_enqueue(event));
+
+  // A physical click normally spans multiple frames. Processing its press
+  // must not make the later release look like an orphaned pointer event.
+  gate.on_dequeued(event);
+  event.type = ENGINE_INPUT_EVENT_POINTER_UP;
+  REQUIRE(gate.should_enqueue(event));
+  gate.on_dequeued(event);
+
+  event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
+  REQUIRE(gate.should_enqueue(event));
+}
+
 TEST_CASE("primary click queue gate preserves every secondary pointer edge") {
   aetherkiri::engine_api::PrimaryClickQueueGate gate;
   engine_input_event_t event{};
@@ -231,8 +258,10 @@ TEST_CASE("primary click queue gate preserves every secondary pointer edge") {
 
   // Leave a primary release waiting so a wrongly encoded virtual right click
   // would be coalesced as stale primary input.
-  event.type = ENGINE_INPUT_EVENT_POINTER_UP;
+  event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
   event.button = 0;
+  REQUIRE(gate.should_enqueue(event));
+  event.type = ENGINE_INPUT_EVENT_POINTER_UP;
   REQUIRE(gate.should_enqueue(event));
   const engine_input_event_t queued_primary_release = event;
 
@@ -499,4 +528,32 @@ TEST_CASE("plugin debug snapshot is bounded JSON and validates buffers") {
   REQUIRE(engine_get_plugin_debug_info(handle.value, too_small, sizeof(too_small),
                                        &written) == ENGINE_RESULT_INVALID_ARGUMENT);
   REQUIRE(written == 0);
+}
+
+TEST_CASE("text translation state is disabled without the private provider") {
+  REQUIRE(engine_is_text_translation_available() == 0);
+  REQUIRE(engine_get_text_translation_state() ==
+          ENGINE_TEXT_TRANSLATION_DISABLED);
+  engine_text_translation_stats_t translation_stats{};
+  translation_stats.struct_size = sizeof(translation_stats);
+  REQUIRE(engine_get_text_translation_stats(&translation_stats) ==
+          ENGINE_RESULT_OK);
+  REQUIRE(translation_stats.state == ENGINE_TEXT_TRANSLATION_DISABLED);
+  REQUIRE(translation_stats.backend == ENGINE_TEXT_TRANSLATION_BACKEND_NONE);
+  REQUIRE(translation_stats.model_tensor_bytes == 0);
+  REQUIRE(engine_get_text_translation_stats(nullptr) ==
+          ENGINE_RESULT_INVALID_ARGUMENT);
+  engine_text_translation_stats_t short_translation_stats{};
+  short_translation_stats.struct_size = sizeof(uint32_t);
+  REQUIRE(engine_get_text_translation_stats(&short_translation_stats) ==
+          ENGINE_RESULT_INVALID_ARGUMENT);
+  REQUIRE(engine_prefetch_text_utf8("kirikiri", "テスト") == ENGINE_RESULT_OK);
+  REQUIRE(engine_set_text_translation_skipping("kirikiri", 1) ==
+          ENGINE_RESULT_OK);
+  REQUIRE(engine_prefetch_text_utf8(nullptr, "テスト") ==
+          ENGINE_RESULT_INVALID_ARGUMENT);
+  REQUIRE(engine_prefetch_text_utf8("kirikiri", nullptr) ==
+          ENGINE_RESULT_INVALID_ARGUMENT);
+  REQUIRE(engine_set_text_translation_skipping(nullptr, 1) ==
+          ENGINE_RESULT_INVALID_ARGUMENT);
 }

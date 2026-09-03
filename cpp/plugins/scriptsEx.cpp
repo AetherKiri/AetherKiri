@@ -9,6 +9,7 @@
 #include "ScriptMgnIntf.h"
 #include "StorageIntf.h"
 #include "TextStream.h"
+#include "UtilStreams.h"
 #include "tjs.h"
 #include "psbfile/PSBFile.h"
 #include "psbfile/PSBMediaRegistry.h"
@@ -1075,6 +1076,31 @@ static tjs_error loadDataPack(tTJSVariant *result,
         return TJS_S_OK;
     }
 
+    // Older KiriKiri save systems append their encrypted data pack after the
+    // BMP thumbnail bytes.  Storage resolution may already have mapped a
+    // missing data_continue.png request to data_continue.bmp, but the data
+    // pack decoders must start at the appended payload rather than at the BMP
+    // header.  Keep the original path for resource registration/logging while
+    // exposing only the payload through a bounded stream.
+    bool compoundBmpPayload = false;
+    if(const auto payloadOffset =
+           TVPFindEmbeddedBmpPayloadOffset(stream.get());
+       payloadOffset.has_value()) {
+        const tjs_uint64 streamSize = stream->GetSize();
+        if(*payloadOffset < streamSize) {
+            const tjs_uint64 payloadSize = streamSize - *payloadOffset;
+            stream = std::make_unique<tTVPPartialStream>(
+                stream.release(), *payloadOffset, payloadSize);
+            spdlog::info(
+                "Scripts.loadDataPack unwrapped compound BMP payload: {} offset={} bytes={}",
+                path.AsStdString(), *payloadOffset, payloadSize);
+            TVPAddLog(
+                ttstr(TJS_W("Scripts.loadDataPack unwrapped compound BMP payload: ")) +
+                path);
+            compoundBmpPayload = true;
+        }
+    }
+
     tTJSVariant binaryResult;
     try {
         tTJS *engine = TVPGetScriptEngine();
@@ -1153,6 +1179,65 @@ static tjs_error loadDataPack(tTJSVariant *result,
         for(tjs_uint i = 0; i < signatureSize; ++i)
             signatureText << std::setw(2)
                           << static_cast<unsigned>(signature[i]);
+
+        // The original KiriKiri saveDataPack also accepts its legacy
+        // scrambled-text save format (FE FE 00/01/02 FF FE).  This format is
+        // commonly stored after a BMP thumbnail, so the text stream is the
+        // canonical decoder: it strips the compound image prefix, descrambles
+        // or inflates the payload, and returns UTF-16 TJS source.  Evaluate it
+        // with the same `(const)[...]` wrapper used by Dictionary/Array
+        // loadStruct, then return the first value from that temporary array.
+        if(compoundBmpPayload && signatureSize >= 5 &&
+           signature[0] == 0xfe && signature[1] == 0xfe &&
+           signature[2] <= 2 && signature[3] == 0xff &&
+           signature[4] == 0xfe) {
+            try {
+                std::unique_ptr<iTJSTextReadStream> textStream(
+                    TVPCreateTextStreamForRead(path, TJS_W("")));
+                if(textStream) {
+                    ttstr text;
+                    textStream->Read(text, 0);
+                    const tjs_int length = text.length();
+                    tjs_char *top = text.AppendBuffer(9);
+                    memmove(top + 8, top, sizeof(tjs_char) * length);
+                    memcpy(top, TJS_W("(const)["), sizeof(tjs_char) * 8);
+                    top[8 + length] = TJS_W(']');
+                    text.FixLen();
+
+                    tTJSVariant evaluated;
+                    TVPExecuteExpression(
+                        text, TVPExtractStorageName(path), 0, nullptr,
+                        &evaluated);
+                    const tTJSVariantClosure closure =
+                        evaluated.AsObjectClosureNoAddRef();
+                    tTJSVariant decodedText;
+                    tTJSVariant *decodedResult = result ? result : &decodedText;
+                    if(closure.Object &&
+                       TJS_SUCCEEDED(closure.PropGetByNum(
+                           TJS_IGNOREPROP, 0, decodedResult, nullptr))) {
+                        spdlog::info(
+                            "Scripts.loadDataPack legacy KSD text ok: {} chars={}",
+                            path.AsStdString(), static_cast<long long>(length));
+                        TVPAddLog(
+                            ttstr(TJS_W("Scripts.loadDataPack legacy KSD text ok: ")) +
+                            path);
+                        return TJS_S_OK;
+                    }
+                }
+            } catch(const eTJS &e) {
+                spdlog::warn(
+                    "Scripts.loadDataPack legacy KSD text decode failed: {} ({})",
+                    e.GetMessage().AsStdString(), path.AsStdString());
+            } catch(const std::exception &e) {
+                spdlog::warn(
+                    "Scripts.loadDataPack legacy KSD text decode failed: {} ({})",
+                    e.what(), path.AsStdString());
+            } catch(...) {
+                spdlog::warn(
+                    "Scripts.loadDataPack legacy KSD text decode failed: unknown ({})",
+                    path.AsStdString());
+            }
+        }
         TVPAddLog(ttstr(TJS_W("Scripts.loadDataPack unrecognized binary: ")) +
                   path + TJS_W(" header=") +
                   ttstr(signatureText.str().c_str()));
