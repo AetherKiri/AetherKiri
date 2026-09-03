@@ -286,7 +286,7 @@ const UI_TEXT := {
         "secret.unlock.confirm": "确认",
         "secret.unlock.failed": "密码不正确，请重试。",
         "secret.unlock.success": "内购已解锁，内测功能有效期至：%s",
-        "iap.artemis_unavailable": "此视觉小说兼容正在测试中，请等待后续支持",
+        "iap.beta_runtime_unavailable": "此视觉小说兼容正在测试中，请等待后续支持",
         "iap.status.purchased": "已购买",
         "iap.status.not_purchased": "未购买",
         "iap.status.loading": "正在读取商品信息…",
@@ -567,7 +567,7 @@ const UI_TEXT := {
         "secret.unlock.confirm": "確認",
         "secret.unlock.failed": "密碼不正確，請再試一次。",
         "secret.unlock.success": "內購已解鎖，測試功能有效期限至：%s",
-        "iap.artemis_unavailable": "此視覺小說的相容支援仍在測試中，請等待後續支援",
+        "iap.beta_runtime_unavailable": "此視覺小說的相容支援仍在測試中，請等待後續支援",
         "iap.status.purchased": "已購買",
         "iap.status.not_purchased": "尚未購買",
         "iap.status.loading": "正在載入商品資訊…",
@@ -846,7 +846,7 @@ const UI_TEXT := {
         "secret.unlock.confirm": "Confirm",
         "secret.unlock.failed": "Incorrect passphrase. Please try again.",
         "secret.unlock.success": "Purchases unlocked; beta feature access expires: %s",
-        "iap.artemis_unavailable": "Compatibility for this visual novel is still being tested. Please wait for a future update.",
+        "iap.beta_runtime_unavailable": "Compatibility for this visual novel is still being tested. Please wait for a future update.",
         "iap.status.purchased": "Purchased",
         "iap.status.not_purchased": "Not purchased",
         "iap.status.loading": "Loading product information…",
@@ -1127,7 +1127,7 @@ const UI_TEXT := {
         "secret.unlock.confirm": "確認",
         "secret.unlock.failed": "パスフレーズが正しくありません。もう一度お試しください。",
         "secret.unlock.success": "課金が解錠されました。ベータ機能の有効期限：%s",
-        "iap.artemis_unavailable": "このビジュアルノベルの互換対応はテスト中です。今後の対応をお待ちください。",
+        "iap.beta_runtime_unavailable": "このビジュアルノベルの互換対応はテスト中です。今後の対応をお待ちください。",
         "iap.status.purchased": "購入済み",
         "iap.status.not_purchased": "未購入",
         "iap.status.loading": "商品情報を読み込み中…",
@@ -1406,7 +1406,7 @@ const UI_TEXT := {
         "secret.unlock.confirm": "확인",
         "secret.unlock.failed": "암호가 올바르지 않습니다. 다시 시도해 주세요.",
         "secret.unlock.success": "인앱 구매가 잠금 해제되었습니다. 베타 기능 만료일: %s",
-        "iap.artemis_unavailable": "이 비주얼 노벨의 호환성은 아직 테스트 중입니다. 추후 지원을 기다려 주세요.",
+        "iap.beta_runtime_unavailable": "이 비주얼 노벨의 호환성은 아직 테스트 중입니다. 추후 지원을 기다려 주세요.",
         "iap.status.purchased": "구입 완료",
         "iap.status.not_purchased": "구입하지 않음",
         "iap.status.loading": "상품 정보 불러오는 중…",
@@ -8036,7 +8036,7 @@ func _process_iap(delta: float) -> void:
     if iap_pending_beta_check_id > 0 and int(coffee_state.get(
         "entitlement_check_completed", 0
     )) >= iap_pending_beta_check_id:
-        _complete_artemis_beta_check()
+        _complete_runtime_beta_check()
 
     var operation_state_source := (
         coffee_state
@@ -10512,7 +10512,7 @@ func _start_selected_game_after_iap() -> void:
         return
     var selected_runtime_kind := _game_runtime_kind(library_path)
     # Development artifacts and Android releases do not use the Apple-only
-    # beta entitlement flow. Keep the Artemis grant enabled for both paths.
+    # beta entitlement flow.
     if not _beta_access_enforcement_enabled():
         if (
             selected_runtime_kind == RUNTIME_KIRIKIRI
@@ -10520,25 +10520,18 @@ func _start_selected_game_after_iap() -> void:
             and not _switch_runtime_player(RUNTIME_KIRIKIRI)
         ):
             return
-        if player.has_method("set_engine_option"):
-            player.set_engine_option("artemis_beta_allowed", "1")
         _start_selected_game_after_entitlements()
         return
 
     # StoreKit lives on the KiriKiri host. Return to that host before probing
-    # Artemis or authorizing ONScripter after an earlier ONS game exits.
+    # a provider-backed beta runtime after another runtime exits.
     if (
         current_player_runtime_kind != RUNTIME_KIRIKIRI
         and not _switch_runtime_player(RUNTIME_KIRIKIRI)
     ):
         return
-    if player.has_method("set_engine_option"):
-        # Reset a grant left on the reusable engine handle before every Release
-        # launch. A fresh verified coffee entitlement enables it again below.
-        player.set_engine_option("artemis_beta_allowed", "0")
     var requires_beta_access := (
         _runtime_requires_beta_access(selected_runtime_kind)
-        or _selected_game_uses_artemis()
         or _selected_game_uses_wa2()
     )
     if not requires_beta_access:
@@ -10547,36 +10540,27 @@ func _start_selected_game_after_iap() -> void:
 
     iap_pending_beta_game = selected_game.duplicate(true)
     if not _iap_supported_platform() or not player.has_method("iap_refresh_entitlement"):
-        _deny_artemis_beta_launch()
+        _deny_runtime_beta_launch()
         return
     iap_pending_beta_check_id = int(player.iap_refresh_entitlement(
         IAP_COFFEE_PRODUCT_ID
     ))
     if iap_pending_beta_check_id <= 0:
-        _deny_artemis_beta_launch()
+        _deny_runtime_beta_launch()
 
 func _runtime_requires_beta_access(runtime_kind: String) -> bool:
-    # ONS and Minori support follow the same Apple release policy as Artemis:
-    # unrestricted in Debug and Android builds, and gated by an active coffee
-    # entitlement in iOS and macOS distribution builds. Provider-backed
-    # runtimes such as WA2 are checked separately by their runtime probe.
-    return runtime_kind == RUNTIME_ONSCRIPTER or runtime_kind == RUNTIME_MINORI
+    # ONS and Artemis are generally available. Minori remains gated by an
+    # active coffee entitlement in iOS and macOS distribution builds.
+    # Provider-backed runtimes such as WA2 are checked separately.
+    return runtime_kind == RUNTIME_MINORI
 
 func _beta_access_enforcement_enabled(platform_name: String = "") -> bool:
     var effective_platform := platform_name if not platform_name.is_empty() else OS.get_name()
     return effective_platform in ["iOS", "macOS"] and not OS.is_debug_build()
 
-func _selected_game_uses_artemis() -> bool:
-    if player == null or not player.has_method("probe_runtime"):
-        return false
-    var library_path := String(selected_game.get("path", "")).strip_edges()
-    if library_path.is_empty():
-        return false
-    return int(player.probe_runtime("artemis", library_path)) > 0
-
 func _selected_game_uses_wa2() -> bool:
     # WHITE ALBUM2 runs on the KiriKiri host through the compiled Wa2
-    # provider, so it follows the same coffee beta-access policy as Artemis.
+    # provider and retains the provider beta-access policy.
     if player == null or not player.has_method("probe_runtime"):
         return false
     var library_path := String(selected_game.get("path", "")).strip_edges()
@@ -10584,31 +10568,23 @@ func _selected_game_uses_wa2() -> bool:
         return false
     return int(player.probe_runtime("wa2", library_path)) > 0
 
-func _complete_artemis_beta_check() -> void:
+func _complete_runtime_beta_check() -> void:
     iap_pending_beta_check_id = 0
     if iap_pending_beta_game.is_empty():
         return
     var pending_game: Dictionary = iap_pending_beta_game.duplicate(true)
     iap_pending_beta_game.clear()
     if not bool(iap_coffee_state.get("entitled", false)) and not _secret_coffee_active():
-        _deny_artemis_beta_launch()
+        _deny_runtime_beta_launch()
         return
     selected_game = pending_game
-    if (
-        _game_runtime_kind(String(selected_game.get("path", "")))
-        == RUNTIME_KIRIKIRI
-        and player.has_method("set_engine_option")
-    ):
-        player.set_engine_option("artemis_beta_allowed", "1")
     _start_selected_game_after_entitlements()
 
-func _deny_artemis_beta_launch() -> void:
+func _deny_runtime_beta_launch() -> void:
     iap_pending_beta_check_id = 0
     iap_pending_beta_game.clear()
-    if player != null and player.has_method("set_engine_option"):
-        player.set_engine_option("artemis_beta_allowed", "0")
     _show_system_alert(
-        _t("iap.artemis_unavailable"),
+        _t("iap.beta_runtime_unavailable"),
         _t("alert.warning_title")
     )
 
@@ -15584,6 +15560,9 @@ func _send_game_pointer_event(event_type: int, pointer_id: int, x: float, y: flo
             str(loading_panel != null and loading_panel.visible),
             active_runtime_kind,
         ]
+        # Desktop probes do not have the iOS device marker file, so keep the
+        # individual edge visible on stdout as well as in optional file logs.
+        print(trace_line)
         _write_probe_marker(trace_line)
         if perf_log_file != null:
             perf_log_file.store_line(trace_line)

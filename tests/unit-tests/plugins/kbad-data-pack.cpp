@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "UtilStreams.h"
 #include "kbadDataPack.h"
+#include "tjsNs0DataPack.h"
 
 #include <cstdint>
 #include <string_view>
@@ -96,4 +98,15 @@ TEST_CASE("KBAD decoder rejects unrelated and truncated data") {
     };
     REQUIRE_THROWS(
         TVPDecodeKbadDataPack(truncated.data(), truncated.size(), &result));
+}
+
+TEST_CASE("registered structured loader accepts KBAD save containers") {
+    const std::vector<Byte> bytes = makePbdMetadataFixture();
+    tTVPMemoryStream stream(bytes.data(), static_cast<tjs_uint>(bytes.size()));
+    tTJSVariant root;
+
+    TVPRegisterTjsNs0DataPackLoader();
+    REQUIRE(TJS::TJSLoadStructuredDataPack(&stream, &root));
+    REQUIRE(root.Type() == tvtObject);
+    CHECK(getProperty(getIndex(root, 0), TJS_W("width")).AsInteger() == 1920);
 }
