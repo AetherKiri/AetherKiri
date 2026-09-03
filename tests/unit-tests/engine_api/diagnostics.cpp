@@ -230,6 +230,27 @@ TEST_CASE("primary click queue gate bounds rapid primary gestures") {
   REQUIRE(gate.should_enqueue(event));
 }
 
+TEST_CASE("primary click queue gate preserves a cross-tick primary gesture") {
+  aetherkiri::engine_api::PrimaryClickQueueGate gate;
+  engine_input_event_t event{};
+  event.struct_size = sizeof(event);
+  event.button = 0;
+  event.pointer_id = 7;
+
+  event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
+  REQUIRE(gate.should_enqueue(event));
+
+  // A physical click normally spans multiple frames. Processing its press
+  // must not make the later release look like an orphaned pointer event.
+  gate.on_dequeued(event);
+  event.type = ENGINE_INPUT_EVENT_POINTER_UP;
+  REQUIRE(gate.should_enqueue(event));
+  gate.on_dequeued(event);
+
+  event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
+  REQUIRE(gate.should_enqueue(event));
+}
+
 TEST_CASE("primary click queue gate preserves every secondary pointer edge") {
   aetherkiri::engine_api::PrimaryClickQueueGate gate;
   engine_input_event_t event{};

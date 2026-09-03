@@ -248,8 +248,137 @@ struct GodotGpuOp {
     uint32_t native_height = 0;
     uint64_t imported_texture = 0;
     uint64_t queue_sequence = 0;
+    // Timestamp assigned when the operation enters the bridge queue.  This is
+    // intentionally separate from profile_enqueued_at, which is also used to
+    // measure the CPU packing interval for texture updates.
+    std::chrono::steady_clock::time_point profile_submitted_at{};
     std::mutex done_mutex;
     std::condition_variable done_cv;
+};
+
+const char *GodotGpuOpTypeName(GodotGpuOp::Type type) {
+    switch (type) {
+        case GodotGpuOp::Type::Update: return "update";
+        case GodotGpuOp::Type::Clear: return "clear";
+        case GodotGpuOp::Type::Copy: return "copy";
+        case GodotGpuOp::Type::CopySelf: return "copy_self";
+        case GodotGpuOp::Type::CopyTriangles: return "copy_triangles";
+        case GodotGpuOp::Type::DrawTriangles: return "draw_triangles";
+        case GodotGpuOp::Type::DrawMaskedTriangles: return "draw_masked_triangles";
+        case GodotGpuOp::Type::Mosaic: return "mosaic";
+        case GodotGpuOp::Type::Read: return "read";
+        case GodotGpuOp::Type::ReadAsync: return "read_async";
+        case GodotGpuOp::Type::Blend: return "blend";
+        case GodotGpuOp::Type::Blend2: return "blend2";
+        case GodotGpuOp::Type::Blend3: return "blend3";
+        case GodotGpuOp::Type::ArtemisShader: return "artemis_shader";
+        case GodotGpuOp::Type::PrepareNativeWrite: return "prepare_native_write";
+        case GodotGpuOp::Type::PublishNativeWrite: return "publish_native_write";
+        case GodotGpuOp::Type::ImportApplePixelBuffer: return "import_apple_pixel_buffer";
+        case GodotGpuOp::Type::ImportAndroidHardwareBuffer: return "import_android_hardware_buffer";
+        case GodotGpuOp::Type::Release: return "release";
+        case GodotGpuOp::Type::Flush: return "flush";
+    }
+    return "unknown";
+}
+
+bool GodotGpuOpProfileEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_GODOT_GPU_OP_PROFILE");
+        return value != nullptr && value[0] != '\0' &&
+               std::strcmp(value, "0") != 0;
+    }();
+    return enabled;
+}
+
+double GodotGpuOpProfileSlowMs() {
+    static const double threshold = [] {
+        const char *value = std::getenv("AETHERKIRI_GODOT_GPU_OP_SLOW_MS");
+        if (value == nullptr || value[0] == '\0') return 5.0;
+        char *end = nullptr;
+        const double parsed = std::strtod(value, &end);
+        return end != value && std::isfinite(parsed) && parsed > 0.0
+                   ? parsed
+                   : 5.0;
+    }();
+    return threshold;
+}
+
+void LogGodotGpuOpProfile(const char *phase,
+                          const GodotGpuOp *op,
+                          double elapsed_ms) {
+    if (!GodotGpuOpProfileEnabled() || op == nullptr ||
+        elapsed_ms < GodotGpuOpProfileSlowMs()) {
+        return;
+    }
+    const uint32_t width = op->profile_width != 0
+        ? op->profile_width
+        : static_cast<uint32_t>(std::max(0.0f, op->size.x));
+    const uint32_t height = op->profile_height != 0
+        ? op->profile_height
+        : static_cast<uint32_t>(std::max(0.0f, op->size.y));
+    double queue_ms = 0.0;
+    if (op->profile_submitted_at.time_since_epoch().count() != 0) {
+        queue_ms = std::chrono::duration<double, std::milli>(
+                       std::chrono::steady_clock::now() -
+                       op->profile_submitted_at)
+                       .count();
+    }
+    RenderingServer *server = RenderingServer::get_singleton();
+    std::ostringstream message;
+    message << std::fixed << std::setprecision(3)
+            << "godot gpu op profile: phase="
+            << (phase != nullptr ? phase : "unknown")
+            << " type=" << GodotGpuOpTypeName(op->type)
+            << " elapsed_ms=" << elapsed_ms
+            << " queue_ms=" << queue_ms
+            << " size=" << width << "x" << height
+            << " render_thread="
+            << (server != nullptr && server->is_on_render_thread() ? 1 : 0);
+    UtilityFunctions::print(String(message.str().c_str()));
+}
+
+class GodotGpuOpExecutionProfile final {
+public:
+    explicit GodotGpuOpExecutionProfile(
+        const std::shared_ptr<GodotGpuOp> &op)
+        : op_(op.get()), enabled_(GodotGpuOpProfileEnabled()),
+          started_(enabled_ ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{}) {}
+
+    ~GodotGpuOpExecutionProfile() {
+        if (!enabled_) return;
+        const double elapsed_ms = std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() - started_)
+                                      .count();
+        LogGodotGpuOpProfile("execute", op_, elapsed_ms);
+    }
+
+private:
+    const GodotGpuOp *op_ = nullptr;
+    bool enabled_ = false;
+    std::chrono::steady_clock::time_point started_{};
+};
+
+class GodotGpuOpWaitProfile final {
+public:
+    GodotGpuOpWaitProfile(const std::shared_ptr<GodotGpuOp> &op, bool wait)
+        : op_(op.get()), enabled_(wait && GodotGpuOpProfileEnabled()),
+          started_(enabled_ ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{}) {}
+
+    ~GodotGpuOpWaitProfile() {
+        if (!enabled_) return;
+        const double elapsed_ms = std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() - started_)
+                                      .count();
+        LogGodotGpuOpProfile("wait", op_, elapsed_ms);
+    }
+
+private:
+    const GodotGpuOp *op_ = nullptr;
+    bool enabled_ = false;
+    std::chrono::steady_clock::time_point started_{};
 };
 
 struct GodotGpuReadbackRequest {
@@ -5226,6 +5355,7 @@ bool ExecuteGodotGpuMosaic(RenderingDevice *rd,
 
 bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &op) {
     if (rd == nullptr || op == nullptr) return false;
+    GodotGpuOpExecutionProfile execution_profile(op);
     bool result = false;
     bool wrote_texture = false;
     switch (op->type) {
@@ -6023,9 +6153,13 @@ void ForceDrainGodotGpuOpsOnRenderThread(uint64_t sequence_cutoff) {
 }
 
 bool RunGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool wait) {
+    GodotGpuOpWaitProfile wait_profile(op, wait);
     RenderingServer *server = RenderingServer::get_singleton();
     RenderingDevice *rd = MainRenderingDevice();
     if (op == nullptr) return false;
+    if (op->profile_submitted_at.time_since_epoch().count() == 0) {
+        op->profile_submitted_at = std::chrono::steady_clock::now();
+    }
     g_gpu_op_submitted.fetch_add(1, std::memory_order_relaxed);
     if (op->type == GodotGpuOp::Type::Blend ||
         op->type == GodotGpuOp::Type::Blend2 ||
@@ -7731,6 +7865,8 @@ bool BridgeReadRgba(uint64_t texture, void *out_pixels, size_t out_pixels_size,
     auto op = std::make_shared<GodotGpuOp>();
     op->type = GodotGpuOp::Type::Read;
     op->src = record.rid;
+    op->profile_width = record.width;
+    op->profile_height = record.height;
     if (!RunGodotGpuOpSync(op)) return false;
     PackedByteArray data = op->data;
     const uint8_t *src = data.ptr();
@@ -10839,6 +10975,12 @@ private:
         frame_present_pending_slot_ = 0;
         frame_present_has_current_ = false;
         frame_present_has_pending_ = false;
+        // The copy op may still be queued on Godot's render thread. Keep the
+        // shared_ptr alive until the queued operation reaches the release
+        // fence below, then drop our reference. The queue owns its own
+        // reference, so clearing this member is safe after RunGodotGpuOpSync
+        // has ordered the releases behind all preceding work.
+        frame_present_pending_op_.reset();
         frame_present_pending_draw_frame_ = 0;
         frame_present_serial_ = UINT64_MAX;
         if (frame_texture_backend_ == "godot_native_gpu_presented" ||
@@ -10979,18 +11121,34 @@ private:
             ? static_cast<uint64_t>(engine->get_frames_drawn())
             : 0;
         if (frame_present_has_pending_) {
+            bool pending_done = false;
+            bool pending_result = false;
+            if (frame_present_pending_op_) {
+                std::lock_guard<std::mutex> done_lock(
+                    frame_present_pending_op_->done_mutex);
+                pending_done = frame_present_pending_op_->done;
+                pending_result = frame_present_pending_op_->result;
+            }
             const bool pending_complete =
                 drawn_frame > frame_present_pending_draw_frame_;
-            if (pending_complete) {
+            if (pending_complete && pending_done && pending_result) {
                 frame_present_current_slot_ = frame_present_pending_slot_;
                 frame_present_has_current_ = true;
                 frame_present_has_pending_ = false;
+                frame_present_pending_op_.reset();
                 // The RD storage stays stable while its pixels change. Notify
                 // TextureRect/Canvas explicitly so the already-bound
                 // Texture2DRD is invalidated without replacing the Resource
                 // object that the scene owns.
                 frame_present_textures_[frame_present_current_slot_]
                     ->emit_changed();
+            } else if (pending_complete && pending_done) {
+                // A failed asynchronous copy must not permanently block the
+                // presentation ring. Drop the failed slot and enqueue a fresh
+                // copy below; the current slot (if any) remains valid while
+                // that retry is in flight.
+                frame_present_has_pending_ = false;
+                frame_present_pending_op_.reset();
             } else {
                 frame_texture_serial_ = serial;
                 frame_texture_backend_ = backend_name;
@@ -11010,7 +11168,15 @@ private:
         op->src_pos = Vector3();
         op->dst_pos = Vector3();
         op->size = Vector3(width, height, 1);
-        if (!RunGodotGpuOpSync(op)) {
+        // Do not wait for the render thread here. This method runs from the
+        // Godot main thread, while the copy is encoded on the RenderingServer
+        // render thread. A synchronous wait couples a game-script frame to
+        // the next render submission and turns a character/face texture burst
+        // into a 100+ ms main-thread spike. The ring already delays promotion
+        // until a later drawn frame; retaining the op lets us additionally
+        // verify that the asynchronous copy really completed before exposing
+        // the destination texture.
+        if (!RunGodotGpuOpAsync(op)) {
             frame_texture_backend_ = "godot_native_gpu_present_timeout";
             if (frame_present_textures_[frame_present_current_slot_].is_valid()) {
                 return frame_present_textures_[frame_present_current_slot_];
@@ -11019,6 +11185,7 @@ private:
         }
         frame_present_pending_slot_ = next_slot;
         frame_present_has_pending_ = true;
+        frame_present_pending_op_ = std::move(op);
         frame_present_pending_draw_frame_ = drawn_frame;
         frame_present_serial_ = serial;
         frame_texture_serial_ = serial;
@@ -11175,6 +11342,7 @@ private:
     size_t frame_present_pending_slot_ = 0;
     bool frame_present_has_current_ = false;
     bool frame_present_has_pending_ = false;
+    std::shared_ptr<GodotGpuOp> frame_present_pending_op_;
     uint64_t frame_present_pending_draw_frame_ = 0;
     uint64_t frame_present_serial_ = UINT64_MAX;
     uint64_t frame_texture_serial_ = UINT64_MAX;

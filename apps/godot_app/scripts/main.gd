@@ -5504,7 +5504,12 @@ func _find_shell_scroll_at_position(position: Vector2) -> ScrollContainer:
     return null
 
 func _control_at_pointer(position: Vector2) -> Control:
-    var hovered := get_viewport().gui_get_hovered_control()
+    var current_viewport := get_viewport()
+    var hovered := (
+        current_viewport.gui_get_hovered_control()
+        if current_viewport != null
+        else null
+    )
     if hovered is Control:
         var control := hovered as Control
         if control.is_visible_in_tree() and control.get_global_rect().has_point(position):
@@ -5555,6 +5560,10 @@ func _start_shell_scroll_drag(key: int, position: Vector2) -> void:
         "pending_y": 0.0,
         "dragging": false,
         "threshold": SHELL_SCROLL_BUTTON_DRAG_THRESHOLD if button != null else SHELL_SCROLL_DRAG_THRESHOLD,
+        # A Range control owns its complete press/drag/release gesture. Do not
+        # let vertical finger wobble hand that same pointer to the surrounding
+        # settings ScrollContainer midway through a slider adjustment.
+        "scroll_locked": horizontal_slider != null,
         "axis_lock": SHELL_SCROLL_AXIS_PENDING if horizontal_slider != null else SHELL_SCROLL_AXIS_NONE,
         "gesture_delta": Vector2.ZERO,
     }
@@ -5574,6 +5583,8 @@ func _update_shell_scroll_drag(
     var scroll := _shell_scroll_from_drag_state(state)
     if scroll == null or not scroll.is_visible_in_tree():
         shell_scroll_drag_states.erase(key)
+        return false
+    if bool(state.get("scroll_locked", false)):
         return false
     var last_position := state.get("last", position) as Vector2
     var delta := position - last_position
