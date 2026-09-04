@@ -3102,29 +3102,29 @@ func _rebuild_settings_view() -> void:
         groups.add_child(secondary_column)
 
     var interface_group := _settings_group(primary_column, _t("settings.section.interface"), ICON_SETTINGS, animate_page, 0.03)
-    _add_settings_row(interface_group, _settings_block(_t("settings.language"), _t("settings.language_desc"), _language_select(), stack_settings_controls))
-    _add_settings_row(interface_group, _settings_block(_t("settings.style"), _t("settings.style_desc"), _style_select(), stack_settings_controls))
+    _add_settings_row(interface_group, _settings_row_with_icon(ICON_HELP, _t("settings.language"), _t("settings.language_desc"), _language_select(), stack_settings_controls))
+    _add_settings_row(interface_group, _settings_row_with_icon(ICON_SETTINGS, _t("settings.style"), _t("settings.style_desc"), _style_select(), stack_settings_controls))
     if OS.get_name() == "iOS":
-        _add_settings_row(interface_group, _settings_block(_t("settings.ui_scale"), _t("settings.ui_scale_desc"), _ios_ui_scale_segment(), stack_settings_controls))
+        _add_settings_row(interface_group, _settings_row_with_icon(ICON_SETTINGS, _t("settings.ui_scale"), _t("settings.ui_scale_desc"), _ios_ui_scale_segment(), stack_settings_controls))
 
     var render_group := _settings_group(primary_column, _t("settings.section.render"), ICON_PERFORMANCE, animate_page, 0.055)
-    _add_settings_row(render_group, _settings_block(_t("settings.render_backend"), _t("settings.render_backend_desc"), _backend_segment(), stack_settings_controls))
-    _add_settings_row(render_group, _settings_block(_t("settings.surface_mode"), _t("settings.surface_mode_desc"), _surface_mode_select(), stack_settings_controls))
-    _add_settings_row(render_group, _settings_block(_t("settings.upscale"), _t("settings.upscale_desc"), _upscale_select(), stack_settings_controls))
-    _add_settings_row(render_group, _settings_toggle_row(_t("settings.fps_limit"), _t("settings.fps_limit_desc"), _settings_draft_bool("fps_limit_enabled", frame_limit_enabled), "fps_limit"))
+    _add_settings_row(render_group, _settings_row_with_icon(ICON_PERFORMANCE, _t("settings.render_backend"), _t("settings.render_backend_desc"), _backend_segment(), stack_settings_controls))
+    _add_settings_row(render_group, _settings_row_with_icon(ICON_PERFORMANCE, _t("settings.surface_mode"), _t("settings.surface_mode_desc"), _surface_mode_select(), stack_settings_controls))
+    _add_settings_row(render_group, _settings_row_with_icon(ICON_PERFORMANCE, _t("settings.upscale"), _t("settings.upscale_desc"), _upscale_select(), stack_settings_controls))
+    _add_settings_row(render_group, _settings_toggle_row_with_icon(ICON_PERFORMANCE, _t("settings.fps_limit"), _t("settings.fps_limit_desc"), _settings_draft_bool("fps_limit_enabled", frame_limit_enabled), "fps_limit"))
     if _settings_draft_bool("fps_limit_enabled", frame_limit_enabled):
         _add_settings_row(render_group, _settings_fps_row())
     if OS.get_name() == "iOS" or OS.get_name() == "Android":
-        _add_settings_row(render_group, _settings_toggle_row(_t("settings.landscape"), _t("settings.landscape_desc"), _settings_draft_bool("force_landscape", lock_landscape), "landscape"))
+        _add_settings_row(render_group, _settings_toggle_row_with_icon(ICON_SETTINGS, _t("settings.landscape"), _t("settings.landscape_desc"), _settings_draft_bool("force_landscape", lock_landscape), "landscape"))
 
     var diagnostic_group := _settings_group(secondary_column, _t("settings.section.diagnostics"), ICON_PERFORMANCE, animate_page, 0.08)
-    _add_settings_row(diagnostic_group, _settings_block(_t("settings.diagnostic_profile"), _t("settings.diagnostic_profile_desc"), _diagnostic_profile_select(), stack_settings_controls))
-    _add_settings_row(diagnostic_group, _settings_block(_t("settings.debug_overlay"), _t("settings.debug_overlay_desc"), _debug_overlay_select(), stack_settings_controls))
-    _add_settings_row(diagnostic_group, _settings_toggle_row(_t("settings.error_dialog_logs"), _t("settings.error_dialog_logs_desc"), _settings_draft_bool("error_dialog_logs", error_dialog_logs), "error_dialog_logs"))
+    _add_settings_row(diagnostic_group, _settings_row_with_icon(ICON_PERFORMANCE, _t("settings.diagnostic_profile"), _t("settings.diagnostic_profile_desc"), _diagnostic_profile_select(), stack_settings_controls))
+    _add_settings_row(diagnostic_group, _settings_row_with_icon(ICON_PERFORMANCE, _t("settings.debug_overlay"), _t("settings.debug_overlay_desc"), _debug_overlay_select(), stack_settings_controls))
+    _add_settings_row(diagnostic_group, _settings_toggle_row_with_icon(ICON_PERFORMANCE, _t("settings.error_dialog_logs"), _t("settings.error_dialog_logs_desc"), _settings_draft_bool("error_dialog_logs", error_dialog_logs), "error_dialog_logs"))
 
     var compatibility_group := _settings_group(secondary_column, _t("settings.section.compatibility"), ICON_PLUGIN, animate_page, 0.105)
-    _add_settings_row(compatibility_group, _settings_block(_t("settings.plugin_load_mode"), _t("settings.plugin_load_mode_desc"), _plugin_load_mode_select(), stack_settings_controls))
-    _add_settings_row(compatibility_group, _settings_toggle_row(_t("settings.mock"), _t("settings.mock_desc"), _settings_draft_bool("mock_enabled", mock_enabled), "mock"))
+    _add_settings_row(compatibility_group, _settings_row_with_icon(ICON_PLUGIN, _t("settings.plugin_load_mode"), _t("settings.plugin_load_mode_desc"), _plugin_load_mode_select(), stack_settings_controls))
+    _add_settings_row(compatibility_group, _settings_toggle_row_with_icon(ICON_PLUGIN, _t("settings.mock"), _t("settings.mock_desc"), _settings_draft_bool("mock_enabled", mock_enabled), "mock"))
 
     var advanced_group := _settings_group(secondary_column, _t("settings.section.advanced"), ICON_PLUGIN, animate_page, 0.13)
     var advanced_disclosure = AetherDisclosure.new()
@@ -4098,10 +4098,9 @@ func _section_title(text: String, _icon_path: String) -> HBoxContainer:
 func _settings_group(page: VBoxContainer, title: String, icon_path: String, animate: bool, delay: float) -> VBoxContainer:
     var group := VBoxContainer.new()
     group.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    group.add_theme_constant_override("separation", 10)
+    group.add_theme_constant_override("separation", 8)
     page.add_child(group)
 
-    # Modern Section Header with Pill Category Chip
     var header_box := HBoxContainer.new()
     header_box.custom_minimum_size = Vector2(0, 32)
     header_box.add_theme_constant_override("separation", 10)
@@ -4115,6 +4114,7 @@ func _settings_group(page: VBoxContainer, title: String, icon_path: String, anim
     badge_style.content_margin_top = 5
     badge_style.content_margin_right = 5
     badge_style.content_margin_bottom = 5
+    badge_style.shadow_size = 0
     icon_badge.add_theme_stylebox_override("panel", badge_style)
     icon_badge.add_child(_icon_rect(icon_path, Vector2(18, 18), ui_tokens.accent))
     header_box.add_child(icon_badge)
@@ -4127,14 +4127,15 @@ func _settings_group(page: VBoxContainer, title: String, icon_path: String, anim
     title_label.add_theme_color_override("font_color", ui_tokens.accent)
     header_box.add_child(title_label)
 
-    # Elevated Inset Group Card
+    # Flat, zero-shadow, clean card panel with 1px hairline border
     var panel := PanelContainer.new()
     panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    var panel_style := ui_tokens.material_panel(true)
+    var panel_style := ui_tokens.panel(ui_tokens.surface_raised, 12, ui_tokens.separator, 1)
     panel_style.content_margin_left = 18
-    panel_style.content_margin_top = 14
+    panel_style.content_margin_top = 12
     panel_style.content_margin_right = 18
-    panel_style.content_margin_bottom = 14
+    panel_style.content_margin_bottom = 12
+    panel_style.shadow_size = 0
     panel.add_theme_stylebox_override("panel", panel_style)
     group.add_child(panel)
 
@@ -4151,27 +4152,50 @@ func _add_settings_row(group: VBoxContainer, row: Control) -> void:
         group.add_child(_detail_separator())
     group.add_child(row)
 
-func _settings_block(title: String, subtitle: String, control: Control, stack_control: bool = false) -> Control:
+func _settings_row_with_icon(icon_path: String, title: String, subtitle: String, control: Control, stack_control: bool = false) -> Control:
     var margin := MarginContainer.new()
     margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    margin.add_theme_constant_override("margin_left", 4)
+    margin.add_theme_constant_override("margin_left", 6)
     margin.add_theme_constant_override("margin_top", 12)
-    margin.add_theme_constant_override("margin_right", 4)
+    margin.add_theme_constant_override("margin_right", 6)
     margin.add_theme_constant_override("margin_bottom", 12)
+
     var box: BoxContainer = VBoxContainer.new() if stack_control else HBoxContainer.new()
-    box.custom_minimum_size = Vector2(0, 94 if stack_control else 68)
-    box.add_theme_constant_override("separation", 12 if stack_control else 18)
+    box.custom_minimum_size = Vector2(0, 88 if stack_control else 58)
+    box.add_theme_constant_override("separation", 14)
     margin.add_child(box)
+
+    var left_row := HBoxContainer.new()
+    left_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    left_row.add_theme_constant_override("separation", 14)
+    box.add_child(left_row)
+
+    # Clean squircle icon container with zero shadow
+    var icon_container := PanelContainer.new()
+    icon_container.custom_minimum_size = Vector2(32, 32)
+    icon_container.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+    var icon_style := ui_tokens.panel(ui_tokens.accent_fill, 8)
+    icon_style.content_margin_left = 6
+    icon_style.content_margin_top = 6
+    icon_style.content_margin_right = 6
+    icon_style.content_margin_bottom = 6
+    icon_style.shadow_size = 0
+    icon_container.add_theme_stylebox_override("panel", icon_style)
+    icon_container.add_child(_icon_rect(icon_path, Vector2(18, 18), ui_tokens.accent))
+    left_row.add_child(icon_container)
+
     var labels := VBoxContainer.new()
     labels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    labels.add_theme_constant_override("separation", 4)
-    box.add_child(labels)
+    labels.add_theme_constant_override("separation", 3)
+    left_row.add_child(labels)
+
     var title_label := Label.new()
     title_label.text = title
     title_label.add_theme_font_override("font", DISPLAY_FONT)
     title_label.add_theme_font_size_override("font_size", 15)
     title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
+
     if not subtitle.is_empty():
         var sub := Label.new()
         sub.text = subtitle
@@ -4179,42 +4203,21 @@ func _settings_block(title: String, subtitle: String, control: Control, stack_co
         sub.add_theme_font_size_override("font_size", 12)
         sub.add_theme_color_override("font_color", ui_tokens.text_secondary)
         labels.add_child(sub)
+
     control.size_flags_horizontal = Control.SIZE_EXPAND_FILL if stack_control else Control.SIZE_SHRINK_END
     control.size_flags_vertical = Control.SIZE_SHRINK_CENTER
     box.add_child(control)
     return margin
 
-func _settings_toggle_row(title: String, subtitle: String, initial: bool, key: String) -> Control:
-    var margin := MarginContainer.new()
-    margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    margin.add_theme_constant_override("margin_left", 4)
-    margin.add_theme_constant_override("margin_top", 12)
-    margin.add_theme_constant_override("margin_right", 4)
-    margin.add_theme_constant_override("margin_bottom", 12)
-    var row := HBoxContainer.new()
-    row.custom_minimum_size = Vector2(0, 62)
-    row.add_theme_constant_override("separation", 16)
-    margin.add_child(row)
-    var labels := VBoxContainer.new()
-    labels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    labels.add_theme_constant_override("separation", 4)
-    var title_label := Label.new()
-    title_label.text = title
-    title_label.add_theme_font_override("font", DISPLAY_FONT)
-    title_label.add_theme_font_size_override("font_size", 15)
-    title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
-    labels.add_child(title_label)
-    var sub := Label.new()
-    sub.text = subtitle
-    sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    sub.add_theme_font_size_override("font_size", 12)
-    sub.add_theme_color_override("font_color", ui_tokens.text_secondary)
-    labels.add_child(sub)
-    row.add_child(labels)
-
+func _settings_toggle_row_with_icon(icon_path: String, title: String, subtitle: String, initial: bool, key: String) -> Control:
     var toggle := _settings_switch(initial, key)
-    row.add_child(toggle)
-    return margin
+    return _settings_row_with_icon(icon_path, title, subtitle, toggle, false)
+
+func _settings_block(title: String, subtitle: String, control: Control, stack_control: bool = false) -> Control:
+    return _settings_row_with_icon(ICON_SETTINGS, title, subtitle, control, stack_control)
+
+func _settings_toggle_row(title: String, subtitle: String, initial: bool, key: String) -> Control:
+    return _settings_toggle_row_with_icon(ICON_SETTINGS, title, subtitle, initial, key)
 
 func _settings_switch(initial: bool, key: String) -> Button:
     var toggle = AetherSwitch.new()
@@ -4837,10 +4840,7 @@ func _show_detail(game: Dictionary, source: Control = null) -> void:
     selected_game = game
     modal_layer.visible = false
     _sync_shell_route("detail")
-    if previous_route != "detail" and not animate_hero:
-        _animate_shell_route(outgoing, detail_view)
-    elif previous_route != "detail":
-        _animate_shell_route(outgoing, detail_view, false)
+
     for child in detail_scroll.get_children():
         child.queue_free()
 
@@ -4891,11 +4891,23 @@ func _show_detail(game: Dictionary, source: Control = null) -> void:
     var body := _build_compact_detail(game) if compact else _build_desktop_detail(game)
     page.add_child(body)
 
-    ui_motion.reveal(top)
     if animate_hero:
+        # Zero-latency instant hero launch: start immediately on the same frame without any delay
+        detail_view.visible = true
+        detail_view.modulate.a = 1.0
         body.modulate.a = 0.0
-        call_deferred("_animate_hero_forward", body)
+        ui_motion.reveal(top)
+        if outgoing != null and is_instance_valid(outgoing) and outgoing != detail_view:
+            ui_motion._fade(outgoing, 0.0, 0.18, "hero_exit", func():
+                if is_instance_valid(outgoing):
+                    outgoing.visible = false
+                    outgoing.modulate.a = 1.0
+            )
+        _start_hero_forward_instant(body, compact, available_size, gutter)
     else:
+        if previous_route != "detail":
+            _animate_shell_route(outgoing, detail_view)
+        ui_motion.reveal(top)
         ui_motion.reveal(body, 0.04)
 
 func _build_desktop_detail(game: Dictionary) -> Control:
@@ -7138,35 +7150,39 @@ func _populate_game_card_metadata(metadata: PanelContainer, game: Dictionary, co
     sub.add_theme_color_override("font_color", ui_tokens.text_secondary)
     labels.add_child(sub)
 
-func _animate_hero_forward(body: Control) -> void:
-    await get_tree().process_frame
-    if not is_instance_valid(detail_hero_cover) or hero_source_rect.size == Vector2.ZERO:
+func _start_hero_forward_instant(body: Control, compact: bool, available_size: Vector2, gutter: int) -> void:
+    if hero_source_rect.size == Vector2.ZERO or not is_instance_valid(detail_hero_cover):
         ui_motion.reveal(body)
         return
-    # Ensure body scale stays locked at Vector2.ONE so child coordinates do not jitter
-    body.scale = Vector2.ONE
-    var destination := detail_hero_cover.get_global_rect()
-    if destination.size == Vector2.ZERO:
-        ui_motion.reveal(body)
-        return
-    destination.position = destination.position.round()
-    destination.size = destination.size.round()
+
+    # Calculate exact destination rect immediately with mathematical precision (0ms latency)
+    var cover_size := Vector2(128.0, 180.0) if compact else Vector2(300.0, 420.0)
+    var page_width: float = available_size.x - float(gutter * 2) if compact else minf(1120.0, maxf(320.0, available_size.x - float(gutter * 2)))
+    var page_left: float = float(gutter) if compact else (available_size.x - page_width) * 0.5
+    var top_y: float = (20.0 if compact else 28.0) + 52.0 + 28.0
+    var destination_global := Rect2(
+        shell_content.global_position + Vector2(page_left, top_y),
+        cover_size
+    )
+
     _finish_hero_overlay()
     detail_hero_cover.modulate.a = 0.0
     hero_hidden_target = detail_hero_cover
-    # Reveal body with smooth alpha fade without scale distortion to keep cover anchored
+
+    # Fade in body smoothly without scaling distortion so layout coordinates stay anchored
     var body_key := ui_motion._tween_key(body, "reveal")
     ui_motion._stop_tween_key(body_key)
     body.modulate.a = 0.0
+    body.scale = Vector2.ONE
     var body_tween := body.create_tween()
     ui_motion.active_tweens[body_key] = body_tween
-    body_tween.tween_property(body, "modulate:a", 1.0, 0.24).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+    body_tween.tween_property(body, "modulate:a", 1.0, 0.22).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
     body_tween.chain().tween_callback(func(): ui_motion._finish_tween_key(body_key))
 
     var overlay := _create_hero_overlay(hero_source_rect, hero_source_texture)
     var transition_id := hero_transition_id
     var overlay_ref: WeakRef = weakref(overlay)
-    ui_motion.hero_rect(overlay, _hero_local_rect(destination), func(): _complete_hero_overlay_ref(overlay_ref, transition_id, false))
+    ui_motion.hero_rect(overlay, _hero_local_rect(destination_global), func(): _complete_hero_overlay_ref(overlay_ref, transition_id, false))
     _arm_hero_watchdog(overlay, transition_id, false)
 
 func _animate_hero_back(source_rect: Rect2) -> void:
