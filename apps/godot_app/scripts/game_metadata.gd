@@ -21,15 +21,22 @@ static func inspect(path: String) -> Dictionary:
         return result
 
     var candidates: PackedStringArray = []
-    var launch := _first_file(root, [".exe", ".xp3"])
     var files := _file_names(root)
     if files.has("nscript.dat") or files.has("0.txt") or _has_prefix(files, "onscript.nt"):
         result.engine = RUNTIME_ONSCRIPTER
         result.signals.append("onscript-marker")
-    elif files.has("system.ini") and _contains_text(root.path_join("system.ini"), "Artemis"):
+    elif files.has("system.ini") and _is_artemis_package(
+        files,
+        _read_text(root.path_join("system.ini"))
+    ):
         result.engine = RUNTIME_ARTEMIS
         result.signals.append("artemis-system-ini")
         var ini := _read_text(root.path_join("system.ini"))
+        if (
+            _has_extension(files, "pfs")
+            and _value_after(ini, "BOOT").to_lower().ends_with(".iet")
+        ):
+            result.signals.append("artemis-pfs-boot")
         var save_path := _value_after(ini, "SAVEPATH")
         if not save_path.is_empty():
             candidates.append(save_path.replace("\\\\", "/").get_file())
@@ -39,8 +46,10 @@ static func inspect(path: String) -> Dictionary:
     else:
         result.signals.append("kirikiri-xp3-or-default")
 
-    if not launch.is_empty():
-        result.launchFile = launch
+    if result.engine == RUNTIME_KIRIKIRI:
+        var launch := _first_file(root, [".exe", ".xp3"])
+        if not launch.is_empty():
+            result.launchFile = launch
     for marker in ["README.md", "title.ini", "title.ks", "startup.tjs", "config.tjs"]:
         var marker_path := root.path_join(marker)
         if FileAccess.file_exists(marker_path):
@@ -93,20 +102,31 @@ static func _has_prefix(values: PackedStringArray, prefix: String) -> bool:
             return true
     return false
 
+static func _has_extension(values: PackedStringArray, extension: String) -> bool:
+    var normalized := extension.to_lower().trim_prefix(".")
+    for value in values:
+        if value.get_extension() == normalized:
+            return true
+    return false
+
+static func _is_artemis_package(files: PackedStringArray, ini: String) -> bool:
+    if ini.findn("Artemis") >= 0:
+        return true
+    var boot := _value_after(ini, "BOOT").replace("\\", "/")
+    return _has_extension(files, "pfs") and boot.to_lower().ends_with(".iet")
+
 static func _read_text(path: String) -> String:
     var file := FileAccess.open(path, FileAccess.READ)
     if file == null or file.get_length() > 1024 * 1024:
         return ""
     return file.get_as_text()
 
-static func _contains_text(path: String, needle: String) -> bool:
-    return _read_text(path).findn(needle) >= 0
-
 static func _value_after(text: String, key: String) -> String:
     for line in text.split("\n"):
         var trimmed := line.strip_edges()
-        if trimmed.begins_with(key) and trimmed.find("=") >= 0:
-            return trimmed.substr(trimmed.find("=") + 1).strip_edges()
+        var equals := trimmed.find("=")
+        if equals >= 0 and trimmed.left(equals).strip_edges().to_upper() == key.to_upper():
+            return trimmed.substr(equals + 1).strip_edges()
     return ""
 
 static func _extract_title_candidates(text: String) -> PackedStringArray:
