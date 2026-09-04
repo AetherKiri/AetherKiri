@@ -1787,8 +1787,14 @@ namespace motion {
         if(!_runtime->activeMotion) {
             return detail::makeArray({});
         }
+        // AnimKAGLayer compares this value with its previous result and only
+        // invalidates the Layer when it changes.  Expose the progress
+        // ping-pong token expected by that protocol.  Returning the static
+        // source-path list leaves the first transparent frame of fade-in
+        // motions resident forever because that list does not change while
+        // opacity, transforms and nested timelines advance.
         return detail::makeArray(
-            detail::stringsToVariants(activeSourceCandidates()));
+            {tTJSVariant(static_cast<tjs_int>(_commandListPulse ? 1 : 0))});
     }
 
     bool Player::getD3DAvailable() { return true; }
