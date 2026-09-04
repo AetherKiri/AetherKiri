@@ -78,7 +78,9 @@ const LANG_KO := "ko"
 const LANGUAGE_MODES := [LANG_SYSTEM, LANG_ZH_HANS, LANG_ZH_HANT, LANG_EN, LANG_JA, LANG_KO]
 const STYLE_DARK := "dark"
 const STYLE_CLASSIC := "classic"
-const STYLE_MODES := [STYLE_DARK, STYLE_CLASSIC]
+const STYLE_WARM_DARK := "warm_dark"
+const STYLE_WARM_LIGHT := "warm_light"
+const STYLE_MODES := [STYLE_DARK, STYLE_CLASSIC, STYLE_WARM_DARK, STYLE_WARM_LIGHT]
 const IOS_UI_SCALE_MODES := ["compact", "comfortable", "standard"]
 const UI_TEXT := {
     LANG_ZH_HANS: {
@@ -1514,8 +1516,12 @@ func _language_option_label(mode: String) -> String:
 
 func _style_option_label(mode: String) -> String:
     if mode == STYLE_CLASSIC:
-        return _t("style.classic")
-    return _t("style.dark")
+        return "Clean Light / 纯净浅色"
+    elif mode == STYLE_WARM_DARK:
+        return "Classic Warm / 原版暖黑"
+    elif mode == STYLE_WARM_LIGHT:
+        return "Classic Warm / 原版暖白"
+    return "Midnight Dark / 现代深邃"
 
 func _apply_language_mode() -> void:
     language_mode = _normalize_language_mode(language_mode)
@@ -4092,13 +4098,46 @@ func _section_title(text: String, _icon_path: String) -> HBoxContainer:
 func _settings_group(page: VBoxContainer, title: String, icon_path: String, animate: bool, delay: float) -> VBoxContainer:
     var group := VBoxContainer.new()
     group.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    group.add_theme_constant_override("separation", 6)
+    group.add_theme_constant_override("separation", 10)
     page.add_child(group)
-    group.add_child(_section_title(title, icon_path))
+
+    # Modern Section Header with Pill Category Chip
+    var header_box := HBoxContainer.new()
+    header_box.custom_minimum_size = Vector2(0, 32)
+    header_box.add_theme_constant_override("separation", 10)
+    group.add_child(header_box)
+
+    var icon_badge := PanelContainer.new()
+    icon_badge.custom_minimum_size = Vector2(28, 28)
+    icon_badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+    var badge_style := ui_tokens.panel(ui_tokens.accent_fill, 8)
+    badge_style.content_margin_left = 5
+    badge_style.content_margin_top = 5
+    badge_style.content_margin_right = 5
+    badge_style.content_margin_bottom = 5
+    icon_badge.add_theme_stylebox_override("panel", badge_style)
+    icon_badge.add_child(_icon_rect(icon_path, Vector2(18, 18), ui_tokens.accent))
+    header_box.add_child(icon_badge)
+
+    var title_label := Label.new()
+    title_label.text = title.to_upper()
+    title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    title_label.add_theme_font_override("font", DISPLAY_FONT)
+    title_label.add_theme_font_size_override("font_size", 13)
+    title_label.add_theme_color_override("font_color", ui_tokens.accent)
+    header_box.add_child(title_label)
+
+    # Elevated Inset Group Card
     var panel := PanelContainer.new()
     panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    panel.add_theme_stylebox_override("panel", ui_tokens.material_panel())
+    var panel_style := ui_tokens.material_panel(true)
+    panel_style.content_margin_left = 18
+    panel_style.content_margin_top = 14
+    panel_style.content_margin_right = 18
+    panel_style.content_margin_bottom = 14
+    panel.add_theme_stylebox_override("panel", panel_style)
     group.add_child(panel)
+
     var rows := VBoxContainer.new()
     rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     rows.add_theme_constant_override("separation", 0)
@@ -4115,10 +4154,10 @@ func _add_settings_row(group: VBoxContainer, row: Control) -> void:
 func _settings_block(title: String, subtitle: String, control: Control, stack_control: bool = false) -> Control:
     var margin := MarginContainer.new()
     margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    margin.add_theme_constant_override("margin_left", 2)
-    margin.add_theme_constant_override("margin_top", 10)
-    margin.add_theme_constant_override("margin_right", 2)
-    margin.add_theme_constant_override("margin_bottom", 10)
+    margin.add_theme_constant_override("margin_left", 4)
+    margin.add_theme_constant_override("margin_top", 12)
+    margin.add_theme_constant_override("margin_right", 4)
+    margin.add_theme_constant_override("margin_bottom", 12)
     var box: BoxContainer = VBoxContainer.new() if stack_control else HBoxContainer.new()
     box.custom_minimum_size = Vector2(0, 94 if stack_control else 68)
     box.add_theme_constant_override("separation", 12 if stack_control else 18)
@@ -4129,14 +4168,15 @@ func _settings_block(title: String, subtitle: String, control: Control, stack_co
     box.add_child(labels)
     var title_label := Label.new()
     title_label.text = title
-    title_label.add_theme_font_size_override("font_size", 16)
+    title_label.add_theme_font_override("font", DISPLAY_FONT)
+    title_label.add_theme_font_size_override("font_size", 15)
     title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
     if not subtitle.is_empty():
         var sub := Label.new()
         sub.text = subtitle
         sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-        sub.add_theme_font_size_override("font_size", 13)
+        sub.add_theme_font_size_override("font_size", 12)
         sub.add_theme_color_override("font_color", ui_tokens.text_secondary)
         labels.add_child(sub)
     control.size_flags_horizontal = Control.SIZE_EXPAND_FILL if stack_control else Control.SIZE_SHRINK_END
@@ -4147,26 +4187,27 @@ func _settings_block(title: String, subtitle: String, control: Control, stack_co
 func _settings_toggle_row(title: String, subtitle: String, initial: bool, key: String) -> Control:
     var margin := MarginContainer.new()
     margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    margin.add_theme_constant_override("margin_left", 2)
-    margin.add_theme_constant_override("margin_top", 10)
-    margin.add_theme_constant_override("margin_right", 2)
-    margin.add_theme_constant_override("margin_bottom", 10)
+    margin.add_theme_constant_override("margin_left", 4)
+    margin.add_theme_constant_override("margin_top", 12)
+    margin.add_theme_constant_override("margin_right", 4)
+    margin.add_theme_constant_override("margin_bottom", 12)
     var row := HBoxContainer.new()
     row.custom_minimum_size = Vector2(0, 62)
-    row.add_theme_constant_override("separation", 14)
+    row.add_theme_constant_override("separation", 16)
     margin.add_child(row)
     var labels := VBoxContainer.new()
     labels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     labels.add_theme_constant_override("separation", 4)
     var title_label := Label.new()
     title_label.text = title
-    title_label.add_theme_font_size_override("font_size", 16)
+    title_label.add_theme_font_override("font", DISPLAY_FONT)
+    title_label.add_theme_font_size_override("font_size", 15)
     title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
     var sub := Label.new()
     sub.text = subtitle
     sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    sub.add_theme_font_size_override("font_size", 13)
+    sub.add_theme_font_size_override("font_size", 12)
     sub.add_theme_color_override("font_color", ui_tokens.text_secondary)
     labels.add_child(sub)
     row.add_child(labels)
@@ -7098,17 +7139,30 @@ func _populate_game_card_metadata(metadata: PanelContainer, game: Dictionary, co
     labels.add_child(sub)
 
 func _animate_hero_forward(body: Control) -> void:
+    await get_tree().process_frame
     if not is_instance_valid(detail_hero_cover) or hero_source_rect.size == Vector2.ZERO:
         ui_motion.reveal(body)
         return
+    # Ensure body scale stays locked at Vector2.ONE so child coordinates do not jitter
+    body.scale = Vector2.ONE
     var destination := detail_hero_cover.get_global_rect()
     if destination.size == Vector2.ZERO:
         ui_motion.reveal(body)
         return
+    destination.position = destination.position.round()
+    destination.size = destination.size.round()
     _finish_hero_overlay()
     detail_hero_cover.modulate.a = 0.0
     hero_hidden_target = detail_hero_cover
-    ui_motion.reveal(body, 0.02)
+    # Reveal body with smooth alpha fade without scale distortion to keep cover anchored
+    var body_key := ui_motion._tween_key(body, "reveal")
+    ui_motion._stop_tween_key(body_key)
+    body.modulate.a = 0.0
+    var body_tween := body.create_tween()
+    ui_motion.active_tweens[body_key] = body_tween
+    body_tween.tween_property(body, "modulate:a", 1.0, 0.24).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+    body_tween.chain().tween_callback(func(): ui_motion._finish_tween_key(body_key))
+
     var overlay := _create_hero_overlay(hero_source_rect, hero_source_texture)
     var transition_id := hero_transition_id
     var overlay_ref: WeakRef = weakref(overlay)
@@ -7145,6 +7199,10 @@ func _create_hero_overlay(global_rect: Rect2, texture: Texture2D) -> PanelContai
     hero_overlay.position = _hero_local_rect(global_rect).position
     hero_overlay.size = global_rect.size
     var style := ui_tokens.detail_outline_style()
+    style.content_margin_left = 0
+    style.content_margin_top = 0
+    style.content_margin_right = 0
+    style.content_margin_bottom = 0
     hero_overlay.add_theme_stylebox_override("panel", style)
     if texture != null:
         var image := TextureRect.new()
