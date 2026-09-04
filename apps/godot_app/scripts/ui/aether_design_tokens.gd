@@ -3,11 +3,11 @@ extends RefCounted
 const DARK := "dark"
 const LIGHT := "classic"
 
-const RADIUS_SMALL := 6
-const RADIUS_MEDIUM := 8
-const RADIUS_CARD := 12
-const SIDEBAR_WIDTH := 232.0
-const SIDEBAR_COLLAPSED_WIDTH := 88.0
+const RADIUS_SMALL := 8
+const RADIUS_MEDIUM := 12
+const RADIUS_CARD := 18
+const SIDEBAR_WIDTH := 248.0
+const SIDEBAR_COLLAPSED_WIDTH := 80.0
 const CONTENT_MAX_WIDTH := 1180.0
 const PAGE_GUTTER := 32.0
 const PAGE_GUTTER_COMPACT := 20.0
@@ -15,63 +15,63 @@ const CONTROL_HEIGHT := 48.0
 const TOOLBAR_HEIGHT := 72.0
 
 var mode := DARK
-var background := Color("181715")
-var background_raised := Color("1f1e1b")
-var sidebar_material := Color("181715")
-var glass_material := Color("252320")
-var surface := Color("252320")
-var surface_raised := Color("302d29")
-var surface_hover := Color("3a3530")
-var text_primary := Color("faf9f5")
-var text_secondary := Color("a09d96")
-var text_tertiary := Color("6c6a64")
-var accent := Color("cc785c")
-var accent_fill := Color(0.80, 0.47, 0.36, 0.18)
-var success := Color("5db872")
-var warning := Color("d4a017")
-var danger := Color("c64545")
-var separator := Color(1.0, 1.0, 1.0, 0.09)
-var shadow := Color(0.0, 0.0, 0.0, 0.34)
+var background := Color("f5f5f7")
+var background_raised := Color("ffffff")
+var sidebar_material := Color("ffffff")
+var glass_material := Color("ffffff")
+var surface := Color("fbfbfd")
+var surface_raised := Color("ffffff")
+var surface_hover := Color("e8e8ed")
+var text_primary := Color("1d1d1f")
+var text_secondary := Color("6e6e73")
+var text_tertiary := Color("86868b")
+var accent := Color("0071e3")
+var accent_fill := Color(0.0, 0.443, 0.89, 0.12)
+var success := Color("16a34a")
+var warning := Color("eab308")
+var danger := Color("dc2626")
+var separator := Color("d2d2d7")
+var shadow := Color(0.0, 0.0, 0.0, 0.08)
 
 func configure(next_mode: String) -> void:
     mode = LIGHT if next_mode == LIGHT else DARK
-    if mode == LIGHT:
-        background = Color("faf9f5")
-        background_raised = Color("f5f0e8")
-        sidebar_material = Color("f5f0e8")
-        glass_material = Color("faf9f5")
-        surface = Color("efe9de")
-        surface_raised = Color("e8e0d2")
-        surface_hover = Color("e1d7c7")
-        text_primary = Color("141413")
-        text_secondary = Color("6c6a64")
-        text_tertiary = Color("8e8b82")
-        accent = Color("cc785c")
-        accent_fill = Color(0.80, 0.47, 0.36, 0.14)
-        success = Color("5db872")
-        warning = Color("d4a017")
-        danger = Color("c64545")
-        separator = Color("e6dfd8")
-        shadow = Color(0.08, 0.08, 0.07, 0.12)
+    if mode == DARK:
+        background = Color("000000")
+        background_raised = Color("1d1d1f")
+        sidebar_material = Color("000000")
+        glass_material = Color("1d1d1f")
+        surface = Color("272729")
+        surface_raised = Color("2a2a2c")
+        surface_hover = Color("424245")
+        text_primary = Color("f5f5f7")
+        text_secondary = Color("a1a1a6")
+        text_tertiary = Color("86868b")
+        accent = Color("2997ff")
+        accent_fill = Color(0.161, 0.592, 1.0, 0.18)
+        success = Color("16a34a")
+        warning = Color("eab308")
+        danger = Color("dc2626")
+        separator = Color(1.0, 1.0, 1.0, 0.16)
+        shadow = Color(0.0, 0.0, 0.0, 0.28)
         return
 
-    background = Color("181715")
-    background_raised = Color("1f1e1b")
-    sidebar_material = Color("181715")
-    glass_material = Color("252320")
-    surface = Color("252320")
-    surface_raised = Color("302d29")
-    surface_hover = Color("3a3530")
-    text_primary = Color("faf9f5")
-    text_secondary = Color("a09d96")
-    text_tertiary = Color("6c6a64")
-    accent = Color("cc785c")
-    accent_fill = Color(0.80, 0.47, 0.36, 0.18)
-    success = Color("5db872")
-    warning = Color("d4a017")
-    danger = Color("c64545")
-    separator = Color(1.0, 1.0, 1.0, 0.09)
-    shadow = Color(0.0, 0.0, 0.0, 0.34)
+    background = Color("f5f5f7")
+    background_raised = Color("ffffff")
+    sidebar_material = Color("ffffff")
+    glass_material = Color("ffffff")
+    surface = Color("fbfbfd")
+    surface_raised = Color("ffffff")
+    surface_hover = Color("e8e8ed")
+    text_primary = Color("1d1d1f")
+    text_secondary = Color("6e6e73")
+    text_tertiary = Color("86868b")
+    accent = Color("0071e3")
+    accent_fill = Color(0.0, 0.443, 0.89, 0.12)
+    success = Color("16a34a")
+    warning = Color("eab308")
+    danger = Color("dc2626")
+    separator = Color("d2d2d7")
+    shadow = Color(0.0, 0.0, 0.0, 0.08)
 
 func panel(fill: Color, radius: int = RADIUS_MEDIUM, border: Color = Color.TRANSPARENT, border_width: int = 0) -> StyleBoxFlat:
     var style := StyleBoxFlat.new()
@@ -88,7 +88,7 @@ func panel(fill: Color, radius: int = RADIUS_MEDIUM, border: Color = Color.TRANS
     return style
 
 func material_panel(elevated: bool = false) -> StyleBoxFlat:
-    var style := panel(glass_material if not elevated else surface, RADIUS_MEDIUM)
+    var style := panel(glass_material if not elevated else surface_raised, RADIUS_CARD)
     style.content_margin_left = 16
     style.content_margin_top = 14
     style.content_margin_right = 16
@@ -100,18 +100,13 @@ func material_panel(elevated: bool = false) -> StyleBoxFlat:
     return style
 
 func card_style(hovered: bool = false, pressed: bool = false) -> StyleBoxFlat:
-    var fill := surface_raised if hovered else surface
+    var fill := surface_hover if hovered else surface_raised
     if pressed:
-        fill = Color(
-            surface_raised.r + accent_fill.r * 0.08,
-            surface_raised.g + accent_fill.g * 0.08,
-            surface_raised.b + accent_fill.b * 0.08,
-            1.0
-        )
+        fill = accent_fill
     return panel(fill, RADIUS_CARD)
 
 func detail_outline_style() -> StyleBoxFlat:
-    return panel(surface, RADIUS_CARD, separator, 1)
+    return panel(surface_raised, RADIUS_CARD, separator, 1)
 
 func sidebar_panel() -> StyleBoxFlat:
     var style := panel(sidebar_material, 0, separator, 1)

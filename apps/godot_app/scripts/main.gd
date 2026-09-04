@@ -1182,7 +1182,7 @@ var advanced_expiry_msec := {}
 var diagnostic_env_originals := {}
 var language_mode := LANG_SYSTEM
 var active_language := LANG_ZH_HANS
-var style_mode := STYLE_DARK
+var style_mode := STYLE_CLASSIC
 var ios_ui_scale_mode := "comfortable"
 var legal_accepted_version := ""
 var legal_accepted_at := 0
@@ -1379,14 +1379,14 @@ const TOUCH_MOUSE_SUPPRESS_MS := 700
 const PILL_ICON_SIZE := Vector2(24, 24)
 const PILL_ICON_VISUAL_OFFSET_Y := 2.0
 const SETTINGS_ACTION_BUTTON_SIZE := Vector2(150, 54)
-const HOME_CARD_SIZE := Vector2(252, 250)
-const HOME_CARD_COVER_HEIGHT := 142.0
-const HOME_TILE_MIN_WIDTH := 340.0
-const HOME_TILE_HEIGHT := 132.0
-const HOME_TILE_COVER_WIDTH := 108.0
-const HOME_ROW_HEIGHT := 112.0
-const HOME_ROW_COVER_WIDTH := 116.0
-const HOME_COMPACT_BREAKPOINT := 700.0
+const HOME_CARD_SIZE := Vector2(312, 272)
+const HOME_CARD_COVER_HEIGHT := 154.0
+const HOME_TILE_MIN_WIDTH := 380.0
+const HOME_TILE_HEIGHT := 148.0
+const HOME_TILE_COVER_WIDTH := 124.0
+const HOME_ROW_HEIGHT := 124.0
+const HOME_ROW_COVER_WIDTH := 120.0
+const HOME_COMPACT_BREAKPOINT := 760.0
 const HOME_PHONE_BREAKPOINT := 520.0
 const DETAIL_COMPACT_BREAKPOINT := 960.0
 
@@ -2183,7 +2183,7 @@ func _shell_compact_button(icon_path: String, tooltip: String, callback: Callabl
 func _sync_shell_route(route: String) -> void:
     shell_route = route
     if shell_route_label != null:
-        shell_route_label.text = "AetherKiri"
+        shell_route_label.text = _t("settings.title") if route == "settings" else (_t("nav.videos") if route == "videos" else "Aether")
     _apply_shell_nav_state(shell_library_button, route == "library")
     _apply_shell_nav_state(shell_video_button, route == "videos")
     _apply_shell_nav_state(shell_settings_button, route == "settings")
@@ -2809,31 +2809,25 @@ func _layout_home_view(window_size: Vector2) -> void:
     var phone := minf(window_size.x, window_size.y) < HOME_PHONE_BREAKPOINT
     var margin: float = 16.0 if phone else (24.0 if compact else ui_tokens.PAGE_GUTTER)
     home_page_margin.add_theme_constant_override("margin_left", int(margin))
-    home_page_margin.add_theme_constant_override("margin_top", 16 if phone else (22 if compact else 28))
+    home_page_margin.add_theme_constant_override("margin_top", 20 if phone else (28 if compact else 36))
     home_page_margin.add_theme_constant_override("margin_right", int(margin))
-    home_page_margin.add_theme_constant_override("margin_bottom", 16 if phone else (22 if compact else 28))
-    home_header_box.vertical = false
-    home_header_box.custom_minimum_size = Vector2(0, 62 if phone else (68 if compact else 72))
-    home_header_box.add_theme_constant_override("separation", 12 if phone else (16 if compact else 24))
-    home_title_label.add_theme_font_size_override("font_size", 27 if phone else 31)
-    home_subtitle_label.add_theme_font_size_override("font_size", 13 if phone else 14)
+    home_page_margin.add_theme_constant_override("margin_bottom", 20 if phone else (28 if compact else 36))
+    home_header_box.vertical = phone
+    home_header_box.custom_minimum_size = Vector2(0, 0)
+    home_header_box.add_theme_constant_override("separation", 16 if phone else 24)
+    home_title_label.add_theme_font_size_override("font_size", 32 if phone else (38 if compact else 44))
+    home_subtitle_label.add_theme_font_size_override("font_size", 14 if phone else 15)
     home_actions.alignment = BoxContainer.ALIGNMENT_END
-    home_primary_button.text = "" if OS.get_name() == "iOS" else "+"
+    home_actions.size_flags_horizontal = Control.SIZE_SHRINK_END if not phone else Control.SIZE_EXPAND_FILL
+    home_primary_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL if phone else Control.SIZE_SHRINK_END
     _sync_home_action_labels()
-    var fab_size := 52.0 if phone else 56.0
-    var fab_inset := 12.0 if phone else (16.0 if compact else 20.0)
-    home_primary_button.offset_left = -fab_size - fab_inset
-    home_primary_button.offset_top = -fab_size - fab_inset
-    home_primary_button.offset_right = -fab_inset
-    home_primary_button.offset_bottom = -fab_inset
-    home_primary_button.size = Vector2(fab_size, fab_size)
     var scroll_bar_width := game_scroll.get_v_scroll_bar().get_combined_minimum_size().x
     var list_width := maxf(HOME_TILE_MIN_WIDTH, window_size.x - margin * 2.0 - scroll_bar_width)
-    var gap := 10.0 if phone else (14.0 if compact else 16.0)
+    var gap := 12.0 if phone else (16.0 if compact else 20.0)
     var columns := AetherDisplayScale.home_columns(list_width, HOME_TILE_MIN_WIDTH, gap, compact)
     game_list.columns = columns
     game_list.add_theme_constant_override("h_separation", int(gap))
-    game_list.add_theme_constant_override("v_separation", int(gap if compact else 18.0))
+    game_list.add_theme_constant_override("v_separation", int(gap))
     game_list.custom_minimum_size = Vector2(list_width, 0)
     if video_list != null:
         video_list.columns = columns
@@ -2846,7 +2840,7 @@ func _layout_home_view(window_size: Vector2) -> void:
 
 func _sync_home_header_text() -> void:
     if is_instance_valid(home_title_label):
-        home_title_label.text = _t("nav.videos") if home_library_mode == "video" else _t("nav.library")
+        home_title_label.text = _t("video.status") if home_library_mode == "video" else _t("home.status")
     if is_instance_valid(home_subtitle_label):
         home_subtitle_label.text = _t("video.status") if home_library_mode == "video" else _t("home.game_count", [known_games.size()])
 
@@ -2855,6 +2849,7 @@ func _sync_home_action_labels() -> void:
         var primary_text := _t("video.refresh") if OS.get_name() == "iOS" else _t("video.import")
         if home_library_mode == "game":
             primary_text = _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import")
+        _set_pill_button_text(home_primary_button, primary_text)
         home_primary_button.tooltip_text = primary_text
         home_primary_button.accessibility_name = primary_text
     if is_instance_valid(home_guide_button):
@@ -2910,6 +2905,14 @@ func _build_home_view() -> void:
     _apply_shell_compact_state(home_guide_button, false)
     home_actions.add_child(home_guide_button)
 
+    home_primary_button = _pill_button(
+        _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import"),
+        ICON_REFRESH if OS.get_name() == "iOS" else ICON_ADD
+    )
+    home_primary_button.custom_minimum_size = Vector2(132, ui_tokens.CONTROL_HEIGHT)
+    home_primary_button.pressed.connect(_on_refresh_or_import)
+    home_actions.add_child(home_primary_button)
+
     var library_body := Control.new()
     library_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     library_body.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -2945,24 +2948,8 @@ func _build_home_view() -> void:
     empty_state.mouse_filter = Control.MOUSE_FILTER_IGNORE
     library_body.add_child(empty_state)
 
-    home_primary_button = Button.new()
-    var home_action_is_refresh := OS.get_name() == "iOS"
-    home_primary_button.text = "" if home_action_is_refresh else "+"
-    home_primary_button.tooltip_text = _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import")
-    home_primary_button.accessibility_name = home_primary_button.tooltip_text
-    home_primary_button.anchor_left = 1.0
-    home_primary_button.anchor_top = 1.0
-    home_primary_button.anchor_right = 1.0
-    home_primary_button.anchor_bottom = 1.0
-    ui_widgets.floating_action_button(home_primary_button)
-    if home_action_is_refresh:
-        _attach_centered_button_icon(home_primary_button, ICON_REFRESH, Vector2(23, 23))
-    home_primary_button.pressed.connect(_on_refresh_or_import)
-    library_body.add_child(home_primary_button)
-    home_primary_button.move_to_front()
-
     var empty_box := VBoxContainer.new()
-    empty_box.custom_minimum_size = Vector2(280, 0)
+    empty_box.custom_minimum_size = Vector2(320, 0)
     empty_box.add_theme_constant_override("separation", 12)
     empty_state.add_child(empty_box)
 
@@ -2973,7 +2960,8 @@ func _build_home_view() -> void:
     empty_title_label = Label.new()
     empty_title_label.text = _t("home.empty_title")
     empty_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    empty_title_label.add_theme_font_size_override("font_size", 21)
+    empty_title_label.add_theme_font_override("font", DISPLAY_FONT)
+    empty_title_label.add_theme_font_size_override("font_size", 26)
     empty_title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     empty_box.add_child(empty_title_label)
 
@@ -2985,14 +2973,6 @@ func _build_home_view() -> void:
     empty_help_label.add_theme_color_override("font_color", ui_tokens.text_secondary)
     empty_box.add_child(empty_help_label)
 
-    empty_primary_button = _pill_button(
-        _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import"),
-        ICON_REFRESH if OS.get_name() == "iOS" else ICON_ADD
-    )
-    empty_primary_button.custom_minimum_size = Vector2(164, 48)
-    empty_primary_button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-    empty_primary_button.pressed.connect(_on_refresh_or_import)
-    empty_box.add_child(empty_primary_button)
 
     video_empty_state = CenterContainer.new()
     video_empty_state.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -3072,8 +3052,8 @@ func _rebuild_settings_view() -> void:
     center.add_child(page)
 
     var top := HBoxContainer.new()
-    top.custom_minimum_size = Vector2(0, 72)
-    top.add_theme_constant_override("separation", 14)
+    top.custom_minimum_size = Vector2(0, 84 if compact else 96)
+    top.add_theme_constant_override("separation", 18)
     page.add_child(top)
 
     var title_stack := VBoxContainer.new()
@@ -3083,11 +3063,11 @@ func _rebuild_settings_view() -> void:
     var title := Label.new()
     title.text = _t("settings.title")
     title.add_theme_font_override("font", DISPLAY_FONT)
-    title.add_theme_font_size_override("font_size", 31)
+    title.add_theme_font_size_override("font_size", 34 if compact else 42)
     title.add_theme_color_override("font_color", ui_tokens.text_primary)
     title_stack.add_child(title)
     var subtitle := Label.new()
-    subtitle.text = _t("home.subtitle")
+    subtitle.text = "AetherKiri"
     subtitle.add_theme_font_size_override("font_size", 13)
     subtitle.add_theme_color_override("font_color", ui_tokens.text_secondary)
     title_stack.add_child(subtitle)
@@ -4844,14 +4824,14 @@ func _show_detail(game: Dictionary, source: Control = null) -> void:
     content.add_child(center)
 
     var page := VBoxContainer.new()
-    page.custom_minimum_size = Vector2(minf(1080.0, maxf(320.0, available_size.x - float(gutter * 2))), 0)
+    page.custom_minimum_size = Vector2(minf(1120.0, maxf(320.0, available_size.x - float(gutter * 2))), 0)
     page.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-    page.add_theme_constant_override("separation", 24)
+    page.add_theme_constant_override("separation", 28)
     center.add_child(page)
 
     var top := HBoxContainer.new()
-    top.custom_minimum_size = Vector2(0, 48)
-    top.add_theme_constant_override("separation", 10)
+    top.custom_minimum_size = Vector2(0, 52)
+    top.add_theme_constant_override("separation", 12)
     page.add_child(top)
 
     var back := _shell_compact_button(ICON_BACK, _t("nav.library"), _show_home)
@@ -4860,10 +4840,10 @@ func _show_detail(game: Dictionary, source: Control = null) -> void:
     top.add_child(back)
 
     var eyebrow := Label.new()
-    eyebrow.text = _t("detail.eyebrow")
+    eyebrow.text = _t("detail.eyebrow").to_upper()
     eyebrow.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     eyebrow.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-    eyebrow.add_theme_font_size_override("font_size", 16)
+    eyebrow.add_theme_font_size_override("font_size", 13)
     eyebrow.add_theme_color_override("font_color", ui_tokens.text_secondary)
     top.add_child(eyebrow)
 
@@ -4880,12 +4860,12 @@ func _show_detail(game: Dictionary, source: Control = null) -> void:
 func _build_desktop_detail(game: Dictionary) -> Control:
     var body := HBoxContainer.new()
     body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    body.add_theme_constant_override("separation", 32)
-    body.add_child(_detail_cover(game, Vector2(252, 354)))
+    body.add_theme_constant_override("separation", 40)
+    body.add_child(_detail_cover(game, Vector2(300, 420)))
 
     var information := VBoxContainer.new()
     information.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    information.add_theme_constant_override("separation", 14)
+    information.add_theme_constant_override("separation", 16)
     body.add_child(information)
     information.add_child(_detail_identity(game, false))
     information.add_child(_detail_tools(game))
@@ -4902,7 +4882,7 @@ func _build_compact_detail(game: Dictionary) -> Control:
     summary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     summary.add_theme_constant_override("separation", 16)
     body.add_child(summary)
-    summary.add_child(_detail_cover(game, Vector2(112, 158)))
+    summary.add_child(_detail_cover(game, Vector2(128, 180)))
 
     var primary := VBoxContainer.new()
     primary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -4953,13 +4933,13 @@ func _detail_identity(game: Dictionary, compact: bool) -> VBoxContainer:
 
     var title := Label.new()
     title.text = _game_display_title(game)
-    title.custom_minimum_size = Vector2(0, 64 if compact else 72)
+    title.custom_minimum_size = Vector2(0, 72 if compact else 94)
     title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
     title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     title.max_lines_visible = 3 if compact else 2
     title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
     title.add_theme_font_override("font", DISPLAY_FONT)
-    title.add_theme_font_size_override("font_size", 23 if compact else 32)
+    title.add_theme_font_size_override("font_size", 25 if compact else 40)
     title.add_theme_color_override("font_color", ui_tokens.text_primary)
     identity.add_child(title)
 
@@ -4972,8 +4952,10 @@ func _detail_identity(game: Dictionary, compact: bool) -> VBoxContainer:
     return identity
 
 func _detail_launch_button() -> Button:
-    var start := _icon_action_button(ICON_PLAY, _t("detail.launch"), _start_selected_game, true, false, 52.0)
+    var start := _pill_button(_t("detail.launch"), ICON_PLAY)
+    start.custom_minimum_size = Vector2(176, 52)
     start.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+    start.pressed.connect(_start_selected_game)
     start.button_down.connect(func(): _android_input_debug_log("detail launch button_down"))
     start.button_up.connect(func(): _android_input_debug_log("detail launch button_up"))
     start.pressed.connect(func(): _android_input_debug_log("detail launch pressed"))
