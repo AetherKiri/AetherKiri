@@ -1064,6 +1064,12 @@ const SHELL_SCROLL_WHEEL_SPEED := 4.0
 const SHELL_SCROLL_WHEEL_STEP := 320.0
 const SHELL_SCROLL_TWEEN_DURATION := 0.18
 const SHELL_SCROLL_MOUSE_KEY := -1
+const SHELL_SCROLL_MOMENTUM_FRICTION := 4.2
+const SHELL_SCROLL_MOMENTUM_MIN := 60.0
+const SHELL_SCROLL_OVERSCROLL_MAX := 56.0
+const SHELL_SCROLL_OVERSCROLL_STIFFNESS := 170.0
+const SHELL_SCROLL_OVERSCROLL_DAMPING := 13.0
+const SHELL_SCROLL_OVERSCROLL_RESISTANCE := 0.28
 const SETTINGS_DRAFT_KEYS := [
     "language",
     "style",
@@ -1216,6 +1222,8 @@ var shell_scroll_drag_states := {}
 var shell_scroll_remainders := {}
 var shell_scroll_tweens := {}
 var shell_scroll_targets := {}
+var shell_scroll_momentum := {}
+var shell_scroll_overscroll := {}
 var opaque_frame_shader: Shader
 var shown_system_alerts := {}
 var ui_icon_cache := {}
@@ -4163,14 +4171,19 @@ func _start_shell_scroll_drag(key: int, position: Vector2) -> void:
         shell_scroll_drag_states.erase(key)
         return
     _stop_shell_scroll_tween(scroll)
+    _stop_shell_scroll_momentum(scroll)
+    _clear_scroll_overscroll(scroll)
     var control := _control_at_pointer(position)
     var button := _nearest_base_button(control) if control != null else null
     shell_scroll_drag_states[key] = {
         "scroll": scroll,
         "control": control,
         "last": position,
+        "last_time": Time.get_ticks_usec(),
+        "velocity": 0.0,
         "distance": 0.0,
         "pending_y": 0.0,
+        "overscroll": 0.0,
         "dragging": false,
         "threshold": SHELL_SCROLL_BUTTON_DRAG_THRESHOLD if button != null else SHELL_SCROLL_DRAG_THRESHOLD,
     }
@@ -4187,10 +4200,18 @@ func _update_shell_scroll_drag(key: int, position: Vector2, relative: Vector2) -
         shell_scroll_drag_states.erase(key)
         return false
     var last_position := state.get("last", position) as Vector2
+    var now := Time.get_ticks_usec()
+    var last_time := int(state.get("last_time", now))
+    var dt := maxf(float(now - last_time) / 1000000.0, 1.0 / 240.0)
     var delta := position - last_position
     if delta.is_zero_approx():
         delta = relative
     state["last"] = position
+    state["last_time"] = now
+    # Pointer velocity (px/s), smoothed so release flicks feel natural
+    var instant_velocity := -delta.y / dt
+    var velocity := lerpf(float(state.get("velocity", 0.0)), instant_velocity, 0.4)
+    state["velocity"] = velocity
     var distance := float(state.get("distance", 0.0)) + absf(delta.y)
     var pending_y := float(state.get("pending_y", 0.0)) + delta.y
     var was_dragging := bool(state.get("dragging", false))
@@ -4203,7 +4224,23 @@ func _update_shell_scroll_drag(key: int, position: Vector2, relative: Vector2) -
     if not dragging:
         return false
     var drag_delta := delta.y if was_dragging else pending_y
-    _scroll_container_by(scroll, -drag_delta * SHELL_SCROLL_DRAG_SPEED)
+    var move := -drag_delta * SHELL_SCROLL_DRAG_SPEED
+    var bar := scroll.get_v_scroll_bar()
+    if bar != null:
+        # Rubber-band: past an edge the content follows the finger with resistance
+        var current := float(scroll.scroll_vertical)
+        var raw := current + move
+        var clamped := clampf(raw, bar.min_value, bar.max_value)
+        var beyond := raw - clamped
+        if absf(beyond) > 0.001 or absf(float(state.get("overscroll", 0.0))) > 0.001:
+            var overscroll := clampf(float(state.get("overscroll", 0.0)) + beyond * SHELL_SCROLL_OVERSCROLL_RESISTANCE, -SHELL_SCROLL_OVERSCROLL_MAX, SHELL_SCROLL_OVERSCROLL_MAX)
+            state["overscroll"] = overscroll
+            move = clamped - current
+            _apply_scroll_overscroll(scroll, overscroll)
+        else:
+            state["overscroll"] = 0.0
+    shell_scroll_drag_states[key] = state
+    _scroll_container_by(scroll, move)
     _cancel_shell_scroll_press(state)
     return true
 
@@ -4212,8 +4249,105 @@ func _finish_shell_scroll_drag(key: int) -> bool:
     var dragging := bool(state.get("dragging", false))
     if dragging:
         _cancel_shell_scroll_press(state)
+    var scroll := state.get("scroll") as ScrollContainer
+    if scroll != null and is_instance_valid(scroll):
+        var velocity := float(state.get("velocity", 0.0))
+        var overscroll := float(state.get("overscroll", 0.0))
+        if absf(overscroll) > 0.5:
+            _begin_scroll_overscroll_spring(scroll, overscroll)
+        elif absf(velocity) > SHELL_SCROLL_MOMENTUM_MIN:
+            shell_scroll_momentum[scroll.get_instance_id()] = {
+                "scroll": scroll,
+                "velocity": velocity * SHELL_SCROLL_DRAG_SPEED,
+            }
     shell_scroll_drag_states.erase(key)
     return dragging
+
+func _stop_shell_scroll_momentum(scroll: ScrollContainer) -> void:
+    if scroll == null or not is_instance_valid(scroll):
+        return
+    shell_scroll_momentum.erase(scroll.get_instance_id())
+
+func _add_scroll_momentum_impulse(scroll: ScrollContainer, kick: float) -> void:
+    if scroll == null or not is_instance_valid(scroll):
+        return
+    _stop_shell_scroll_tween(scroll)
+    var key := scroll.get_instance_id()
+    var entry: Dictionary = shell_scroll_momentum.get(key, {})
+    entry["scroll"] = scroll
+    entry["velocity"] = clampf(float(entry.get("velocity", 0.0)) + kick, -4200.0, 4200.0)
+    shell_scroll_momentum[key] = entry
+
+func _apply_scroll_overscroll(scroll: ScrollContainer, amount: float) -> void:
+    if scroll == null or not is_instance_valid(scroll) or scroll.get_child_count() < 1:
+        return
+    var content := scroll.get_child(0) as Control
+    if content == null or not is_instance_valid(content):
+        return
+    content.position.y = float(-scroll.scroll_vertical) - amount
+
+func _clear_scroll_overscroll(scroll: ScrollContainer) -> void:
+    if scroll == null or not is_instance_valid(scroll):
+        return
+    shell_scroll_overscroll.erase(scroll.get_instance_id())
+    _apply_scroll_overscroll(scroll, 0.0)
+
+func _begin_scroll_overscroll_spring(scroll: ScrollContainer, offset: float) -> void:
+    offset = clampf(offset, -SHELL_SCROLL_OVERSCROLL_MAX, SHELL_SCROLL_OVERSCROLL_MAX)
+    if absf(offset) < 0.5:
+        _clear_scroll_overscroll(scroll)
+        return
+    shell_scroll_overscroll[scroll.get_instance_id()] = {
+        "scroll": scroll,
+        "content": scroll.get_child(0) as Control,
+        "offset": offset,
+        "velocity": 0.0,
+    }
+
+func _process_shell_scroll_physics(delta: float) -> void:
+    # Momentum inertia: exponential friction glide
+    for key_variant in shell_scroll_momentum.keys():
+        var entry: Dictionary = shell_scroll_momentum.get(key_variant, {})
+        var scroll := entry.get("scroll") as ScrollContainer
+        if scroll == null or not is_instance_valid(scroll) or not scroll.is_visible_in_tree():
+            shell_scroll_momentum.erase(key_variant)
+            continue
+        var velocity := float(entry.get("velocity", 0.0))
+        var step := velocity * delta
+        var bar := scroll.get_v_scroll_bar()
+        _scroll_container_by(scroll, step)
+        velocity *= exp(-SHELL_SCROLL_MOMENTUM_FRICTION * delta)
+        var reached_edge := bar != null and (is_equal_approx(float(scroll.scroll_vertical), bar.max_value) or is_equal_approx(float(scroll.scroll_vertical), bar.min_value))
+        if bar != null and reached_edge and absf(step) > 0.5:
+            # Leftover speed converts into an elastic edge bounce
+            shell_scroll_momentum.erase(key_variant)
+            _begin_scroll_overscroll_spring(scroll, clampf(step * 0.22, -SHELL_SCROLL_OVERSCROLL_MAX, SHELL_SCROLL_OVERSCROLL_MAX))
+            continue
+        if absf(velocity) < SHELL_SCROLL_MOMENTUM_MIN:
+            shell_scroll_momentum.erase(key_variant)
+            continue
+        entry["velocity"] = velocity
+        shell_scroll_momentum[key_variant] = entry
+    # Overscroll elasticity: damped spring pulling the content back to the edge
+    for key_variant in shell_scroll_overscroll.keys():
+        var entry: Dictionary = shell_scroll_overscroll.get(key_variant, {})
+        var scroll := entry.get("scroll") as ScrollContainer
+        var content := entry.get("content") as Control
+        if scroll == null or not is_instance_valid(scroll) or content == null or not is_instance_valid(content):
+            shell_scroll_overscroll.erase(key_variant)
+            continue
+        var offset := float(entry.get("offset", 0.0))
+        var velocity := float(entry.get("velocity", 0.0))
+        velocity += (-SHELL_SCROLL_OVERSCROLL_STIFFNESS * offset - SHELL_SCROLL_OVERSCROLL_DAMPING * velocity) * delta
+        offset += velocity * delta
+        if absf(offset) < 0.4 and absf(velocity) < 6.0:
+            shell_scroll_overscroll.erase(key_variant)
+            _apply_scroll_overscroll(scroll, 0.0)
+            continue
+        entry["offset"] = offset
+        entry["velocity"] = velocity
+        shell_scroll_overscroll[key_variant] = entry
+        _apply_scroll_overscroll(scroll, offset)
 
 func _reset_shell_scroll_drag() -> void:
     for key in shell_scroll_drag_states.keys():
@@ -4226,6 +4360,12 @@ func _reset_shell_scroll_drag() -> void:
             tween.kill()
     shell_scroll_tweens.clear()
     shell_scroll_targets.clear()
+    shell_scroll_momentum.clear()
+    for key_variant in shell_scroll_overscroll.keys():
+        var entry: Dictionary = shell_scroll_overscroll.get(key_variant, {})
+        var scroll := entry.get("scroll") as ScrollContainer
+        _clear_scroll_overscroll(scroll)
+    shell_scroll_overscroll.clear()
 
 func _cancel_shell_scroll_press(state: Dictionary) -> void:
     get_viewport().gui_release_focus()
@@ -9391,6 +9531,7 @@ func _process_video_playback(delta: float) -> void:
 func _process(delta: float) -> void:
     _fit_full_rects()
     _follow_nav_pills()
+    _process_shell_scroll_physics(delta)
     _process_iap(delta)
     _update_advanced_tool_timeouts()
     _flush_log_view_if_needed(delta)
@@ -10834,7 +10975,12 @@ func _handle_shell_scroll_input(event: InputEvent) -> bool:
             var wheel_factor := absf(mouse_button.factor)
             if wheel_factor < 1.0:
                 wheel_factor = 1.0
-            _scroll_container_by(wheel_scroll, wheel_direction * SHELL_SCROLL_WHEEL_STEP * SHELL_SCROLL_WHEEL_SPEED * wheel_factor, true)
+            # Wheel flicks feed the same momentum physics as touch: glide +
+            # friction decay + elastic edge bounce instead of a fixed tween.
+            _add_scroll_momentum_impulse(
+                wheel_scroll,
+                wheel_direction * SHELL_SCROLL_WHEEL_STEP * SHELL_SCROLL_WHEEL_SPEED * wheel_factor
+            )
             return true
         if mouse_button.button_index != MOUSE_BUTTON_LEFT:
             return false
