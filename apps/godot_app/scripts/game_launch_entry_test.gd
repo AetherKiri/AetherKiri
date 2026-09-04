@@ -21,6 +21,22 @@ func _init() -> void:
         "EXE launch path"
     )
     _expect_equal(
+        GameLaunchEntry.resolve_for_runtime(
+            {"path": root, GameLaunchEntry.FIELD: "开始游戏.exe"},
+            "artemis"
+        ),
+        root,
+        "Artemis directory launch path"
+    )
+    _expect_equal(
+        GameLaunchEntry.resolve_for_runtime(
+            {"path": root, GameLaunchEntry.FIELD: "开始游戏.exe"},
+            "kirikiri"
+        ),
+        exe_path,
+        "KiriKiri configured launch path"
+    )
+    _expect_equal(
         GameLaunchEntry.relative_path_for_selection(root, archive_path),
         "patch/data.xp3",
         "nested XP3 selection"
