@@ -5,6 +5,7 @@
 #include "tjsNs0DataPack.h"
 
 #include <cstdint>
+#include <initializer_list>
 #include <string_view>
 #include <vector>
 
@@ -25,6 +26,15 @@ void appendU16(std::vector<Byte> &bytes, std::uint16_t value) {
     bytes.push_back(0xcd);
     bytes.push_back(static_cast<Byte>(value));
     bytes.push_back(static_cast<Byte>(value >> 8));
+}
+
+void appendRaw16(std::vector<Byte> &bytes,
+                 std::initializer_list<Byte> value) {
+    REQUIRE(value.size() <= 0xffff);
+    bytes.push_back(0xda);
+    bytes.push_back(static_cast<Byte>(value.size()));
+    bytes.push_back(static_cast<Byte>(value.size() >> 8));
+    bytes.insert(bytes.end(), value);
 }
 
 tTJSVariant getIndex(const tTJSVariant &object, tjs_int index) {
@@ -84,6 +94,35 @@ TEST_CASE("KBAD data packs decode PBD canvas and layer metadata") {
     const tTJSVariant layer = getIndex(root, 1);
     CHECK(ttstr(getProperty(layer, TJS_W("name"))) == TJS_W("com"));
     CHECK(getProperty(layer, TJS_W("visible")).AsInteger() == 1);
+}
+
+TEST_CASE("KBAD data packs preserve fixed and length-prefixed octets") {
+    std::vector<Byte> bytes = { 'K', 'B', 'A', 'D', '1', '0', '0', 0 };
+    bytes.push_back(0x92); // two octets
+    bytes.push_back(0xd9); // five-byte fixed octet
+    bytes.insert(bytes.end(), { 0x00, 0x7f, 0x80, 0xfe, 0xff });
+    appendRaw16(bytes, { 0x10, 0x20, 0x30, 0x40, 0x50, 0x60 });
+
+    tTJSVariant root;
+    REQUIRE(TVPDecodeKbadDataPack(bytes.data(), bytes.size(), &root));
+
+    const tTJSVariant fixed = getIndex(root, 0);
+    REQUIRE(fixed.Type() == tvtOctet);
+    const tTJSVariantOctet *fixedOctet = fixed.AsOctetNoAddRef();
+    REQUIRE(fixedOctet != nullptr);
+    REQUIRE(fixedOctet->GetLength() == 5);
+    CHECK(std::vector<Byte>(fixedOctet->GetData(),
+                            fixedOctet->GetData() + fixedOctet->GetLength()) ==
+          std::vector<Byte>{ 0x00, 0x7f, 0x80, 0xfe, 0xff });
+
+    const tTJSVariant raw16 = getIndex(root, 1);
+    REQUIRE(raw16.Type() == tvtOctet);
+    const tTJSVariantOctet *raw16Octet = raw16.AsOctetNoAddRef();
+    REQUIRE(raw16Octet != nullptr);
+    REQUIRE(raw16Octet->GetLength() == 6);
+    CHECK(std::vector<Byte>(raw16Octet->GetData(),
+                            raw16Octet->GetData() + raw16Octet->GetLength()) ==
+          std::vector<Byte>{ 0x10, 0x20, 0x30, 0x40, 0x50, 0x60 });
 }
 
 TEST_CASE("KBAD decoder rejects unrelated and truncated data") {
