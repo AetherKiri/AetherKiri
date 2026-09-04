@@ -10599,24 +10599,40 @@ func _start_selected_game_after_entitlements() -> void:
     active_runtime_kind = _game_runtime_kind(library_path)
     if not _switch_runtime_player(active_runtime_kind):
         return
+    var launch_uses_directory := GameLaunchEntry.runtime_uses_directory(
+        active_runtime_kind
+    )
     var raw_launch_file := String(selected_game.get(GameLaunchEntry.FIELD, "")).strip_edges()
-    if not raw_launch_file.is_empty() and not GameLaunchEntry.is_supported_file(raw_launch_file):
+    if (
+        not launch_uses_directory
+        and not raw_launch_file.is_empty()
+        and not GameLaunchEntry.is_supported_file(raw_launch_file)
+    ):
         _show_system_alert(
             _t("message.launch_file_unsupported"),
             _t("alert.warning_title")
         )
         return
     var relative_launch_file := GameLaunchEntry.configured_relative_path(selected_game)
-    if not raw_launch_file.is_empty() and relative_launch_file.is_empty():
+    if (
+        not launch_uses_directory
+        and not raw_launch_file.is_empty()
+        and relative_launch_file.is_empty()
+    ):
         _show_system_alert(
             _t("message.launch_file_outside_game"),
             _t("alert.warning_title")
         )
         return
-    var launch_path := library_path \
-        if active_runtime_kind in [RUNTIME_ONSCRIPTER, RUNTIME_MINORI] \
-        else GameLaunchEntry.resolve(selected_game)
-    if not relative_launch_file.is_empty() and not FileAccess.file_exists(launch_path):
+    var launch_path := GameLaunchEntry.resolve_for_runtime(
+        selected_game,
+        active_runtime_kind
+    )
+    if (
+        not launch_uses_directory
+        and not relative_launch_file.is_empty()
+        and not FileAccess.file_exists(launch_path)
+    ):
         _show_system_alert(
             _t("message.launch_file_missing", [relative_launch_file]),
             _t("alert.warning_title")
@@ -11830,7 +11846,7 @@ func _probe_open_game(config: Dictionary, target_game_path: String, backend_env:
     if not _switch_runtime_player(runtime_kind):
         _write_probe_marker("probe_open_game runtime_switch_failed kind=%s" % runtime_kind)
         return false
-    if runtime_kind == RUNTIME_ONSCRIPTER:
+    if GameLaunchEntry.runtime_uses_directory(runtime_kind):
         target_game_path = _game_runtime_root(target_game_path)
     selected_backend = ProbeConfig.backend(config, backend_env)
     if not selected_backend in BACKENDS:
@@ -13556,7 +13572,7 @@ func _on_open_game() -> void:
         render_errors += 1
         return
     active_runtime_kind = detected_runtime
-    if detected_runtime == RUNTIME_ONSCRIPTER:
+    if GameLaunchEntry.runtime_uses_directory(detected_runtime):
         path = _game_runtime_root(path)
         game_path.text = path
     _load_button_position_memory(path)
