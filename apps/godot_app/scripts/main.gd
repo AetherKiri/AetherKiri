@@ -1208,6 +1208,7 @@ var iap_settings_refresh_pending := false
 var android_video_import_notice_shown := false
 var dirty_settings := false
 var settings_animate_next := true
+var settings_compact_layout := false
 var settings_draft := {}
 var active_game_path := ""
 var active_game_started_msec := 0
@@ -2243,6 +2244,15 @@ func _build_shell_chrome() -> void:
     ]
     _bind_nav_pill_drag(shell_compact_indicator, compact_specs, 0)
 
+    # Deterministic resync whenever the header/sidebar layout settles; the
+    # per-frame follow then keeps the pills locked onto the live button rects.
+    shell_content.resized.connect(func():
+        call_deferred("_update_nav_indicator", false)
+        call_deferred("_update_compact_indicator", false)
+    )
+    compact_margin.resized.connect(func(): call_deferred("_update_compact_indicator", false))
+    sidebar_host.resized.connect(func(): call_deferred("_update_nav_indicator", false))
+
     # Keep pills and feathers aligned across window resize / device rotation
     shell_content.resized.connect(func():
         call_deferred("_update_nav_indicator", false)
@@ -2252,6 +2262,49 @@ func _build_shell_chrome() -> void:
     call_deferred("_create_scroll_feathers")
     _sync_shell_route(shell_route)
     _apply_sidebar_presentation(false)
+
+func _nav_pill_goal(pill: Control, buttons: Array, compact: bool) -> Variant:
+    var route_index: int = {"library": 0, "videos": 1, "settings": 2}.get(shell_route, -1)
+    if route_index < 0 or route_index >= buttons.size():
+        return null
+    var button: Button = buttons[route_index]
+    if button == null or not is_instance_valid(button) or button.size == Vector2.ZERO:
+        return null
+    var parent := pill.get_parent() as Control
+    if parent == null or parent.size == Vector2.ZERO:
+        return null
+    var parent_rect := parent.get_global_rect()
+    var button_rect := button.get_global_rect()
+    if button_rect.size == Vector2.ZERO:
+        return null
+    var target_size: Vector2
+    var target_pos: Vector2
+    if compact or shell_sidebar_collapsed:
+        target_size = button_rect.size + Vector2(6.0, 6.0)
+        target_pos = button_rect.position - parent_rect.position - Vector2(3.0, 3.0)
+    else:
+        target_size = Vector2(maxf(44.0, parent.size.x - 12.0), button_rect.size.y)
+        target_pos = Vector2(6.0, button_rect.position.y - parent_rect.position.y)
+    return {"pos": target_pos, "size": target_size}
+
+func _follow_nav_pills() -> void:
+    # Live magnetic follow: pills chase the real button rects every frame so
+    # container sorting, font loading, resize or rotation can never leave them
+    # offset. Spring physics keep the chase smooth; it settles once aligned.
+    if nav_pill_drag.get("active", false) or ui_motion.reduced_motion:
+        return
+    if shell_nav_indicator != null and is_instance_valid(shell_nav_indicator) \
+            and shell_nav_indicator.visible and shell_sidebar != null and is_instance_valid(shell_sidebar) and shell_sidebar.visible:
+        var goal = _nav_pill_goal(shell_nav_indicator, [shell_library_button, shell_video_button, shell_settings_button], false)
+        if goal != null:
+            ui_motion.spring_property(shell_nav_indicator, "position", goal["pos"], 0.30, 1.0)
+            ui_motion.spring_property(shell_nav_indicator, "size", goal["size"], 0.18, 1.0)
+    if shell_compact_indicator != null and is_instance_valid(shell_compact_indicator) \
+            and shell_compact_indicator.visible and shell_compact_header != null and is_instance_valid(shell_compact_header) and shell_compact_header.visible:
+        var goal_compact = _nav_pill_goal(shell_compact_indicator, [shell_compact_library_button, shell_compact_video_button, shell_compact_settings_button], true)
+        if goal_compact != null:
+            ui_motion.spring_property(shell_compact_indicator, "position", goal_compact["pos"], 0.30, 1.0)
+            ui_motion.spring_property(shell_compact_indicator, "size", goal_compact["size"], 0.18, 1.0)
 
 func _bind_nav_pill_drag(pill: Control, specs: Array, axis: int) -> void:
     if pill == null:
@@ -2374,9 +2427,13 @@ func _shell_compact_button(icon_path: String, tooltip: String, callback: Callabl
     var button := Button.new()
     button.icon = _load_ui_icon(icon_path)
     button.expand_icon = true
+    # Icon-only square button: lock 44x44, centered glyph, so the jelly pill
+    # overlay and the icon always share the same visual center.
     button.custom_minimum_size = Vector2(44, 44)
     button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
     button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+    button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+    button.alignment = HORIZONTAL_ALIGNMENT_CENTER
     button.tooltip_text = tooltip
     button.add_theme_constant_override("icon_max_width", 22)
     button.focus_mode = Control.FOCUS_ALL
@@ -2418,14 +2475,11 @@ func _update_nav_indicator(spring: bool) -> void:
     var host := shell_nav_indicator.get_parent() as Control
     if host == null or host.size.x <= 0.0 or button.size.y <= 0.0:
         return
-    var target_pos: Vector2
-    var target_size: Vector2
-    if shell_sidebar_collapsed:
-        target_size = Vector2(44.0, 44.0)
-        target_pos = Vector2((host.size.x - 44.0) * 0.5, button.position.y + (button.size.y - 44.0) * 0.5)
-    else:
-        target_size = Vector2(maxf(44.0, host.size.x - 12.0), button.size.y)
-        target_pos = Vector2(6.0, button.position.y)
+    var goal = _nav_pill_goal(shell_nav_indicator, [shell_library_button, shell_video_button, shell_settings_button], false)
+    if goal == null:
+        return
+    var target_pos: Vector2 = goal["pos"]
+    var target_size: Vector2 = goal["size"]
     var was_hidden := not shell_nav_indicator.visible
     shell_nav_indicator.visible = true
     if spring and not ui_motion.reduced_motion:
@@ -2478,12 +2532,14 @@ func _update_compact_indicator(spring: bool) -> void:
     if button == null or not is_instance_valid(button):
         shell_compact_indicator.visible = false
         return
-    var header_rect := shell_compact_header.get_global_rect()
-    var button_rect := button.get_global_rect()
-    if button_rect.size == Vector2.ZERO:
+    var host := shell_compact_indicator.get_parent() as Control
+    if host == null or host.size == Vector2.ZERO:
         return
-    var target_pos := button_rect.position - header_rect.position - Vector2(3.0, 3.0)
-    var target_size := button_rect.size + Vector2(6.0, 6.0)
+    var goal = _nav_pill_goal(shell_compact_indicator, [shell_compact_library_button, shell_compact_video_button, shell_compact_settings_button], true)
+    if goal == null:
+        return
+    var target_pos: Vector2 = goal["pos"]
+    var target_size: Vector2 = goal["size"]
     var was_hidden := not shell_compact_indicator.visible
     shell_compact_indicator.visible = true
     if spring and not ui_motion.reduced_motion:
@@ -2507,7 +2563,7 @@ func _apply_shell_nav_state(button: Button, selected: bool) -> void:
     if shell_sidebar_collapsed or shell_sidebar_animating_expand:
         button.custom_minimum_size = Vector2(44, 44)
         button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-        ui_widgets.toolbar_button(button, selected)
+        ui_widgets.ghost_nav_button(button, selected)
     else:
         button.custom_minimum_size = Vector2(0, 48)
         button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2516,7 +2572,7 @@ func _apply_shell_nav_state(button: Button, selected: bool) -> void:
 func _apply_shell_compact_state(button: Button, selected: bool) -> void:
     if button == null:
         return
-    ui_widgets.toolbar_button(button, selected)
+    ui_widgets.ghost_nav_button(button, selected)
 
 func _toggle_sidebar() -> void:
     if AetherDisplayScale.use_compact_shell(get_viewport_rect().size):
@@ -3338,7 +3394,8 @@ func _rebuild_settings_view() -> void:
     # The sidebar is already excluded from available_size. Keep two columns only
     # when both columns have enough room for copy and their controls.
     var compact := available_size.x < 1140.0
-    var gutter := 20 if compact else 32
+    settings_compact_layout = compact
+    var gutter := 14 if compact else 32
     var max_content_width := 760.0 if compact else 1120.0
     var settings_content_width := minf(max_content_width, maxf(320.0, available_size.x - float(gutter * 2)))
     var stack_settings_controls := settings_content_width < 640.0
@@ -3348,9 +3405,9 @@ func _rebuild_settings_view() -> void:
     var margin := MarginContainer.new()
     margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     margin.add_theme_constant_override("margin_left", gutter)
-    margin.add_theme_constant_override("margin_top", 20 if compact else 28)
+    margin.add_theme_constant_override("margin_top", 12 if compact else 28)
     margin.add_theme_constant_override("margin_right", gutter)
-    margin.add_theme_constant_override("margin_bottom", 40)
+    margin.add_theme_constant_override("margin_bottom", 28 if compact else 40)
     settings_view.add_child(margin)
 
     var center := CenterContainer.new()
@@ -3360,12 +3417,12 @@ func _rebuild_settings_view() -> void:
     var page := VBoxContainer.new()
     page.custom_minimum_size = Vector2(settings_content_width, 0)
     page.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-    page.add_theme_constant_override("separation", 24)
+    page.add_theme_constant_override("separation", 14 if compact else 24)
     center.add_child(page)
 
     var top := HBoxContainer.new()
-    top.custom_minimum_size = Vector2(0, 72 if compact else 84)
-    top.add_theme_constant_override("separation", 18)
+    top.custom_minimum_size = Vector2(0, 52 if compact else 72)
+    top.add_theme_constant_override("separation", 14 if compact else 18)
     page.add_child(top)
 
     var title_stack := VBoxContainer.new()
@@ -3375,12 +3432,12 @@ func _rebuild_settings_view() -> void:
     var title := Label.new()
     title.text = _t("settings.title")
     title.add_theme_font_override("font", DISPLAY_FONT)
-    title.add_theme_font_size_override("font_size", 32 if compact else 40)
+    title.add_theme_font_size_override("font_size", 24 if compact else 40)
     title.add_theme_color_override("font_color", ui_tokens.text_primary)
     title_stack.add_child(title)
     var subtitle := Label.new()
     subtitle.text = "AetherKiri"
-    subtitle.add_theme_font_size_override("font_size", 13)
+    subtitle.add_theme_font_size_override("font_size", 11 if compact else 13)
     subtitle.add_theme_color_override("font_color", ui_tokens.text_secondary)
     title_stack.add_child(subtitle)
 
@@ -3400,7 +3457,7 @@ func _rebuild_settings_view() -> void:
     # Timeline sections: one vertical flow shared by desktop and mobile
     var flow := VBoxContainer.new()
     flow.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    flow.add_theme_constant_override("separation", 18)
+    flow.add_theme_constant_override("separation", 12 if compact else 18)
     page.add_child(flow)
 
     var interface_rows := _settings_section(flow, _t("settings.section.interface"), animate_page, 0.04)
@@ -4417,9 +4474,10 @@ func _section_title(text: String, _icon_path: String) -> HBoxContainer:
     return row
 
 func _settings_section(page: VBoxContainer, title: String, animate: bool, delay: float) -> VBoxContainer:
+    var compact := settings_compact_layout
     var section := HBoxContainer.new()
     section.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    section.add_theme_constant_override("separation", 14)
+    section.add_theme_constant_override("separation", 10 if compact else 14)
     page.add_child(section)
 
     # Timeline rail: accent dot + connecting hairline
@@ -4429,9 +4487,9 @@ func _settings_section(page: VBoxContainer, title: String, animate: bool, delay:
     section.add_child(rail)
 
     var dot := PanelContainer.new()
-    dot.custom_minimum_size = Vector2(10, 10)
+    dot.custom_minimum_size = Vector2(8, 8) if compact else Vector2(10, 10)
     dot.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-    dot.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.accent, 5))
+    dot.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.accent, 4 if compact else 5))
     rail.add_child(dot)
 
     var line := PanelContainer.new()
@@ -4443,24 +4501,24 @@ func _settings_section(page: VBoxContainer, title: String, animate: bool, delay:
 
     var content := VBoxContainer.new()
     content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    content.add_theme_constant_override("separation", 8)
+    content.add_theme_constant_override("separation", 5 if compact else 8)
     section.add_child(content)
 
     var title_label := Label.new()
     title_label.text = title.to_upper()
     title_label.add_theme_font_override("font", DISPLAY_FONT)
-    title_label.add_theme_font_size_override("font_size", 13)
+    title_label.add_theme_font_size_override("font_size", 11 if compact else 13)
     title_label.add_theme_color_override("font_color", ui_tokens.accent)
     content.add_child(title_label)
 
     # Flat, zero-shadow card panel with 1px hairline border
     var panel := PanelContainer.new()
     panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    var panel_style := ui_tokens.panel(ui_tokens.surface_raised, 12, ui_tokens.separator, 1)
-    panel_style.content_margin_left = 18
-    panel_style.content_margin_top = 10
-    panel_style.content_margin_right = 18
-    panel_style.content_margin_bottom = 10
+    var panel_style := ui_tokens.panel(ui_tokens.surface_raised, 10 if compact else 12, ui_tokens.separator, 1)
+    panel_style.content_margin_left = 12 if compact else 18
+    panel_style.content_margin_top = 6 if compact else 10
+    panel_style.content_margin_right = 12 if compact else 18
+    panel_style.content_margin_bottom = 6 if compact else 10
     panel_style.shadow_size = 0
     panel.add_theme_stylebox_override("panel", panel_style)
     content.add_child(panel)
@@ -4479,27 +4537,28 @@ func _add_settings_row(group: VBoxContainer, row: Control) -> void:
     group.add_child(row)
 
 func _settings_row(title: String, subtitle: String, control: Control, stack_control: bool = false) -> Control:
+    var compact := settings_compact_layout
     var margin := MarginContainer.new()
     margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    margin.add_theme_constant_override("margin_left", 8)
-    margin.add_theme_constant_override("margin_top", 12)
-    margin.add_theme_constant_override("margin_right", 8)
-    margin.add_theme_constant_override("margin_bottom", 12)
+    margin.add_theme_constant_override("margin_left", 2 if compact else 8)
+    margin.add_theme_constant_override("margin_top", 7 if compact else 12)
+    margin.add_theme_constant_override("margin_right", 2 if compact else 8)
+    margin.add_theme_constant_override("margin_bottom", 7 if compact else 12)
 
     var box: BoxContainer = VBoxContainer.new() if stack_control else HBoxContainer.new()
-    box.custom_minimum_size = Vector2(0, 86 if stack_control else 56)
-    box.add_theme_constant_override("separation", 12 if stack_control else 20)
+    box.custom_minimum_size = Vector2(0, (64 if compact else 78) if stack_control else (46 if compact else 56))
+    box.add_theme_constant_override("separation", 8 if compact else 20)
     margin.add_child(box)
 
     var labels := VBoxContainer.new()
     labels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    labels.add_theme_constant_override("separation", 3)
+    labels.add_theme_constant_override("separation", 2 if compact else 3)
     box.add_child(labels)
 
     var title_label := Label.new()
     title_label.text = title
     title_label.add_theme_font_override("font", DISPLAY_FONT)
-    title_label.add_theme_font_size_override("font_size", 15)
+    title_label.add_theme_font_size_override("font_size", 14 if compact else 15)
     title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
 
@@ -4507,7 +4566,7 @@ func _settings_row(title: String, subtitle: String, control: Control, stack_cont
         var sub := Label.new()
         sub.text = subtitle
         sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-        sub.add_theme_font_size_override("font_size", 12)
+        sub.add_theme_font_size_override("font_size", 11 if compact else 12)
         sub.add_theme_color_override("font_color", ui_tokens.text_secondary)
         labels.add_child(sub)
 
@@ -9331,6 +9390,7 @@ func _process_video_playback(delta: float) -> void:
 
 func _process(delta: float) -> void:
     _fit_full_rects()
+    _follow_nav_pills()
     _process_iap(delta)
     _update_advanced_tool_timeouts()
     _flush_log_view_if_needed(delta)
