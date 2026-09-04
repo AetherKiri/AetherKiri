@@ -38,6 +38,11 @@ elseif(IOS)
 else()
     target_compile_definitions(engine_api PRIVATE ENGINE_API_BUILD_SHARED)
 endif()
+
+if(WIN32)
+    find_package(LibLZMA CONFIG REQUIRED)
+    target_link_libraries(engine_api PRIVATE LibLZMA::LibLZMA)
+endif()
 target_include_directories(engine_api
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -92,9 +97,9 @@ if(TARGET aetherinternal_artemis_lua)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/artemis_lua_symbol_prefix.h")
     if(MSVC)
         target_compile_options(aetherinternal_artemis_lua PRIVATE
-            /FI"${AETHERKIRI_ARTEMIS_LUA_PREFIX_HEADER}")
+            "/FI${AETHERKIRI_ARTEMIS_LUA_PREFIX_HEADER}")
         target_compile_options(engine_api PRIVATE
-            /FI"${AETHERKIRI_ARTEMIS_LUA_PREFIX_HEADER}")
+            "/FI${AETHERKIRI_ARTEMIS_LUA_PREFIX_HEADER}")
     else()
         target_compile_options(aetherinternal_artemis_lua PRIVATE
             -include "${AETHERKIRI_ARTEMIS_LUA_PREFIX_HEADER}")

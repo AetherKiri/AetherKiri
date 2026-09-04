@@ -60,17 +60,16 @@ std::string g_stdoutpath = "stdout.txt";
 std::string g_stderrpath = "stderr.txt";
 
 // Upstream built-in layer effects refer to a process-global `ONScripter ons`.
-// Keep the ABI-visible storage without registering a global destructor. The
-// embedded host mirrors upstream static teardown on the game thread, then can
-// placement-construct a fresh object for a later session.
+#ifdef _WIN32
+ONScripter ons;
+#else
 union ONScripterGlobalStorage {
     ONScripter value;
-
     ONScripterGlobalStorage() {}
     ~ONScripterGlobalStorage() {}
 };
-
 ONScripterGlobalStorage ons;
+#endif
 
 namespace {
 
@@ -484,7 +483,7 @@ std::string EnsureTrailingSeparator(const std::string &path) {
     if (last == '/' || last == '\\') {
         return path;
     }
-    return path + fs::path::preferred_separator;
+    return path + std::string(1, fs::path::preferred_separator);
 }
 
 std::string StableGameDirectoryName(const fs::path &root) {

@@ -248,6 +248,7 @@ jobs:
             mkdir -p .devtools
             git clone https://github.com/microsoft/vcpkg.git .devtools/vcpkg
           fi
+          mkdir -p .devtools/vcpkg/downloads
           if [[ ! -x ".devtools/vcpkg/vcpkg" ]]; then
             (cd .devtools/vcpkg && ./bootstrap-vcpkg.sh -disableMetrics)
           fi
@@ -931,13 +932,13 @@ jobs:
           path: .ccache
           key: ${{ runner.os }}-macos-ccache-v2
 
-  web:
-    name: Build Web App
+  linux:
+    name: Build Linux x64 App
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
       CCACHE_DIR: ${{ github.workspace }}/.ccache
-      EMSDK_VERSION: 4.0.15
+      VCPKG_DOWNLOADS: ${{ github.workspace }}/.devtools/vcpkg/downloads
       GODOT_RELEASE: 4.7-stable
       GODOT_TEMPLATE_VERSION: 4.7.stable
 
@@ -949,12 +950,6 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
-      - name: Set up Rust for Minori
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rust-src
-          targets: wasm32-unknown-emscripten
-
       - name: Initialize public runtime packages
         if: env.AETHERKIRI_WITH_INTERNAL != 'true'
         run: |
@@ -962,59 +957,16 @@ jobs:
           git -c submodule.packages/psdfile.url=https://github.com/AetherKiri/psdfile.git \
             submodule update --init --recursive --depth 1 packages/psdfile
 
-      - name: Set application release version
-        if: env.AETHERKIRI_RELEASE_VERSION != ''
-        run: |
-          release_build_number=$((AETHERKIRI_BUILD_NUMBER * 100 + AETHERKIRI_BUILD_ATTEMPT))
-          python3 .github/scripts/set-release-version.py \
-            "$AETHERKIRI_RELEASE_VERSION" \
-            --build-number "$release_build_number" \
-            --github-env "$GITHUB_ENV"
-
       - name: Verify AetherInternal package
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
         run: |
-          set -euo pipefail
           test -f packages/AetherInternal/cmake/AetherInternalConfig.cmake
           git submodule status --recursive
 
       - name: Install Build Systems
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build pkg-config autoconf autoconf-archive automake libtool gettext bison flex curl unzip zip zstd ccache jq python3 mono-complete
-
-      - name: Set up Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: '24'
-          cache: npm
-
-      - name: Restore Emscripten cache
-        id: restore-emsdk
-        uses: actions/cache/restore@v5
-        with:
-          path: .devtools/emsdk
-          key: ${{ runner.os }}-emsdk-${{ env.EMSDK_VERSION }}
-
-      - name: Install Emscripten
-        run: |
-          set -euo pipefail
-          mkdir -p .devtools
-          if [[ ! -d ".devtools/emsdk/.git" ]]; then
-            rm -rf .devtools/emsdk
-            git clone https://github.com/emscripten-core/emsdk.git .devtools/emsdk
-          fi
-          .devtools/emsdk/emsdk install "$EMSDK_VERSION"
-          .devtools/emsdk/emsdk activate "$EMSDK_VERSION"
-          {
-            echo "EMSDK=${GITHUB_WORKSPACE}/.devtools/emsdk"
-            echo "EMSCRIPTEN_ROOT=${GITHUB_WORKSPACE}/.devtools/emsdk/upstream/emscripten"
-            echo "EMSDK_PYTHON=$(command -v python3)"
-          } >> "$GITHUB_ENV"
-          {
-            echo "${GITHUB_WORKSPACE}/.devtools/emsdk"
-            echo "${GITHUB_WORKSPACE}/.devtools/emsdk/upstream/emscripten"
-          } >> "$GITHUB_PATH"
+          sudo apt-get install -y cmake ninja-build pkg-config autoconf autoconf-archive automake libtool gettext bison flex gobjc gobjc++ libx11-dev curl unzip zip zstd ccache jq mono-complete nasm
 
       - name: Install Godot export tools
         run: |
@@ -1037,13 +989,13 @@ jobs:
             "https://github.com/godotengine/godot-builds/releases/download/${GODOT_RELEASE}/Godot_v${GODOT_RELEASE}_export_templates.tpz"
           unzip -tq "${RUNNER_TEMP}/godot-export-templates.tpz"
           unzip -q "${RUNNER_TEMP}/godot-export-templates.tpz" -d "${RUNNER_TEMP}/godot-templates"
-          template_dir="${HOME}/.local/share/godot/export_templates/${GODOT_TEMPLATE_VERSION}"
+          template_dir="${GITHUB_WORKSPACE}/.aetherkiri-cache/xdg/data/godot/export_templates/${GODOT_TEMPLATE_VERSION}"
           mkdir -p "$template_dir"
           cp -a "${RUNNER_TEMP}/godot-templates/templates/." "$template_dir/"
 
           {
             echo "GODOT_BIN=${GITHUB_WORKSPACE}/${godot_bin}"
-            echo "GODOT_TEMPLATE_DIR=${template_dir}"
+            echo "GODOT_TEMPLATE_DIR=${GITHUB_WORKSPACE}/.aetherkiri-cache/xdg/data/godot/export_templates"
           } >> "$GITHUB_ENV"
 
       - name: Restore ccache
@@ -1051,9 +1003,9 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-web-ccache-v2
+          key: ${{ runner.os }}-linux-ccache-v2
           restore-keys: |
-            ${{ runner.os }}-web-ccache-
+            ${{ runner.os }}-linux-ccache-
 
       - name: Setup ccache config
         run: |
@@ -1071,6 +1023,7 @@ jobs:
             mkdir -p .devtools
             git clone https://github.com/microsoft/vcpkg.git .devtools/vcpkg
           fi
+          mkdir -p .devtools/vcpkg/downloads
           if [[ ! -x ".devtools/vcpkg/vcpkg" ]]; then
             (cd .devtools/vcpkg && ./bootstrap-vcpkg.sh -disableMetrics)
           fi
@@ -1081,54 +1034,413 @@ jobs:
           VCPKG_PACKAGES_TOKEN: ${{ github.token }}
         run: bash .github/scripts/configure-vcpkg-binary-cache.sh "$VCPKG_ROOT/vcpkg"
 
-      - name: Install npm dependencies
-        run: npm ci
+      - name: Restore vcpkg source cache
+        id: restore-vcpkg-downloads
+        uses: actions/cache/restore@v5
+        with:
+          path: .devtools/vcpkg/downloads
+          key: ${{ runner.os }}-vcpkg-downloads-${{ hashFiles('vcpkg-configuration.json', 'vcpkg.json', 'vcpkg/ports/**', 'vcpkg/triplets/**') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-downloads-
 
-      - name: Typecheck Web scripts
-        run: npm run typecheck
-
-      - name: Build Web Release
+      - name: Build Linux Release
         run: |
-          set -euo pipefail
-          source .devtools/emsdk/emsdk_env.sh
           chmod +x ./build.sh
-          export CMAKE_C_COMPILER_LAUNCHER=ccache
-          export CMAKE_CXX_COMPILER_LAUNCHER=ccache
-          ./build.sh web release --jobs=4 2>&1 | tee "${RUNNER_TEMP}/web-build.log"
-          if grep -E "SCRIPT ERROR|Failed to load script|Can't open GDExtension|Can't open dynamic library" "${RUNNER_TEMP}/web-build.log"; then
-            echo "Godot Web export logged script or GDExtension load errors." >&2
-            exit 1
-          fi
+          export CMAKE_C_COMPILER_LAUNCHER=ccache CMAKE_CXX_COMPILER_LAUNCHER=ccache
+          ./build.sh linux release --jobs=4
 
-      - name: Verify Web export
+      - name: Build Linux Debug
+        run: |
+          chmod +x ./build.sh
+          export CMAKE_C_COMPILER_LAUNCHER=ccache CMAKE_CXX_COMPILER_LAUNCHER=ccache
+          ./build.sh linux debug --jobs=4
+
+      - name: Verify Linux exports
         run: |
           set -euo pipefail
-          test -f out/godot/web/release/index.html
-          test -f out/godot/web/release/index.wasm
-          test -f out/godot/web/release/index.pck
-          test -f out/godot/web/release/live2d/aetherkiri-live2d-bridge.js
-          node --check build/web_export_local_picker.js
-          node --check build/web_export_range_fs.js
-          node --check build/patch_web_export.mjs
+          for build_type in release debug; do
+            export_dir="out/godot/linux/${build_type}"
+            test -x "${export_dir}/AetherKiri.x86_64"
+            test -f "${export_dir}/libengine_api.so"
+            test -f "${export_dir}/libaether_kiri_godot.so"
+            ! find "$export_dir" -maxdepth 1 -type f -name '*.so*' -print0 | xargs -0 -r ldd | grep -F 'not found'
+          done
 
-      - name: Upload Artifact
-        if: success()
+      - name: Upload Linux Release
         uses: actions/upload-artifact@v7
         with:
-          name: web-release-export
-          path: out/godot/web/release
+          name: linux-release-x64
+          path: out/godot/linux/release/
           retention-days: 7
 
-      - name: Save Emscripten cache
-        if: success() && github.event_name != 'pull_request' && steps.restore-emsdk.outputs.cache-matched-key == ''
+      - name: Upload Linux Debug
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-debug-x64
+          path: out/godot/linux/debug/
+          retention-days: 7
+
+      - name: Save vcpkg source cache
+        if: always() && steps.restore-vcpkg-downloads.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
-          path: .devtools/emsdk
-          key: ${{ runner.os }}-emsdk-${{ env.EMSDK_VERSION }}
+          path: .devtools/vcpkg/downloads
+          key: ${{ runner.os }}-vcpkg-downloads-${{ hashFiles('vcpkg-configuration.json', 'vcpkg.json', 'vcpkg/ports/**', 'vcpkg/triplets/**') }}
 
       - name: Save ccache
         if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-web-ccache-v2
+          key: ${{ runner.os }}-linux-ccache-v2
+
+# Windows x64 build temporarily disabled (see PR discussion).
+#  windows:
+#    name: Build Windows x64 App
+#    if: ${{ github.event_name == 'workflow_dispatch_disabled' }}
+#    runs-on: windows-latest
+#    env:
+#      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+#      # The private Artemis runtime currently has a Windows-only source
+#      # incompatibility; build the public runtime on this platform instead.
+#      AETHERKIRI_ENABLE_INTERNAL: 'false'
+#      VCPKG_DOWNLOADS: ${{ github.workspace }}/.devtools/vcpkg/downloads
+#      GODOT_RELEASE: 4.7-stable
+#      GODOT_TEMPLATE_VERSION: 4.7.stable
+#
+#    steps:
+#      - name: Checkout Repository
+#        uses: actions/checkout@v6
+#        with:
+#          submodules: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && 'recursive' || 'false' }}
+#          ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
+#          persist-credentials: false
+#
+#      - name: Initialize public runtime packages
+#        if: env.AETHERKIRI_WITH_INTERNAL != 'true'
+#        shell: bash
+#        run: |
+#          git submodule update --init --depth 1 packages/OnscripterYuri
+#          git -c submodule.packages/psdfile.url=https://github.com/AetherKiri/psdfile.git \
+#            submodule update --init --recursive --depth 1 packages/psdfile
+#
+#      - name: Verify AetherInternal package
+#        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+#        shell: bash
+#        run: |
+#          test -f packages/AetherInternal/cmake/AetherInternalConfig.cmake
+#          git submodule status --recursive
+#
+#      - name: Install Build Systems
+#        shell: pwsh
+#        run: |
+#          $ErrorActionPreference = 'Stop'
+#          choco install ninja mono nasm winflexbison3 -y --no-progress
+#          if (!(Get-Command win_bison.exe -ErrorAction SilentlyContinue)) {
+#            throw 'win_bison.exe was not found after installing winflexbison3.'
+#          }
+#          $monoCandidates = @(
+#            "$env:ProgramFiles\Mono\bin",
+#            "${env:ProgramFiles(x86)}\Mono\bin",
+#            "${env:ChocolateyToolsLocation}\mono\bin",
+#            "$env:ChocolateyInstall\bin"
+#          )
+#          $monoDir = $monoCandidates | Where-Object {
+#            Test-Path (Join-Path $_ 'mono.exe')
+#          } | Select-Object -First 1
+#          if (-not $monoDir) {
+#            throw 'Mono executable was not found after installation.'
+#          }
+#          $monoDir | Out-File $env:GITHUB_PATH -Append
+#          "MONO_BIN=$(Join-Path $monoDir 'mono.exe')" | Out-File $env:GITHUB_ENV -Append
+#
+#      - name: Set up MSVC environment
+#        uses: ilammy/msvc-dev-cmd@v1
+#        with:
+#          arch: x64
+#
+#      - name: Install Godot export tools
+#        shell: pwsh
+#        run: |
+#          $ErrorActionPreference = 'Stop'
+#          New-Item -ItemType Directory -Force .godot, "$env:USERPROFILE\AppData\Roaming\Godot\export_templates\$env:GODOT_TEMPLATE_VERSION" | Out-Null
+#          Invoke-WebRequest -Uri "https://github.com/godotengine/godot-builds/releases/download/${env:GODOT_RELEASE}/Godot_v${env:GODOT_RELEASE}_win64.exe.zip" -OutFile "$env:RUNNER_TEMP\godot.zip"
+#          Expand-Archive "$env:RUNNER_TEMP\godot.zip" .godot -Force
+#          Invoke-WebRequest -Uri "https://github.com/godotengine/godot-builds/releases/download/${env:GODOT_RELEASE}/Godot_v${env:GODOT_RELEASE}_export_templates.tpz" -OutFile "$env:RUNNER_TEMP\templates.zip"
+#          Expand-Archive "$env:RUNNER_TEMP\templates.zip" "$env:RUNNER_TEMP\templates" -Force
+#          Copy-Item "$env:RUNNER_TEMP\templates\templates\*" "$env:USERPROFILE\AppData\Roaming\Godot\export_templates\$env:GODOT_TEMPLATE_VERSION" -Recurse -Force
+#          $godot = (Get-ChildItem .godot -Filter 'Godot*_win64.exe' -Recurse | Select-Object -First 1).FullName
+#          "GODOT_BIN=$godot" | Out-File $env:GITHUB_ENV -Append
+#
+#      - name: Bootstrap vcpkg
+#        shell: pwsh
+#        run: |
+#          if ((Test-Path .devtools\vcpkg) -and !(Test-Path .devtools\vcpkg\.git)) { Remove-Item .devtools\vcpkg -Recurse -Force }
+#          if (!(Test-Path .devtools\vcpkg\.git)) { git clone https://github.com/microsoft/vcpkg.git .devtools\vcpkg }
+#          New-Item -ItemType Directory -Force .devtools\vcpkg\downloads | Out-Null
+#          if (!(Test-Path .devtools\vcpkg\vcpkg.exe)) { & .devtools\vcpkg\bootstrap-vcpkg.bat -disableMetrics }
+#          "VCPKG_ROOT=$pwd\.devtools\vcpkg" | Out-File $env:GITHUB_ENV -Append
+#
+#      - name: Configure vcpkg binary cache
+#        shell: bash
+#        env:
+#          VCPKG_PACKAGES_TOKEN: ${{ github.token }}
+#        run: bash .github/scripts/configure-vcpkg-binary-cache.sh .devtools/vcpkg/vcpkg.exe
+#
+#      - name: Restore vcpkg source cache
+#        id: restore-vcpkg-downloads
+#        uses: actions/cache/restore@v5
+#        with:
+#          path: .devtools/vcpkg/downloads
+#          key: ${{ runner.os }}-vcpkg-downloads-${{ hashFiles('vcpkg-configuration.json', 'vcpkg.json', 'vcpkg/ports/**', 'vcpkg/triplets/**') }}
+#          restore-keys: |
+#            ${{ runner.os }}-vcpkg-downloads-
+#
+#      - name: Build Windows Release
+#        shell: pwsh
+#        run: |
+#          cmake --preset "Windows Release Config" -D AETHERKIRI_ENABLE_INTERNAL=$env:AETHERKIRI_ENABLE_INTERNAL
+#          cmake --build --preset "Windows Release Build" --parallel 4
+#          New-Item -ItemType Directory -Force apps/godot_app/bin/windows/debug | Out-Null
+#          Copy-Item apps/godot_app/bin/windows/release/*.dll apps/godot_app/bin/windows/debug/ -Force
+#          & $env:GODOT_BIN --headless --path apps/godot_app --editor --quit
+#          & $env:GODOT_BIN --headless --path apps/godot_app --export-release "Windows Release" out/godot/windows/release/Aether.exe
+#
+#      - name: Build Windows Debug
+#        shell: pwsh
+#        run: |
+#          cmake --preset "Windows Debug Config" -D AETHERKIRI_ENABLE_INTERNAL=$env:AETHERKIRI_ENABLE_INTERNAL
+#          cmake --build --preset "Windows Debug Build" --parallel 4
+#          & $env:GODOT_BIN --headless --path apps/godot_app --export-debug "Windows Debug" out/godot/windows/debug/Aether.exe
+#
+#      - name: Verify Windows exports
+#        shell: pwsh
+#        run: |
+#          if (!(Test-Path out/godot/windows/release/Aether.exe) -or !(Test-Path out/godot/windows/debug/Aether.exe)) { throw 'Windows exports missing' }
+#          foreach ($buildType in @('release', 'debug')) {
+#            if (!(Test-Path "apps/godot_app/bin/windows/$buildType/aether_kiri_godot.dll") -or !(Test-Path "apps/godot_app/bin/windows/$buildType/engine_api.dll")) { throw "Windows $buildType runtime DLLs missing" }
+#            if (!(Test-Path "out/godot/windows/$buildType/aether_kiri_godot.dll") -or !(Test-Path "out/godot/windows/$buildType/engine_api.dll")) { throw "Windows $buildType export DLLs missing" }
+#          }
+#
+#      - name: Upload Windows Release
+#        uses: actions/upload-artifact@v7
+#        with:
+#          name: windows-release-x64
+#          path: out/godot/windows/release/
+#          retention-days: 7
+#
+#      - name: Upload Windows Debug
+#        uses: actions/upload-artifact@v7
+#        with:
+#          name: windows-debug-x64
+#          path: out/godot/windows/debug/
+#          retention-days: 7
+#
+#      - name: Save vcpkg source cache
+#        if: always() && steps.restore-vcpkg-downloads.outputs.cache-hit != 'true'
+#        uses: actions/cache/save@v5
+#        with:
+#          path: .devtools/vcpkg/downloads
+#          key: ${{ runner.os }}-vcpkg-downloads-${{ hashFiles('vcpkg-configuration.json', 'vcpkg.json', 'vcpkg/ports/**', 'vcpkg/triplets/**') }}
+#
+#  web:
+#    name: Build Web App
+#    runs-on: ubuntu-latest
+#    env:
+#      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+#      CCACHE_DIR: ${{ github.workspace }}/.ccache
+#      EMSDK_VERSION: 4.0.15
+#      GODOT_RELEASE: 4.7-stable
+#      GODOT_TEMPLATE_VERSION: 4.7.stable
+#
+#    steps:
+#      - name: Checkout Repository
+#        uses: actions/checkout@v6
+#        with:
+#          submodules: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && 'recursive' || 'false' }}
+#          ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
+#          persist-credentials: false
+#
+#      - name: Set up Rust for Minori
+#        uses: dtolnay/rust-toolchain@nightly
+#        with:
+#          components: rust-src
+#          targets: wasm32-unknown-emscripten
+#
+#      - name: Initialize public runtime packages
+#        if: env.AETHERKIRI_WITH_INTERNAL != 'true'
+#        run: |
+#          git submodule update --init --depth 1 packages/OnscripterYuri
+#          git -c submodule.packages/psdfile.url=https://github.com/AetherKiri/psdfile.git \
+#            submodule update --init --recursive --depth 1 packages/psdfile
+#
+#      - name: Set application release version
+#        if: env.AETHERKIRI_RELEASE_VERSION != ''
+#        run: |
+#          release_build_number=$((AETHERKIRI_BUILD_NUMBER * 100 + AETHERKIRI_BUILD_ATTEMPT))
+#          python3 .github/scripts/set-release-version.py \
+#            "$AETHERKIRI_RELEASE_VERSION" \
+#            --build-number "$release_build_number" \
+#            --github-env "$GITHUB_ENV"
+#
+#      - name: Verify AetherInternal package
+#        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+#        run: |
+#          set -euo pipefail
+#          test -f packages/AetherInternal/cmake/AetherInternalConfig.cmake
+#          git submodule status --recursive
+#
+#      - name: Install Build Systems
+#        run: |
+#          sudo apt-get update
+#          sudo apt-get install -y cmake ninja-build pkg-config autoconf autoconf-archive automake libtool gettext bison flex curl unzip zip zstd ccache jq python3 mono-complete
+#
+#      - name: Set up Node
+#        uses: actions/setup-node@v6
+#        with:
+#          node-version: '24'
+#          cache: npm
+#
+#      - name: Restore Emscripten cache
+#        id: restore-emsdk
+#        uses: actions/cache/restore@v5
+#        with:
+#          path: .devtools/emsdk
+#          key: ${{ runner.os }}-emsdk-${{ env.EMSDK_VERSION }}
+#
+#      - name: Install Emscripten
+#        run: |
+#          set -euo pipefail
+#          mkdir -p .devtools
+#          if [[ ! -d ".devtools/emsdk/.git" ]]; then
+#            rm -rf .devtools/emsdk
+#            git clone https://github.com/emscripten-core/emsdk.git .devtools/emsdk
+#          fi
+#          .devtools/emsdk/emsdk install "$EMSDK_VERSION"
+#          .devtools/emsdk/emsdk activate "$EMSDK_VERSION"
+#          {
+#            echo "EMSDK=${GITHUB_WORKSPACE}/.devtools/emsdk"
+#            echo "EMSCRIPTEN_ROOT=${GITHUB_WORKSPACE}/.devtools/emsdk/upstream/emscripten"
+#            echo "EMSDK_PYTHON=$(command -v python3)"
+#          } >> "$GITHUB_ENV"
+#          {
+#            echo "${GITHUB_WORKSPACE}/.devtools/emsdk"
+#            echo "${GITHUB_WORKSPACE}/.devtools/emsdk/upstream/emscripten"
+#          } >> "$GITHUB_PATH"
+#
+#      - name: Install Godot export tools
+#        run: |
+#          set -euo pipefail
+#          mkdir -p .godot "${RUNNER_TEMP}/godot-templates"
+#          curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
+#            -o "${RUNNER_TEMP}/godot-linux.zip" \
+#            "https://github.com/godotengine/godot-builds/releases/download/${GODOT_RELEASE}/Godot_v${GODOT_RELEASE}_linux.x86_64.zip"
+#          unzip -tq "${RUNNER_TEMP}/godot-linux.zip"
+#          unzip -q "${RUNNER_TEMP}/godot-linux.zip" -d .godot
+#          godot_bin="$(find .godot -maxdepth 1 -type f -name 'Godot*_linux.x86_64' | head -1)"
+#          if [[ -z "$godot_bin" ]]; then
+#            echo "Godot Linux binary not found after unzip" >&2
+#            exit 1
+#          fi
+#          chmod +x "$godot_bin"
+#
+#          curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
+#            -o "${RUNNER_TEMP}/godot-export-templates.tpz" \
+#            "https://github.com/godotengine/godot-builds/releases/download/${GODOT_RELEASE}/Godot_v${GODOT_RELEASE}_export_templates.tpz"
+#          unzip -tq "${RUNNER_TEMP}/godot-export-templates.tpz"
+#          unzip -q "${RUNNER_TEMP}/godot-export-templates.tpz" -d "${RUNNER_TEMP}/godot-templates"
+#          template_dir="${HOME}/.local/share/godot/export_templates/${GODOT_TEMPLATE_VERSION}"
+#          mkdir -p "$template_dir"
+#          cp -a "${RUNNER_TEMP}/godot-templates/templates/." "$template_dir/"
+#
+#          {
+#            echo "GODOT_BIN=${GITHUB_WORKSPACE}/${godot_bin}"
+#            echo "GODOT_TEMPLATE_DIR=${template_dir}"
+#          } >> "$GITHUB_ENV"
+#
+#      - name: Restore ccache
+#        id: restore-ccache
+#        uses: actions/cache/restore@v5
+#        with:
+#          path: .ccache
+#          key: ${{ runner.os }}-web-ccache-v2
+#          restore-keys: |
+#            ${{ runner.os }}-web-ccache-
+#
+#      - name: Setup ccache config
+#        run: |
+#          ccache --max-size=400M
+#          ccache --cleanup
+#          ccache -z
+#
+#      - name: Bootstrap vcpkg
+#        run: |
+#          set -euo pipefail
+#          if [[ -d ".devtools/vcpkg" && ! -f ".devtools/vcpkg/.vcpkg-root" ]]; then
+#            rm -rf .devtools/vcpkg
+#          fi
+#          if [[ ! -d ".devtools/vcpkg/.git" ]]; then
+#            mkdir -p .devtools
+#            git clone https://github.com/microsoft/vcpkg.git .devtools/vcpkg
+#          fi
+#          if [[ ! -x ".devtools/vcpkg/vcpkg" ]]; then
+#            (cd .devtools/vcpkg && ./bootstrap-vcpkg.sh -disableMetrics)
+#          fi
+#          echo "VCPKG_ROOT=${GITHUB_WORKSPACE}/.devtools/vcpkg" >> "$GITHUB_ENV"
+#
+#      - name: Configure vcpkg binary cache
+#        env:
+#          VCPKG_PACKAGES_TOKEN: ${{ github.token }}
+#        run: bash .github/scripts/configure-vcpkg-binary-cache.sh "$VCPKG_ROOT/vcpkg"
+#
+#      - name: Install npm dependencies
+#        run: npm ci
+#
+#      - name: Typecheck Web scripts
+#        run: npm run typecheck
+#
+#      - name: Build Web Release
+#        run: |
+#          set -euo pipefail
+#          source .devtools/emsdk/emsdk_env.sh
+#          chmod +x ./build.sh
+#          export CMAKE_C_COMPILER_LAUNCHER=ccache
+#          export CMAKE_CXX_COMPILER_LAUNCHER=ccache
+#          ./build.sh web release --jobs=4 2>&1 | tee "${RUNNER_TEMP}/web-build.log"
+#          if grep -E "SCRIPT ERROR|Failed to load script|Can't open GDExtension|Can't open dynamic library" "${RUNNER_TEMP}/web-build.log"; then
+#            echo "Godot Web export logged script or GDExtension load errors." >&2
+#            exit 1
+#          fi
+#
+#      - name: Verify Web export
+#        run: |
+#          set -euo pipefail
+#          test -f out/godot/web/release/index.html
+#          test -f out/godot/web/release/index.wasm
+#          test -f out/godot/web/release/index.pck
+#          test -f out/godot/web/release/live2d/aetherkiri-live2d-bridge.js
+#          node --check build/web_export_local_picker.js
+#          node --check build/web_export_range_fs.js
+#          node --check build/patch_web_export.mjs
+#
+#      - name: Upload Artifact
+#        if: success()
+#        uses: actions/upload-artifact@v7
+#        with:
+#          name: web-release-export
+#          path: out/godot/web/release
+#          retention-days: 7
+#
+#      - name: Save Emscripten cache
+#        if: success() && github.event_name != 'pull_request' && steps.restore-emsdk.outputs.cache-matched-key == ''
+#        uses: actions/cache/save@v5
+#        with:
+#          path: .devtools/emsdk
+#          key: ${{ runner.os }}-emsdk-${{ env.EMSDK_VERSION }}
+#
+#      - name: Save ccache
+#        if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-hit != 'true'
+#        uses: actions/cache/save@v5
+#        with:
+#          path: .ccache
+#          key: ${{ runner.os }}-web-ccache-v2

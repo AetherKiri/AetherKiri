@@ -70,6 +70,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     compatMediaLayerPlugins.cpp
     compatSystemPlugins.cpp
     dummy_plugin_stubs.cpp
+    windows_compat_stubs.cpp
     pluginAnchors.cpp
     fstat/main.cpp
 )
