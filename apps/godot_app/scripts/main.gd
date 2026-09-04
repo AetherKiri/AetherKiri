@@ -1098,7 +1098,10 @@ var shell_root: Control
 var shell_content: Control
 var shell_sidebar: PanelContainer
 var shell_nav_indicator: PanelContainer
+var scroll_feathers: Array[Control] = []
+var nav_pill_drag := {"active": false, "pill": null, "axis": 1}
 var shell_compact_header: PanelContainer
+var shell_compact_indicator: PanelContainer
 var shell_route_label: Label
 var launch_transition_tween: Tween
 var shell_library_button: Button
@@ -1458,6 +1461,7 @@ func _apply_style_mode(update_theme: bool = true) -> void:
     color_danger = ui_tokens.danger
     color_success = ui_tokens.success
     color_line = ui_tokens.separator
+    _refresh_feather_colors()
 
     if update_theme:
         _apply_ui_font()
@@ -2187,12 +2191,27 @@ func _build_shell_chrome() -> void:
     )
     shell_root.add_child(shell_compact_header)
 
+    # Host keeps the jelly nav indicator behind the compact header row
+    var compact_host := Control.new()
+    compact_host.name = "CompactHeaderHost"
+    compact_host.set_anchors_preset(Control.PRESET_FULL_RECT)
+    compact_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    shell_compact_header.add_child(compact_host)
+
+    shell_compact_indicator = PanelContainer.new()
+    shell_compact_indicator.name = "CompactNavIndicator"
+    shell_compact_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    shell_compact_indicator.visible = false
+    shell_compact_indicator.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.accent_fill, 10))
+    compact_host.add_child(shell_compact_indicator)
+
     var compact_margin := MarginContainer.new()
+    compact_margin.set_anchors_preset(Control.PRESET_FULL_RECT)
     compact_margin.add_theme_constant_override("margin_left", 18)
     compact_margin.add_theme_constant_override("margin_top", 10)
     compact_margin.add_theme_constant_override("margin_right", 12)
     compact_margin.add_theme_constant_override("margin_bottom", 10)
-    shell_compact_header.add_child(compact_margin)
+    compact_host.add_child(compact_margin)
     var compact_row := HBoxContainer.new()
     compact_row.add_theme_constant_override("separation", 10)
     compact_margin.add_child(compact_row)
@@ -2210,8 +2229,125 @@ func _build_shell_chrome() -> void:
     shell_compact_settings_button = _shell_compact_button(ICON_SETTINGS, _t("settings.title"), _show_settings)
     compact_row.add_child(shell_compact_settings_button)
 
+    # Both jelly nav pills are directly draggable along their axis
+    var sidebar_specs := [
+        {"button": shell_library_button, "action": _show_home, "route": "library"},
+        {"button": shell_video_button, "action": _show_video_library, "route": "videos"},
+        {"button": shell_settings_button, "action": _show_settings, "route": "settings"},
+    ]
+    _bind_nav_pill_drag(shell_nav_indicator, sidebar_specs, 1)
+    var compact_specs := [
+        {"button": shell_compact_library_button, "action": _show_home, "route": "library"},
+        {"button": shell_compact_video_button, "action": _show_video_library, "route": "videos"},
+        {"button": shell_compact_settings_button, "action": _show_settings, "route": "settings"},
+    ]
+    _bind_nav_pill_drag(shell_compact_indicator, compact_specs, 0)
+
+    call_deferred("_create_scroll_feathers")
     _sync_shell_route(shell_route)
     _apply_sidebar_presentation(false)
+
+func _bind_nav_pill_drag(pill: Control, specs: Array, axis: int) -> void:
+    if pill == null:
+        return
+    pill.mouse_filter = Control.MOUSE_FILTER_STOP
+    pill.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+    pill.gui_input.connect(func(event: InputEvent):
+        _on_nav_pill_input(pill, specs, axis, event)
+    )
+
+func _on_nav_pill_input(pill: Control, specs: Array, axis: int, event: InputEvent) -> void:
+    if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+        if event.pressed:
+            nav_pill_drag = {"active": true, "pill": pill, "axis": axis}
+            ui_motion.active_springs.erase(ui_motion._motion_key(pill, "position"))
+            pill.accept_event()
+        elif nav_pill_drag.get("active", false) and nav_pill_drag.get("pill") == pill:
+            nav_pill_drag = {"active": false, "pill": null, "axis": axis}
+            _snap_nav_pill(pill, specs, axis)
+            pill.accept_event()
+    elif event is InputEventMouseMotion and nav_pill_drag.get("active", false) and nav_pill_drag.get("pill") == pill:
+        var parent_control := pill.get_parent() as Control
+        if parent_control == null:
+            return
+        var parent_rect := parent_control.get_global_rect()
+        var mouse_center: float = pill.get_global_mouse_position()[axis]
+        var lo: float = (specs[0]["button"] as Button).get_global_rect().get_center()[axis]
+        var hi: float = (specs[specs.size() - 1]["button"] as Button).get_global_rect().get_center()[axis]
+        var clamped_center := clampf(mouse_center, lo, hi)
+        var target := pill.position
+        target[axis] = clamped_center - parent_rect.position[axis] - pill.size[axis] * 0.5
+        if ui_motion.reduced_motion:
+            pill.position = target
+        else:
+            # Elastic finger-follow while dragging
+            ui_motion.spring_property(pill, "position", target, 0.06, 1.0)
+        pill.accept_event()
+
+func _snap_nav_pill(pill: Control, specs: Array, axis: int) -> void:
+    var pill_center: float = pill.get_global_rect().get_center()[axis]
+    var best: Dictionary = {}
+    var best_dist := INF
+    for spec in specs:
+        var btn: Button = spec["button"]
+        var dist: float = absf(btn.get_global_rect().get_center()[axis] - pill_center)
+        if dist < best_dist:
+            best_dist = dist
+            best = spec
+    if best.is_empty():
+        return
+    if String(best.get("route", "")) == shell_route:
+        _update_nav_indicator(false)
+        _update_compact_indicator(false)
+        return
+    var action: Callable = best["action"]
+    if action.is_valid():
+        action.call()
+
+func _create_scroll_feathers() -> void:
+    for cfg in [[false, 26.0], [true, 34.0]]:
+        var strip := TextureRect.new()
+        strip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+        var grad := Gradient.new()
+        var c: Color = ui_tokens.background
+        grad.colors = PackedColorArray([Color(c.r, c.g, c.b, 1.0), Color(c.r, c.g, c.b, 0.0)])
+        var tex := GradientTexture2D.new()
+        tex.gradient = grad
+        if bool(cfg[0]):
+            tex.fill_from = Vector2(0, 1)
+            tex.fill_to = Vector2(0, 0)
+        else:
+            tex.fill_from = Vector2(0, 0)
+            tex.fill_to = Vector2(0, 1)
+        strip.texture = tex
+        strip.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+        strip.stretch_mode = TextureRect.STRETCH_SCALE
+        if bool(cfg[0]):
+            strip.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+            strip.offset_top = -float(cfg[1])
+        else:
+            strip.set_anchors_preset(Control.PRESET_TOP_WIDE)
+            strip.offset_bottom = float(cfg[1])
+        strip.set_meta("feather_gradient", grad)
+        shell_content.add_child(strip)
+        scroll_feathers.append(strip)
+    _sync_feather_visibility()
+
+func _sync_feather_visibility() -> void:
+    var visible := not game_running
+    for strip in scroll_feathers:
+        if strip != null and is_instance_valid(strip):
+            strip.visible = visible
+
+func _refresh_feather_colors() -> void:
+    for strip in scroll_feathers:
+        if strip == null or not is_instance_valid(strip):
+            continue
+        var grad: Gradient = strip.get_meta("feather_gradient")
+        if grad == null:
+            continue
+        var c: Color = ui_tokens.background
+        grad.colors = PackedColorArray([Color(c.r, c.g, c.b, 1.0), Color(c.r, c.g, c.b, 0.0)])
 
 func _shell_nav_button(text: String, icon_path: String, callback: Callable) -> Button:
     var button := Button.new()
@@ -2252,6 +2388,7 @@ func _sync_shell_route(route: String) -> void:
     _apply_shell_compact_state(shell_compact_video_button, route == "videos")
     _apply_shell_compact_state(shell_compact_settings_button, route == "settings")
     call_deferred("_update_nav_indicator", true)
+    call_deferred("_update_compact_indicator", true)
 
 func _update_nav_indicator(spring: bool) -> void:
     if shell_nav_indicator == null or not is_instance_valid(shell_nav_indicator):
@@ -2293,7 +2430,7 @@ func _update_nav_indicator(spring: bool) -> void:
         else:
             ui_motion.spring_property(shell_nav_indicator, "position", target_pos, 0.42, 0.55)
             ui_motion.spring_property(shell_nav_indicator, "size", target_size, 0.30, 1.0)
-        _jelly_nav_indicator()
+        _jelly_pill(shell_nav_indicator)
     else:
         ui_motion.active_springs.erase(ui_motion._motion_key(shell_nav_indicator, "position"))
         ui_motion.active_springs.erase(ui_motion._motion_key(shell_nav_indicator, "size"))
@@ -2301,20 +2438,62 @@ func _update_nav_indicator(spring: bool) -> void:
         shell_nav_indicator.size = target_size
         shell_nav_indicator.scale = Vector2.ONE
 
-func _jelly_nav_indicator() -> void:
-    if shell_nav_indicator == null or not is_instance_valid(shell_nav_indicator):
+func _jelly_pill(pill: Control) -> void:
+    if pill == null or not is_instance_valid(pill):
         return
     # Jelly deformation: stretch along the travel axis then wobble back to a round shape
-    ui_motion._update_pivot(shell_nav_indicator)
-    ui_motion.spring_property(shell_nav_indicator, "scale", Vector2(1.06, 0.90), 0.13, 0.68)
+    ui_motion._update_pivot(pill)
+    ui_motion.spring_property(pill, "scale", Vector2(1.06, 0.90), 0.13, 0.68)
     var tree := get_tree()
     if tree != null:
         tree.create_timer(0.10).timeout.connect(
             func():
-                if shell_nav_indicator != null and is_instance_valid(shell_nav_indicator):
-                    ui_motion.spring_property(shell_nav_indicator, "scale", Vector2.ONE, 0.32, 0.55),
+                if pill != null and is_instance_valid(pill):
+                    ui_motion.spring_property(pill, "scale", Vector2.ONE, 0.32, 0.55),
             CONNECT_ONE_SHOT
         )
+
+func _update_compact_indicator(spring: bool) -> void:
+    if shell_compact_indicator == null or not is_instance_valid(shell_compact_indicator):
+        return
+    if shell_compact_header == null or not is_instance_valid(shell_compact_header) or not shell_compact_header.visible:
+        shell_compact_indicator.visible = false
+        return
+    var button: Button = null
+    match shell_route:
+        "library":
+            button = shell_compact_library_button
+        "videos":
+            button = shell_compact_video_button
+        "settings":
+            button = shell_compact_settings_button
+        _:
+            button = null
+    if button == null or not is_instance_valid(button):
+        shell_compact_indicator.visible = false
+        return
+    var header_rect := shell_compact_header.get_global_rect()
+    var button_rect := button.get_global_rect()
+    if button_rect.size == Vector2.ZERO:
+        return
+    var target_pos := button_rect.position - header_rect.position - Vector2(3.0, 3.0)
+    var target_size := button_rect.size + Vector2(6.0, 6.0)
+    var was_hidden := not shell_compact_indicator.visible
+    shell_compact_indicator.visible = true
+    if spring and not ui_motion.reduced_motion:
+        if was_hidden:
+            shell_compact_indicator.position = target_pos
+            shell_compact_indicator.size = target_size
+        else:
+            ui_motion.spring_property(shell_compact_indicator, "position", target_pos, 0.42, 0.55)
+            ui_motion.spring_property(shell_compact_indicator, "size", target_size, 0.30, 1.0)
+        _jelly_pill(shell_compact_indicator)
+    else:
+        ui_motion.active_springs.erase(ui_motion._motion_key(shell_compact_indicator, "position"))
+        ui_motion.active_springs.erase(ui_motion._motion_key(shell_compact_indicator, "size"))
+        shell_compact_indicator.position = target_pos
+        shell_compact_indicator.size = target_size
+        shell_compact_indicator.scale = Vector2.ONE
 
 func _apply_shell_nav_state(button: Button, selected: bool) -> void:
     if button == null:
@@ -2927,6 +3106,7 @@ func _set_game_background(active: bool) -> void:
     if bg_rect != null:
         bg_rect.color = color
     RenderingServer.set_default_clear_color(color)
+    _sync_feather_visibility()
 
 func _layout_home_view(window_size: Vector2) -> void:
     if home_page_margin == null or home_header_box == null or game_list == null:
