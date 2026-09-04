@@ -26,6 +26,8 @@ const SETTINGS_FILE := "user://aetherkiri_settings.cfg"
 const IAP_LIST_LIMIT_PRODUCT_ID := "com.aether.list.limit"
 const IAP_COFFEE_PRODUCT_ID := "com.aether.coffee"
 const ANDROID_COFFEE_URL := "https://qr.alipay.com/fkx108053gol728ayzhec90"
+const APP_SERVICE_FILING_NUMBER := "沪ICP备2026042398号-2A"
+const APP_SERVICE_FILING_URL := "https://beian.miit.gov.cn/#/Integrated/index"
 const IAP_POLL_INTERVAL_SEC := 0.12
 const IAP_DETAIL_AUTHORIZATION_TTL_MS := 30000
 const SECRET_UNLOCK_TAP_TARGET := 20
@@ -267,6 +269,8 @@ const UI_TEXT := {
         "settings.version": "版本",
         "settings.author": "作者",
         "settings.email": "邮箱",
+        "settings.app_service_filing": "App服务备案号",
+        "settings.app_service_filing_open_failed": "无法打开备案信息网页，请稍后重试。",
         "iap.list_limit.title": "目录限制解锁",
         "iap.list_limit.desc": "永久解锁视觉小说库和视频库中的全部目录项目",
         "iap.coffee.title": "请作者喝一杯咖啡",
@@ -548,6 +552,8 @@ const UI_TEXT := {
         "settings.version": "版本",
         "settings.author": "作者",
         "settings.email": "信箱",
+        "settings.app_service_filing": "App 服務備案號",
+        "settings.app_service_filing_open_failed": "無法開啟備案資訊網頁，請稍後再試。",
         "iap.list_limit.title": "解除目錄限制",
         "iap.list_limit.desc": "永久解鎖視覺小說庫與影片庫中的所有目錄項目",
         "iap.coffee.title": "請作者喝一杯咖啡",
@@ -827,6 +833,8 @@ const UI_TEXT := {
         "settings.version": "Version",
         "settings.author": "Author",
         "settings.email": "Email",
+        "settings.app_service_filing": "App Service Filing Number",
+        "settings.app_service_filing_open_failed": "Unable to open the filing page. Please try again later.",
         "iap.list_limit.title": "Unlock Library Limit",
         "iap.list_limit.desc": "Permanently unlock every item in the visual novel and video libraries",
         "iap.coffee.title": "Buy the Author a Coffee",
@@ -1108,6 +1116,8 @@ const UI_TEXT := {
         "settings.version": "バージョン",
         "settings.author": "作者",
         "settings.email": "メール",
+        "settings.app_service_filing": "アプリサービス届出番号",
+        "settings.app_service_filing_open_failed": "届出情報ページを開けませんでした。後でもう一度お試しください。",
         "iap.list_limit.title": "ライブラリ制限解除",
         "iap.list_limit.desc": "ビジュアルノベルと動画ライブラリのすべての項目を永久に解除します",
         "iap.coffee.title": "作者にコーヒーを一杯贈る",
@@ -1387,6 +1397,8 @@ const UI_TEXT := {
         "settings.version": "버전",
         "settings.author": "작성자",
         "settings.email": "이메일",
+        "settings.app_service_filing": "앱 서비스 등록 번호",
+        "settings.app_service_filing_open_failed": "등록 정보 페이지를 열 수 없습니다. 나중에 다시 시도해 주세요.",
         "iap.list_limit.title": "라이브러리 제한 해제",
         "iap.list_limit.desc": "비주얼 노벨 및 동영상 라이브러리의 모든 항목을 영구적으로 해제합니다",
         "iap.coffee.title": "작가에게 커피 한 잔 사주기",
@@ -4864,6 +4876,11 @@ func _rebuild_settings_view() -> void:
             _t("settings.ios_statement_open"),
             _show_ios_additional_statement
         ))
+    _add_settings_row(about_group, _settings_link_value_row(
+        _t("settings.app_service_filing"),
+        APP_SERVICE_FILING_NUMBER,
+        _open_app_service_filing
+    ))
     var version_row := _settings_value_row(
         _t("settings.version"),
         _application_version_text()
@@ -6145,6 +6162,39 @@ func _settings_value_row(title: String, value: String) -> Control:
     value_label.add_theme_font_size_override("font_size", 15)
     value_label.add_theme_color_override("font_color", ui_tokens.text_secondary)
     row.add_child(value_label)
+    return margin
+
+func _settings_link_value_row(title: String, value: String, action: Callable) -> Control:
+    var margin := MarginContainer.new()
+    margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    margin.add_theme_constant_override("margin_left", 2)
+    margin.add_theme_constant_override("margin_top", 8)
+    margin.add_theme_constant_override("margin_right", 2)
+    margin.add_theme_constant_override("margin_bottom", 8)
+    var row := HBoxContainer.new()
+    row.custom_minimum_size = Vector2(0, 44)
+    row.add_theme_constant_override("separation", 18)
+    margin.add_child(row)
+    var label := Label.new()
+    label.text = title
+    label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    label.add_theme_font_size_override("font_size", 17)
+    label.add_theme_color_override("font_color", ui_tokens.text_primary)
+    row.add_child(label)
+    var link := LinkButton.new()
+    link.text = value
+    link.underline = LinkButton.UNDERLINE_MODE_ALWAYS
+    link.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+    link.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+    link.add_theme_font_size_override("font_size", 15)
+    var link_color := Color("0969da") if style_mode == STYLE_CLASSIC else Color("58a6ff")
+    link.add_theme_color_override("font_color", link_color)
+    link.add_theme_color_override("font_focus_color", link_color)
+    link.add_theme_color_override("font_hover_color", link_color.lightened(0.12))
+    link.add_theme_color_override("font_pressed_color", link_color.darkened(0.12))
+    link.pressed.connect(action)
+    row.add_child(link)
     return margin
 
 func _settings_action_row(title: String, subtitle: String, action_text: String, action: Callable) -> Control:
@@ -7740,6 +7790,14 @@ func _open_android_coffee() -> void:
         _show_system_alert(
             _t("support.coffee.open_failed"),
             _t("support.coffee.title")
+        )
+
+func _open_app_service_filing() -> void:
+    var result := OS.shell_open(APP_SERVICE_FILING_URL)
+    if result != OK:
+        _show_system_alert(
+            _t("settings.app_service_filing_open_failed"),
+            _t("settings.app_service_filing")
         )
 
 func _iap_supported_platform() -> bool:
