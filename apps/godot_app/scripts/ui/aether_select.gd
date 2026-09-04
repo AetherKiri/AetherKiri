@@ -37,11 +37,11 @@ func setup(design_tokens, motion_system, next_chevron: Texture2D, next_check: Te
     add_theme_color_override("font_pressed_color", tokens.text_primary)
     add_theme_color_override("font_focus_color", tokens.text_primary)
     add_theme_color_override("font_disabled_color", tokens.text_tertiary)
-    add_theme_stylebox_override("normal", _field_box(Color.TRANSPARENT, Color.TRANSPARENT, 0))
-    add_theme_stylebox_override("hover", _field_box(tokens.accent_fill, Color.TRANSPARENT, 0))
+    add_theme_stylebox_override("normal", _field_box(tokens.glass_material, Color.TRANSPARENT, 0))
+    add_theme_stylebox_override("hover", _field_box(tokens.surface_hover, Color.TRANSPARENT, 0))
     add_theme_stylebox_override("pressed", _field_box(tokens.accent_fill, Color.TRANSPARENT, 0))
-    add_theme_stylebox_override("focus", tokens.focus_style(8))
-    add_theme_stylebox_override("disabled", _field_box(Color(tokens.surface_raised.r, tokens.surface_raised.g, tokens.surface_raised.b, 0.34), tokens.separator, 1))
+    add_theme_stylebox_override("focus", tokens.focus_style(12))
+    add_theme_stylebox_override("disabled", _field_box(Color(tokens.surface_raised.r, tokens.surface_raised.g, tokens.surface_raised.b, 0.34), Color.TRANSPARENT, 0))
 
     chevron = TextureRect.new()
     chevron.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -187,14 +187,19 @@ func _animate_popup(show: bool) -> void:
         return
     if popup_tween != null and popup_tween.is_valid():
         popup_tween.kill()
+    var rest_position: Vector2 = popup_panel.get_meta("aether_rest_position", popup_panel.position)
+    popup_panel.set_meta("aether_rest_position", rest_position)
     if show:
         popup_panel.modulate.a = 0.0
-        popup_panel.scale = Vector2.ONE if motion.reduced_motion else Vector2(0.98, 0.98)
+        if not motion.reduced_motion:
+            popup_panel.scale = Vector2(0.94, 0.94)
+            popup_panel.position = rest_position + Vector2(0, -6)
     var duration := 0.12 if motion.reduced_motion else (0.18 if show else 0.14)
     popup_tween = create_tween().set_parallel(true)
     popup_tween.tween_property(popup_panel, "modulate:a", 1.0 if show else 0.0, duration).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
     if not motion.reduced_motion:
-        motion.spring_property(popup_panel, "scale", Vector2.ONE if show else Vector2(0.98, 0.98), 0.22 if show else 0.16, 1.0)
+        motion.spring_property(popup_panel, "scale", Vector2.ONE if show else Vector2(0.94, 0.94), 0.26 if show else 0.18, 0.9 if show else 1.0)
+        motion.spring_property(popup_panel, "position", rest_position, 0.30 if show else 0.20, 1.0)
     if not show:
         popup_tween.chain().tween_callback(_free_overlay)
 
@@ -229,14 +234,15 @@ func _exit_tree() -> void:
         overlay.queue_free()
 
 func _field_box(fill: Color, border: Color, border_width: int) -> StyleBoxFlat:
-    var style: StyleBoxFlat = tokens.button_style(fill, border, 8)
-    style.content_margin_left = 13
+    var style: StyleBoxFlat = tokens.button_style(fill, Color.TRANSPARENT, 12)
+    style.content_margin_left = 14
     style.content_margin_right = 42
     style.shadow_color = Color.TRANSPARENT
-    style.border_width_left = border_width
-    style.border_width_top = border_width
-    style.border_width_right = border_width
-    style.border_width_bottom = border_width
+    style.shadow_size = 0
+    style.border_width_left = 0
+    style.border_width_top = 0
+    style.border_width_right = 0
+    style.border_width_bottom = 0
     return style
 
 func _popup_box() -> StyleBoxFlat:

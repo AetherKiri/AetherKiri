@@ -1,15 +1,15 @@
 extends Node
 
 const PRESS_SCALE := Vector2(0.972, 0.972)
-const TACTILE_PRESS_SCALE := Vector2(0.955, 0.955)
+const TACTILE_PRESS_SCALE := Vector2(0.960, 0.960)
 const HOVER_SCALE := Vector2(1.010, 1.010)
 const REST_SCALE := Vector2.ONE
 const ENTER_OFFSET := Vector2(0, 10)
 const ENTER_DURATION := 0.24
 const ROUTE_EXIT_DURATION := 0.18
 const ROUTE_ENTER_DELAY := 0.075
-const PRESS_RESPONSE := 0.16
-const RELEASE_RESPONSE := 0.24
+const PRESS_RESPONSE := 0.13
+const RELEASE_RESPONSE := 0.30
 const HOVER_RESPONSE := 0.26
 const SPRING_STEP := 1.0 / 120.0
 const HERO_DURATION := 0.34
@@ -131,7 +131,7 @@ func bind_tactile(control: Control) -> void:
     if control == null:
         return
     control.set_meta("aether_press_scale", TACTILE_PRESS_SCALE)
-    control.set_meta("aether_release_damping", 0.82)
+    control.set_meta("aether_release_damping", 0.74)
     bind_pressable(control)
 
 func cancel_press(control: Control) -> void:
