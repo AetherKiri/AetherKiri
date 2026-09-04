@@ -681,6 +681,11 @@ namespace motion {
         double _cameraTargetX = 0, _cameraTargetY = 0, _cameraTargetZ = 0;
         bool _speed = true;           // Aligned to libkrkr2.so +1093: bool flag
         double _frameTickCount = 0.0;
+        // getCommandList() is polled by AnimKAGLayer after every progress()
+        // call to decide whether its backing Layer needs repainting.  The
+        // compatible list is a one-value ping-pong token, not a list of the
+        // motion's static source paths.
+        bool _commandListPulse = false;
         tjs_int _maskMode = 0;                         // libkrkr2.so +1148
         std::uint32_t _colorWeightPacked = 0xFF808080u; // libkrkr2.so +1156
         bool _independentLayerInherit = false;          // libkrkr2.so +1097

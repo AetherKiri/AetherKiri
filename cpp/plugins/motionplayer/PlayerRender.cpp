@@ -13969,6 +13969,11 @@ namespace motion {
         if(!_speed) {
             return;
         }
+        // Toggle the command-list token on every accepted progress call,
+        // including progress(0).  KAG uses that token solely as a dirty
+        // signal before scheduling onPaint; the evaluated frame itself stays
+        // in the retained node tree below.
+        _commandListPulse = !_commandListPulse;
         const bool hasNativeBackend = _nativeBackend != nullptr;
         _layersDirty = !hasNativeBackend;
         if(!_completedEndedTimelineRenderHoldLabel.empty()) {
