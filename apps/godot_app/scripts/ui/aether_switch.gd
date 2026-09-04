@@ -55,6 +55,19 @@ func _sync(enabled: bool, animate: bool) -> void:
         knob.position = target
         return
     motion.spring_property(knob, "position", target, 0.30, 1.0)
+    _stretch_knob()
+
+func _stretch_knob() -> void:
+    if motion.reduced_motion:
+        return
+    # iOS-style elastic deformation: horizontal stretch while sliding, spring back to a round shape
+    _animate_knob_scale(Vector2(1.24, 0.80), 0.10)
+    var tree := get_tree()
+    if tree != null:
+        tree.create_timer(0.09).timeout.connect(
+            func(): _animate_knob_scale(Vector2.ONE, 0.30),
+            CONNECT_ONE_SHOT
+        )
 
 func _press_in() -> void:
     if motion.reduced_motion:

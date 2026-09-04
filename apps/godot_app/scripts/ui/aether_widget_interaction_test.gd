@@ -78,7 +78,7 @@ func _run() -> void:
     if fab_style.shadow_size != 0:
         _fail("floating action button introduced an extra shadow layer")
         return
-    if not is_equal_approx(float(fab.get_meta("aether_release_damping", 1.0)), 0.82):
+    if not is_equal_approx(float(fab.get_meta("aether_release_damping", 1.0)), 0.74):
         _fail("floating action button did not receive tactile release physics")
         return
 

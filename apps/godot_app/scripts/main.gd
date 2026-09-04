@@ -1097,6 +1097,7 @@ var debug_console = null
 var shell_root: Control
 var shell_content: Control
 var shell_sidebar: PanelContainer
+var shell_nav_indicator: PanelContainer
 var shell_compact_header: PanelContainer
 var shell_route_label: Label
 var launch_transition_tween: Tween
@@ -1580,14 +1581,39 @@ func _apply_ui_font() -> void:
     ui_theme.set_color("font_color", "CheckButton", color_text)
     ui_theme.set_color("font_hover_color", "CheckButton", color_text)
     ui_theme.set_color("font_pressed_color", "CheckButton", color_text)
-    ui_theme.set_stylebox("normal", "OptionButton", _panel_style(8, color_card_alt, color_line, 1))
-    ui_theme.set_stylebox("hover", "OptionButton", _panel_style(8, color_card_hover, Color.TRANSPARENT, 0))
-    ui_theme.set_stylebox("pressed", "OptionButton", _panel_style(8, color_accent_dim, Color.TRANSPARENT, 0))
-    ui_theme.set_stylebox("focus", "OptionButton", _focus_outline(8))
-    ui_theme.set_stylebox("normal", "LineEdit", _panel_style(8, color_card_alt, color_line, 1))
-    ui_theme.set_stylebox("focus", "LineEdit", _panel_style(8, color_card_hover, color_line, 1))
-    ui_theme.set_stylebox("normal", "TextEdit", _panel_style(8, Color(0, 0, 0, 0.18), color_line, 1))
-    ui_theme.set_stylebox("focus", "TextEdit", _panel_style(8, Color(0, 0, 0, 0.24), color_line, 1))
+
+    # Unified default Button chrome: rounded 12, surface fill + hairline, no pill shapes.
+    var button_normal := _panel_style(12, ui_tokens.surface, ui_tokens.separator, 1)
+    button_normal.content_margin_top = 10
+    button_normal.content_margin_bottom = 10
+    var button_hover := _panel_style(12, ui_tokens.surface_hover, Color.TRANSPARENT, 0)
+    button_hover.content_margin_top = 10
+    button_hover.content_margin_bottom = 10
+    var button_pressed := _panel_style(12, ui_tokens.accent_fill, Color.TRANSPARENT, 0)
+    button_pressed.content_margin_top = 10
+    button_pressed.content_margin_bottom = 10
+    var button_disabled := _panel_style(12, Color(ui_tokens.surface_raised.r, ui_tokens.surface_raised.g, ui_tokens.surface_raised.b, 0.34), ui_tokens.separator, 1)
+    button_disabled.content_margin_top = 10
+    button_disabled.content_margin_bottom = 10
+    var button_focus := _panel_style(12, Color(0, 0, 0, 0), ui_tokens.accent, 2)
+    button_focus.draw_center = false
+    ui_theme.set_stylebox("normal", "Button", button_normal)
+    ui_theme.set_stylebox("hover", "Button", button_hover)
+    ui_theme.set_stylebox("pressed", "Button", button_pressed)
+    ui_theme.set_stylebox("disabled", "Button", button_disabled)
+    ui_theme.set_stylebox("focus", "Button", button_focus)
+    ui_theme.set_color("font_hover_color", "Button", color_text)
+    ui_theme.set_color("font_pressed_color", "Button", color_text)
+    ui_theme.set_color("font_focus_color", "Button", color_text)
+
+    ui_theme.set_stylebox("normal", "OptionButton", _panel_style(12, color_card_alt, color_line, 1))
+    ui_theme.set_stylebox("hover", "OptionButton", _panel_style(12, color_card_hover, Color.TRANSPARENT, 0))
+    ui_theme.set_stylebox("pressed", "OptionButton", _panel_style(12, color_accent_dim, Color.TRANSPARENT, 0))
+    ui_theme.set_stylebox("focus", "OptionButton", _focus_outline(12))
+    ui_theme.set_stylebox("normal", "LineEdit", _panel_style(12, color_card_alt, color_line, 1))
+    ui_theme.set_stylebox("focus", "LineEdit", _panel_style(12, color_card_hover, color_line, 1))
+    ui_theme.set_stylebox("normal", "TextEdit", _panel_style(12, Color(0, 0, 0, 0.18), color_line, 1))
+    ui_theme.set_stylebox("focus", "TextEdit", _panel_style(12, Color(0, 0, 0, 0.24), color_line, 1))
     ui_theme.set_stylebox("scroll", "VScrollBar", _scroll_track_style())
     ui_theme.set_stylebox("grabber", "VScrollBar", _scroll_thumb_style(color_muted.darkened(0.18)))
     ui_theme.set_stylebox("grabber_highlight", "VScrollBar", _scroll_thumb_style(color_muted))
@@ -1836,12 +1862,23 @@ func _build_video_view() -> void:
     video_progress_slider.drag_started.connect(func():
         active_video_scrubbing = true
         _set_video_controls_visible(true)
+        ui_motion._update_pivot(video_progress_slider)
+        ui_motion.spring_property(video_progress_slider, "scale", Vector2(1.05, 1.28), 0.14, 0.8)
     )
     video_progress_slider.drag_ended.connect(func(value_changed: bool):
         active_video_scrubbing = false
         video_controls_idle_sec = 0.0
+        ui_motion.spring_property(video_progress_slider, "scale", Vector2.ONE, 0.30, 0.8)
         if value_changed and player != null:
             player.media_seek(video_progress_slider.value)
+    )
+    video_progress_slider.mouse_entered.connect(func():
+        ui_motion._update_pivot(video_progress_slider)
+        ui_motion.spring_property(video_progress_slider, "scale", Vector2(1.01, 1.10), 0.28, 1.0)
+    )
+    video_progress_slider.mouse_exited.connect(func():
+        if not video_progress_slider.dragging:
+            ui_motion.spring_property(video_progress_slider, "scale", Vector2.ONE, 0.28, 1.0)
     )
     timeline.add_child(video_progress_slider)
     video_time_label = Label.new()
@@ -2064,9 +2101,25 @@ func _build_shell_chrome() -> void:
     shell_sidebar.add_theme_stylebox_override("panel", ui_tokens.sidebar_panel())
     shell_root.add_child(shell_sidebar)
 
+    # Host keeps the spring selection indicator (drawn behind nav items) and the sidebar column
+    var sidebar_host := Control.new()
+    sidebar_host.name = "SidebarHost"
+    sidebar_host.set_anchors_preset(Control.PRESET_FULL_RECT)
+    sidebar_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    shell_sidebar.add_child(sidebar_host)
+
+    shell_nav_indicator = PanelContainer.new()
+    shell_nav_indicator.name = "NavIndicator"
+    shell_nav_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    shell_nav_indicator.visible = false
+    shell_nav_indicator.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.accent_fill, 10))
+    sidebar_host.add_child(shell_nav_indicator)
+
     var sidebar := VBoxContainer.new()
+    sidebar.set_anchors_preset(Control.PRESET_FULL_RECT)
     sidebar.add_theme_constant_override("separation", 10)
-    shell_sidebar.add_child(sidebar)
+    sidebar.mouse_filter = Control.MOUSE_FILTER_PASS
+    sidebar_host.add_child(sidebar)
 
     shell_sidebar_brand = HBoxContainer.new()
     shell_sidebar_brand.custom_minimum_size = Vector2(0, 62)
@@ -2100,6 +2153,8 @@ func _build_shell_chrome() -> void:
     sidebar.add_child(shell_video_button)
     shell_settings_button = _shell_nav_button(_t("settings.title"), ICON_SETTINGS, _show_settings)
     sidebar.add_child(shell_settings_button)
+    for nav_button in [shell_library_button, shell_video_button, shell_settings_button]:
+        ui_motion.bind_lift(nav_button)
 
     var flexible_space := Control.new()
     flexible_space.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -2196,6 +2251,70 @@ func _sync_shell_route(route: String) -> void:
     _apply_shell_compact_state(shell_compact_library_button, route == "library")
     _apply_shell_compact_state(shell_compact_video_button, route == "videos")
     _apply_shell_compact_state(shell_compact_settings_button, route == "settings")
+    call_deferred("_update_nav_indicator", true)
+
+func _update_nav_indicator(spring: bool) -> void:
+    if shell_nav_indicator == null or not is_instance_valid(shell_nav_indicator):
+        return
+    if shell_sidebar == null or not is_instance_valid(shell_sidebar) or not shell_sidebar.visible:
+        shell_nav_indicator.visible = false
+        return
+    var button: Button = null
+    match shell_route:
+        "library":
+            button = shell_library_button
+        "videos":
+            button = shell_video_button
+        "settings":
+            button = shell_settings_button
+        _:
+            button = null
+    if button == null or not is_instance_valid(button):
+        shell_nav_indicator.visible = false
+        return
+    var host := shell_nav_indicator.get_parent() as Control
+    if host == null or host.size.x <= 0.0 or button.size.y <= 0.0:
+        return
+    var target_pos: Vector2
+    var target_size: Vector2
+    if shell_sidebar_collapsed:
+        target_size = Vector2(44.0, 44.0)
+        target_pos = Vector2((host.size.x - 44.0) * 0.5, button.position.y + (button.size.y - 44.0) * 0.5)
+    else:
+        target_size = Vector2(maxf(44.0, host.size.x - 12.0), button.size.y)
+        target_pos = Vector2(6.0, button.position.y)
+    var was_hidden := not shell_nav_indicator.visible
+    shell_nav_indicator.visible = true
+    if spring and not ui_motion.reduced_motion:
+        if was_hidden:
+            # First appearance: no cross-screen flight, just jelly in place
+            shell_nav_indicator.position = target_pos
+            shell_nav_indicator.size = target_size
+        else:
+            ui_motion.spring_property(shell_nav_indicator, "position", target_pos, 0.42, 0.55)
+            ui_motion.spring_property(shell_nav_indicator, "size", target_size, 0.30, 1.0)
+        _jelly_nav_indicator()
+    else:
+        ui_motion.active_springs.erase(ui_motion._motion_key(shell_nav_indicator, "position"))
+        ui_motion.active_springs.erase(ui_motion._motion_key(shell_nav_indicator, "size"))
+        shell_nav_indicator.position = target_pos
+        shell_nav_indicator.size = target_size
+        shell_nav_indicator.scale = Vector2.ONE
+
+func _jelly_nav_indicator() -> void:
+    if shell_nav_indicator == null or not is_instance_valid(shell_nav_indicator):
+        return
+    # Jelly deformation: stretch along the travel axis then wobble back to a round shape
+    ui_motion._update_pivot(shell_nav_indicator)
+    ui_motion.spring_property(shell_nav_indicator, "scale", Vector2(1.06, 0.90), 0.13, 0.68)
+    var tree := get_tree()
+    if tree != null:
+        tree.create_timer(0.10).timeout.connect(
+            func():
+                if shell_nav_indicator != null and is_instance_valid(shell_nav_indicator):
+                    ui_motion.spring_property(shell_nav_indicator, "scale", Vector2.ONE, 0.32, 0.55),
+            CONNECT_ONE_SHOT
+        )
 
 func _apply_shell_nav_state(button: Button, selected: bool) -> void:
     if button == null:
@@ -2288,6 +2407,7 @@ func _apply_sidebar_presentation(animate_labels: bool) -> void:
     shell_sidebar_toggle.text = "☰"
     shell_sidebar_toggle.tooltip_text = _t("nav.expand_sidebar") if shell_sidebar_collapsed else _t("nav.collapse_sidebar")
     shell_sidebar_toggle.accessibility_name = shell_sidebar_toggle.tooltip_text
+    _update_nav_indicator(false)
     _apply_shell_nav_state(shell_library_button, shell_route == "library")
     _apply_shell_nav_state(shell_video_button, shell_route == "videos")
     _apply_shell_nav_state(shell_settings_button, shell_route == "settings")
