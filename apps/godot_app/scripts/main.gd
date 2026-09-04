@@ -1224,6 +1224,8 @@ var shell_scroll_tweens := {}
 var shell_scroll_targets := {}
 var shell_scroll_momentum := {}
 var shell_scroll_overscroll := {}
+var scroll_flair_speed := 0.0
+var scroll_flair_dir := 1.0
 var opaque_frame_shader: Shader
 var shown_system_alerts := {}
 var ui_icon_cache := {}
@@ -4304,8 +4306,53 @@ func _begin_scroll_overscroll_spring(scroll: ScrollContainer, offset: float) -> 
         "velocity": 0.0,
     }
 
+func _process_scroll_flair(delta: float) -> void:
+    # Lively-but-ordered scroll dynamics: the card grid leans a few degrees
+    # with the scroll direction and settles back, while covers gently zoom the
+    # further they sit from the viewport centre (a quiet depth cue).
+    var target_speed := 0.0
+    var direction := scroll_flair_dir
+    for entry in shell_scroll_momentum.values():
+        var v: float = absf(float(entry.get("velocity", 0.0)))
+        if v > target_speed:
+            target_speed = v
+            direction = signf(float(entry.get("velocity", 1.0)))
+    for state in shell_scroll_drag_states.values():
+        if bool(state.get("dragging", false)):
+            var drag_v: float = absf(float(state.get("velocity", 0.0)))
+            if drag_v > target_speed:
+                target_speed = drag_v
+                direction = signf(float(state.get("velocity", 1.0)))
+    if target_speed > 1.0:
+        scroll_flair_dir = direction
+    scroll_flair_speed = lerpf(scroll_flair_speed, target_speed, 1.0 - exp(-6.0 * delta))
+
+    var intensity := clampf(scroll_flair_speed / 2600.0, 0.0, 1.0)
+    var lean := scroll_flair_dir * intensity * 0.006
+    var viewport_height := maxf(1.0, get_viewport_rect().size.y)
+    var viewport_center_y := viewport_height * 0.5
+    var settle := 1.0 - exp(-10.0 * delta)
+    for grid in [game_list, video_list]:
+        if grid == null or not is_instance_valid(grid):
+            continue
+        if grid.pivot_offset != grid.size * 0.5:
+            grid.pivot_offset = grid.size * 0.5
+        grid.rotation = lerpf(grid.rotation, lean, settle)
+        if not grid.is_visible_in_tree():
+            continue
+        for card in grid.get_children():
+            if card == null or not is_instance_valid(card) or not card.is_visible_in_tree():
+                continue
+            var cover: Control = card.get_meta("hero_cover", null)
+            if cover == null or not is_instance_valid(cover):
+                continue
+            var card_center_y: float = card.get_global_rect().get_center().y
+            var distance := clampf(absf(card_center_y - viewport_center_y) / (viewport_height * 0.5), 0.0, 1.0)
+            var zoom := 1.0 + distance * 0.10
+            cover.pivot_offset = cover.size * 0.5
+            cover.scale = cover.scale.lerp(Vector2(zoom, zoom), settle)
+
 func _process_shell_scroll_physics(delta: float) -> void:
-    # Momentum inertia: exponential friction glide
     for key_variant in shell_scroll_momentum.keys():
         var entry: Dictionary = shell_scroll_momentum.get(key_variant, {})
         var scroll := entry.get("scroll") as ScrollContainer
@@ -4319,9 +4366,11 @@ func _process_shell_scroll_physics(delta: float) -> void:
         velocity *= exp(-SHELL_SCROLL_MOMENTUM_FRICTION * delta)
         var reached_edge := bar != null and (is_equal_approx(float(scroll.scroll_vertical), bar.max_value) or is_equal_approx(float(scroll.scroll_vertical), bar.min_value))
         if bar != null and reached_edge and absf(step) > 0.5:
-            # Leftover speed converts into an elastic edge bounce
+            # Leftover speed converts into an elastic edge bounce; scale with
+            # the impact velocity (per-second) so the bounce is actually visible
             shell_scroll_momentum.erase(key_variant)
-            _begin_scroll_overscroll_spring(scroll, clampf(step * 0.22, -SHELL_SCROLL_OVERSCROLL_MAX, SHELL_SCROLL_OVERSCROLL_MAX))
+            var impact := clampf(velocity * 0.05, 6.0, SHELL_SCROLL_OVERSCROLL_MAX)
+            _begin_scroll_overscroll_spring(scroll, clampf(impact * signf(velocity), -SHELL_SCROLL_OVERSCROLL_MAX, SHELL_SCROLL_OVERSCROLL_MAX))
             continue
         if absf(velocity) < SHELL_SCROLL_MOMENTUM_MIN:
             shell_scroll_momentum.erase(key_variant)
@@ -9532,6 +9581,7 @@ func _process(delta: float) -> void:
     _fit_full_rects()
     _follow_nav_pills()
     _process_shell_scroll_physics(delta)
+    _process_scroll_flair(delta)
     _process_iap(delta)
     _update_advanced_tool_timeouts()
     _flush_log_view_if_needed(delta)
