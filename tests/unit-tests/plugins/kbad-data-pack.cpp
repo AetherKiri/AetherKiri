@@ -1,10 +1,16 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "BinaryStream.h"
 #include "UtilStreams.h"
 #include "kbadDataPack.h"
+#include "tjsArray.h"
 #include "tjsNs0DataPack.h"
 
+#include <array>
+#include <chrono>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <initializer_list>
 #include <string_view>
 #include <vector>
@@ -12,6 +18,67 @@
 namespace {
 
 using Byte = std::uint8_t;
+
+class TemporaryFile {
+public:
+    TemporaryFile() {
+        const auto unique = std::chrono::steady_clock::now()
+                                .time_since_epoch()
+                                .count();
+        path = std::filesystem::temp_directory_path() /
+               ("aetherkiri-array-struct-" + std::to_string(unique) +
+                ".ksd");
+    }
+
+    ~TemporaryFile() {
+        std::error_code error;
+        std::filesystem::remove(path, error);
+    }
+
+    std::filesystem::path path;
+};
+
+class BinaryStreamFactoryScope {
+public:
+    BinaryStreamFactoryScope() : previous(TJS::TJSCreateBinaryStreamForRead) {
+        TJS::TJSCreateBinaryStreamForRead = &TVPCreateBinaryStreamForRead;
+    }
+
+    ~BinaryStreamFactoryScope() {
+        TJS::TJSCreateBinaryStreamForRead = previous;
+    }
+
+private:
+    decltype(TJS::TJSCreateBinaryStreamForRead) previous;
+};
+
+bool loadSyntheticStructuredPack(tTJSBinaryStream *stream,
+                                 tTJSVariant *result) {
+    static constexpr std::array<Byte, 8> signature = {
+        'A', 'K', 'P', 'K', '1', '0', '0', 0,
+    };
+    if(!stream || stream->GetSize() != signature.size())
+        return false;
+
+    std::array<Byte, signature.size()> bytes{};
+    stream->SetPosition(0);
+    if(stream->Read(bytes.data(), static_cast<tjs_uint>(bytes.size())) !=
+           bytes.size() ||
+       bytes != signature)
+        return false;
+    if(result)
+        *result = static_cast<tTVInteger>(42);
+    return true;
+}
+
+class StructuredLoaderScope {
+public:
+    StructuredLoaderScope() {
+        TJS::TJSSetStructuredDataPackLoader(&loadSyntheticStructuredPack);
+    }
+
+    ~StructuredLoaderScope() { TVPRegisterTjsNs0DataPackLoader(); }
+};
 
 void appendString(std::vector<Byte> &bytes, std::string_view value) {
     REQUIRE(value.size() <= 31);
@@ -148,4 +215,37 @@ TEST_CASE("registered structured loader accepts KBAD save containers") {
     REQUIRE(TJS::TJSLoadStructuredDataPack(&stream, &root));
     REQUIRE(root.Type() == tvtObject);
     CHECK(getProperty(getIndex(root, 0), TJS_W("width")).AsInteger() == 1920);
+}
+
+TEST_CASE("Array.loadStruct delegates non-native binary data packs") {
+    const std::vector<Byte> bytes = {
+        'A', 'K', 'P', 'K', '1', '0', '0', 0,
+    };
+    TemporaryFile file;
+    BinaryStreamFactoryScope streamFactory;
+    StructuredLoaderScope structuredLoader;
+    {
+        std::ofstream output(file.path, std::ios::binary);
+        REQUIRE(output.good());
+        output.write(reinterpret_cast<const char *>(bytes.data()),
+                     static_cast<std::streamsize>(bytes.size()));
+        REQUIRE(output.good());
+    }
+
+    iTJSDispatch2 *arrayClass = nullptr;
+    iTJSDispatch2 *array = TJSCreateArrayObject(&arrayClass);
+    REQUIRE(array != nullptr);
+    REQUIRE(arrayClass != nullptr);
+    tTJSVariant filename(ttstr(file.path.string()));
+    tTJSVariant *params[] = { &filename };
+    tTJSVariant root;
+    const tjs_error error = arrayClass->FuncCall(
+        0, TJS_W("loadStruct"), nullptr, &root, 1, params, array);
+    array->Release();
+    arrayClass->Release();
+
+    INFO("Array.loadStruct error=" << error);
+    REQUIRE(TJS_SUCCEEDED(error));
+    REQUIRE(root.Type() == tvtInteger);
+    CHECK(root.AsInteger() == 42);
 }
