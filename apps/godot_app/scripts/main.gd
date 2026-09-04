@@ -2243,6 +2243,12 @@ func _build_shell_chrome() -> void:
     ]
     _bind_nav_pill_drag(shell_compact_indicator, compact_specs, 0)
 
+    # Keep pills and feathers aligned across window resize / device rotation
+    shell_content.resized.connect(func():
+        call_deferred("_update_nav_indicator", false)
+        call_deferred("_update_compact_indicator", false)
+    )
+
     call_deferred("_create_scroll_feathers")
     _sync_shell_route(shell_route)
     _apply_sidebar_presentation(false)
@@ -3478,6 +3484,25 @@ func _rebuild_settings_view() -> void:
 
     if animate_page:
         ui_motion.reveal(top)
+        # Slow recursive cascade level 2: every row inside every section card
+        call_deferred("_cascade_settings_rows", [
+            interface_rows, render_rows, compatibility_rows,
+            diagnostic_rows, advanced_rows, about_rows,
+        ])
+
+func _cascade_settings_rows(groups: Array) -> void:
+    if not is_instance_valid(settings_view) or not settings_view.visible:
+        return
+    var section_delay := 0.08
+    for rows in groups:
+        if rows == null or not is_instance_valid(rows):
+            continue
+        var row_delay := section_delay
+        for row in rows.get_children():
+            if row is Control and is_instance_valid(row) and not row.is_queued_for_deletion():
+                ui_motion.reveal(row, row_delay)
+                row_delay += 0.028
+        section_delay += 0.045
 
 func _build_detail_view() -> void:
     detail_view = Control.new()
@@ -5055,7 +5080,27 @@ func _animate_shell_route(outgoing: Control, incoming: Control, lift: bool = tru
     if outgoing == incoming:
         ui_motion.settle_route(incoming, true)
         return
-    ui_motion.route_transition(outgoing, incoming, lift)
+    # Phones/narrow screens slide horizontally, desktop slides vertically
+    var horizontal := get_viewport_rect().size.x < HOME_PHONE_BREAKPOINT
+    ui_motion.route_transition(outgoing, incoming, lift, horizontal)
+    if incoming == home_view:
+        call_deferred("_cascade_home_cards")
+
+func _cascade_home_cards() -> void:
+    if not is_instance_valid(home_view) or not home_view.visible:
+        return
+    # Slow recursive stagger level 1: header elements
+    if is_instance_valid(home_header_box):
+        var header_index := 0
+        for child in home_header_box.get_children():
+            if child is Control and is_instance_valid(child) and not child.is_queued_for_deletion():
+                ui_motion.reveal(child, 0.06 + 0.07 * float(header_index))
+                header_index += 1
+    # Level 2: cards fan in one after another with spring reveal
+    if home_library_mode == "video" and video_list != null and is_instance_valid(video_list):
+        ui_motion.cascade_children(video_list, 0.06, 0.26)
+    elif game_list != null and is_instance_valid(game_list):
+        ui_motion.cascade_children(game_list, 0.06, 0.26)
 
 func _show_home() -> void:
     _show_library("game")
@@ -5084,8 +5129,21 @@ func _show_library(mode: String) -> void:
         _refresh_games()
     if previous_route != "library":
         _animate_shell_route(outgoing, home_view, not returning_from_detail)
+    else:
+        # Game/video pages share the library route: still play the slow cascade swap
+        _animate_library_swap()
     if returning_from_detail:
         call_deferred("_animate_hero_back", detail_rect)
+
+func _animate_library_swap() -> void:
+    if not is_instance_valid(home_view):
+        return
+    # Whole-view breath + header fade, then cards cascade in slowly
+    home_view.modulate.a = 0.35
+    ui_motion._fade(home_view, 1.0, 0.22, "route")
+    if is_instance_valid(home_header_box):
+        ui_motion.reveal(home_header_box, 0.0)
+    call_deferred("_cascade_home_cards")
 
 func _show_settings() -> void:
     var previous_route := shell_route
@@ -5188,6 +5246,8 @@ func _show_detail(game: Dictionary, source: Control = null) -> void:
             _animate_shell_route(outgoing, detail_view)
         ui_motion.reveal(top)
         ui_motion.reveal(body, 0.04)
+        # Recursive cascade: cover, identity, tools, panels stagger in
+        ui_motion.cascade_children(body, 0.06, 0.12)
 
 func _build_desktop_detail(game: Dictionary) -> Control:
     var body := HBoxContainer.new()
@@ -7260,14 +7320,10 @@ func _game_card(game: Dictionary) -> Button:
     button.clip_contents = true
     button.focus_mode = Control.FOCUS_ALL
     button.text = ""
-    if home_compact_layout:
-        button.add_theme_stylebox_override("normal", ui_tokens.panel(ui_tokens.surface, 8))
-        button.add_theme_stylebox_override("hover", ui_tokens.panel(ui_tokens.surface_raised, 8))
-        button.add_theme_stylebox_override("pressed", ui_tokens.panel(ui_tokens.surface_hover, 8))
-    else:
-        button.add_theme_stylebox_override("normal", ui_tokens.card_style())
-        button.add_theme_stylebox_override("hover", ui_tokens.card_style(true))
-        button.add_theme_stylebox_override("pressed", ui_tokens.card_style(true, true))
+    # Unified card language across desktop and phone: same rounded surfaces
+    button.add_theme_stylebox_override("normal", ui_tokens.card_style())
+    button.add_theme_stylebox_override("hover", ui_tokens.card_style(true))
+    button.add_theme_stylebox_override("pressed", ui_tokens.card_style(true, true))
     button.add_theme_stylebox_override("focus", ui_tokens.focus_style())
     button.set_meta("game_path", String(game.get("path", "")))
     button.pressed.connect(func(): _open_game_detail_with_iap(game, button))
