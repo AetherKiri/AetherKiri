@@ -3058,7 +3058,7 @@ func _rebuild_settings_view() -> void:
     center.add_child(page)
 
     var top := HBoxContainer.new()
-    top.custom_minimum_size = Vector2(0, 84 if compact else 96)
+    top.custom_minimum_size = Vector2(0, 72 if compact else 84)
     top.add_theme_constant_override("separation", 18)
     page.add_child(top)
 
@@ -3069,7 +3069,7 @@ func _rebuild_settings_view() -> void:
     var title := Label.new()
     title.text = _t("settings.title")
     title.add_theme_font_override("font", DISPLAY_FONT)
-    title.add_theme_font_size_override("font_size", 34 if compact else 42)
+    title.add_theme_font_size_override("font_size", 32 if compact else 40)
     title.add_theme_color_override("font_color", ui_tokens.text_primary)
     title_stack.add_child(title)
     var subtitle := Label.new()
@@ -3085,48 +3085,44 @@ func _rebuild_settings_view() -> void:
     save_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
     top.add_child(save_button)
 
-    var groups: BoxContainer = VBoxContainer.new() if compact else HBoxContainer.new()
-    groups.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    groups.add_theme_constant_override("separation", 18)
-    page.add_child(groups)
+    # Header hairline rule
+    var header_rule := PanelContainer.new()
+    header_rule.custom_minimum_size = Vector2(0, 1)
+    header_rule.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.separator, 0))
+    page.add_child(header_rule)
 
-    var primary_column := VBoxContainer.new()
-    primary_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    primary_column.add_theme_constant_override("separation", 20)
-    groups.add_child(primary_column)
-    var secondary_column := primary_column
-    if not compact:
-        secondary_column = VBoxContainer.new()
-        secondary_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-        secondary_column.add_theme_constant_override("separation", 20)
-        groups.add_child(secondary_column)
+    # Timeline sections: one vertical flow shared by desktop and mobile
+    var flow := VBoxContainer.new()
+    flow.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    flow.add_theme_constant_override("separation", 18)
+    page.add_child(flow)
 
-    var interface_group := _settings_group(primary_column, _t("settings.section.interface"), ICON_SETTINGS, animate_page, 0.03)
-    _add_settings_row(interface_group, _settings_row_with_icon(ICON_HELP, _t("settings.language"), _t("settings.language_desc"), _language_select(), stack_settings_controls))
-    _add_settings_row(interface_group, _settings_row_with_icon(ICON_SETTINGS, _t("settings.style"), _t("settings.style_desc"), _style_select(), stack_settings_controls))
+    var interface_rows := _settings_section(flow, _t("settings.section.interface"), animate_page, 0.04)
+    _add_settings_row(interface_rows, _settings_row(_t("settings.style"), _t("settings.style_desc"), _style_select(), stack_settings_controls))
+    _add_settings_row(interface_rows, _settings_row(_t("settings.language"), _t("settings.language_desc"), _language_select(), stack_settings_controls))
     if OS.get_name() == "iOS":
-        _add_settings_row(interface_group, _settings_row_with_icon(ICON_SETTINGS, _t("settings.ui_scale"), _t("settings.ui_scale_desc"), _ios_ui_scale_segment(), stack_settings_controls))
+        _add_settings_row(interface_rows, _settings_row(_t("settings.ui_scale"), _t("settings.ui_scale_desc"), _ios_ui_scale_segment(), stack_settings_controls))
 
-    var render_group := _settings_group(primary_column, _t("settings.section.render"), ICON_PERFORMANCE, animate_page, 0.055)
-    _add_settings_row(render_group, _settings_row_with_icon(ICON_PERFORMANCE, _t("settings.render_backend"), _t("settings.render_backend_desc"), _backend_segment(), stack_settings_controls))
-    _add_settings_row(render_group, _settings_row_with_icon(ICON_PERFORMANCE, _t("settings.surface_mode"), _t("settings.surface_mode_desc"), _surface_mode_select(), stack_settings_controls))
-    _add_settings_row(render_group, _settings_row_with_icon(ICON_PERFORMANCE, _t("settings.upscale"), _t("settings.upscale_desc"), _upscale_select(), stack_settings_controls))
-    _add_settings_row(render_group, _settings_toggle_row_with_icon(ICON_PERFORMANCE, _t("settings.fps_limit"), _t("settings.fps_limit_desc"), _settings_draft_bool("fps_limit_enabled", frame_limit_enabled), "fps_limit"))
+    var render_rows := _settings_section(flow, _t("settings.section.render"), animate_page, 0.08)
+    _add_settings_row(render_rows, _settings_row(_t("settings.render_backend"), _t("settings.render_backend_desc"), _backend_segment(), stack_settings_controls))
+    _add_settings_row(render_rows, _settings_row(_t("settings.surface_mode"), _t("settings.surface_mode_desc"), _surface_mode_select(), stack_settings_controls))
+    _add_settings_row(render_rows, _settings_row(_t("settings.upscale"), _t("settings.upscale_desc"), _upscale_select(), stack_settings_controls))
+    _add_settings_row(render_rows, _settings_toggle_row(_t("settings.fps_limit"), _t("settings.fps_limit_desc"), _settings_draft_bool("fps_limit_enabled", frame_limit_enabled), "fps_limit"))
     if _settings_draft_bool("fps_limit_enabled", frame_limit_enabled):
-        _add_settings_row(render_group, _settings_fps_row())
+        _add_settings_row(render_rows, _settings_fps_row())
     if OS.get_name() == "iOS" or OS.get_name() == "Android":
-        _add_settings_row(render_group, _settings_toggle_row_with_icon(ICON_SETTINGS, _t("settings.landscape"), _t("settings.landscape_desc"), _settings_draft_bool("force_landscape", lock_landscape), "landscape"))
+        _add_settings_row(render_rows, _settings_toggle_row(_t("settings.landscape"), _t("settings.landscape_desc"), _settings_draft_bool("force_landscape", lock_landscape), "landscape"))
 
-    var diagnostic_group := _settings_group(secondary_column, _t("settings.section.diagnostics"), ICON_PERFORMANCE, animate_page, 0.08)
-    _add_settings_row(diagnostic_group, _settings_row_with_icon(ICON_PERFORMANCE, _t("settings.diagnostic_profile"), _t("settings.diagnostic_profile_desc"), _diagnostic_profile_select(), stack_settings_controls))
-    _add_settings_row(diagnostic_group, _settings_row_with_icon(ICON_PERFORMANCE, _t("settings.debug_overlay"), _t("settings.debug_overlay_desc"), _debug_overlay_select(), stack_settings_controls))
-    _add_settings_row(diagnostic_group, _settings_toggle_row_with_icon(ICON_PERFORMANCE, _t("settings.error_dialog_logs"), _t("settings.error_dialog_logs_desc"), _settings_draft_bool("error_dialog_logs", error_dialog_logs), "error_dialog_logs"))
+    var compatibility_rows := _settings_section(flow, _t("settings.section.compatibility"), animate_page, 0.12)
+    _add_settings_row(compatibility_rows, _settings_row(_t("settings.plugin_load_mode"), _t("settings.plugin_load_mode_desc"), _plugin_load_mode_select(), stack_settings_controls))
+    _add_settings_row(compatibility_rows, _settings_toggle_row(_t("settings.mock"), _t("settings.mock_desc"), _settings_draft_bool("mock_enabled", mock_enabled), "mock"))
 
-    var compatibility_group := _settings_group(secondary_column, _t("settings.section.compatibility"), ICON_PLUGIN, animate_page, 0.105)
-    _add_settings_row(compatibility_group, _settings_row_with_icon(ICON_PLUGIN, _t("settings.plugin_load_mode"), _t("settings.plugin_load_mode_desc"), _plugin_load_mode_select(), stack_settings_controls))
-    _add_settings_row(compatibility_group, _settings_toggle_row_with_icon(ICON_PLUGIN, _t("settings.mock"), _t("settings.mock_desc"), _settings_draft_bool("mock_enabled", mock_enabled), "mock"))
+    var diagnostic_rows := _settings_section(flow, _t("settings.section.diagnostics"), animate_page, 0.16)
+    _add_settings_row(diagnostic_rows, _settings_row(_t("settings.diagnostic_profile"), _t("settings.diagnostic_profile_desc"), _diagnostic_profile_select(), stack_settings_controls))
+    _add_settings_row(diagnostic_rows, _settings_row(_t("settings.debug_overlay"), _t("settings.debug_overlay_desc"), _debug_overlay_select(), stack_settings_controls))
+    _add_settings_row(diagnostic_rows, _settings_toggle_row(_t("settings.error_dialog_logs"), _t("settings.error_dialog_logs_desc"), _settings_draft_bool("error_dialog_logs", error_dialog_logs), "error_dialog_logs"))
 
-    var advanced_group := _settings_group(secondary_column, _t("settings.section.advanced"), ICON_PLUGIN, animate_page, 0.13)
+    var advanced_rows := _settings_section(flow, _t("settings.section.advanced"), animate_page, 0.20)
     var advanced_disclosure = AetherDisclosure.new()
     advanced_disclosure.setup(
         ui_tokens,
@@ -3136,12 +3132,12 @@ func _rebuild_settings_view() -> void:
         advanced_tool_expanded
     )
     ui_widgets.disclosure_button(advanced_disclosure)
-    _add_settings_row(advanced_group, advanced_disclosure)
+    _add_settings_row(advanced_rows, advanced_disclosure)
     var advanced_content := VBoxContainer.new()
     advanced_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     advanced_content.add_theme_constant_override("separation", 0)
     advanced_content.visible = advanced_tool_expanded
-    advanced_group.add_child(advanced_content)
+    advanced_rows.add_child(advanced_content)
     _add_settings_row(advanced_content, _settings_toggle_row(_t("settings.plugin_trace"), _t("settings.plugin_trace_desc"), plugin_trace, "advanced_plugin_trace"))
     _add_settings_row(advanced_content, _settings_toggle_row(_t("settings.trace_log"), _t("settings.trace_log_desc"), trace_log, "advanced_trace_log"))
     _add_settings_row(advanced_content, _settings_toggle_row(_t("settings.console_log"), _t("settings.console_log_desc"), console_log_file, "advanced_console_log"))
@@ -3152,30 +3148,30 @@ func _rebuild_settings_view() -> void:
     )
 
     if _iap_supported_platform():
-        var purchase_group := _settings_group(secondary_column, _t("settings.section.purchases"), ICON_LIBRARY, animate_page, 0.155)
-        _add_settings_row(purchase_group, _settings_iap_product_row())
-        _add_settings_row(purchase_group, _settings_action_row(
+        var purchase_rows := _settings_section(flow, _t("settings.section.purchases"), animate_page, 0.24)
+        _add_settings_row(purchase_rows, _settings_iap_product_row())
+        _add_settings_row(purchase_rows, _settings_action_row(
             _t("iap.restore"),
             _t("iap.restore_desc"),
             _t("iap.restore_action"),
             func(): _begin_iap_restore()
         ))
 
-    var about_group := _settings_group(secondary_column, _t("settings.section.about"), ICON_HELP, animate_page, 0.18)
-    _add_settings_row(about_group, _settings_action_row(
+    var about_rows := _settings_section(flow, _t("settings.section.about"), animate_page, 0.28)
+    _add_settings_row(about_rows, _settings_action_row(
         _t("settings.legal"),
         _t("settings.legal_desc"),
         _t("settings.legal_open"),
         func(): _show_legal_agreement(false)
     ))
     if _effective_legal_platform_name() == "iOS":
-        _add_settings_row(about_group, _settings_action_row(
+        _add_settings_row(about_rows, _settings_action_row(
             _t("settings.ios_statement"),
             _t("settings.ios_statement_desc"),
             _t("settings.ios_statement_open"),
             _show_ios_additional_statement
         ))
-    _add_settings_row(about_group, _settings_value_row(
+    _add_settings_row(about_rows, _settings_value_row(
         _t("settings.version"),
         str(ProjectSettings.get_setting("application/config/version", "development"))
     ))
@@ -4095,56 +4091,61 @@ func _section_title(text: String, _icon_path: String) -> HBoxContainer:
     row.add_child(label)
     return row
 
-func _settings_group(page: VBoxContainer, title: String, icon_path: String, animate: bool, delay: float) -> VBoxContainer:
-    var group := VBoxContainer.new()
-    group.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    group.add_theme_constant_override("separation", 8)
-    page.add_child(group)
+func _settings_section(page: VBoxContainer, title: String, animate: bool, delay: float) -> VBoxContainer:
+    var section := HBoxContainer.new()
+    section.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    section.add_theme_constant_override("separation", 14)
+    page.add_child(section)
 
-    var header_box := HBoxContainer.new()
-    header_box.custom_minimum_size = Vector2(0, 32)
-    header_box.add_theme_constant_override("separation", 10)
-    group.add_child(header_box)
+    # Timeline rail: accent dot + connecting hairline
+    var rail := VBoxContainer.new()
+    rail.custom_minimum_size = Vector2(12, 0)
+    rail.add_theme_constant_override("separation", 6)
+    section.add_child(rail)
 
-    var icon_badge := PanelContainer.new()
-    icon_badge.custom_minimum_size = Vector2(28, 28)
-    icon_badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-    var badge_style := ui_tokens.panel(ui_tokens.accent_fill, 8)
-    badge_style.content_margin_left = 5
-    badge_style.content_margin_top = 5
-    badge_style.content_margin_right = 5
-    badge_style.content_margin_bottom = 5
-    badge_style.shadow_size = 0
-    icon_badge.add_theme_stylebox_override("panel", badge_style)
-    icon_badge.add_child(_icon_rect(icon_path, Vector2(18, 18), ui_tokens.accent))
-    header_box.add_child(icon_badge)
+    var dot := PanelContainer.new()
+    dot.custom_minimum_size = Vector2(10, 10)
+    dot.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+    dot.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.accent, 5))
+    rail.add_child(dot)
+
+    var line := PanelContainer.new()
+    line.custom_minimum_size = Vector2(2, 0)
+    line.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+    line.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    line.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.separator, 0))
+    rail.add_child(line)
+
+    var content := VBoxContainer.new()
+    content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    content.add_theme_constant_override("separation", 8)
+    section.add_child(content)
 
     var title_label := Label.new()
     title_label.text = title.to_upper()
-    title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     title_label.add_theme_font_override("font", DISPLAY_FONT)
     title_label.add_theme_font_size_override("font_size", 13)
     title_label.add_theme_color_override("font_color", ui_tokens.accent)
-    header_box.add_child(title_label)
+    content.add_child(title_label)
 
-    # Flat, zero-shadow, clean card panel with 1px hairline border
+    # Flat, zero-shadow card panel with 1px hairline border
     var panel := PanelContainer.new()
     panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     var panel_style := ui_tokens.panel(ui_tokens.surface_raised, 12, ui_tokens.separator, 1)
     panel_style.content_margin_left = 18
-    panel_style.content_margin_top = 12
+    panel_style.content_margin_top = 10
     panel_style.content_margin_right = 18
-    panel_style.content_margin_bottom = 12
+    panel_style.content_margin_bottom = 10
     panel_style.shadow_size = 0
     panel.add_theme_stylebox_override("panel", panel_style)
-    group.add_child(panel)
+    content.add_child(panel)
 
     var rows := VBoxContainer.new()
     rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     rows.add_theme_constant_override("separation", 0)
     panel.add_child(rows)
     if animate:
-        ui_motion.reveal(group, delay)
+        ui_motion.reveal(section, delay)
     return rows
 
 func _add_settings_row(group: VBoxContainer, row: Control) -> void:
@@ -4152,42 +4153,23 @@ func _add_settings_row(group: VBoxContainer, row: Control) -> void:
         group.add_child(_detail_separator())
     group.add_child(row)
 
-func _settings_row_with_icon(icon_path: String, title: String, subtitle: String, control: Control, stack_control: bool = false) -> Control:
+func _settings_row(title: String, subtitle: String, control: Control, stack_control: bool = false) -> Control:
     var margin := MarginContainer.new()
     margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    margin.add_theme_constant_override("margin_left", 6)
+    margin.add_theme_constant_override("margin_left", 8)
     margin.add_theme_constant_override("margin_top", 12)
-    margin.add_theme_constant_override("margin_right", 6)
+    margin.add_theme_constant_override("margin_right", 8)
     margin.add_theme_constant_override("margin_bottom", 12)
 
     var box: BoxContainer = VBoxContainer.new() if stack_control else HBoxContainer.new()
-    box.custom_minimum_size = Vector2(0, 88 if stack_control else 58)
-    box.add_theme_constant_override("separation", 14)
+    box.custom_minimum_size = Vector2(0, 86 if stack_control else 56)
+    box.add_theme_constant_override("separation", 12 if stack_control else 20)
     margin.add_child(box)
-
-    var left_row := HBoxContainer.new()
-    left_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    left_row.add_theme_constant_override("separation", 14)
-    box.add_child(left_row)
-
-    # Clean squircle icon container with zero shadow
-    var icon_container := PanelContainer.new()
-    icon_container.custom_minimum_size = Vector2(32, 32)
-    icon_container.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-    var icon_style := ui_tokens.panel(ui_tokens.accent_fill, 8)
-    icon_style.content_margin_left = 6
-    icon_style.content_margin_top = 6
-    icon_style.content_margin_right = 6
-    icon_style.content_margin_bottom = 6
-    icon_style.shadow_size = 0
-    icon_container.add_theme_stylebox_override("panel", icon_style)
-    icon_container.add_child(_icon_rect(icon_path, Vector2(18, 18), ui_tokens.accent))
-    left_row.add_child(icon_container)
 
     var labels := VBoxContainer.new()
     labels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     labels.add_theme_constant_override("separation", 3)
-    left_row.add_child(labels)
+    box.add_child(labels)
 
     var title_label := Label.new()
     title_label.text = title
@@ -4209,15 +4191,12 @@ func _settings_row_with_icon(icon_path: String, title: String, subtitle: String,
     box.add_child(control)
     return margin
 
-func _settings_toggle_row_with_icon(icon_path: String, title: String, subtitle: String, initial: bool, key: String) -> Control:
+func _settings_toggle_row(title: String, subtitle: String, initial: bool, key: String) -> Control:
     var toggle := _settings_switch(initial, key)
-    return _settings_row_with_icon(icon_path, title, subtitle, toggle, false)
+    return _settings_row(title, subtitle, toggle, false)
 
 func _settings_block(title: String, subtitle: String, control: Control, stack_control: bool = false) -> Control:
-    return _settings_row_with_icon(ICON_SETTINGS, title, subtitle, control, stack_control)
-
-func _settings_toggle_row(title: String, subtitle: String, initial: bool, key: String) -> Control:
-    return _settings_toggle_row_with_icon(ICON_SETTINGS, title, subtitle, initial, key)
+    return _settings_row(title, subtitle, control, stack_control)
 
 func _settings_switch(initial: bool, key: String) -> Button:
     var toggle = AetherSwitch.new()
