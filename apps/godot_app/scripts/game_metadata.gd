@@ -81,20 +81,30 @@ static func _first_file(root: String, extensions: Array) -> String:
     var dir := DirAccess.open(root)
     if dir == null:
         return ""
-    var fallback := ""
+    var executable_fallback := ""
+    var archive_fallback := ""
     dir.list_dir_begin()
     var entry := dir.get_next()
     while not entry.is_empty():
         if not dir.current_is_dir():
             var lower := entry.to_lower()
             if extensions.has("." + lower.get_extension()):
-                if lower.ends_with(".exe"):
+                # A KiriKiri Windows executable is not a readable storage
+                # file on macOS/iOS. Prefer the game's data archive whenever
+                # both a launcher and an XP3 archive are present.
+                if lower == "data.xp3":
+                    dir.list_dir_end()
                     return entry
-                if fallback.is_empty():
-                    fallback = entry
+                if lower.ends_with(".xp3"):
+                    if archive_fallback.is_empty():
+                        archive_fallback = entry
+                elif executable_fallback.is_empty():
+                    executable_fallback = entry
         entry = dir.get_next()
     dir.list_dir_end()
-    return fallback
+    if not archive_fallback.is_empty():
+        return archive_fallback
+    return executable_fallback
 
 static func _has_prefix(values: PackedStringArray, prefix: String) -> bool:
     for value in values:

@@ -35,7 +35,13 @@ func _init() -> void:
     _write(kirikiri_root.path_join("system.ini"), "[Game]\nBOOT = startup.tjs\n")
     var kirikiri := GameMetadata.inspect(kirikiri_root)
     _expect_equal(String(kirikiri.engine), "kirikiri", "KiriKiri remains default")
-    _expect_equal(String(kirikiri.launchFile), "game.exe", "KiriKiri launcher retained")
+    _expect_equal(String(kirikiri.launchFile), "data.xp3", "KiriKiri archive preferred")
+
+    var exe_only_root := fixture_root.path_join("kirikiri_exe_only")
+    DirAccess.make_dir_recursive_absolute(exe_only_root)
+    _write(exe_only_root.path_join("game.exe"), "launcher")
+    var exe_only := GameMetadata.inspect(exe_only_root)
+    _expect_equal(String(exe_only.launchFile), "game.exe", "KiriKiri executable fallback")
 
     _remove_tree(fixture_root)
     if failures == 0:
