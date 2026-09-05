@@ -39,7 +39,7 @@ jobs:
 
       - name: Install Bison
         shell: pwsh
-        run: choco install winflexbison --no-progress -y
+        run: choco install winflexbison3 --no-progress -y
 
       - name: Bootstrap vcpkg
         shell: pwsh
