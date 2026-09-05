@@ -136,8 +136,6 @@ const UI_TEXT := {
         "home.status": "视觉小说库",
         "nav.library": "视觉小说",
         "nav.videos": "视频库",
-        "nav.collapse_sidebar": "收起侧边栏",
-        "nav.expand_sidebar": "展开侧边栏",
         "home.empty_title": "尚未添加任何游戏",
         "home.game_count": "%d 个游戏",
         "video.video_count": "%d 个视频",
@@ -417,8 +415,6 @@ const UI_TEXT := {
         "home.status": "視覺小說庫",
         "nav.library": "視覺小說",
         "nav.videos": "影片庫",
-        "nav.collapse_sidebar": "收合側邊欄",
-        "nav.expand_sidebar": "展開側邊欄",
         "home.empty_title": "尚未加入任何遊戲",
         "home.game_count": "%d 個遊戲",
         "video.video_count": "%d 個影片",
@@ -696,8 +692,6 @@ const UI_TEXT := {
         "home.status": "Visual Novel Library",
         "nav.library": "Visual Novels",
         "nav.videos": "Videos",
-        "nav.collapse_sidebar": "Collapse sidebar",
-        "nav.expand_sidebar": "Expand sidebar",
         "home.empty_title": "No games added yet",
         "home.game_count": "%d games",
         "video.video_count": "%d videos",
@@ -977,8 +971,6 @@ const UI_TEXT := {
         "home.status": "ビジュアルノベルライブラリ",
         "nav.library": "ビジュアルノベル",
         "nav.videos": "ビデオ",
-        "nav.collapse_sidebar": "サイドバーを折りたたむ",
-        "nav.expand_sidebar": "サイドバーを展開",
         "home.empty_title": "ゲームはまだ追加されていません",
         "home.game_count": "%d 本のゲーム",
         "video.video_count": "%d 本のビデオ",
@@ -1256,8 +1248,6 @@ const UI_TEXT := {
         "home.status": "비주얼 노벨 라이브러리",
         "nav.library": "비주얼 노벨",
         "nav.videos": "비디오",
-        "nav.collapse_sidebar": "사이드바 접기",
-        "nav.expand_sidebar": "사이드바 펼치기",
         "home.empty_title": "아직 추가된 게임이 없습니다",
         "home.game_count": "게임 %d개",
         "video.video_count": "비디오 %d개",
@@ -1639,11 +1629,7 @@ var shell_compact_settings_button: Button
 var shell_sidebar_brand: HBoxContainer
 var shell_sidebar_brand_labels: VBoxContainer
 var shell_sidebar_version: Label
-var shell_sidebar_toggle: Button
-var shell_sidebar_collapsed := false
-var shell_sidebar_animating_expand := false
 var shell_sidebar_layout_width := 0.0
-var shell_sidebar_tween: Tween
 var shell_route := "library"
 var home_view: Control
 var settings_view: ScrollContainer
@@ -2922,7 +2908,6 @@ func _build_shell_chrome() -> void:
     shell_root.add_child(shell_sidebar)
     # Spring-driven width animation moves the sidebar every frame; keep the
     # content area, home layout and safe-area fills glued to the live size.
-    shell_sidebar.resized.connect(_sync_sidebar_layout_width)
 
     # Host keeps the spring selection indicator (drawn behind nav items) and the sidebar column
     var sidebar_host := Control.new()
@@ -2934,16 +2919,14 @@ func _build_shell_chrome() -> void:
     shell_nav_indicator = PanelContainer.new()
     shell_nav_indicator.name = "NavIndicator"
     shell_nav_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    shell_nav_indicator.z_index = 1
     shell_nav_indicator.visible = false
-    shell_nav_indicator.add_theme_stylebox_override("panel", _nav_indicator_style(10))
+    shell_nav_indicator.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.accent_fill, 6))
     sidebar_host.add_child(shell_nav_indicator)
 
     var sidebar := VBoxContainer.new()
     sidebar.set_anchors_preset(Control.PRESET_FULL_RECT)
     sidebar.add_theme_constant_override("separation", 10)
     sidebar.mouse_filter = Control.MOUSE_FILTER_PASS
-    sidebar.z_index = 2
     sidebar_host.add_child(sidebar)
 
     shell_sidebar_brand = HBoxContainer.new()
@@ -2985,18 +2968,6 @@ func _build_shell_chrome() -> void:
     flexible_space.size_flags_vertical = Control.SIZE_EXPAND_FILL
     sidebar.add_child(flexible_space)
 
-    shell_sidebar_toggle = Button.new()
-    shell_sidebar_toggle.text = "☰"
-    shell_sidebar_toggle.tooltip_text = _t("nav.collapse_sidebar")
-    shell_sidebar_toggle.accessibility_name = shell_sidebar_toggle.tooltip_text
-    shell_sidebar_toggle.custom_minimum_size = Vector2(44, 44)
-    shell_sidebar_toggle.focus_mode = Control.FOCUS_ALL
-    shell_sidebar_toggle.pressed.connect(_toggle_sidebar)
-    shell_sidebar_toggle.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-    ui_widgets.toolbar_button(shell_sidebar_toggle)
-    shell_sidebar_toggle.add_theme_font_size_override("font_size", 23)
-    sidebar.add_child(shell_sidebar_toggle)
-
     shell_sidebar_version = Label.new()
     shell_sidebar_version.text = _application_version_text()
     shell_sidebar_version.add_theme_font_size_override("font_size", 10)
@@ -3023,9 +2994,8 @@ func _build_shell_chrome() -> void:
     shell_compact_indicator = PanelContainer.new()
     shell_compact_indicator.name = "CompactNavIndicator"
     shell_compact_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    shell_compact_indicator.z_index = 1
     shell_compact_indicator.visible = false
-    shell_compact_indicator.add_theme_stylebox_override("panel", _nav_indicator_style(10))
+    shell_compact_indicator.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.accent_fill, 6))
     compact_host.add_child(shell_compact_indicator)
 
     var compact_margin := MarginContainer.new()
@@ -3034,7 +3004,6 @@ func _build_shell_chrome() -> void:
     compact_margin.add_theme_constant_override("margin_top", 10)
     compact_margin.add_theme_constant_override("margin_right", 12)
     compact_margin.add_theme_constant_override("margin_bottom", 10)
-    compact_margin.z_index = 2
     compact_host.add_child(compact_margin)
     var compact_row := HBoxContainer.new()
     compact_row.add_theme_constant_override("separation", 10)
@@ -3093,19 +3062,6 @@ func _build_shell_chrome() -> void:
     _sync_shell_route(shell_route)
     _apply_sidebar_presentation(false)
 
-func _nav_indicator_style(radius: int) -> StyleBoxFlat:
-    # Keep the selection surface visible on iOS light themes. The old accent
-    # fill was only alpha 0.12 there and sat below a full-size container,
-    # making the selected route look like it had no indicator at all.
-    var alpha := 0.24 if ui_tokens.mode in ["classic", "warm_light"] else 0.20
-    var fill := Color(ui_tokens.accent.r, ui_tokens.accent.g, ui_tokens.accent.b, alpha)
-    var border := Color(ui_tokens.accent.r, ui_tokens.accent.g, ui_tokens.accent.b, alpha + 0.14)
-    var style := ui_tokens.panel(fill, radius, border, 1)
-    style.shadow_color = Color(ui_tokens.accent.r, ui_tokens.accent.g, ui_tokens.accent.b, 0.10)
-    style.shadow_size = 2
-    style.shadow_offset = Vector2(0, 1)
-    return style
-
 func _nav_pill_goal(pill: Control, buttons: Array, compact: bool) -> Variant:
     var route_index: int = {"library": 0, "videos": 1, "settings": 2}.get(shell_route, -1)
     if route_index < 0 or route_index >= buttons.size():
@@ -3122,7 +3078,7 @@ func _nav_pill_goal(pill: Control, buttons: Array, compact: bool) -> Variant:
         return null
     var target_size: Vector2
     var target_pos: Vector2
-    if compact or shell_sidebar_collapsed:
+    if compact:
         target_size = button_rect.size + Vector2(6.0, 6.0)
         target_pos = button_rect.position - parent_rect.position - Vector2(3.0, 3.0)
     else:
@@ -3175,9 +3131,40 @@ func _move_nav_pill(pill: Control, specs: Array, axis: int, pointer_axis: float)
     target[axis] = _nav_pill_drag_target(pill, specs, axis, pointer_axis)
     if ui_motion.reduced_motion:
         pill.position = target
+        return
+    # Elastic finger-follow plus squash along the travel axis, exactly the
+    # select-menu highlight behaviour.
+    ui_motion.spring_property(pill, "position", target, 0.06, 1.0)
+    var stretch := Vector2(1.05, 0.93) if axis == 0 else Vector2(0.93, 1.05)
+    ui_motion.spring_property(pill, "scale", stretch, 0.10, 0.8)
+
+func _slide_pill_to_button(pill: Control, axis: int, target_button: Button) -> void:
+    # Hover preview: glide the pill onto the hovered row like the dropdown
+    # menu highlight does, without committing the route.
+    if pill == null or target_button == null or not is_instance_valid(target_button):
+        return
+    var host := pill.get_parent() as Control
+    if host == null or host.size == Vector2.ZERO:
+        return
+    var button_rect := target_button.get_global_rect()
+    var parent_rect := host.get_global_rect()
+    if button_rect.size == Vector2.ZERO:
+        return
+    pill.visible = true
+    var target_size: Vector2
+    var target_pos: Vector2
+    if axis == 0:
+        target_size = button_rect.size + Vector2(6.0, 6.0)
+        target_pos = button_rect.position - parent_rect.position - Vector2(3.0, 3.0)
     else:
-        # Elastic finger-follow while dragging
-        ui_motion.spring_property(pill, "position", target, 0.06, 1.0)
+        target_size = Vector2(maxf(44.0, host.size.x - 12.0), button_rect.size.y)
+        target_pos = Vector2(6.0, button_rect.position.y - parent_rect.position.y)
+    if ui_motion.reduced_motion:
+        pill.position = target_pos
+        pill.size = target_size
+        return
+    ui_motion.spring_property(pill, "position", target_pos, 0.30, 0.55)
+    ui_motion.spring_property(pill, "size", target_size, 0.24, 1.0)
 
 func _on_nav_pill_input(pill: Control, specs: Array, axis: int, event: InputEvent) -> void:
     if event is InputEventScreenTouch:
@@ -3215,10 +3202,26 @@ func _on_nav_pill_input(pill: Control, specs: Array, axis: int, event: InputEven
         pill.accept_event()
 
 func _bind_nav_button_drag_proxy(button: Button, pill: Control, specs: Array, axis: int) -> void:
-    # Dragging from on top of a nav button hands the gesture to the jelly
-    # pill after a short threshold; a plain tap still clicks the button.
+    # Dropdown-menu-like rail: hovering slides the pill onto the row, dragging
+    # carries it, and release (tap or drag) commits the nearest route.
     if button == null:
         return
+    button.mouse_entered.connect(func():
+        if nav_pill_drag.get("active", false) or nav_button_drag.get("active", false):
+            return
+        nav_pill_drag = {"active": true, "pill": pill, "axis": axis, "hover": true}
+        _slide_pill_to_button(pill, axis, button)
+    )
+    button.mouse_exited.connect(func():
+        if nav_button_drag.get("active", false):
+            return
+        if nav_pill_drag.get("active", false) and nav_pill_drag.get("pill") == pill \
+                and bool(nav_pill_drag.get("hover", false)):
+            nav_pill_drag = {"active": false, "pill": null, "axis": axis}
+            # Snap back to the committed route with the same jelly release.
+            _update_nav_indicator(true)
+            _update_compact_indicator(true)
+    )
     button.gui_input.connect(func(event: InputEvent):
         if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
             if event.pressed:
@@ -3233,10 +3236,14 @@ func _bind_nav_button_drag_proxy(button: Button, pill: Control, specs: Array, ax
             elif nav_button_drag.get("button") == button:
                 var consumed := bool(nav_button_drag.get("active", false))
                 nav_button_drag = {}
-                if not consumed:
-                    return
                 if nav_pill_drag.get("active", false) and nav_pill_drag.get("pill") == pill:
                     nav_pill_drag = {"active": false, "pill": null, "axis": axis}
+                if not consumed:
+                    # Plain click: Button's own pressed signal commits the
+                    # route; still settle the pill with a jelly wobble.
+                    _update_nav_indicator(true)
+                    _update_compact_indicator(true)
+                    return
                 var released_over_button := false
                 for spec in specs:
                     var spec_button := spec["button"] as Button
@@ -3275,6 +3282,9 @@ func _snap_nav_pill(pill: Control, specs: Array, axis: int) -> void:
     if String(best.get("route", "")) == shell_route:
         _update_nav_indicator(false)
         _update_compact_indicator(false)
+        # Same-route release after a drag: settle the squashed pill back to a
+        # round shape with the jelly release.
+        ui_motion.spring_property(pill, "scale", Vector2.ONE, 0.26, 0.55)
         return
     var action: Callable = best["action"]
     if action.is_valid():
@@ -3482,172 +3492,56 @@ func _update_compact_indicator(spring: bool) -> void:
 func _apply_shell_nav_state(button: Button, selected: bool) -> void:
     if button == null:
         return
-    if shell_sidebar_collapsed or shell_sidebar_animating_expand:
-        button.custom_minimum_size = Vector2(44, 44)
-        button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-        ui_widgets.ghost_nav_button(button, selected)
-    else:
-        button.custom_minimum_size = Vector2(0, 48)
-        button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-        ui_widgets.navigation_button(button, selected)
+    button.custom_minimum_size = Vector2(0, 48)
+    button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    # Dropdown-menu-like rail: rows carry no button chrome at all; the sliding
+    # accent pill is the only selection surface (same language as the select
+    # menu highlight).
+    ui_widgets.ghost_nav_button(button, selected)
 
 func _apply_shell_compact_state(button: Button, selected: bool) -> void:
     if button == null:
         return
     ui_widgets.ghost_nav_button(button, selected)
 
-func _toggle_sidebar() -> void:
-    if AetherDisplayScale.use_compact_shell(get_viewport_rect().size):
-        return
-    var expanding := shell_sidebar_collapsed
-    if shell_sidebar_tween != null and shell_sidebar_tween.is_valid():
-        shell_sidebar_tween.kill()
-    ui_motion.active_springs.erase(ui_motion._motion_key(shell_sidebar, "size"))
-    _reset_sidebar_item_modulates()
-    shell_sidebar_collapsed = not shell_sidebar_collapsed
-    shell_sidebar_animating_expand = expanding
-    var target_width: float = ui_tokens.SIDEBAR_COLLAPSED_WIDTH if shell_sidebar_collapsed else ui_tokens.SIDEBAR_WIDTH
-    if ui_motion.reduced_motion:
-        shell_sidebar_animating_expand = false
-        _apply_sidebar_width(target_width)
-        _apply_sidebar_presentation(false)
-        return
-    if expanding:
-        _apply_sidebar_presentation(false)
-        _animate_sidebar_width(target_width, true)
-        return
-    shell_sidebar_tween = shell_sidebar.create_tween().set_parallel(true)
-    for item in [shell_sidebar_brand_labels, shell_library_button, shell_video_button, shell_settings_button, shell_sidebar_version]:
-        shell_sidebar_tween.tween_property(item, "modulate:a", 0.0, 0.10).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
-    shell_sidebar_tween.chain().tween_callback(func():
-        _apply_sidebar_presentation(false)
-        _reset_sidebar_item_modulates()
-        _animate_sidebar_width(target_width, false)
-    )
-
-func _animate_sidebar_width(target_width: float, expanding: bool) -> void:
-    if ui_motion.reduced_motion:
-        shell_sidebar_animating_expand = false
-        _apply_sidebar_width(target_width)
-        _apply_sidebar_presentation(expanding)
-        return
-    var layout_size := shell_root.size
-    if layout_size.y <= 0.0:
-        layout_size = _ui_safe_rect(get_viewport_rect().size).size
-    # Spring the real sidebar size instead of a quint tween. The under-damped
-    # width spring overshoots the target by ~2-3 px and wobbles back, which
-    # reads as the sidebar itself being jelly. `shell_sidebar.resized` keeps
-    # the content offsets in sync on every frame of the spring.
-    ui_motion.spring_property(
-        shell_sidebar,
-        "size",
-        Vector2(target_width, layout_size.y),
-        0.42,
-        0.60,
-        func():
-            shell_sidebar_animating_expand = false
-            _apply_sidebar_width(target_width)
-            _apply_sidebar_presentation(expanding)
-    )
-
-func _sync_sidebar_layout_width() -> void:
-    if shell_sidebar == null or not is_instance_valid(shell_sidebar) \
-            or shell_content == null or not shell_sidebar.visible:
-        return
-    if AetherDisplayScale.use_compact_shell(get_viewport_rect().size):
-        return
-    var width := shell_sidebar.size.x
-    shell_sidebar_layout_width = width
-    if not is_equal_approx(shell_content.offset_left, width):
-        shell_content.offset_left = width
-    var root_size := shell_root.size
-    if root_size.y <= 0.0:
-        root_size = _ui_safe_rect(get_viewport_rect().size).size
-    _layout_home_view(Vector2(maxf(0.0, root_size.x - width), root_size.y))
-    _layout_shell_safe_area_fills(get_viewport_rect().size, _ui_safe_rect(get_viewport_rect().size))
-
-func _reset_sidebar_item_modulates() -> void:
-    for item in [shell_sidebar_brand_labels, shell_library_button, shell_video_button, shell_settings_button, shell_sidebar_version]:
-        if item != null and is_instance_valid(item):
-            item.modulate.a = 1.0
-
 func _apply_sidebar_presentation(animate_labels: bool) -> void:
     if shell_sidebar_brand_labels == null:
         return
-    var compact_visual := shell_sidebar_collapsed or shell_sidebar_animating_expand
-    shell_sidebar_brand.alignment = BoxContainer.ALIGNMENT_CENTER if compact_visual else BoxContainer.ALIGNMENT_BEGIN
-    shell_sidebar_brand_labels.visible = not compact_visual
-    shell_sidebar_version.visible = not compact_visual
-    shell_library_button.text = "" if compact_visual else _t("nav.library")
-    shell_video_button.text = "" if compact_visual else _t("nav.videos")
-    shell_settings_button.text = "" if compact_visual else _t("settings.title")
-    shell_library_button.tooltip_text = _t("nav.library") if compact_visual else ""
-    shell_video_button.tooltip_text = _t("nav.videos") if compact_visual else ""
-    shell_settings_button.tooltip_text = _t("settings.title") if compact_visual else ""
-    shell_library_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER if compact_visual else HORIZONTAL_ALIGNMENT_LEFT
-    shell_video_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER if compact_visual else HORIZONTAL_ALIGNMENT_LEFT
-    shell_settings_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER if compact_visual else HORIZONTAL_ALIGNMENT_LEFT
-    shell_library_button.alignment = HORIZONTAL_ALIGNMENT_CENTER if compact_visual else HORIZONTAL_ALIGNMENT_LEFT
-    shell_video_button.alignment = HORIZONTAL_ALIGNMENT_CENTER if compact_visual else HORIZONTAL_ALIGNMENT_LEFT
-    shell_settings_button.alignment = HORIZONTAL_ALIGNMENT_CENTER if compact_visual else HORIZONTAL_ALIGNMENT_LEFT
-    shell_sidebar_toggle.text = "☰"
-    shell_sidebar_toggle.tooltip_text = _t("nav.expand_sidebar") if shell_sidebar_collapsed else _t("nav.collapse_sidebar")
-    shell_sidebar_toggle.accessibility_name = shell_sidebar_toggle.tooltip_text
+    shell_sidebar_brand.alignment = BoxContainer.ALIGNMENT_BEGIN
+    shell_sidebar_brand_labels.visible = true
+    shell_sidebar_version.visible = true
+    shell_library_button.text = _t("nav.library")
+    shell_video_button.text = _t("nav.videos")
+    shell_settings_button.text = _t("settings.title")
+    shell_library_button.tooltip_text = ""
+    shell_video_button.tooltip_text = ""
+    shell_settings_button.tooltip_text = ""
+    shell_library_button.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
+    shell_video_button.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
+    shell_settings_button.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
+    shell_library_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+    shell_video_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+    shell_settings_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
     _update_nav_indicator(false)
     _apply_shell_nav_state(shell_library_button, shell_route == "library")
     _apply_shell_nav_state(shell_video_button, shell_route == "videos")
     _apply_shell_nav_state(shell_settings_button, shell_route == "settings")
-    if animate_labels and not compact_visual:
+    if animate_labels:
         ui_motion.enter(shell_sidebar_brand_labels, Vector2.ZERO, 0.03)
         ui_motion.enter(shell_library_button, Vector2.ZERO, 0.04)
         ui_motion.enter(shell_video_button, Vector2.ZERO, 0.06)
         ui_motion.enter(shell_settings_button, Vector2.ZERO, 0.08)
         ui_motion.enter(shell_sidebar_version, Vector2.ZERO, 0.10)
 
-func _apply_sidebar_width(width: float) -> void:
-    if shell_sidebar == null or shell_content == null:
-        return
-    shell_sidebar_layout_width = width
-    var layout_size := shell_root.size
-    if layout_size.x <= 0.0 or layout_size.y <= 0.0:
-        layout_size = _ui_safe_rect(get_viewport_rect().size).size
-    shell_sidebar.size = Vector2(width, layout_size.y)
-    shell_content.offset_left = width
-    _layout_shell_safe_area_fills(get_viewport_rect().size, _ui_safe_rect(get_viewport_rect().size))
-    _layout_home_view(Vector2(maxf(0.0, layout_size.x - width), layout_size.y))
-
 func _layout_shell(window_size: Vector2) -> void:
     if shell_content == null or shell_sidebar == null or shell_compact_header == null:
         return
     var compact := AetherDisplayScale.use_compact_shell(window_size)
-    var layout_mode_changed := shell_compact_header.visible != compact
-    if layout_mode_changed:
-        if shell_sidebar_tween != null and shell_sidebar_tween.is_valid():
-            shell_sidebar_tween.kill()
-        shell_sidebar_animating_expand = false
-        _reset_sidebar_item_modulates()
-        _apply_sidebar_presentation(false)
-        ui_motion.active_springs.erase(ui_motion._motion_key(shell_sidebar, "size"))
     shell_sidebar.visible = not compact
     shell_compact_header.visible = compact
     shell_sidebar.position = Vector2.ZERO
-    var target_sidebar_width: float = ui_tokens.SIDEBAR_COLLAPSED_WIDTH if shell_sidebar_collapsed else ui_tokens.SIDEBAR_WIDTH
-    var sidebar_size_key := ui_motion._motion_key(shell_sidebar, "size")
-    var sidebar_spring_active: bool = ui_motion.active_springs.has(sidebar_size_key)
-    if compact:
-        shell_sidebar_layout_width = target_sidebar_width
-        shell_sidebar.size = Vector2(target_sidebar_width, window_size.y)
-    elif layout_mode_changed or not sidebar_spring_active:
-        shell_sidebar_layout_width = target_sidebar_width
-        shell_sidebar.size = Vector2(target_sidebar_width, window_size.y)
-    else:
-        # _fit_full_rects runs every frame, including during rotation. Preserve
-        # the spring's live x coordinate instead of snapping it back to the
-        # target before the next physics step.
-        shell_sidebar.size = Vector2(shell_sidebar.size.x, window_size.y)
-        var sidebar_state: Dictionary = ui_motion.active_springs.get(sidebar_size_key, {})
-        sidebar_state["target"] = Vector2(target_sidebar_width, window_size.y)
-        ui_motion.active_springs[sidebar_size_key] = sidebar_state
+    shell_sidebar_layout_width = ui_tokens.SIDEBAR_WIDTH
+    shell_sidebar.size = Vector2(shell_sidebar_layout_width, window_size.y)
     shell_compact_header.offset_left = 0.0
     shell_compact_header.offset_top = 0.0
     shell_compact_header.offset_right = 0.0
@@ -4553,7 +4447,7 @@ func _layout_shell_safe_area_fills(window_size: Vector2, safe_rect: Rect2) -> vo
     var top_inset := maxf(0.0, safe_rect.position.y)
     var compact_shell := AetherDisplayScale.use_compact_shell(safe_rect.size)
     shell_safe_top_fill.visible = OS.get_name() == "iOS" and compact_shell and top_inset > 0.0
-    shell_safe_top_fill.color = ui_tokens.sidebar_material
+    shell_safe_top_fill.color = ui_tokens.background
     if shell_safe_top_fill.visible:
         # shell_root starts at the safe-area origin. Extending this
         # non-interactive fill upward colors the status-bar region without
@@ -7837,7 +7731,7 @@ func _refresh_language_texts() -> void:
         shell_compact_video_button.tooltip_text = _t("nav.videos")
     if is_instance_valid(shell_compact_settings_button):
         shell_compact_settings_button.tooltip_text = _t("settings.title")
-    if is_instance_valid(shell_sidebar_toggle):
+    if is_instance_valid(shell_sidebar_brand_labels):
         _apply_sidebar_presentation(false)
     _sync_shell_route(shell_route)
     _sync_home_header_text()
