@@ -2934,14 +2934,16 @@ func _build_shell_chrome() -> void:
     shell_nav_indicator = PanelContainer.new()
     shell_nav_indicator.name = "NavIndicator"
     shell_nav_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    shell_nav_indicator.z_index = 1
     shell_nav_indicator.visible = false
-    shell_nav_indicator.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.accent_fill, 10))
+    shell_nav_indicator.add_theme_stylebox_override("panel", _nav_indicator_style(10))
     sidebar_host.add_child(shell_nav_indicator)
 
     var sidebar := VBoxContainer.new()
     sidebar.set_anchors_preset(Control.PRESET_FULL_RECT)
     sidebar.add_theme_constant_override("separation", 10)
     sidebar.mouse_filter = Control.MOUSE_FILTER_PASS
+    sidebar.z_index = 2
     sidebar_host.add_child(sidebar)
 
     shell_sidebar_brand = HBoxContainer.new()
@@ -3021,8 +3023,9 @@ func _build_shell_chrome() -> void:
     shell_compact_indicator = PanelContainer.new()
     shell_compact_indicator.name = "CompactNavIndicator"
     shell_compact_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    shell_compact_indicator.z_index = 1
     shell_compact_indicator.visible = false
-    shell_compact_indicator.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.accent_fill, 10))
+    shell_compact_indicator.add_theme_stylebox_override("panel", _nav_indicator_style(10))
     compact_host.add_child(shell_compact_indicator)
 
     var compact_margin := MarginContainer.new()
@@ -3031,6 +3034,7 @@ func _build_shell_chrome() -> void:
     compact_margin.add_theme_constant_override("margin_top", 10)
     compact_margin.add_theme_constant_override("margin_right", 12)
     compact_margin.add_theme_constant_override("margin_bottom", 10)
+    compact_margin.z_index = 2
     compact_host.add_child(compact_margin)
     var compact_row := HBoxContainer.new()
     compact_row.add_theme_constant_override("separation", 10)
@@ -3088,6 +3092,19 @@ func _build_shell_chrome() -> void:
     call_deferred("_create_scroll_feathers")
     _sync_shell_route(shell_route)
     _apply_sidebar_presentation(false)
+
+func _nav_indicator_style(radius: int) -> StyleBoxFlat:
+    # Keep the selection surface visible on iOS light themes. The old accent
+    # fill was only alpha 0.12 there and sat below a full-size container,
+    # making the selected route look like it had no indicator at all.
+    var alpha := 0.24 if ui_tokens.mode in ["classic", "warm_light"] else 0.20
+    var fill := Color(ui_tokens.accent.r, ui_tokens.accent.g, ui_tokens.accent.b, alpha)
+    var border := Color(ui_tokens.accent.r, ui_tokens.accent.g, ui_tokens.accent.b, alpha + 0.14)
+    var style := ui_tokens.panel(fill, radius, border, 1)
+    style.shadow_color = Color(ui_tokens.accent.r, ui_tokens.accent.g, ui_tokens.accent.b, 0.10)
+    style.shadow_size = 2
+    style.shadow_offset = Vector2(0, 1)
+    return style
 
 func _nav_pill_goal(pill: Control, buttons: Array, compact: bool) -> Variant:
     var route_index: int = {"library": 0, "videos": 1, "settings": 2}.get(shell_route, -1)
@@ -3352,6 +3369,8 @@ func _sync_shell_route(route: String) -> void:
     _apply_shell_compact_state(shell_compact_settings_button, route == "settings")
     call_deferred("_update_nav_indicator", true)
     call_deferred("_update_compact_indicator", true)
+    if input_trace_enabled:
+        call_deferred("_write_ui_probe_snapshot", "route_%s" % route)
 
 func _update_nav_indicator(spring: bool) -> void:
     if shell_nav_indicator == null or not is_instance_valid(shell_nav_indicator):
@@ -3601,17 +3620,34 @@ func _layout_shell(window_size: Vector2) -> void:
     if shell_content == null or shell_sidebar == null or shell_compact_header == null:
         return
     var compact := AetherDisplayScale.use_compact_shell(window_size)
-    if shell_sidebar_tween != null and shell_sidebar_tween.is_valid():
-        shell_sidebar_tween.kill()
+    var layout_mode_changed := shell_compact_header.visible != compact
+    if layout_mode_changed:
+        if shell_sidebar_tween != null and shell_sidebar_tween.is_valid():
+            shell_sidebar_tween.kill()
         shell_sidebar_animating_expand = false
         _reset_sidebar_item_modulates()
         _apply_sidebar_presentation(false)
-    ui_motion.active_springs.erase(ui_motion._motion_key(shell_sidebar, "size"))
+        ui_motion.active_springs.erase(ui_motion._motion_key(shell_sidebar, "size"))
     shell_sidebar.visible = not compact
     shell_compact_header.visible = compact
     shell_sidebar.position = Vector2.ZERO
-    shell_sidebar_layout_width = ui_tokens.SIDEBAR_COLLAPSED_WIDTH if shell_sidebar_collapsed else ui_tokens.SIDEBAR_WIDTH
-    shell_sidebar.size = Vector2(shell_sidebar_layout_width, window_size.y)
+    var target_sidebar_width: float = ui_tokens.SIDEBAR_COLLAPSED_WIDTH if shell_sidebar_collapsed else ui_tokens.SIDEBAR_WIDTH
+    var sidebar_size_key := ui_motion._motion_key(shell_sidebar, "size")
+    var sidebar_spring_active: bool = ui_motion.active_springs.has(sidebar_size_key)
+    if compact:
+        shell_sidebar_layout_width = target_sidebar_width
+        shell_sidebar.size = Vector2(target_sidebar_width, window_size.y)
+    elif layout_mode_changed or not sidebar_spring_active:
+        shell_sidebar_layout_width = target_sidebar_width
+        shell_sidebar.size = Vector2(target_sidebar_width, window_size.y)
+    else:
+        # _fit_full_rects runs every frame, including during rotation. Preserve
+        # the spring's live x coordinate instead of snapping it back to the
+        # target before the next physics step.
+        shell_sidebar.size = Vector2(shell_sidebar.size.x, window_size.y)
+        var sidebar_state: Dictionary = ui_motion.active_springs.get(sidebar_size_key, {})
+        sidebar_state["target"] = Vector2(target_sidebar_width, window_size.y)
+        ui_motion.active_springs[sidebar_size_key] = sidebar_state
     shell_compact_header.offset_left = 0.0
     shell_compact_header.offset_top = 0.0
     shell_compact_header.offset_right = 0.0
@@ -5146,7 +5182,7 @@ func _rebuild_settings_view() -> void:
     top.add_child(title_stack)
     var title := Label.new()
     title.text = _t("settings.title")
-    title.add_theme_font_override("font", DISPLAY_FONT)
+    title.add_theme_font_override("font", BODY_FONT)
     title.add_theme_font_size_override("font_size", 24 if compact else 40)
     title.add_theme_color_override("font_color", ui_tokens.text_primary)
     title_stack.add_child(title)
@@ -5334,6 +5370,8 @@ func _rebuild_settings_view() -> void:
             interface_rows, render_rows, compatibility_rows,
             diagnostic_rows, advanced_rows, about_rows,
         ])
+    if input_trace_enabled:
+        call_deferred("_write_ui_probe_snapshot", "settings_rebuilt")
 
 func _cascade_settings_rows(groups: Array) -> void:
     if not is_instance_valid(settings_view) or not settings_view.visible:
@@ -6039,7 +6077,9 @@ func _start_shell_scroll_drag(key: int, position: Vector2) -> void:
         "control_id": control.get_instance_id() if control != null else 0,
         "last": position,
         "last_time": Time.get_ticks_usec(),
+        "last_motion_msec": Time.get_ticks_msec(),
         "velocity": 0.0,
+        "velocity_y": 0.0,
         "distance": 0.0,
         "pending_y": 0.0,
         "overscroll": 0.0,
@@ -6052,6 +6092,14 @@ func _start_shell_scroll_drag(key: int, position: Vector2) -> void:
         "axis_lock": SHELL_SCROLL_AXIS_PENDING if horizontal_slider != null else SHELL_SCROLL_AXIS_NONE,
         "gesture_delta": Vector2.ZERO,
     }
+    if input_trace_enabled:
+        _write_probe_marker("ui_scroll_start key=%d scroll=%d pos=%.1f,%.1f deadzone=%d" % [
+            key,
+            scroll.get_instance_id(),
+            position.x,
+            position.y,
+            scroll.scroll_deadzone,
+        ])
 
 func _update_shell_scroll_drag(
     key: int,
@@ -6128,6 +6176,15 @@ func _update_shell_scroll_drag(
     shell_scroll_drag_states[key] = state
     _scroll_container_by(scroll, move)
     _cancel_shell_scroll_press(state)
+    if input_trace_enabled:
+        _write_probe_marker("ui_scroll_drag key=%d scroll=%d delta=%.2f velocity=%.2f offset=%.2f value=%d" % [
+            key,
+            scroll.get_instance_id(),
+            drag_delta,
+            float(state.get("velocity_y", 0.0)),
+            float(state.get("overscroll", 0.0)),
+            scroll.scroll_vertical,
+        ])
     return true
 
 func _finish_shell_scroll_drag(key: int) -> bool:
@@ -6135,7 +6192,11 @@ func _finish_shell_scroll_drag(key: int) -> bool:
     var dragging := bool(state.get("dragging", false))
     if dragging:
         _cancel_shell_scroll_press(state)
-    var scroll := state.get("scroll") as ScrollContainer
+    # Drag state stores instance IDs deliberately, because a rebuilt settings
+    # page can invalidate the old Object reference between touch-up frames.
+    # Resolving the ID here is essential: using state["scroll"] silently
+    # disabled every iOS release flick's inertia and edge spring.
+    var scroll := _shell_scroll_from_drag_state(state)
     if scroll != null and is_instance_valid(scroll):
         var velocity := -float(state.get("velocity_y", 0.0)) * SHELL_SCROLL_DRAG_SPEED
         var overscroll := float(state.get("overscroll", 0.0))
@@ -6146,6 +6207,18 @@ func _finish_shell_scroll_drag(key: int) -> bool:
                 "scroll": scroll,
                 "velocity": velocity,
             }
+        if input_trace_enabled:
+            _write_probe_marker("ui_scroll_end key=%d scroll=%d dragging=%s velocity=%.2f overscroll=%.2f momentum=%s value=%d" % [
+                key,
+                scroll.get_instance_id(),
+                str(dragging),
+                velocity,
+                overscroll,
+                str(shell_scroll_momentum.has(scroll.get_instance_id())),
+                scroll.scroll_vertical,
+            ])
+    elif input_trace_enabled:
+        _write_probe_marker("ui_scroll_end key=%d scroll=missing dragging=%s" % [key, str(dragging)])
     shell_scroll_drag_states.erase(key)
     return dragging
 
@@ -6248,7 +6321,11 @@ func _process_shell_scroll_physics(delta: float) -> void:
         var bar := scroll.get_v_scroll_bar()
         _scroll_container_by(scroll, step)
         velocity *= exp(-SHELL_SCROLL_MOMENTUM_FRICTION * delta)
-        var reached_edge := bar != null and (is_equal_approx(float(scroll.scroll_vertical), bar.max_value) or is_equal_approx(float(scroll.scroll_vertical), bar.min_value))
+        var maximum_scroll := bar.max_value - maxf(0.0, bar.page) if bar != null else 0.0
+        var reached_edge := bar != null and (
+            is_equal_approx(float(scroll.scroll_vertical), maximum_scroll)
+            or is_equal_approx(float(scroll.scroll_vertical), bar.min_value)
+        )
         if bar != null and reached_edge and absf(step) > 0.5:
             # Leftover speed converts into an elastic edge bounce; scale with
             # the impact velocity (per-second) so the bounce is actually visible
@@ -6301,7 +6378,9 @@ func _reset_shell_scroll_drag() -> void:
     shell_scroll_overscroll.clear()
 
 func _cancel_shell_scroll_press(state: Dictionary) -> void:
-    get_viewport().gui_release_focus()
+    var viewport := get_viewport()
+    if viewport != null:
+        viewport.gui_release_focus()
     var control := _shell_control_from_drag_state(state)
     if control == null:
         return
@@ -6711,7 +6790,7 @@ func _settings_section(page: VBoxContainer, title: String, animate: bool, delay:
 
     var title_label := Label.new()
     title_label.text = title.to_upper()
-    title_label.add_theme_font_override("font", DISPLAY_FONT)
+    title_label.add_theme_font_override("font", BODY_FONT)
     title_label.add_theme_font_size_override("font_size", 11 if compact else 13)
     title_label.add_theme_color_override("font_color", ui_tokens.accent)
     content.add_child(title_label)
@@ -6762,7 +6841,7 @@ func _settings_row(title: String, subtitle: String, control: Control, stack_cont
 
     var title_label := Label.new()
     title_label.text = title
-    title_label.add_theme_font_override("font", DISPLAY_FONT)
+    title_label.add_theme_font_override("font", BODY_FONT)
     title_label.add_theme_font_size_override("font_size", 14 if compact else 15)
     title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
@@ -6813,7 +6892,7 @@ func _settings_value_row(title: String, value: String) -> Control:
     label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     # Same family + size scale as _settings_row so every settings row reads
     # with one voice (the old 17px default-font title broke the rhythm).
-    label.add_theme_font_override("font", DISPLAY_FONT)
+    label.add_theme_font_override("font", BODY_FONT)
     label.add_theme_font_size_override("font_size", 14 if compact else 15)
     label.add_theme_color_override("font_color", ui_tokens.text_primary)
     row.add_child(label)
@@ -6843,7 +6922,7 @@ func _settings_action_row(title: String, subtitle: String, action_text: String, 
     row.add_child(labels)
     var title_label := Label.new()
     title_label.text = title
-    title_label.add_theme_font_override("font", DISPLAY_FONT)
+    title_label.add_theme_font_override("font", BODY_FONT)
     title_label.add_theme_font_size_override("font_size", 14 if compact else 15)
     title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
@@ -6885,7 +6964,7 @@ func _settings_iap_product_row() -> Control:
 
     var title_label := Label.new()
     title_label.text = _t("iap.list_limit.title")
-    title_label.add_theme_font_override("font", DISPLAY_FONT)
+    title_label.add_theme_font_override("font", BODY_FONT)
     title_label.add_theme_font_size_override("font_size", 14 if compact else 15)
     title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
@@ -6951,7 +7030,7 @@ func _settings_iap_coffee_row() -> Control:
 
     var title_label := Label.new()
     title_label.text = _t("iap.coffee.title")
-    title_label.add_theme_font_override("font", DISPLAY_FONT)
+    title_label.add_theme_font_override("font", BODY_FONT)
     title_label.add_theme_font_size_override("font_size", 14 if compact else 15)
     title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
@@ -7224,7 +7303,7 @@ func _settings_fps_row() -> Control:
     labels.add_theme_constant_override("separation", 6)
     var title_label := Label.new()
     title_label.text = _t("settings.target_fps")
-    title_label.add_theme_font_override("font", DISPLAY_FONT)
+    title_label.add_theme_font_override("font", BODY_FONT)
     title_label.add_theme_font_size_override("font_size", 14 if compact else 15)
     title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
@@ -12183,6 +12262,7 @@ func _finish_ready_after_first_frame() -> void:
 
     _append_log("Debug CPU is a fallback backend and is not part of performance acceptance.")
     _write_probe_marker("ready")
+    _write_ui_probe_snapshot("ready")
     video_progress_data = _load_video_progress()
     _refresh_games()
     _refresh_videos()
@@ -15169,6 +15249,38 @@ func _write_probe_marker(line: String) -> void:
     marker.seek_end()
     marker.store_line("%d %s" % [Time.get_ticks_msec(), line])
     marker.flush()
+
+func _write_ui_probe_snapshot(label: String) -> void:
+    if not input_trace_enabled:
+        return
+    var viewport_size := get_viewport_rect().size
+    var safe_rect := _ui_safe_rect(viewport_size)
+    var compact := AetherDisplayScale.use_compact_shell(safe_rect.size)
+    var indicator: Control = shell_compact_indicator if compact else shell_nav_indicator
+    var indicator_rect := indicator.get_global_rect() if indicator != null and is_instance_valid(indicator) else Rect2()
+    var scroll_deadzone := -1
+    if settings_view != null and is_instance_valid(settings_view):
+        scroll_deadzone = settings_view.scroll_deadzone
+    _write_probe_marker("ui_snapshot label=%s platform=%s viewport=%.0fx%.0f safe=%.0f,%.0f %.0fx%.0f compact=%s sidebar_visible=%s sidebar_size=%.1fx%.1f indicator_visible=%s indicator_rect=%.1f,%.1f %.1fx%.1f scroll_deadzone=%d" % [
+        label,
+        OS.get_name(),
+        viewport_size.x,
+        viewport_size.y,
+        safe_rect.position.x,
+        safe_rect.position.y,
+        safe_rect.size.x,
+        safe_rect.size.y,
+        str(compact),
+        str(shell_sidebar != null and is_instance_valid(shell_sidebar) and shell_sidebar.visible),
+        shell_sidebar.size.x if shell_sidebar != null and is_instance_valid(shell_sidebar) else 0.0,
+        shell_sidebar.size.y if shell_sidebar != null and is_instance_valid(shell_sidebar) else 0.0,
+        str(indicator != null and is_instance_valid(indicator) and indicator.visible),
+        indicator_rect.position.x,
+        indicator_rect.position.y,
+        indicator_rect.size.x,
+        indicator_rect.size.y,
+        scroll_deadzone,
+    ])
 
 func _kirikiri_virtual_key(event: InputEventKey) -> int:
     var key_code := int(event.keycode)

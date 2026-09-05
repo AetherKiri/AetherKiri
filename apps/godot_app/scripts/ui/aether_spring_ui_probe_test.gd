@@ -251,8 +251,8 @@ func _run() -> void:
             return
         var title_label: Label = labels[0]
         var sub_label: Label = labels[1]
-        if title_label.get_theme_font("font") != MainScript.DISPLAY_FONT:
-            _fail("%s row title did not use the unified display font" % row_kind)
+        if title_label.get_theme_font("font") != MainScript.BODY_FONT:
+            _fail("%s row title did not use the unified body font" % row_kind)
             return
         if int(title_label.get_theme_font_size("font_size")) != 15:
             _fail("%s row title font size left the unified scale" % row_kind)

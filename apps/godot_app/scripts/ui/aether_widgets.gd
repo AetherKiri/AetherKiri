@@ -121,11 +121,11 @@ func navigation_button(button: Button, selected: bool = false) -> Button:
     button.add_theme_color_override("icon_focus_color", foreground)
     _set_button_boxes(
         button,
-        tokens.button_style(Color.TRANSPARENT, Color.TRANSPARENT, 14),
-        tokens.button_style(Color(tokens.text_primary.r, tokens.text_primary.g, tokens.text_primary.b, 0.08), Color.TRANSPARENT, 14),
-        tokens.button_style(Color(tokens.text_primary.r, tokens.text_primary.g, tokens.text_primary.b, 0.14), Color.TRANSPARENT, 14),
-        _focus_box(14),
-        tokens.button_style(Color.TRANSPARENT, Color.TRANSPARENT, 14)
+        tokens.button_style(Color.TRANSPARENT, Color.TRANSPARENT, 16),
+        tokens.button_style(Color(tokens.text_primary.r, tokens.text_primary.g, tokens.text_primary.b, 0.08), Color.TRANSPARENT, 16),
+        tokens.button_style(Color(tokens.text_primary.r, tokens.text_primary.g, tokens.text_primary.b, 0.14), Color.TRANSPARENT, 16),
+        _focus_box(16),
+        tokens.button_style(Color.TRANSPARENT, Color.TRANSPARENT, 16)
     )
     return button
 
@@ -143,7 +143,7 @@ func ghost_nav_button(button: Button, selected: bool = false) -> Button:
     button.add_theme_color_override("icon_pressed_color", tokens.accent)
     button.add_theme_color_override("icon_focus_color", foreground)
     for state in ["normal", "hover", "pressed", "hover_pressed", "focus", "disabled"]:
-        button.add_theme_stylebox_override(state, tokens.panel(Color.TRANSPARENT, 12))
+        button.add_theme_stylebox_override(state, tokens.panel(Color.TRANSPARENT, 14))
     return button
 
 func disclosure_button(button: Button) -> Button:
@@ -205,7 +205,7 @@ func _set_button_boxes(button: Button, normal: StyleBox, hover: StyleBox, presse
 
 func _primary_box(fill: Color, elevated: bool) -> StyleBoxFlat:
     # Rounded accent button with a single top-edge light, no shadow
-    var style: StyleBoxFlat = tokens.button_style(fill, Color.TRANSPARENT, 14)
+    var style: StyleBoxFlat = tokens.button_style(fill, Color.TRANSPARENT, 16)
     style.border_color = fill.lightened(0.30)
     style.border_width_top = 1
     style.shadow_size = 0
@@ -214,7 +214,7 @@ func _primary_box(fill: Color, elevated: bool) -> StyleBoxFlat:
 func _control_box(fill: Color, border: Color, elevated: bool) -> StyleBoxFlat:
     # Rounded control with a crisp 1px hairline outline, no shadow
     var effective_border: Color = border if border.a > 0.0 else tokens.separator
-    var style: StyleBoxFlat = tokens.button_style(fill, effective_border, 14)
+    var style: StyleBoxFlat = tokens.button_style(fill, effective_border, 16)
     style.shadow_size = 0
     return style
 
@@ -231,4 +231,4 @@ func _disabled_field_box() -> StyleBoxFlat:
     return _control_box(Color(tokens.surface_raised.r, tokens.surface_raised.g, tokens.surface_raised.b, 0.34), tokens.separator, false)
 
 func _focus_box(radius: int) -> StyleBoxFlat:
-    return tokens.focus_style(14)
+    return tokens.focus_style(16)
