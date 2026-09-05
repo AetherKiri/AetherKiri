@@ -1624,6 +1624,8 @@ var shell_sidebar: PanelContainer
 var shell_nav_indicator: PanelContainer
 var scroll_feathers: Array[Control] = []
 var nav_pill_drag := {"active": false, "pill": null, "axis": 1}
+var nav_pill_touch_index := -1
+var nav_button_drag := {}
 var shell_compact_header: PanelContainer
 var shell_compact_indicator: PanelContainer
 var shell_route_label: Label
@@ -2582,31 +2584,22 @@ func _build_video_view() -> void:
     video_timeline = HBoxContainer.new()
     video_timeline.add_theme_constant_override("separation", 14)
     video_controls_box.add_child(video_timeline)
-    video_progress_slider = HSlider.new()
+    video_progress_slider = AetherSlider.new()
+    video_progress_slider.name = "VideoProgressSlider"
     video_progress_slider.min_value = 0.0
     video_progress_slider.max_value = 1.0
     video_progress_slider.step = 0.1
+    video_progress_slider.setup(ui_tokens, 0.0)
     video_progress_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     video_progress_slider.drag_started.connect(func():
         active_video_scrubbing = true
         _set_video_controls_visible(true)
-        ui_motion._update_pivot(video_progress_slider)
-        ui_motion.spring_property(video_progress_slider, "scale", Vector2(1.05, 1.28), 0.14, 0.8)
     )
     video_progress_slider.drag_ended.connect(func(value_changed: bool):
         active_video_scrubbing = false
         video_controls_idle_sec = 0.0
-        ui_motion.spring_property(video_progress_slider, "scale", Vector2.ONE, 0.30, 0.8)
         if value_changed and player != null:
             player.media_seek(video_progress_slider.value)
-    )
-    video_progress_slider.mouse_entered.connect(func():
-        ui_motion._update_pivot(video_progress_slider)
-        ui_motion.spring_property(video_progress_slider, "scale", Vector2(1.01, 1.10), 0.28, 1.0)
-    )
-    video_progress_slider.mouse_exited.connect(func():
-        if not video_progress_slider.dragging:
-            ui_motion.spring_property(video_progress_slider, "scale", Vector2.ONE, 0.28, 1.0)
     )
     video_timeline.add_child(video_progress_slider)
     video_time_label = Label.new()
@@ -2927,6 +2920,9 @@ func _build_shell_chrome() -> void:
     shell_sidebar.clip_contents = true
     shell_sidebar.add_theme_stylebox_override("panel", ui_tokens.sidebar_panel())
     shell_root.add_child(shell_sidebar)
+    # Spring-driven width animation moves the sidebar every frame; keep the
+    # content area, home layout and safe-area fills glued to the live size.
+    shell_sidebar.resized.connect(_sync_sidebar_layout_width)
 
     # Host keeps the spring selection indicator (drawn behind nav items) and the sidebar column
     var sidebar_host := Control.new()
@@ -3066,6 +3062,13 @@ func _build_shell_chrome() -> void:
         {"button": shell_compact_settings_button, "action": _show_settings, "route": "settings"},
     ]
     _bind_nav_pill_drag(shell_compact_indicator, compact_specs, 0)
+    # The pill is mostly covered by its nav buttons. Letting a horizontal
+    # (or vertical) drag start on a button itself is what makes the jelly
+    # pill feel responsive instead of only grabbable in the tiny gaps.
+    for spec in sidebar_specs:
+        _bind_nav_button_drag_proxy(spec["button"], shell_nav_indicator, sidebar_specs, 1)
+    for spec in compact_specs:
+        _bind_nav_button_drag_proxy(spec["button"], shell_compact_indicator, compact_specs, 0)
 
     # Deterministic resync whenever the header/sidebar layout settles; the
     # per-frame follow then keeps the pills locked onto the live button rects.
@@ -3138,7 +3141,49 @@ func _bind_nav_pill_drag(pill: Control, specs: Array, axis: int) -> void:
         _on_nav_pill_input(pill, specs, axis, event)
     )
 
+func _nav_pill_drag_target(pill: Control, specs: Array, axis: int, pointer_axis: float) -> float:
+    # Pure geometry: where the pill center should sit so it follows the
+    # pointer, clamped to the span between the first and last nav button.
+    var parent_control := pill.get_parent() as Control
+    if parent_control == null or specs.is_empty():
+        return pill.position[axis]
+    var parent_rect := parent_control.get_global_rect()
+    var lo: float = (specs[0]["button"] as Button).get_global_rect().get_center()[axis]
+    var hi: float = (specs[specs.size() - 1]["button"] as Button).get_global_rect().get_center()[axis]
+    var clamped_center := clampf(pointer_axis, lo, hi)
+    return clamped_center - parent_rect.position[axis] - pill.size[axis] * 0.5
+
+func _move_nav_pill(pill: Control, specs: Array, axis: int, pointer_axis: float) -> void:
+    var target := pill.position
+    target[axis] = _nav_pill_drag_target(pill, specs, axis, pointer_axis)
+    if ui_motion.reduced_motion:
+        pill.position = target
+    else:
+        # Elastic finger-follow while dragging
+        ui_motion.spring_property(pill, "position", target, 0.06, 1.0)
+
 func _on_nav_pill_input(pill: Control, specs: Array, axis: int, event: InputEvent) -> void:
+    if event is InputEventScreenTouch:
+        var touch := event as InputEventScreenTouch
+        if touch.pressed:
+            nav_pill_drag = {"active": true, "pill": pill, "axis": axis}
+            nav_pill_touch_index = touch.index
+            ui_motion.active_springs.erase(ui_motion._motion_key(pill, "position"))
+            pill.accept_event()
+        elif nav_pill_drag.get("active", false) and nav_pill_drag.get("pill") == pill \
+                and touch.index == nav_pill_touch_index:
+            nav_pill_drag = {"active": false, "pill": null, "axis": axis}
+            nav_pill_touch_index = -1
+            _snap_nav_pill(pill, specs, axis)
+            pill.accept_event()
+        return
+    if event is InputEventScreenDrag:
+        var drag := event as InputEventScreenDrag
+        if nav_pill_drag.get("active", false) and nav_pill_drag.get("pill") == pill \
+                and drag.index == nav_pill_touch_index:
+            _move_nav_pill(pill, specs, axis, drag.position[axis])
+            pill.accept_event()
+        return
     if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
         if event.pressed:
             nav_pill_drag = {"active": true, "pill": pill, "axis": axis}
@@ -3149,22 +3194,54 @@ func _on_nav_pill_input(pill: Control, specs: Array, axis: int, event: InputEven
             _snap_nav_pill(pill, specs, axis)
             pill.accept_event()
     elif event is InputEventMouseMotion and nav_pill_drag.get("active", false) and nav_pill_drag.get("pill") == pill:
-        var parent_control := pill.get_parent() as Control
-        if parent_control == null:
-            return
-        var parent_rect := parent_control.get_global_rect()
-        var mouse_center: float = pill.get_global_mouse_position()[axis]
-        var lo: float = (specs[0]["button"] as Button).get_global_rect().get_center()[axis]
-        var hi: float = (specs[specs.size() - 1]["button"] as Button).get_global_rect().get_center()[axis]
-        var clamped_center := clampf(mouse_center, lo, hi)
-        var target := pill.position
-        target[axis] = clamped_center - parent_rect.position[axis] - pill.size[axis] * 0.5
-        if ui_motion.reduced_motion:
-            pill.position = target
-        else:
-            # Elastic finger-follow while dragging
-            ui_motion.spring_property(pill, "position", target, 0.06, 1.0)
+        _move_nav_pill(pill, specs, axis, pill.get_global_mouse_position()[axis])
         pill.accept_event()
+
+func _bind_nav_button_drag_proxy(button: Button, pill: Control, specs: Array, axis: int) -> void:
+    # Dragging from on top of a nav button hands the gesture to the jelly
+    # pill after a short threshold; a plain tap still clicks the button.
+    if button == null:
+        return
+    button.gui_input.connect(func(event: InputEvent):
+        if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+            if event.pressed:
+                nav_button_drag = {
+                    "button": button,
+                    "pill": pill,
+                    "specs": specs,
+                    "axis": axis,
+                    "active": false,
+                    "start": event.global_position,
+                }
+            elif nav_button_drag.get("button") == button:
+                var consumed := bool(nav_button_drag.get("active", false))
+                nav_button_drag = {}
+                if not consumed:
+                    return
+                if nav_pill_drag.get("active", false) and nav_pill_drag.get("pill") == pill:
+                    nav_pill_drag = {"active": false, "pill": null, "axis": axis}
+                var released_over_button := false
+                for spec in specs:
+                    var spec_button := spec["button"] as Button
+                    if spec_button != null and spec_button.get_global_rect().has_point(event.global_position):
+                        released_over_button = true
+                        break
+                if not released_over_button:
+                    _snap_nav_pill(pill, specs, axis)
+        elif event is InputEventMouseMotion \
+                and nav_button_drag.get("button") == button \
+                and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+            if not bool(nav_button_drag.get("active", false)):
+                var start: Vector2 = nav_button_drag.get("start", event.global_position)
+                if event.global_position.distance_to(start) < 8.0:
+                    return
+                nav_button_drag["active"] = true
+                nav_pill_drag = {"active": true, "pill": pill, "axis": axis}
+                ui_motion.active_springs.erase(ui_motion._motion_key(pill, "position"))
+                ui_motion.cancel_press(button)
+            _move_nav_pill(pill, specs, axis, event.global_position[axis])
+            button.accept_event()
+    )
 
 func _snap_nav_pill(pill: Control, specs: Array, axis: int) -> void:
     var pill_center: float = pill.get_global_rect().get_center()[axis]
@@ -3313,7 +3390,7 @@ func _update_nav_indicator(spring: bool) -> void:
         else:
             ui_motion.spring_property(shell_nav_indicator, "position", target_pos, 0.42, 0.55)
             ui_motion.spring_property(shell_nav_indicator, "size", target_size, 0.30, 1.0)
-        _jelly_pill(shell_nav_indicator)
+        _jelly_pill(shell_nav_indicator, false)
     else:
         ui_motion.active_springs.erase(ui_motion._motion_key(shell_nav_indicator, "position"))
         ui_motion.active_springs.erase(ui_motion._motion_key(shell_nav_indicator, "size"))
@@ -3321,13 +3398,16 @@ func _update_nav_indicator(spring: bool) -> void:
         shell_nav_indicator.size = target_size
         shell_nav_indicator.scale = Vector2.ONE
 
-func _jelly_pill(pill: Control) -> void:
+func _jelly_pill(pill: Control, horizontal: bool = false) -> void:
     if pill == null or not is_instance_valid(pill):
         return
-    # Jelly deformation: stretch along the travel axis then wobble back to a round shape
+    # Jelly deformation: stretch along the travel axis then wobble back to a
+    # round shape. The sidebar pill travels vertically, the compact header
+    # pill horizontally — stretching the wrong axis read as "no jelly".
     ui_motion._update_pivot(pill)
-    ui_motion.spring_property(pill, "scale", Vector2(1.06, 0.90), 0.13, 0.68)
-    var tree := get_tree()
+    var stretch := Vector2(1.06, 0.90) if horizontal else Vector2(0.90, 1.06)
+    ui_motion.spring_property(pill, "scale", stretch, 0.13, 0.68)
+    var tree := get_tree() if is_inside_tree() else null
     if tree != null:
         tree.create_timer(0.10).timeout.connect(
             func():
@@ -3372,7 +3452,7 @@ func _update_compact_indicator(spring: bool) -> void:
         else:
             ui_motion.spring_property(shell_compact_indicator, "position", target_pos, 0.42, 0.55)
             ui_motion.spring_property(shell_compact_indicator, "size", target_size, 0.30, 1.0)
-        _jelly_pill(shell_compact_indicator)
+        _jelly_pill(shell_compact_indicator, true)
     else:
         ui_motion.active_springs.erase(ui_motion._motion_key(shell_compact_indicator, "position"))
         ui_motion.active_springs.erase(ui_motion._motion_key(shell_compact_indicator, "size"))
@@ -3403,6 +3483,7 @@ func _toggle_sidebar() -> void:
     var expanding := shell_sidebar_collapsed
     if shell_sidebar_tween != null and shell_sidebar_tween.is_valid():
         shell_sidebar_tween.kill()
+    ui_motion.active_springs.erase(ui_motion._motion_key(shell_sidebar, "size"))
     _reset_sidebar_item_modulates()
     shell_sidebar_collapsed = not shell_sidebar_collapsed
     shell_sidebar_animating_expand = expanding
@@ -3431,18 +3512,40 @@ func _animate_sidebar_width(target_width: float, expanding: bool) -> void:
         _apply_sidebar_width(target_width)
         _apply_sidebar_presentation(expanding)
         return
-    shell_sidebar_tween = shell_sidebar.create_tween()
-    shell_sidebar_tween.tween_method(
-        _apply_sidebar_width,
-        shell_sidebar_layout_width,
-        target_width,
-        0.36
-    ).set_trans(Tween.TRANS_QUINT).set_ease(Tween.EASE_OUT)
-    shell_sidebar_tween.tween_callback(func():
-        shell_sidebar_animating_expand = false
-        _apply_sidebar_width(target_width)
-        _apply_sidebar_presentation(expanding)
+    var layout_size := shell_root.size
+    if layout_size.y <= 0.0:
+        layout_size = _ui_safe_rect(get_viewport_rect().size).size
+    # Spring the real sidebar size instead of a quint tween. The under-damped
+    # width spring overshoots the target by ~2-3 px and wobbles back, which
+    # reads as the sidebar itself being jelly. `shell_sidebar.resized` keeps
+    # the content offsets in sync on every frame of the spring.
+    ui_motion.spring_property(
+        shell_sidebar,
+        "size",
+        Vector2(target_width, layout_size.y),
+        0.42,
+        0.60,
+        func():
+            shell_sidebar_animating_expand = false
+            _apply_sidebar_width(target_width)
+            _apply_sidebar_presentation(expanding)
     )
+
+func _sync_sidebar_layout_width() -> void:
+    if shell_sidebar == null or not is_instance_valid(shell_sidebar) \
+            or shell_content == null or not shell_sidebar.visible:
+        return
+    if AetherDisplayScale.use_compact_shell(get_viewport_rect().size):
+        return
+    var width := shell_sidebar.size.x
+    shell_sidebar_layout_width = width
+    if not is_equal_approx(shell_content.offset_left, width):
+        shell_content.offset_left = width
+    var root_size := shell_root.size
+    if root_size.y <= 0.0:
+        root_size = _ui_safe_rect(get_viewport_rect().size).size
+    _layout_home_view(Vector2(maxf(0.0, root_size.x - width), root_size.y))
+    _layout_shell_safe_area_fills(get_viewport_rect().size, _ui_safe_rect(get_viewport_rect().size))
 
 func _reset_sidebar_item_modulates() -> void:
     for item in [shell_sidebar_brand_labels, shell_library_button, shell_video_button, shell_settings_button, shell_sidebar_version]:
@@ -3503,6 +3606,7 @@ func _layout_shell(window_size: Vector2) -> void:
         shell_sidebar_animating_expand = false
         _reset_sidebar_item_modulates()
         _apply_sidebar_presentation(false)
+    ui_motion.active_springs.erase(ui_motion._motion_key(shell_sidebar, "size"))
     shell_sidebar.visible = not compact
     shell_compact_header.visible = compact
     shell_sidebar.position = Vector2.ZERO
@@ -5906,7 +6010,12 @@ func _deep_control_at_position(node: Node, position: Vector2) -> Control:
 func _configure_shell_scroll(scroll: ScrollContainer) -> void:
     scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
     scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-    scroll.scroll_deadzone = 0
+    # The shell owns touch scrolling (finger-follow, momentum glide, elastic
+    # rubber-band). The ScrollContainer's built-in touch pan starts moving the
+    # content immediately at deadzone 0, so both systems double-drive the same
+    # offset and the gesture loses its silk. A huge deadzone disables the
+    # native pan while wheel/trackpad input keeps working normally.
+    scroll.scroll_deadzone = 1000000
 
 func _start_shell_scroll_drag(key: int, position: Vector2) -> void:
     var scroll := _find_shell_scroll_at_position(position)
@@ -6687,6 +6796,7 @@ func _settings_switch(initial: bool, key: String) -> Button:
     return toggle
 
 func _settings_value_row(title: String, value: String) -> Control:
+    var compact := settings_compact_layout
     var margin := MarginContainer.new()
     margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     margin.add_theme_constant_override("margin_left", 2)
@@ -6701,13 +6811,16 @@ func _settings_value_row(title: String, value: String) -> Control:
     label.text = title
     label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-    label.add_theme_font_size_override("font_size", 17)
+    # Same family + size scale as _settings_row so every settings row reads
+    # with one voice (the old 17px default-font title broke the rhythm).
+    label.add_theme_font_override("font", DISPLAY_FONT)
+    label.add_theme_font_size_override("font_size", 14 if compact else 15)
     label.add_theme_color_override("font_color", ui_tokens.text_primary)
     row.add_child(label)
     var value_label := Label.new()
     value_label.text = value
     value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-    value_label.add_theme_font_size_override("font_size", 15)
+    value_label.add_theme_font_size_override("font_size", 11 if compact else 12)
     value_label.add_theme_color_override("font_color", ui_tokens.text_secondary)
     row.add_child(value_label)
     return margin
@@ -6719,7 +6832,7 @@ func _settings_action_row(title: String, subtitle: String, action_text: String, 
     margin.add_theme_constant_override("margin_top", 10)
     margin.add_theme_constant_override("margin_right", 2)
     margin.add_theme_constant_override("margin_bottom", 10)
-    var compact := shell_content.size.x < 640.0
+    var compact := settings_compact_layout
     var row: BoxContainer = VBoxContainer.new() if compact else HBoxContainer.new()
     row.custom_minimum_size = Vector2(0, 126 if compact else 92)
     row.add_theme_constant_override("separation", 12 if compact else 18)
@@ -6730,18 +6843,20 @@ func _settings_action_row(title: String, subtitle: String, action_text: String, 
     row.add_child(labels)
     var title_label := Label.new()
     title_label.text = title
-    title_label.add_theme_font_size_override("font_size", 16)
+    title_label.add_theme_font_override("font", DISPLAY_FONT)
+    title_label.add_theme_font_size_override("font_size", 14 if compact else 15)
     title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
     var sub := Label.new()
     sub.text = subtitle
     sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    sub.add_theme_font_size_override("font_size", 13)
+    sub.add_theme_font_size_override("font_size", 11 if compact else 12)
     sub.add_theme_color_override("font_color", ui_tokens.text_secondary)
     labels.add_child(sub)
     var open := _pill_button(action_text)
     _configure_settings_action_button(open)
-    open.pressed.connect(action)
+    if action.is_valid():
+        open.pressed.connect(action)
     row.add_child(open)
     return margin
 
@@ -6757,7 +6872,7 @@ func _settings_iap_product_row() -> Control:
     margin.add_theme_constant_override("margin_top", 10)
     margin.add_theme_constant_override("margin_right", 2)
     margin.add_theme_constant_override("margin_bottom", 10)
-    var compact := shell_content.size.x < 640.0
+    var compact := settings_compact_layout
     var row: BoxContainer = VBoxContainer.new() if compact else HBoxContainer.new()
     row.custom_minimum_size = Vector2(0, 150 if compact else 112)
     row.add_theme_constant_override("separation", 12 if compact else 18)
@@ -6770,20 +6885,21 @@ func _settings_iap_product_row() -> Control:
 
     var title_label := Label.new()
     title_label.text = _t("iap.list_limit.title")
-    title_label.add_theme_font_size_override("font_size", 16)
+    title_label.add_theme_font_override("font", DISPLAY_FONT)
+    title_label.add_theme_font_size_override("font_size", 14 if compact else 15)
     title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
 
     var description := Label.new()
     description.text = _t("iap.list_limit.desc")
     description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    description.add_theme_font_size_override("font_size", 13)
+    description.add_theme_font_size_override("font_size", 11 if compact else 12)
     description.add_theme_color_override("font_color", ui_tokens.text_secondary)
     labels.add_child(description)
 
     var status := Label.new()
     status.text = _iap_product_status_text()
-    status.add_theme_font_size_override("font_size", 15)
+    status.add_theme_font_size_override("font_size", 11 if compact else 12)
     status.add_theme_color_override("font_color", ui_tokens.accent)
     labels.add_child(status)
 
@@ -6822,7 +6938,7 @@ func _settings_iap_coffee_row() -> Control:
     margin.add_theme_constant_override("margin_top", 10)
     margin.add_theme_constant_override("margin_right", 2)
     margin.add_theme_constant_override("margin_bottom", 10)
-    var compact := shell_content.size.x < 640.0
+    var compact := settings_compact_layout
     var row: BoxContainer = VBoxContainer.new() if compact else HBoxContainer.new()
     row.custom_minimum_size = Vector2(0, 150 if compact else 112)
     row.add_theme_constant_override("separation", 12 if compact else 18)
@@ -6835,21 +6951,22 @@ func _settings_iap_coffee_row() -> Control:
 
     var title_label := Label.new()
     title_label.text = _t("iap.coffee.title")
-    title_label.add_theme_font_size_override("font_size", 16)
+    title_label.add_theme_font_override("font", DISPLAY_FONT)
+    title_label.add_theme_font_size_override("font_size", 14 if compact else 15)
     title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
 
     var description := Label.new()
     description.text = _t("iap.coffee.desc")
     description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    description.add_theme_font_size_override("font_size", 13)
+    description.add_theme_font_size_override("font_size", 11 if compact else 12)
     description.add_theme_color_override("font_color", ui_tokens.text_secondary)
     labels.add_child(description)
 
     var status := Label.new()
     status.text = _iap_coffee_status_text()
     status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    status.add_theme_font_size_override("font_size", 15)
+    status.add_theme_font_size_override("font_size", 11 if compact else 12)
     status.add_theme_color_override("font_color", ui_tokens.accent)
     labels.add_child(status)
 
@@ -7097,6 +7214,7 @@ func _settings_fps_row() -> Control:
     margin.add_theme_constant_override("margin_top", 10)
     margin.add_theme_constant_override("margin_right", 2)
     margin.add_theme_constant_override("margin_bottom", 10)
+    var compact := settings_compact_layout
     var row := HBoxContainer.new()
     row.custom_minimum_size = Vector2(0, 62)
     row.add_theme_constant_override("separation", 14)
@@ -7106,12 +7224,13 @@ func _settings_fps_row() -> Control:
     labels.add_theme_constant_override("separation", 6)
     var title_label := Label.new()
     title_label.text = _t("settings.target_fps")
-    title_label.add_theme_font_size_override("font_size", 18)
+    title_label.add_theme_font_override("font", DISPLAY_FONT)
+    title_label.add_theme_font_size_override("font_size", 14 if compact else 15)
     title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
     var sub := Label.new()
     sub.text = _t("settings.target_fps_desc")
-    sub.add_theme_font_size_override("font_size", 14)
+    sub.add_theme_font_size_override("font_size", 11 if compact else 12)
     sub.add_theme_color_override("font_color", ui_tokens.text_secondary)
     labels.add_child(sub)
     row.add_child(labels)
@@ -15454,6 +15573,13 @@ func _handle_shell_scroll_input(event: InputEvent) -> bool:
     # pointer; otherwise one wheel gesture moves both scroll containers.
     if get_tree().get_first_node_in_group(AETHER_SELECT_OVERLAY_INPUT_GROUP) != null:
         return false
+
+    if event is InputEventMouseButton or event is InputEventMouseMotion:
+        if _is_touch_platform() and event.device == INPUT_DEVICE_ID_EMULATION:
+            # iOS synthesized this mouse event from a real touch; the
+            # ScreenTouch/Drag branches below already own that gesture.
+            # Handling both would double-drive the scroll offset.
+            return false
 
     if event is InputEventScreenTouch:
         var touch := event as InputEventScreenTouch

@@ -9,6 +9,10 @@ const ITEM_HEIGHT := 40.0
 const OVERLAY_INPUT_GROUP := "aether_select_input_overlay"
 const TOUCH_DRAG_THRESHOLD := 6.0
 const TOUCH_MOUSE_SUPPRESS_MS := 500
+const MENU_ITEM_STAGGER := 0.028
+const MENU_ITEM_MAX_STAGGER := 12
+const MENU_ITEM_START_SCALE_Y := 0.55
+const POPUP_REST_SCALE := 0.90
 
 var tokens
 var motion
@@ -182,6 +186,7 @@ func _open_popup() -> void:
     _animate_chevron(true)
     # Jelly slide the highlight to the selected row after layout settles
     call_deferred("_slide_menu_highlight", true, selected_index)
+    call_deferred("_cascade_menu_items")
     call_deferred("_focus_selected_item")
 
 func _menu_item(index: int) -> Button:
@@ -214,6 +219,35 @@ func _menu_item(index: int) -> Button:
     button.focus_entered.connect(func(): _slide_menu_highlight(true, index))
     motion.bind_pressable(button)
     return button
+
+func _cascade_menu_items() -> void:
+    # Incremental slide-in: every row drops in from under the previous one,
+    # top to bottom, so long menus read as a staggered reveal.
+    if popup_menu == null or not is_instance_valid(popup_menu):
+        return
+    var step := 0
+    for child in popup_menu.get_children():
+        var item := child as Control
+        if item == null or not is_instance_valid(item):
+            continue
+        if motion.reduced_motion:
+            item.modulate.a = 1.0
+            item.scale = Vector2.ONE
+            step += 1
+            continue
+        var delay := float(mini(step, MENU_ITEM_MAX_STAGGER)) * MENU_ITEM_STAGGER
+        item.pivot_offset = Vector2(maxf(1.0, item.size.x) * 0.5, 0.0)
+        item.modulate.a = 0.0
+        item.scale = Vector2(1.0, MENU_ITEM_START_SCALE_Y)
+        # Probe-visible contract: rows slide in from a squashed state.
+        item.set_meta("aether_cascade_start_scale_y", MENU_ITEM_START_SCALE_Y)
+        item.set_meta("aether_cascade_delay", delay)
+        var tween := item.create_tween().set_parallel(true)
+        tween.tween_property(item, "modulate:a", 1.0, 0.16) \
+            .set_delay(delay).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+        tween.tween_property(item, "scale", Vector2.ONE, 0.26) \
+            .set_delay(delay).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+        step += 1
 
 func _slide_menu_highlight(animate: bool, index: int) -> void:
     if menu_highlight == null or not is_instance_valid(menu_highlight):
@@ -344,14 +378,22 @@ func _animate_popup(show: bool) -> void:
     if show:
         popup_panel.modulate.a = 0.0
         if not motion.reduced_motion:
-            popup_panel.scale = Vector2(0.94, 0.94)
-            popup_panel.position = rest_position + Vector2(0, -6)
+            popup_panel.scale = Vector2(POPUP_REST_SCALE, POPUP_REST_SCALE)
+            popup_panel.position = rest_position + Vector2(0, -10)
     var duration := 0.12 if motion.reduced_motion else (0.18 if show else 0.14)
     popup_tween = create_tween().set_parallel(true)
     popup_tween.tween_property(popup_panel, "modulate:a", 1.0 if show else 0.0, duration).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
     if not motion.reduced_motion:
-        # Jelly pop: under-damped uniform-scale wobble, no aspect distortion
-        motion.spring_property(popup_panel, "scale", Vector2.ONE if show else Vector2(0.94, 0.94), 0.26 if show else 0.18, 0.58 if show else 1.0)
+        # Jelly pop: a visible under-damped wobble (≈2.3% overshoot at damping
+        # 0.42) without any aspect distortion. The old 0.94/0.58 pair peaked
+        # at ~0.6% — below one rendered pixel of wobble.
+        motion.spring_property(
+            popup_panel,
+            "scale",
+            Vector2.ONE if show else Vector2(POPUP_REST_SCALE, POPUP_REST_SCALE),
+            0.30 if show else 0.18,
+            0.42 if show else 1.0
+        )
         motion.spring_property(popup_panel, "position", rest_position, 0.30 if show else 0.20, 1.0)
     if not show:
         popup_tween.chain().tween_callback(_free_overlay)

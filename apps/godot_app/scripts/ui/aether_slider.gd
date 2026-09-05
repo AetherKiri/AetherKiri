@@ -2,8 +2,16 @@ extends HSlider
 
 const CONTROL_SIZE := Vector2(220.0, 40.0)
 const KNOB_SIZE := 18
+const TRACK_THIN := 3.0
+const TRACK_THICK := 6.5
+const THICKNESS_DURATION := 0.22
 
 var tokens
+var track_style: StyleBoxFlat
+var fill_style: StyleBoxFlat
+var fill_highlight_style: StyleBoxFlat
+var thickness_tween: Tween
+var scrubbing := false
 
 func setup(design_tokens, initial_value: float) -> void:
     tokens = design_tokens
@@ -15,18 +23,12 @@ func setup(design_tokens, initial_value: float) -> void:
     mouse_force_pass_scroll_events = false
     value = clampf(initial_value, min_value, max_value)
 
-    add_theme_stylebox_override(
-        "slider",
-        _track_style(tokens.background_raised)
-    )
-    add_theme_stylebox_override(
-        "grabber_area",
-        _track_style(tokens.accent)
-    )
-    add_theme_stylebox_override(
-        "grabber_area_highlight",
-        _track_style(tokens.accent.lightened(0.055))
-    )
+    track_style = _track_style(tokens.background_raised)
+    fill_style = _track_style(tokens.accent)
+    fill_highlight_style = _track_style(tokens.accent.lightened(0.055))
+    add_theme_stylebox_override("slider", track_style)
+    add_theme_stylebox_override("grabber_area", fill_style)
+    add_theme_stylebox_override("grabber_area_highlight", fill_highlight_style)
     add_theme_stylebox_override("focus", tokens.focus_style(8))
     var knob_fill: Color = (
         tokens.text_primary if tokens.mode == "dark" else tokens.background
@@ -43,13 +45,55 @@ func setup(design_tokens, initial_value: float) -> void:
         "grabber_disabled",
         _knob_texture(tokens.text_tertiary, tokens.separator)
     )
+    # The control itself never scales while touched: scaling distorts the round
+    # grabber into an ellipse. The track thickens under the fixed knob instead.
+    drag_started.connect(func():
+        scrubbing = true
+        _animate_thickness(1.0)
+    )
+    drag_ended.connect(func(_value_changed: bool):
+        scrubbing = false
+        _animate_thickness(0.0)
+    )
+    mouse_entered.connect(func(): _animate_thickness(0.6))
+    mouse_exited.connect(func():
+        if not scrubbing:
+            _animate_thickness(0.0)
+    )
+
+func _animate_thickness(target: float) -> void:
+    if thickness_tween != null and thickness_tween.is_valid():
+        thickness_tween.kill()
+    thickness_tween = create_tween()
+    thickness_tween.tween_method(
+        _set_track_thickness,
+        _current_thickness(),
+        clampf(target, 0.0, 1.0),
+        THICKNESS_DURATION
+    ).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+func _current_thickness() -> float:
+    if track_style == null:
+        return 0.0
+    return clampf(
+        (track_style.content_margin_top - TRACK_THIN) / (TRACK_THICK - TRACK_THIN),
+        0.0,
+        1.0
+    )
+
+func _set_track_thickness(amount: float) -> void:
+    var margin := lerpf(TRACK_THIN, TRACK_THICK, clampf(amount, 0.0, 1.0))
+    for style in [track_style, fill_style, fill_highlight_style]:
+        if style != null:
+            style.content_margin_top = margin
+            style.content_margin_bottom = margin
 
 func _track_style(fill: Color) -> StyleBoxFlat:
     var style := StyleBoxFlat.new()
     style.bg_color = fill
     style.set_corner_radius_all(3)
-    style.content_margin_top = 3
-    style.content_margin_bottom = 3
+    style.content_margin_top = TRACK_THIN
+    style.content_margin_bottom = TRACK_THIN
     return style
 
 func _knob_texture(fill: Color, outline: Color) -> Texture2D:
