@@ -5079,7 +5079,7 @@ func _rebuild_settings_view() -> void:
     top.add_child(title_stack)
     var title := Label.new()
     title.text = _t("settings.title")
-    title.add_theme_font_override("font", BODY_FONT)
+    title.add_theme_font_override("font", DISPLAY_FONT)
     title.add_theme_font_size_override("font_size", 24 if compact else 40)
     title.add_theme_color_override("font_color", ui_tokens.text_primary)
     title_stack.add_child(title)
@@ -6688,7 +6688,7 @@ func _settings_section(page: VBoxContainer, title: String, animate: bool, delay:
 
     var title_label := Label.new()
     title_label.text = title.to_upper()
-    title_label.add_theme_font_override("font", BODY_FONT)
+    title_label.add_theme_font_override("font", DISPLAY_FONT)
     title_label.add_theme_font_size_override("font_size", 11 if compact else 13)
     title_label.add_theme_color_override("font_color", ui_tokens.accent)
     content.add_child(title_label)
@@ -6739,7 +6739,7 @@ func _settings_row(title: String, subtitle: String, control: Control, stack_cont
 
     var title_label := Label.new()
     title_label.text = title
-    title_label.add_theme_font_override("font", BODY_FONT)
+    title_label.add_theme_font_override("font", DISPLAY_FONT)
     title_label.add_theme_font_size_override("font_size", 14 if compact else 15)
     title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
@@ -6790,7 +6790,7 @@ func _settings_value_row(title: String, value: String) -> Control:
     label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     # Same family + size scale as _settings_row so every settings row reads
     # with one voice (the old 17px default-font title broke the rhythm).
-    label.add_theme_font_override("font", BODY_FONT)
+    label.add_theme_font_override("font", DISPLAY_FONT)
     label.add_theme_font_size_override("font_size", 14 if compact else 15)
     label.add_theme_color_override("font_color", ui_tokens.text_primary)
     row.add_child(label)
@@ -6820,7 +6820,7 @@ func _settings_action_row(title: String, subtitle: String, action_text: String, 
     row.add_child(labels)
     var title_label := Label.new()
     title_label.text = title
-    title_label.add_theme_font_override("font", BODY_FONT)
+    title_label.add_theme_font_override("font", DISPLAY_FONT)
     title_label.add_theme_font_size_override("font_size", 14 if compact else 15)
     title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
@@ -6862,7 +6862,7 @@ func _settings_iap_product_row() -> Control:
 
     var title_label := Label.new()
     title_label.text = _t("iap.list_limit.title")
-    title_label.add_theme_font_override("font", BODY_FONT)
+    title_label.add_theme_font_override("font", DISPLAY_FONT)
     title_label.add_theme_font_size_override("font_size", 14 if compact else 15)
     title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
@@ -6928,7 +6928,7 @@ func _settings_iap_coffee_row() -> Control:
 
     var title_label := Label.new()
     title_label.text = _t("iap.coffee.title")
-    title_label.add_theme_font_override("font", BODY_FONT)
+    title_label.add_theme_font_override("font", DISPLAY_FONT)
     title_label.add_theme_font_size_override("font_size", 14 if compact else 15)
     title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
@@ -7201,7 +7201,7 @@ func _settings_fps_row() -> Control:
     labels.add_theme_constant_override("separation", 6)
     var title_label := Label.new()
     title_label.text = _t("settings.target_fps")
-    title_label.add_theme_font_override("font", BODY_FONT)
+    title_label.add_theme_font_override("font", DISPLAY_FONT)
     title_label.add_theme_font_size_override("font_size", 14 if compact else 15)
     title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
