@@ -37,6 +37,10 @@ jobs:
           git submodule update --init --depth 1 packages/OnscripterYuri
           git -c submodule.packages/psdfile.url=https://github.com/AetherKiri/psdfile.git submodule update --init --recursive --depth 1 packages/psdfile
 
+      - name: Install Bison
+        shell: pwsh
+        run: choco install winflexbison --no-progress -y
+
       - name: Bootstrap vcpkg
         shell: pwsh
         run: |
