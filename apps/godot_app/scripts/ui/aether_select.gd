@@ -12,7 +12,7 @@ const TOUCH_MOUSE_SUPPRESS_MS := 500
 const MENU_ITEM_STAGGER := 0.028
 const MENU_ITEM_MAX_STAGGER := 12
 const MENU_ITEM_START_SCALE_Y := 0.55
-const POPUP_REST_SCALE := 0.90
+const POPUP_REST_SCALE := 0.86
 
 var tokens
 var motion
@@ -379,22 +379,21 @@ func _animate_popup(show: bool) -> void:
         popup_panel.modulate.a = 0.0
         if not motion.reduced_motion:
             popup_panel.scale = Vector2(POPUP_REST_SCALE, POPUP_REST_SCALE)
-            popup_panel.position = rest_position + Vector2(0, -10)
+            popup_panel.position = rest_position + Vector2(0, -14)
     var duration := 0.12 if motion.reduced_motion else (0.18 if show else 0.14)
     popup_tween = create_tween().set_parallel(true)
     popup_tween.tween_property(popup_panel, "modulate:a", 1.0 if show else 0.0, duration).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
     if not motion.reduced_motion:
-        # Jelly pop: a visible under-damped wobble (≈2.3% overshoot at damping
-        # 0.42) without any aspect distortion. The old 0.94/0.58 pair peaked
-        # at ~0.6% — below one rendered pixel of wobble.
+        # Springy pop: bigger compression + lower damping so the panel visibly
+        # overshoots (~4.5% at damping 0.34) and wobbles back before settling.
         motion.spring_property(
             popup_panel,
             "scale",
             Vector2.ONE if show else Vector2(POPUP_REST_SCALE, POPUP_REST_SCALE),
-            0.30 if show else 0.18,
-            0.42 if show else 1.0
+            0.32 if show else 0.18,
+            0.34 if show else 1.0
         )
-        motion.spring_property(popup_panel, "position", rest_position, 0.30 if show else 0.20, 1.0)
+        motion.spring_property(popup_panel, "position", rest_position, 0.34 if show else 0.20, 0.72 if show else 1.0)
     if not show:
         popup_tween.chain().tween_callback(_free_overlay)
 
