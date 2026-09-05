@@ -489,6 +489,12 @@ void motion::ResourceManager::resetStaticStateForHostSession() {
 }
 
 void motion::ResourceManager::trimStaticStateForMemoryPressure() {
+    // Called only from the strongest (MAX) compaction level. A normal
+    // MINIMIZE notification must not discard parsed Motion modules: scene
+    // transitions routinely create short-lived ResourceManager wrappers, and
+    // reparsing the same PSB on the application thread produces visible
+    // frame spikes. The explicit MAX path remains available to release every
+    // process-level warm module when the host really needs all caches gone.
     clearWarmMotionModuleCache();
 }
 

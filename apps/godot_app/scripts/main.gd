@@ -10812,7 +10812,11 @@ func _ready() -> void:
     input_trace_enabled = (
         _runtime_flag("AETHERKIRI_INPUT_TRACE")
         or ios_diagnostics_enabled
-        or not cli_probe_script.is_empty()
+        # A CLI probe should measure the game, not force the very verbose
+        # LayerIntf input tracer on every click.  The tracer walks and logs a
+        # large TJS object graph from onMouseDown/onMouseUp and can itself
+        # create 45-70ms host frames.  Keep it opt-in for targeted input
+        # investigations while probes retain their normal input delivery.
     )
     device_probe_enabled = device_probe_enabled or frame_probe_enabled
     device_probe_enabled = device_probe_enabled or input_trace_enabled
@@ -12224,10 +12228,13 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
     var tick_total := 0.0
     var update_total := 0.0
     var frame_total := 0.0
+    var wall_frame_total := 0.0
     var input_max := 0.0
     var tick_max := 0.0
     var update_max := 0.0
     var frame_max := 0.0
+    var wall_frame_max := 0.0
+    var wait_max := 0.0
     var spikes := 0
     var input_events := 0
     var clicks_sent := 0
@@ -12240,10 +12247,13 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
     var sample_tick_total := 0.0
     var sample_update_total := 0.0
     var sample_frame_total := 0.0
+    var sample_wall_frame_total := 0.0
     var sample_input_max := 0.0
     var sample_tick_max := 0.0
     var sample_update_max := 0.0
     var sample_frame_max := 0.0
+    var sample_wall_frame_max := 0.0
+    var sample_wait_max := 0.0
     var sample_spikes := 0
     var sample_index := 0
 
@@ -12320,6 +12330,18 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
             step += 1
         await get_tree().process_frame
         var sample_end_ticks := Time.get_ticks_usec()
+        # The overlay's Frame value is the host/Godot frame delta, which
+        # includes the time spent yielding to the next process_frame. Keep
+        # that wall-clock interval separate from the active engine work above
+        # so click-stream results can be compared with the floating panel.
+        var wall_frame_ms := float(sample_end_ticks - frame_start) / 1000.0
+        var wait_ms := maxf(0.0, wall_frame_ms - frame_ms)
+        wall_frame_total += wall_frame_ms
+        wall_frame_max = maxf(wall_frame_max, wall_frame_ms)
+        wait_max = maxf(wait_max, wait_ms)
+        sample_wall_frame_total += wall_frame_ms
+        sample_wall_frame_max = maxf(sample_wall_frame_max, wall_frame_ms)
+        sample_wait_max = maxf(sample_wait_max, wait_ms)
         var sample_elapsed_ms := float(sample_end_ticks - sample_start_ticks) / 1000.0
         var stream_finished := frame_index + 1 >= frames
         if sample_interval_ms > 0 and (sample_elapsed_ms >= sample_interval_ms or stream_finished):
@@ -12328,7 +12350,7 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
                 0.0,
                 (sample_elapsed_ms - sample_frame_total) / sample_divisor
             )
-            var sample_line := "click_stream_sample label=%s index=%d frames=%d clicks=%d elapsed_ms=%.2f fps=%.2f avg_input_ms=%.2f avg_tick_ms=%.2f avg_update_ms=%.2f avg_active_ms=%.2f avg_wait_ms=%.2f max_input_ms=%.2f max_tick_ms=%.2f max_update_ms=%.2f max_active_ms=%.2f spikes=%d spike_ms=%.2f texture_backend=%s renderer=\"%s\"" % [
+            var sample_line := "click_stream_sample label=%s index=%d frames=%d clicks=%d elapsed_ms=%.2f fps=%.2f avg_input_ms=%.2f avg_tick_ms=%.2f avg_update_ms=%.2f avg_active_ms=%.2f avg_wait_ms=%.2f avg_wall_frame_ms=%.2f max_input_ms=%.2f max_tick_ms=%.2f max_update_ms=%.2f max_active_ms=%.2f max_wall_frame_ms=%.2f max_wait_ms=%.2f spikes=%d spike_ms=%.2f texture_backend=%s renderer=\"%s\"" % [
                 label,
                 sample_index,
                 sample_frames,
@@ -12340,10 +12362,13 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
                 sample_update_total / sample_divisor,
                 sample_frame_total / sample_divisor,
                 sample_wait_ms,
+                sample_wall_frame_total / sample_divisor,
                 sample_input_max,
                 sample_tick_max,
                 sample_update_max,
                 sample_frame_max,
+                sample_wall_frame_max,
+                sample_wait_max,
                 sample_spikes,
                 spike_ms,
                 player.get_frame_texture_backend(),
@@ -12359,15 +12384,18 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
             sample_tick_total = 0.0
             sample_update_total = 0.0
             sample_frame_total = 0.0
+            sample_wall_frame_total = 0.0
             sample_input_max = 0.0
             sample_tick_max = 0.0
             sample_update_max = 0.0
             sample_frame_max = 0.0
+            sample_wall_frame_max = 0.0
+            sample_wait_max = 0.0
             sample_spikes = 0
 
     var divisor := float(max(1, measured_frames))
     var elapsed_sec: float = maxf(0.0001, float(Time.get_ticks_usec() - stream_start_ticks) / 1000000.0)
-    var line := "click_stream label=%s frames=%d measured_frames=%d clicks_per_frame=%d click_every_frames=%d max_clicks=%d clicks_sent=%d input_events=%d fps=%.2f avg_input_ms=%.2f max_input_ms=%.2f avg_tick_ms=%.2f max_tick_ms=%.2f avg_update_ms=%.2f max_update_ms=%.2f avg_frame_ms=%.2f max_frame_ms=%.2f spikes=%d spike_ms=%.2f texture_backend=%s renderer=\"%s\"" % [
+    var line := "click_stream label=%s frames=%d measured_frames=%d clicks_per_frame=%d click_every_frames=%d max_clicks=%d clicks_sent=%d input_events=%d fps=%.2f avg_input_ms=%.2f max_input_ms=%.2f avg_tick_ms=%.2f max_tick_ms=%.2f avg_update_ms=%.2f max_update_ms=%.2f avg_frame_ms=%.2f max_frame_ms=%.2f avg_wall_frame_ms=%.2f max_wall_frame_ms=%.2f max_wait_ms=%.2f spikes=%d spike_ms=%.2f texture_backend=%s renderer=\"%s\"" % [
         label,
         frames,
         measured_frames,
@@ -12385,6 +12413,9 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
         update_max,
         frame_total / divisor,
         frame_max,
+        wall_frame_total / divisor,
+        wall_frame_max,
+        wait_max,
         spikes,
         spike_ms,
         player.get_frame_texture_backend(),
