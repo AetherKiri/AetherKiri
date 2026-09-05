@@ -26,10 +26,15 @@ func setup(design_tokens, motion_system, initial_value: bool) -> void:
     knob.size = KNOB_SIZE
     knob.pivot_offset = KNOB_SIZE * 0.5
     var knob_style: StyleBoxFlat = tokens.panel(Color.WHITE, 12)
-    knob_style.border_color = Color(1, 1, 1, 0.56)
+    # Light themes need a hairline that darkens toward the track; dark themes
+    # get a top light edge. Either way the geometry stays identical, so every
+    # switch in every section reads as the same control.
+    knob_style.border_color = (
+        Color(1, 1, 1, 0.56) if tokens.mode == "dark" or tokens.mode == "warm_dark" else Color(0, 0, 0, 0.12)
+    )
     knob_style.border_width_top = 1
-    knob_style.shadow_color = Color(0, 0, 0, 0.28 if tokens.mode == "dark" else 0.16)
-    knob_style.shadow_size = 5 if tokens.mode == "dark" else 3
+    knob_style.shadow_color = Color(0, 0, 0, 0.28 if tokens.mode == "dark" or tokens.mode == "warm_dark" else 0.16)
+    knob_style.shadow_size = 5 if tokens.mode == "dark" or tokens.mode == "warm_dark" else 3
     knob_style.shadow_offset = Vector2(0, 2)
     knob.add_theme_stylebox_override("panel", knob_style)
     add_child(knob)
