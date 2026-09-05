@@ -55,7 +55,7 @@ func setup(design_tokens, motion_system, next_chevron: Texture2D, next_check: Te
     add_theme_stylebox_override("normal", _field_box(tokens.glass_material, Color.TRANSPARENT, 0))
     add_theme_stylebox_override("hover", _field_box(tokens.accent_fill, Color.TRANSPARENT, 0))
     add_theme_stylebox_override("pressed", _field_box(tokens.accent_fill, Color.TRANSPARENT, 0))
-    add_theme_stylebox_override("focus", tokens.focus_style(12))
+    add_theme_stylebox_override("focus", tokens.focus_style(14))
     add_theme_stylebox_override("disabled", _field_box(Color(tokens.surface_raised.r, tokens.surface_raised.g, tokens.surface_raised.b, 0.34), Color.TRANSPARENT, 0))
 
     chevron = TextureRect.new()
@@ -435,7 +435,7 @@ func _exit_tree() -> void:
         overlay.queue_free()
 
 func _field_box(fill: Color, border: Color, border_width: int) -> StyleBoxFlat:
-    var style: StyleBoxFlat = tokens.button_style(fill, Color.TRANSPARENT, 12)
+    var style: StyleBoxFlat = tokens.button_style(fill, Color.TRANSPARENT, 14)
     style.content_margin_left = 14
     style.content_margin_right = 42
     style.shadow_color = Color.TRANSPARENT
@@ -447,7 +447,7 @@ func _field_box(fill: Color, border: Color, border_width: int) -> StyleBoxFlat:
     return style
 
 func _popup_box() -> StyleBoxFlat:
-    var style: StyleBoxFlat = tokens.panel(tokens.surface, 8)
+    var style: StyleBoxFlat = tokens.panel(tokens.surface, 12)
     style.content_margin_left = MENU_PADDING
     style.content_margin_top = MENU_PADDING
     style.content_margin_right = MENU_PADDING

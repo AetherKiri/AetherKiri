@@ -102,8 +102,8 @@ func _initialize() -> void:
     assert(not bool(landscape_detail["compact"]))
     assert(bool(landscape_detail["phone_landscape"]))
     assert(float(landscape_detail["content_width"]) > float(portrait_detail["content_width"]))
-    assert(app._home_card_minimum_size(true) == Vector2(340, 112))
-    assert(app._home_card_minimum_size(false) == Vector2(340, 132))
+    assert(app._home_card_minimum_size(true) == Vector2(app.HOME_TILE_MIN_WIDTH, app.HOME_ROW_HEIGHT))
+    assert(app._home_card_minimum_size(false) == Vector2(app.HOME_TILE_MIN_WIDTH, app.HOME_TILE_HEIGHT))
 
     var portrait_video_controls: Dictionary = app._video_controls_layout_spec(portrait.size)
     var landscape_video_controls: Dictionary = app._video_controls_layout_spec(landscape.size)
@@ -225,6 +225,31 @@ func _initialize() -> void:
     assert(is_equal_approx(float(bounded_momentum["target"]), 1200.0))
     assert(is_equal_approx(app._shell_scroll_maximum(0.0, 1800.0, 600.0), 1200.0))
     assert(is_equal_approx(app._shell_scroll_maximum(20.0, 10.0, 100.0), 20.0))
+
+    # Touch release must resolve the scroll by instance ID. A stale
+    # state["scroll"] lookup silently disabled all iOS flick inertia and edge
+    # springs even though finger-follow updates were running.
+    var mobile_scroll := ScrollContainer.new()
+    mobile_scroll.size = Vector2(360, 240)
+    var mobile_content := Control.new()
+    mobile_content.custom_minimum_size = Vector2(360, 1600)
+    mobile_scroll.add_child(mobile_content)
+    root.add_child(mobile_scroll)
+    app._configure_shell_scroll(mobile_scroll)
+    assert(mobile_scroll.scroll_deadzone >= 100000)
+    await process_frame
+    var mobile_scroll_id := mobile_scroll.get_instance_id()
+    app.shell_scroll_drag_states[88] = {
+        "scroll_id": mobile_scroll_id,
+        "control_id": 0,
+        "dragging": true,
+        "velocity_y": -900.0,
+        "overscroll": 0.0,
+    }
+    assert(app._finish_shell_scroll_drag(88))
+    assert(app.shell_scroll_momentum.has(mobile_scroll_id))
+    app._reset_shell_scroll_drag()
+    mobile_scroll.free()
 
     var released_scroll := ScrollContainer.new()
     var released_control := Button.new()
