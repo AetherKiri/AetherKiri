@@ -245,7 +245,7 @@ class tTVPDestTexture : public tTVPBaseTexture {
     bool HoldAlpha = true;
 
 public:
-    tTVPDestTexture(tjs_uint w, tjs_uint h) : tTVPBaseTexture(w, h) {}
+    tTVPDestTexture(tjs_uint w, tjs_uint h);
 
     //     bool Blt(tjs_int x, tjs_int y, const iTVPBaseBitmap *ref,
     // 		tTVPRect refrect, tTVPBBBltMethod method, tjs_int opa);

@@ -124,6 +124,25 @@ private:
         return value;
     }
 
+    tTJSVariant readOctet(std::size_t byteCount) {
+        require(byteCount);
+        if(byteCount >
+           static_cast<std::size_t>(std::numeric_limits<tjs_uint>::max()))
+            throw std::runtime_error("KBAD octet is too large");
+
+        tTJSVariantOctet *octet = TJSAllocVariantOctet(
+            byteCount == 0 ? nullptr : data_ + position_,
+            static_cast<tjs_uint>(byteCount));
+        if(!octet)
+            throw std::runtime_error("cannot create KBAD octet");
+        position_ += byteCount;
+
+        tTJSVariant value;
+        value = octet;
+        octet->Release();
+        return value;
+    }
+
     tTJSVariant decodeValue(std::size_t depth) {
         if(depth > KBAD_MAX_DEPTH)
             throw std::runtime_error("KBAD nesting is too deep");
@@ -180,12 +199,10 @@ private:
         case 0xd3:
             return tTJSVariant(static_cast<tTVInteger>(
                 static_cast<std::int64_t>(readU64())));
-        case 0xd9:
-            return tTJSVariant(ttstr(readString(readU8())));
         case 0xda:
-            return tTJSVariant(ttstr(readString(readU16())));
+            return readOctet(readU16());
         case 0xdb:
-            return tTJSVariant(ttstr(readString(readU32())));
+            return readOctet(readU32());
         case 0xdc:
             return decodeArray(readU16(), depth + 1);
         case 0xdd:
@@ -195,6 +212,8 @@ private:
         case 0xdf:
             return decodeMap(readU32(), depth + 1);
         default:
+            if(type >= 0xd4 && type <= 0xd9)
+                return readOctet(type - 0xd4);
             throw std::runtime_error("unsupported KBAD type");
         }
     }

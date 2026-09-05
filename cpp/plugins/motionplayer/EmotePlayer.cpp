@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <unordered_map>
 
+#include "D3DEmoteModule.h"
 #include "EmotePlayer.h"
 #include "RuntimeSupport.h"
 #include "ncbind.hpp"
@@ -49,7 +50,10 @@ namespace {
         tTJSVariant base;
         if(TJS_FAILED(metaObj->PropGet(0, TJS_W("base"), nullptr, &base, metaObj)) ||
            base.Type() != tvtObject) {
-            return {};
+            // Standalone E-mote PSBs expose chara/motion directly in
+            // metadata. Companion modules wrap the same dictionary in
+            // metadata.base.
+            base = metadata;
         }
         iTJSDispatch2 *baseObj = base.AsObjectNoAddRef();
         if(!baseObj) {
@@ -100,12 +104,47 @@ namespace {
         }();
         return enabled;
     }
+
+    std::vector<std::shared_ptr<motion::detail::MotionSnapshot>>
+    orderedNativeObjectSnapshots(
+        const std::vector<motion::ResourceManager::CachedModuleEntry>
+            &cached) {
+        std::vector<const motion::ResourceManager::CachedModuleEntry *>
+            ordered;
+        ordered.reserve(cached.size());
+        for(const auto &entry : cached) {
+            ordered.push_back(&entry);
+        }
+        std::sort(ordered.begin(), ordered.end(), [](const auto *left,
+                                                     const auto *right) {
+            return left->loadGeneration < right->loadGeneration;
+        });
+
+        std::vector<std::shared_ptr<motion::detail::MotionSnapshot>> result;
+        result.reserve(ordered.size());
+        for(const auto *entry : ordered) {
+            if(auto snapshot =
+                   motion::detail::lookupModuleSnapshot(entry->module)) {
+                result.push_back(std::move(snapshot));
+            }
+        }
+        return result;
+    }
 } // namespace
 
 namespace motion {
 
     EmotePlayer::EmotePlayer(ResourceManager rm) :
-        _player(std::move(rm)) {}
+        _player(std::move(rm)) {
+        // libartemis.so MOGLBase::BeginCreateMask/PrepareInnerMask use mode
+        // 1 for the antialiased alpha-mask path. D3DEmoteModule exposes that
+        // native default, while a bare Motion Player intentionally defaults
+        // to stencil mode. Propagate the module setting when constructing the
+        // owned player so a half-closed eyelid does not promote the final
+        // translucent mask row to a fully visible strip of iris. The public
+        // per-player maskMode setter can still override this afterwards.
+        _player.setMaskMode(D3DEmoteModule::getMaskMode());
+    }
 
     EmotePlayer::~EmotePlayer() = default;
 
@@ -236,6 +275,7 @@ namespace motion {
             copy->_player.loadFromSnapshot(snapshot);
         }
         copy->_player.unserialize(playerState);
+        copy->_player.assignNativeBackendState(_player);
 
         // These wrapper properties are not part of Player::serialize().
         // Apply them after load/unserialize so model initialization cannot
@@ -779,8 +819,17 @@ namespace motion {
                         bestEntry->module, TJS_W("chara"));
                     const ttstr metaMotion = readMetadataBaseField(
                         bestEntry->module, TJS_W("motion"));
-                    _player.bindMotionModuleKey(
-                        ttstr(bestEntry->key.c_str()));
+                    const auto selectedSnapshot =
+                        detail::lookupModuleSnapshot(bestEntry->module);
+                    if(selectedSnapshot) {
+                        _player.setProject(bestEntry->module);
+                        _player.loadFromSnapshot(
+                            selectedSnapshot,
+                            orderedNativeObjectSnapshots(cached));
+                    } else {
+                        _player.bindMotionModuleKey(
+                            ttstr(bestEntry->key.c_str()));
+                    }
                     _storageKey = ttstr(bestEntry->key.c_str());
                     _module = bestEntry->module;
                     _player.setChara(metaChara);

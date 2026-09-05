@@ -74,7 +74,43 @@ struct alpha_blend_func {
         return d1 + ((d + ((s - d) * a >> 8)) & 0xff00);
     }
 };
-DEFINE_BLEND_VARIATION(alpha_blend)
+
+// Destination-alpha normal blending is the hottest software compositor
+// operation.  Its table path is needed for partially transparent sources,
+// but the common opaque case has a fixed source contribution (255) and a
+// fully opaque result alpha.  Avoid two random table lookups in that case.
+// The transparent-source shortcut is restricted to a covered destination so
+// that the historical zero-alpha-buffer rounding remains unchanged.
+struct alpha_blend_d_op {
+    inline tjs_uint32 operator()(tjs_uint32 d, tjs_uint32 s) const {
+        const tjs_uint32 sa = s >> 24;
+        const tjs_uint32 da = d >> 24;
+        if(sa == 0 && da != 0)
+            return d;
+        if(sa == 255) {
+            tjs_uint32 d1 = d & 0xff00ff;
+            d1 = (d1 + (((s & 0xff00ff) - d1) * 255 >> 8)) & 0xff00ff;
+            tjs_uint32 d2 = d & 0xff00;
+            d2 = (d2 + (((s & 0xff00) - d2) * 255 >> 8)) & 0xff00;
+            return d1 + d2 + 0xff000000u;
+        }
+        const tjs_uint32 addr = ((s >> 16) & 0xff00) + da;
+        const tjs_uint32 destalpha = TVPNegativeMulTable[addr] << 24;
+        const tjs_uint32 sopa = TVPOpacityOnOpacityTable[addr];
+        tjs_uint32 d1 = d & 0xff00ff;
+        d1 = (d1 + (((s & 0xff00ff) - d1) * sopa >> 8)) & 0xff00ff;
+        tjs_uint32 d2 = d & 0xff00;
+        return d1 + ((d2 + (((s & 0xff00) - d2) * sopa >> 8)) & 0xff00) +
+            destalpha;
+    }
+};
+
+typedef normal_op<alpha_blend_func> alpha_blend_functor;
+typedef translucent_op<alpha_blend_func> alpha_blend_o_functor;
+typedef hda_op<alpha_blend_func> alpha_blend_HDA_functor;
+typedef hda_translucent_op<alpha_blend_func> alpha_blend_HDA_o_functor;
+typedef alpha_blend_d_op alpha_blend_d_functor;
+typedef dest_alpha_translucent_op<alpha_blend_func> alpha_blend_do_functor;
 
 //------------------------------------------------------------------------------
 struct alpha_blend_a_functor {

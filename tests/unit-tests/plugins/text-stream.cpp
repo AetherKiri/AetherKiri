@@ -1,13 +1,18 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "TextStream.h"
+#include "UtilStreams.h"
 
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <string>
+#include <vector>
+
+#include <zlib.h>
 
 namespace {
 
@@ -28,6 +33,60 @@ public:
 
     std::filesystem::path path;
 };
+
+class TemporaryDirectory {
+public:
+    explicit TemporaryDirectory(const std::string &name) {
+        const auto unique = std::chrono::steady_clock::now()
+                                .time_since_epoch()
+                                .count();
+        path = std::filesystem::temp_directory_path() /
+               (name + "-" + std::to_string(unique));
+        std::filesystem::create_directories(path);
+    }
+
+    ~TemporaryDirectory() {
+        std::error_code error;
+        std::filesystem::remove_all(path, error);
+    }
+
+    std::filesystem::path path;
+};
+
+void appendLe64(std::vector<unsigned char> &bytes, std::uint64_t value) {
+    for(int shift = 0; shift < 64; shift += 8)
+        bytes.push_back(static_cast<unsigned char>(value >> shift));
+}
+
+std::vector<unsigned char> makeBmpWithTextPayload(
+    const std::vector<unsigned char> &payload) {
+    constexpr std::uint32_t imageSize = 54;
+    std::vector<unsigned char> bytes(imageSize, 0);
+    bytes[0] = 'B';
+    bytes[1] = 'M';
+    bytes[2] = static_cast<unsigned char>(imageSize);
+    bytes[10] = static_cast<unsigned char>(imageSize);
+    bytes.insert(bytes.end(), payload.begin(), payload.end());
+    return bytes;
+}
+
+void writeBytes(const TemporaryFile &file,
+                const std::vector<unsigned char> &bytes) {
+    std::ofstream output(file.path, std::ios::binary);
+    REQUIRE(output.good());
+    output.write(reinterpret_cast<const char *>(bytes.data()),
+                 static_cast<std::streamsize>(bytes.size()));
+    REQUIRE(output.good());
+}
+
+void writeBytes(const std::filesystem::path &path,
+                const std::vector<unsigned char> &bytes) {
+    std::ofstream output(path, std::ios::binary);
+    REQUIRE(output.good());
+    output.write(reinterpret_cast<const char *>(bytes.data()),
+                 static_cast<std::streamsize>(bytes.size()));
+    REQUIRE(output.good());
+}
 
 } // namespace
 
@@ -136,4 +195,106 @@ TEST_CASE("BOM-less CP932 scripts use the legacy KiriKiri fallback") {
     tTJSString decoded;
     REQUIRE(stream->Read(decoded, 0) == 18);
     CHECK(ttstr(decoded) == TJS_W("var name = \"\u4f53\u9a13\u7248\";\n"));
+}
+
+TEST_CASE("BMP save thumbnails expose an appended UTF-16 text payload") {
+    TemporaryFile file("aetherkiri-bmp-save-utf16.bmp");
+    const std::u16string text = u"(const) %[\"slot\" => 1]";
+    std::vector<unsigned char> payload = {0xff, 0xfe};
+    for(const char16_t character : text) {
+        payload.push_back(static_cast<unsigned char>(character));
+        payload.push_back(static_cast<unsigned char>(character >> 8));
+    }
+    writeBytes(file, makeBmpWithTextPayload(payload));
+
+    std::unique_ptr<iTJSTextReadStream> stream(
+        TVPCreateTextStreamForRead(ttstr(file.path.string()), TJS_W("")));
+    tTJSString decoded;
+    REQUIRE(stream->Read(decoded, 0) == text.size());
+    CHECK(ttstr(decoded) == TJS_W("(const) %[\"slot\" => 1]"));
+}
+
+TEST_CASE("compound BMP streams expose their appended data-pack payload") {
+    TemporaryFile file("aetherkiri-bmp-save-payload.bmp");
+    const std::vector<unsigned char> payload = {
+        0xfe, 0xfe, 0x02, 0xff, 0xfe, 0x01, 0x02, 0x03,
+    };
+    writeBytes(file, makeBmpWithTextPayload(payload));
+
+    std::unique_ptr<tTJSBinaryStream> source(
+        TVPCreateStream(ttstr(file.path.string()), TJS_BS_READ));
+    REQUIRE(source != nullptr);
+    CHECK(source->GetPosition() == 0);
+    const auto offset = TVPFindEmbeddedBmpPayloadOffset(source.get());
+    REQUIRE(offset.has_value());
+    CHECK(*offset == 54);
+    CHECK(source->GetPosition() == 0);
+
+    tTVPPartialStream payloadStream(source.release(), *offset,
+                                    payload.size());
+    std::vector<unsigned char> decoded(payload.size());
+    REQUIRE(payloadStream.Read(decoded.data(),
+                               static_cast<tjs_uint>(decoded.size())) ==
+            decoded.size());
+    CHECK(decoded == payload);
+}
+
+TEST_CASE("ordinary BMP streams are not treated as appended data packs") {
+    TemporaryFile file("aetherkiri-bmp-save-plain.bmp");
+    writeBytes(file, makeBmpWithTextPayload({0x01, 0x02, 0x03}));
+
+    std::unique_ptr<tTJSBinaryStream> source(
+        TVPCreateStream(ttstr(file.path.string()), TJS_BS_READ));
+    REQUIRE(source != nullptr);
+    CHECK_FALSE(TVPFindEmbeddedBmpPayloadOffset(source.get()).has_value());
+    CHECK(source->GetPosition() == 0);
+}
+
+TEST_CASE("BMP save thumbnails expose an appended compressed text payload") {
+    TemporaryFile file("aetherkiri-bmp-save-compressed.bmp");
+    const std::u16string text = u"(const) [1, 2, 3]";
+    const auto *source = reinterpret_cast<const unsigned char *>(text.data());
+    const auto sourceSize = static_cast<uLong>(text.size() * sizeof(char16_t));
+    uLongf compressedSize = compressBound(sourceSize);
+    std::vector<unsigned char> compressed(compressedSize);
+    REQUIRE(compress2(compressed.data(), &compressedSize, source, sourceSize,
+                      Z_BEST_SPEED) == Z_OK);
+    compressed.resize(compressedSize);
+
+    std::vector<unsigned char> payload = {0xfe, 0xfe, 0x02, 0xff, 0xfe};
+    appendLe64(payload, compressed.size());
+    appendLe64(payload, sourceSize);
+    payload.insert(payload.end(), compressed.begin(), compressed.end());
+    writeBytes(file, makeBmpWithTextPayload(payload));
+
+    std::unique_ptr<iTJSTextReadStream> stream(
+        TVPCreateTextStreamForRead(ttstr(file.path.string()), TJS_W("")));
+    tTJSString decoded;
+    REQUIRE(stream->Read(decoded, 0) == text.size());
+    CHECK(ttstr(decoded) == TJS_W("(const) [1, 2, 3]"));
+}
+
+TEST_CASE(
+    "plain save thumbnails fall back to a compound BMP text payload") {
+    TemporaryDirectory directory("aetherkiri-save-sidecar");
+    const auto savedata = directory.path / "savedata";
+    std::filesystem::create_directories(savedata);
+    const auto jpg = savedata / "data_continue.jpg";
+    const auto bmp = savedata / "data_continue.bmp";
+
+    writeBytes(jpg, {0xff, 0xd8, 0xff, 0xd9});
+
+    const std::u16string text = u"(const) %[\"slot\" => 7]";
+    std::vector<unsigned char> payload = {0xff, 0xfe};
+    for(const char16_t character : text) {
+        payload.push_back(static_cast<unsigned char>(character));
+        payload.push_back(static_cast<unsigned char>(character >> 8));
+    }
+    writeBytes(bmp, makeBmpWithTextPayload(payload));
+
+    std::unique_ptr<iTJSTextReadStream> stream(
+        TVPCreateTextStreamForRead(ttstr(jpg.string()), TJS_W("")));
+    tTJSString decoded;
+    REQUIRE(stream->Read(decoded, 0) == text.size());
+    CHECK(ttstr(decoded) == TJS_W("(const) %[\"slot\" => 7]"));
 }

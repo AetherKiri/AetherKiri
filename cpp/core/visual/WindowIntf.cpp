@@ -12,6 +12,7 @@
 #include "tjsCommHead.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include "MsgIntf.h"
 #include "WindowIntf.h"
 #include "LayerIntf.h"
@@ -24,8 +25,11 @@
 #include "LayerManager.h"
 #include "BasicDrawDevice.h"
 #include "EventImpl.h"
+#include "ScriptMgnIntf.h"
+#include "godot/GodotGpuBridge.h"
 
 #include "Application.h"
+#include "spdlog/spdlog.h"
 
 //---------------------------------------------------------------------------
 // Window List
@@ -33,6 +37,42 @@
 tTJSNI_Window *TVPMainWindow = nullptr; // main window
 static std::vector<tTJSNI_Window *> TVPWindowVector;
 static TVPPendingDrawDeviceInstaller g_pending_draw_device_installer = nullptr;
+
+// Canvas is optional in the modern host.  When a private compatibility
+// module registers the legacy Canvas class, create one at Window construction
+// time so old scripts can use window.canvas before they explicitly link a
+// graphics helper script.
+static void TVPCreateWindowCanvas(tTJSNI_BaseWindow *window,
+                                   iTJSDispatch2 *windowObject) {
+    if(!window || !windowObject)
+        return;
+
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    if(!global)
+        return;
+
+    tTJSVariant canvasClassValue;
+    const tjs_error getError =
+        global->PropGet(TJS_MEMBERMUSTEXIST, TJS_W("Canvas"), nullptr,
+                        &canvasClassValue, global);
+    if(TJS_FAILED(getError) || canvasClassValue.Type() != tvtObject) {
+        global->Release();
+        return;
+    }
+
+    iTJSDispatch2 *canvasClass = canvasClassValue.AsObjectNoAddRef();
+    iTJSDispatch2 *canvasObject = nullptr;
+    tTJSVariant parameter(windowObject, windowObject);
+    tTJSVariant *parameters[1] = { &parameter };
+    const tjs_error createError =
+        canvasClass->CreateNew(0, nullptr, nullptr, &canvasObject, 1,
+                               parameters, canvasClass);
+    if(TJS_SUCCEEDED(createError) && canvasObject) {
+        window->SetCanvasObject(tTJSVariant(canvasObject, canvasObject));
+        canvasObject->Release();
+    }
+    global->Release();
+}
 
 void TVPSetPendingDrawDeviceInstaller(TVPPendingDrawDeviceInstaller installer) {
     g_pending_draw_device_installer = installer;
@@ -78,11 +118,116 @@ tTJSNI_Window *TVPGetWindowListAt(tjs_int idx) { return TVPWindowVector[idx]; }
 //---------------------------------------------------------------------------
 tjs_int TVPGetWindowCount() { return (tjs_int)TVPWindowVector.size(); }
 //---------------------------------------------------------------------------
+namespace {
+bool TVPWindowInputTraceEnabled() {
+    const char *value = std::getenv("AETHERKIRI_INPUT_TRACE");
+    return value && *value && *value != '0';
+}
+
+bool TVPRouteCanvasExtraCgPreviewRightClick() {
+    try {
+        tTJSVariant is_canvas_cg_preview;
+        TVPExecuteExpression(
+            TJS_W("typeof mdk == \"Object\" && mdk && "
+                  "typeof mdk.screen_ == \"Object\" && mdk.screen_ && "
+                  "typeof mdk.screen_.currentScreen == \"Object\" && "
+                  "mdk.screen_.currentScreen && "
+                  "mdk.screen_.currentScreen instanceof \"ExtraScreen\" && "
+                  "mdk.screen_.currentScreen.activeWidget_ === "
+                  "mdk.screen_.currentScreen.cg_"),
+            &is_canvas_cg_preview);
+        if(!is_canvas_cg_preview.operator bool())
+            return false;
+
+        tTJSVariant result;
+        TVPExecuteExpression(
+            TJS_W("mdk.screen_.currentScreen.activeWidget_.onCgFinished()"),
+            &result);
+        if(TVPWindowInputTraceEnabled()) {
+            spdlog::info(
+                "Window routed canvas extra CG right click to onCgFinished");
+        }
+        return true;
+    } catch(const eTJS &e) {
+        if(TVPWindowInputTraceEnabled()) {
+            spdlog::info(
+                "Window canvas extra CG right click route failed: {}",
+                ttstr(e.GetMessage()).AsStdString());
+        }
+    } catch(...) {
+        if(TVPWindowInputTraceEnabled()) {
+            spdlog::info("Window canvas extra CG right click route failed");
+        }
+    }
+    return false;
+}
+
+void TVPCallCanvasLifecycle(const tTJSVariant &canvas,
+                            const tjs_char *membername) {
+    if(canvas.Type() != tvtObject || membername == nullptr)
+        return;
+
+    iTJSDispatch2 *object = canvas.AsObjectNoAddRef();
+    if(object == nullptr)
+        return;
+
+    // These are optional hooks supplied by the private legacy Canvas
+    // adapter. Looking them up first keeps the public core usable without it.
+    tTJSVariant method;
+    if(TJS_FAILED(object->PropGet(TJS_IGNOREPROP, membername, nullptr,
+                                  &method, object)) ||
+       method.Type() != tvtObject)
+        return;
+
+    try {
+        method.AsObjectClosureNoAddRef().FuncCall(
+            0, nullptr, nullptr, nullptr, 0, nullptr, object);
+    } catch(...) {
+        // A private lifecycle hook is best-effort. The script onDraw event
+        // below retains the normal event system's error handling.
+    }
+}
+} // namespace
+
+void TVPDeliverWindowCanvasDrawEvents() {
+    // onDraw handlers may create or destroy windows. Snapshot the current
+    // list so mutation during a handler cannot invalidate this iteration.
+    const tjs_int count = TVPGetWindowCount();
+    std::vector<tTJSNI_Window *> windows;
+    windows.reserve(static_cast<size_t>(std::max<tjs_int>(count, 0)));
+    for(tjs_int i = 0; i < count; ++i) {
+        if(tTJSNI_Window *window = TVPGetWindowListAt(i))
+            windows.push_back(window);
+    }
+
+    for(tTJSNI_Window *window : windows) {
+        if(!window || !window->CanDeliverEvents() || !window->GetVisible() ||
+           window->GetDrawCycle() == 0 ||
+           window->GetCanvasObject().Type() != tvtObject)
+            continue;
+        window->OnDraw();
+    }
+}
+
+//---------------------------------------------------------------------------
 void TVPClearAllWindowInputEvents() {
     std::vector<tTJSNI_Window *>::iterator i;
     for(i = TVPWindowVector.begin(); i != TVPWindowVector.end(); i++) {
         (*i)->ClearInputEvents();
     }
+}
+
+//---------------------------------------------------------------------------
+// The embedded host keeps the process alive after System.exit. Script-engine
+// shutdown owns Window invalidation; trying to invalidate the same TJS owner
+// here can recursively finalize a multi-window object graph. Once shutdown is
+// complete, detach any entries retained by script-side reference cycles so a
+// later session never observes an old main window. A surviving native object
+// may unregister itself later; TVPUnregisterWindowToList already tolerates an
+// absent entry.
+void TVPResetWindowRegistryForHostSession() {
+    TVPWindowVector.clear();
+    TVPMainWindow = nullptr;
 }
 //---------------------------------------------------------------------------
 
@@ -138,6 +283,7 @@ tTVPUniqueTagForInputEvent tTVPOnDisplayRotateInputEvent ::Tag;
 //---------------------------------------------------------------------------
 tTJSNI_BaseWindow::tTJSNI_BaseWindow() {
     WaitVSync = false;
+    DrawCycle = 0;
     ObjectVectorLocked = false;
     DrawBuffer = nullptr;
     WindowExposedRegion.clear();
@@ -178,6 +324,8 @@ tjs_error tTJSNI_BaseWindow::Construct(tjs_int numparams, tTJSVariant **param,
         if(newobj)
             newobj->Release();
     }
+
+    TVPCreateWindowCanvas(this, tjs_obj);
 
     return TJS_S_OK;
 }
@@ -242,6 +390,7 @@ void tTJSNI_BaseWindow::Invalidate() {
 
     // release draw device
     SetDrawDeviceObject(tTJSVariant());
+    SetCanvasObject(tTJSVariant());
 
     inherited::Invalidate();
 
@@ -320,6 +469,15 @@ void tTJSNI_BaseWindow::SetDrawDeviceObject(const tTJSVariant &val) {
         ResetDrawDevice();
     }
 }
+//---------------------------------------------------------------------------
+void tTJSNI_BaseWindow::SetCanvasObject(const tTJSVariant &value) {
+    if(CanvasObject.Type() == tvtObject) {
+        CanvasObject.AsObjectClosureNoAddRef().Invalidate(
+            0, nullptr, nullptr, CanvasObject.AsObjectNoAddRef());
+    }
+    CanvasObject = value;
+}
+//---------------------------------------------------------------------------
 //---------------------------------------------------------------------------
 void tTJSNI_BaseWindow::OnClose() {
     if(!CanDeliverEvents())
@@ -442,6 +600,47 @@ void tTJSNI_BaseWindow::OnTouchMove(tjs_real x, tjs_real y, tjs_real cx,
     }
     if(DrawDevice)
         DrawDevice->OnTouchMove(x, y, cx, cy, id);
+}
+//---------------------------------------------------------------------------
+void tTJSNI_BaseWindow::OnPointerDown(tjs_int type, tjs_real x, tjs_real y,
+                                      tjs_real cx, tjs_real cy,
+                                      tjs_uint32 flags, tjs_uint32 id) {
+    if(!CanDeliverEvents())
+        return;
+    if(Owner) {
+        tTJSVariant arg[7] = {type, x, y, cx, cy, (tjs_int64)flags,
+                              (tjs_int64)id};
+        static ttstr eventname(TJS_W("onPointerDown"));
+        TVPPostEvent(Owner, Owner, eventname, 0, TVP_EPT_IMMEDIATE, 7, arg);
+    }
+}
+//---------------------------------------------------------------------------
+void tTJSNI_BaseWindow::OnPointerMove(tjs_int type, tjs_real x, tjs_real y,
+                                      tjs_real cx, tjs_real cy,
+                                      tjs_uint32 flags, tjs_uint32 id) {
+    if(!CanDeliverEvents())
+        return;
+    if(Owner) {
+        tTJSVariant arg[7] = {type, x, y, cx, cy, (tjs_int64)flags,
+                              (tjs_int64)id};
+        static ttstr eventname(TJS_W("onPointerMove"));
+        TVPPostEvent(Owner, Owner, eventname, 0, TVP_EPT_IMMEDIATE, 7, arg);
+    }
+}
+//---------------------------------------------------------------------------
+void tTJSNI_BaseWindow::OnPointerUp(tjs_int type, tjs_real x, tjs_real y,
+                                    tjs_real cx, tjs_real cy,
+                                    tjs_uint32 flags, tjs_uint32 id) {
+    if(!CanDeliverEvents())
+        return;
+    if(Owner) {
+        tTJSVariant arg[7] = {type, x, y, cx, cy, (tjs_int64)flags,
+                              (tjs_int64)id};
+        static ttstr eventname(TJS_W("onPointerUp"));
+        TVPPostEvent(Owner, Owner, eventname, 0, TVP_EPT_IMMEDIATE, 7, arg);
+    }
+    if(type == static_cast<tjs_int>(tTVPPointerType::ptMouseRight))
+        TVPRouteCanvasExtraCgPreviewRightClick();
 }
 //---------------------------------------------------------------------------
 void tTJSNI_BaseWindow::OnTouchScaling(tjs_real startdist, tjs_real curdist,
@@ -601,6 +800,24 @@ void tTJSNI_BaseWindow::OnActivate(bool activate_or_deactivate) {
     }
 }
 //---------------------------------------------------------------------------
+void tTJSNI_BaseWindow::OnDraw() {
+    if(!CanDeliverEvents())
+        return;
+
+    TVPCallCanvasLifecycle(CanvasObject, TJS_W("__aether_begin_drawing"));
+    try {
+        if(Owner) {
+            static ttstr eventname(TJS_W("onDraw"));
+            TVPPostEvent(Owner, Owner, eventname, 0, TVP_EPT_IMMEDIATE, 0,
+                         nullptr);
+        }
+    } catch(...) {
+        TVPCallCanvasLifecycle(CanvasObject, TJS_W("__aether_end_drawing"));
+        throw;
+    }
+    TVPCallCanvasLifecycle(CanvasObject, TJS_W("__aether_end_drawing"));
+}
+//---------------------------------------------------------------------------
 void tTJSNI_BaseWindow::OnHintChange(const ttstr &text, tjs_int x, tjs_int y,
                                      bool isshow) {
     if(!CanDeliverEvents())
@@ -658,6 +875,12 @@ void tTJSNI_BaseWindow::NotifyUpdateRegionFixed(
 //---------------------------------------------------------------------------
 void tTJSNI_BaseWindow::UpdateContent() {
     if(DrawDevice) {
+        // A window update can issue dozens of bitmap compositions. Keep the
+        // whole update in one ordered GPU batch so intermediate blends and
+        // texture uploads are submitted together instead of forcing a queue
+        // drain between every operation. The scope is a no-op for renderers
+        // which do not register the optional Godot bridge callbacks.
+        TVPGodotGpuBatchScope gpuBatch;
         // is called from event dispatcher
         DrawDevice->Update();
 
@@ -752,6 +975,10 @@ void tTJSNI_BaseWindow::SetWaitVSync(bool enable) {
 }
 //---------------------------------------------------------------------------
 bool tTJSNI_BaseWindow::GetWaitVSync() const { return WaitVSync; }
+//---------------------------------------------------------------------------
+void tTJSNI_BaseWindow::SetDrawCycle(tjs_uint32 cycle) { DrawCycle = cycle; }
+//---------------------------------------------------------------------------
+tjs_uint32 tTJSNI_BaseWindow::GetDrawCycle() const { return DrawCycle; }
 //---------------------------------------------------------------------------
 
 //---------------------------------------------------------------------------
@@ -942,6 +1169,14 @@ tTJSNC_Window::tTJSNC_Window() : tTJSNativeClass(TJS_W("Window")) {
         return TJS_S_OK;
     }
     TJS_END_NATIVE_METHOD_DECL(/*func. name*/ hideMouseCursor)
+    //----------------------------------------------------------------------
+    TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ fireOnDraw) {
+        TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
+                                /*var. type*/ tTJSNI_Window);
+        _this->OnDraw();
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_METHOD_DECL(/*func. name*/ fireOnDraw)
     //----------------------------------------------------------------------
     TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ postInputEvent) {
         TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
@@ -1873,6 +2108,41 @@ TJS_BEGIN_NATIVE_PROP_SETTER {
 TJS_END_NATIVE_PROP_SETTER
 }
 TJS_END_NATIVE_PROP_DECL(waitVSync)
+//----------------------------------------------------------------------
+// Compatibility property used by the OpenGL-era CanvasWindow class.  The
+// current event loop already emits window updates; storing the requested
+// cadence here preserves the old observable Window API without introducing a
+// second timer competing with the host scheduler.
+TJS_BEGIN_NATIVE_PROP_DECL(drawCycle){ TJS_BEGIN_NATIVE_PROP_GETTER{
+    TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
+                            /*var. type*/ tTJSNI_Window);
+    *result = static_cast<tjs_int64>(_this->GetDrawCycle());
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_PROP_GETTER
+
+TJS_BEGIN_NATIVE_PROP_SETTER {
+    TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
+                            /*var. type*/ tTJSNI_Window);
+    const tjs_int64 cycle = static_cast<tjs_int64>(*param);
+    _this->SetDrawCycle(cycle <= 0 ? 0 : static_cast<tjs_uint32>(cycle));
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_PROP_SETTER
+}
+TJS_END_NATIVE_PROP_DECL(drawCycle)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_PROP_DECL(canvas){ TJS_BEGIN_NATIVE_PROP_GETTER{
+    TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
+                            /*var. type*/ tTJSNI_Window);
+    *result = _this->GetCanvasObject();
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_PROP_GETTER
+
+TJS_DENY_NATIVE_PROP_SETTER
+}
+TJS_END_NATIVE_PROP_DECL(canvas)
 //---------------------------------------------------------------------------
 TJS_BEGIN_NATIVE_PROP_DECL(layerTreeOwnerInterface){
     TJS_BEGIN_NATIVE_PROP_GETTER{

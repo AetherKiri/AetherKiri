@@ -328,6 +328,15 @@ void TVPAfterSystemInit() {
         _val = IndividualConfigManager::GetInstance()->GetValue<std::string>(
             "renderer", "opengl");
     }
+    // The Godot backend keeps decoded textures in GPU resources. On Apple
+    // targets the legacy platform cache controller is not present, so the
+    // computed graphic-cache budget otherwise remains unused and every
+    // repeated TLG request rebuilds a texture and uploads it again. Enable
+    // the normal memory-derived budget for this backend; other renderers
+    // retain their historical cache policy.
+    if(_val == "godot_native" && TVPGetGraphicCacheLimit() == 0) {
+        TVPSetGraphicCacheLimit(static_cast<tjs_uint64>(-1));
+    }
     if(_val != "software") {
         TVPGraphicSplitOperationType = gsotNone;
     } else {
@@ -568,6 +577,50 @@ static void PushConfigFileOptions(const std::vector<std::string> *options) {
 // Options set via engine_set_option before TVPProgramArguments is initialized
 static std::vector<std::pair<ttstr, ttstr>> TVPEarlySetOptions;
 
+void TVPResetSystemInitStateForHostSession() {
+    // TVPInitProgramArgumentsAndDataPath() was originally process-scoped
+    // because the standalone player only ever opened one title.  Aether keeps
+    // the process alive, so retaining this state makes the next title inherit
+    // the previous title's savedata directory and command-line options.  In
+    // particular, first-run flags can then be read from the wrong game.
+    TVPProgramArguments.clear();
+    TVPEarlySetOptions.clear();
+    TVPProgramArgumentsInit = false;
+    TVPDataPathDirectoryEnsured = false;
+    TVPNativeDataPath = ttstr();
+    TVPDataPath = ttstr();
+    TVPNativeProjectDir = ttstr();
+    TVPProjectDir = ttstr();
+    TVPProjectDirSelected = false;
+    TVPArchiveDelimiter = TJS_W('>');
+
+    // Invalidate any native/script-side command-line cache which survived a
+    // partial shutdown.  Keep the generation monotonic across host sessions.
+    ++TVPCommandLineArgumentGeneration;
+    if(TVPCommandLineArgumentGeneration == 0)
+        TVPCommandLineArgumentGeneration = 1;
+}
+
+static bool TVPFindCommandLineArgument(const tjs_char *name,
+                                       tTJSVariant *value) {
+    const tjs_int namelen = (tjs_int)TJS_strlen(name);
+    for(const auto &argument : TVPProgramArguments) {
+        if(!TJS_strncmp(argument.c_str(), name, namelen)) {
+            if(argument.c_str()[namelen] == TJS_W('=')) {
+                if(value)
+                    *value = argument.c_str() + namelen + 1;
+                return true;
+            }
+            if(argument.c_str()[namelen] == 0) {
+                if(value)
+                    *value = TJS_W("yes");
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 static void TVPInitProgramArgumentsAndDataPath(bool stop_after_datapath_got) {
     if(!TVPProgramArgumentsInit) {
         TVPProgramArgumentsInit = true;
@@ -665,22 +718,20 @@ static void TVPDumpOptions() {
 bool TVPGetCommandLine(const tjs_char *name, tTJSVariant *value) {
     TVPInitProgramArgumentsAndDataPath(false);
 
-    tjs_int namelen = (tjs_int)TJS_strlen(name);
-    std::vector<ttstr>::const_iterator i;
-    for(i = TVPProgramArguments.begin(); i != TVPProgramArguments.end(); i++) {
-        if(!TJS_strncmp(i->c_str(), name, namelen)) {
-            if(i->c_str()[namelen] == TJS_W('=')) {
-                // value is specified
-                const tjs_char *p = i->c_str() + namelen + 1;
-                if(value)
-                    *value = p;
-                return true;
-            } else if(i->c_str()[namelen] == 0) {
-                // value is not specified
-                if(value)
-                    *value = TJS_W("yes");
-                return true;
-            }
+    return TVPFindCommandLineArgument(name, value);
+}
+
+//---------------------------------------------------------------------------
+bool TVPGetCommandLineNoInit(const tjs_char *name, tTJSVariant *value) {
+    if(TVPProgramArgumentsInit)
+        return TVPFindCommandLineArgument(name, value);
+
+    const ttstr requested(name);
+    for(const auto &option : TVPEarlySetOptions) {
+        if(option.first == requested) {
+            if(value)
+                *value = option.second;
+            return true;
         }
     }
     return false;

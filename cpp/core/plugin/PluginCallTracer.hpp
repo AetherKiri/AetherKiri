@@ -339,6 +339,11 @@ private:
     std::mutex m_mutex;
     mutable std::mutex m_statsMutex;
     std::atomic<bool> m_enabled{false};
+    // Missing-member probes are a normal compatibility path for games that
+    // enumerate optional plugin hooks. Keep the aggregate count lock-free;
+    // the class-name lookup and bounded recent-member list are only needed
+    // while the explicitly high-overhead plugin trace is enabled.
+    std::atomic<uint64_t> m_missingMemberCount{0};
     bool m_loggerInitialized = false;
     std::atomic<bool> m_shuttingDown{false};
     PluginDebugSnapshot m_stats;

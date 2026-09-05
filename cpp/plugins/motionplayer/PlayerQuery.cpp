@@ -130,17 +130,6 @@ namespace {
         return out.str();
     }
 
-    bool layerBelongsToCgViewForQuery(tTJSNI_BaseLayer *layer) {
-        for(auto *current = layer; current; current = current->GetParent()) {
-            const auto name = motion::internal::psbDebugLowercase(
-                motion::detail::narrow(current->GetName()));
-            if(name.find("cg view layer") != std::string::npos) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     iTJSDispatch2 *selectVariantDispatchTarget(tTJSVariant *value) {
         if(!value || value->Type() != tvtObject) {
             return nullptr;
@@ -364,7 +353,10 @@ namespace motion {
 
     void Player::setOpacity(double v) { _runtime->opacity = v; }
 
-    void Player::setVisible(bool v) { _runtime->visible = v; }
+    void Player::setVisible(bool v) {
+        _runtime->visible = v;
+        invokeNativeBackend(v ? "show" : "hide");
+    }
 
     void Player::setSlant(double v) { _runtime->slant = v; }
 
@@ -627,14 +619,33 @@ namespace motion {
     }
 
     void Player::skipToSync() {
+        invokeNativeBackend("skip");
         _layersDirty = true;
-        for(auto &[_, state] : _runtime->timelines) {
+        for(auto &[label, state] : _runtime->timelines) {
+            const auto controlIt = _runtime->activeMotion
+                ? _runtime->activeMotion->timelineControlByLabel.find(label)
+                : decltype(_runtime->activeMotion->timelineControlByLabel.find(
+                      label)){};
+            const bool controlLoop =
+                _runtime->activeMotion &&
+                controlIt !=
+                    _runtime->activeMotion->timelineControlByLabel.end() &&
+                controlIt->second.loopBegin >= 0.0 &&
+                controlIt->second.loopEnd > controlIt->second.loopBegin;
+
+            // Native pass/step consumes one-shot controls, but it must leave
+            // persistent controller loops (for example `ポーズA_通常待機`)
+            // running.  These loops are described by TimelineControlBinding,
+            // not MotionClip::loop, so consulting state.loop alone stops all
+            // authored head/body/hair idle motion at the first scenario
+            // `em:step()` call.
+            if(controlLoop || state.loop) {
+                continue;
+            }
             if(state.totalFrames > 0.0) {
                 state.currentTime = state.totalFrames;
             }
-            if(!state.loop) {
-                state.playing = false;
-            }
+            state.playing = false;
         }
         if(const auto it = std::remove_if(_runtime->playingTimelineLabels.begin(),
                                           _runtime->playingTimelineLabels.end(),
@@ -655,6 +666,45 @@ namespace motion {
         if(!_allplaying) {
             disableAutoProgress();
         }
+
+        // MEmotePlayer::Skip/Step do not stop at timeline control.  The
+        // native routines also call epSkip on every eye, eyebrow, mouth,
+        // selector, transition, and generic variable controller.  In
+        // particular, EPSelectorControl::epSkip resolves the final queued
+        // selector and then skips each option's transition controller.  If we
+        // leave those queues live, a model prepared offscreen by `em:step()`
+        // becomes visible in its neutral selector pose and visibly morphs to
+        // the requested pose (for example, a raised hand flashes before the
+        // authored arm_type=0 pose settles).
+        const auto skipAnimator =
+            [this](const std::string &label, VariableAnimatorState &state) {
+                float value = state.targetValue;
+                if(!state.queue.empty()) {
+                    value = state.queue.back().value;
+                }
+                state.queue.clear();
+                state.active = false;
+                state.currentValue = value;
+                state.startValue = value;
+                state.targetValue = value;
+                state.progress = 1.0f;
+                state.duration = 0.0f;
+                _variableValues[label] = value;
+                ensureEvalResultSlotLike_0x686944(label) = value;
+                _evalResultValues[label] = value;
+            };
+        const auto skipBucket = [&skipAnimator](auto &bucket) {
+            for(auto &[label, state] : bucket) {
+                skipAnimator(label, state);
+            }
+        };
+        skipBucket(_type4ControllerAnimators);
+        skipBucket(_type5ControllerAnimators);
+        skipBucket(_type6ControllerAnimators);
+        skipBucket(_type8ControllerAnimators);
+        skipBucket(_type7ControllerAnimators);
+        skipBucket(_variableAnimators);
+        _emoteDirty = true;
     }
 
     void Player::setStereovisionCameraPosition(double x, double y, double z) {
@@ -693,56 +743,56 @@ namespace motion {
                 easeWeight, _emoteAnimatorFlag ? 1 : 0);
         }
 
-        if(hasBinding) {
-            const auto queueControllerStateLikeBinary =
-                [&](const std::string &targetKey,
-                    VariableAnimatorState &state,
-                    double currentValueInput,
-                    double requestedValue,
-                    double requestedTransition,
-                    double requestedEaseWeight) {
-                    const auto currentValue =
-                        static_cast<float>(currentValueInput);
-                    const auto targetValue =
-                        static_cast<float>(requestedValue);
-                    if(requestedTransition <= 0.0) {
-                        state.queue.clear();
-                        state.active = false;
-                        state.currentValue = targetValue;
-                        state.startValue = targetValue;
-                        state.targetValue = targetValue;
-                        state.progress = 1.0f;
-                        state.duration = 0.0f;
-                        state.weight =
-                            static_cast<float>(requestedEaseWeight);
-                        _variableValues[targetKey] = requestedValue;
-                        ensureEvalResultSlotLike_0x686944(targetKey) =
-                            requestedValue;
-                        _evalResultValues[targetKey] = requestedValue;
-                        return;
-                    }
-
-                    if(!_emoteAnimatorFlag) {
-                        state.queue.clear();
-                        state.active = false;
-                        state.currentValue = currentValue;
-                        state.startValue = currentValue;
-                        state.targetValue = currentValue;
-                        state.progress = 1.0f;
-                        state.duration = 0.0f;
-                    }
-
-                    state.queue.push_back(VariableKeyframe{
-                        targetValue,
-                        static_cast<float>(requestedTransition),
-                        static_cast<float>(requestedEaseWeight),
-                    });
-                    _variableValues[targetKey] = state.currentValue;
+        const auto queueControllerStateLikeBinary =
+            [&](const std::string &targetKey,
+                VariableAnimatorState &state,
+                double currentValueInput,
+                double requestedValue,
+                double requestedTransition,
+                double requestedEaseWeight) {
+                const auto currentValue =
+                    static_cast<float>(currentValueInput);
+                const auto targetValue =
+                    static_cast<float>(requestedValue);
+                if(requestedTransition <= 0.0) {
+                    state.queue.clear();
+                    state.active = false;
+                    state.currentValue = targetValue;
+                    state.startValue = targetValue;
+                    state.targetValue = targetValue;
+                    state.progress = 1.0f;
+                    state.duration = 0.0f;
+                    state.weight =
+                        static_cast<float>(requestedEaseWeight);
+                    _variableValues[targetKey] = requestedValue;
                     ensureEvalResultSlotLike_0x686944(targetKey) =
-                        state.currentValue;
-                    _evalResultValues[targetKey] = state.currentValue;
-                };
+                        requestedValue;
+                    _evalResultValues[targetKey] = requestedValue;
+                    return;
+                }
 
+                if(!_emoteAnimatorFlag) {
+                    state.queue.clear();
+                    state.active = false;
+                    state.currentValue = currentValue;
+                    state.startValue = currentValue;
+                    state.targetValue = currentValue;
+                    state.progress = 1.0f;
+                    state.duration = 0.0f;
+                }
+
+                state.queue.push_back(VariableKeyframe{
+                    targetValue,
+                    static_cast<float>(requestedTransition),
+                    static_cast<float>(requestedEaseWeight),
+                });
+                _variableValues[targetKey] = state.currentValue;
+                ensureEvalResultSlotLike_0x686944(targetKey) =
+                    state.currentValue;
+                _evalResultValues[targetKey] = state.currentValue;
+            };
+
+        if(hasBinding) {
             const auto queueControllerLikeBinary =
                 [&](VariableAnimatorState &state,
                     double requestedValue,
@@ -865,12 +915,28 @@ namespace motion {
             }
         }
 
-        // Aligned to Player_setVariable (0x671228): labels without a controller
-        // binding bypass animator queues and write the eval map immediately.
-        _variableAnimators.erase(key);
-        _variableValues[key] = value;
-        ensureEvalResultSlotLike_0x686944(key) = value;
-        _evalResultValues[key] = value;
+        // Labels without a fixed controller binding use the final generic
+        // animator bucket stepped by Player_progress.  Timeline controls such
+        // as body_UD/body_LR are intentionally sparse and depend on this
+        // transition to turn authored keyframes into continuous idle motion.
+        const auto evalIt = _evalResultValues.find(key);
+        const double currentValue = evalIt != _evalResultValues.end()
+            ? evalIt->second
+            : (_variableValues.count(key)
+                   ? _variableValues[key]
+                   : getVariable(detail::widen(key)));
+        auto [stateIt, inserted] = _variableAnimators.try_emplace(key);
+        if(inserted) {
+            stateIt->second.currentValue =
+                static_cast<float>(currentValue);
+            stateIt->second.startValue =
+                static_cast<float>(currentValue);
+            stateIt->second.targetValue =
+                static_cast<float>(currentValue);
+        }
+        queueControllerStateLikeBinary(
+            key, stateIt->second, currentValue, value, transition,
+            easeWeight);
         _emoteDirty = true;
     }
 
@@ -883,6 +949,11 @@ namespace motion {
 
         setVariableResolvedWeightLike_0x671228(
             key, value, transition, variableEaseWeightLike_0x671228(ease));
+        invokeNativeBackend(
+            "setvariable", { MotionBackendValue::String(key),
+                              MotionBackendValue::Number(value),
+                              MotionBackendValue::Number(transition),
+                              MotionBackendValue::Number(ease) });
     }
 
     double Player::getVariable(ttstr label) {
@@ -1198,7 +1269,19 @@ namespace motion {
         const auto key = detail::narrow(label);
         if(const auto it = _runtime->activeMotion->loopTimelines.find(key);
            it != _runtime->activeMotion->loopTimelines.end()) {
-            return it->second;
+            // Some E-mote PSBs expose a generic timeline dictionary whose
+            // optional `loop` field defaults to false, while the authoritative
+            // timelineControl entry carries a valid loop interval.  A false
+            // value here therefore cannot rule out a controller-defined loop.
+            if(it->second) {
+                return true;
+            }
+        }
+        if(const auto it =
+               _runtime->activeMotion->timelineControlByLabel.find(key);
+           it != _runtime->activeMotion->timelineControlByLabel.end()) {
+            return it->second.loopBegin >= 0.0 &&
+                   it->second.loopEnd > it->second.loopBegin;
         }
         return false;
     }
@@ -1359,6 +1442,9 @@ namespace motion {
                 it->second, controlIt->second, 0.0);
         }
         _allplaying = !_runtime->playingTimelineLabels.empty();
+        invokeNativeBackend(
+            "playtimeline", { MotionBackendValue::String(key),
+                               MotionBackendValue::Number(flags) });
         if(!_allplaying) {
             disableAutoProgress();
         }
@@ -1401,6 +1487,8 @@ namespace motion {
         }
 
         _allplaying = !_runtime->playingTimelineLabels.empty();
+        invokeNativeBackend(
+            "stoptimeline", { MotionBackendValue::String(key) });
         if(!_allplaying) {
             disableAutoProgress();
         }
@@ -1435,6 +1523,13 @@ namespace motion {
         state.blendAnimator.startValue = static_cast<float>(ratio);
         state.blendAnimator.targetValue = static_cast<float>(ratio);
         state.blendAutoStop = false;
+        invokeNativeBackend(
+            "settimelineblendratio",
+            { MotionBackendValue::String(key),
+              MotionBackendValue::Number(ratio),
+              MotionBackendValue::Number(0.0),
+              MotionBackendValue::Number(0.0),
+              MotionBackendValue::Boolean(false) });
     }
 
     double Player::getTimelineBlendRatio(ttstr label) {
@@ -1457,11 +1552,20 @@ namespace motion {
             setTimelineBlendLike_0x6735AC(key, false, 0.0, 0.0, 0.0);
         }
         setTimelineBlendLike_0x6735AC(key, false, 1.0, duration, 0.0);
+        invokeNativeBackend(
+            "fadeintimeline", { MotionBackendValue::String(key),
+                                 MotionBackendValue::Number(duration),
+                                 MotionBackendValue::Number(0.0) });
     }
 
     void Player::fadeOutTimeline(ttstr label, double duration, tjs_int) {
         setTimelineBlendLike_0x6735AC(detail::narrow(label), true, 0.0,
                                       duration, 0.0);
+        invokeNativeBackend(
+            "fadeouttimeline",
+            { MotionBackendValue::String(detail::narrow(label)),
+              MotionBackendValue::Number(duration),
+              MotionBackendValue::Number(0.0) });
     }
 
     tTJSVariant Player::getPlayingTimelineInfoList() {
@@ -1538,6 +1642,88 @@ namespace motion {
                     state.totalFrames = it->second;
                 }
             }
+
+            // Mirror only an exact public native timeline. Kiri's retained root
+            // clips (`全体構造` / `タイムライン構造`) are bookkeeping entry
+            // points, not native timelines. Mapping one to the first available
+            // main timeline used to select `sample_全自動_test`, which is an
+            // authored demonstration sequence that intentionally cycles every
+            // expression. Blink and physics are independent native controllers
+            // and do not require that demo timeline to run.
+            if(_nativeBackend) {
+                const auto nativeTimelineLabels = [&](const char *countMethod,
+                                                      const char *labelMethod) {
+                    std::vector<MotionBackendValue> countResults;
+                    if(!invokeNativeBackend(countMethod, {}, &countResults) ||
+                       countResults.empty() ||
+                       countResults.front().type !=
+                           MotionBackendValue::Type::Number) {
+                        return std::vector<std::string>{};
+                    }
+                    const int count = std::max(
+                        0, static_cast<int>(countResults.front().number));
+                    std::vector<std::string> labels;
+                    labels.reserve(static_cast<std::size_t>(count));
+                    for(int index = 0; index < count; ++index) {
+                        std::vector<MotionBackendValue> labelResults;
+                        if(invokeNativeBackend(
+                               labelMethod,
+                               {MotionBackendValue::Number(index)},
+                               &labelResults) &&
+                           !labelResults.empty() &&
+                           labelResults.front().type ==
+                               MotionBackendValue::Type::String) {
+                            labels.push_back(labelResults.front().string);
+                        }
+                    }
+                    return labels;
+                };
+
+                const auto mainLabels = nativeTimelineLabels(
+                    "countmaintimelines", "getmaintimelinelabelat");
+                const auto diffLabels = nativeTimelineLabels(
+                    "countdifftimelines", "getdifftimelinelabelat");
+                int nativeFlags = exactMotionBackendTimelineFlags(
+                    timelineLabel, mainLabels, diffLabels);
+                std::string nativeLabel = timelineLabel;
+                bool startedAmbientTimeline = false;
+                if(nativeFlags == 0) {
+                    nativeLabel = preferredMotionBackendIdleTimeline(diffLabels);
+                    if(!nativeLabel.empty()) {
+                        nativeFlags = 3;
+                        startedAmbientTimeline = true;
+                    }
+                }
+                const bool nativeStarted = nativeFlags != 0 &&
+                    invokeNativeBackend(
+                        "playtimeline",
+                        { MotionBackendValue::String(nativeLabel),
+                          MotionBackendValue::Number(nativeFlags) });
+                if(nativeStarted && startedAmbientTimeline) {
+                    auto &ambientState = _runtime->timelines[nativeLabel];
+                    ambientState.label = nativeLabel;
+                    ambientState.flags = nativeFlags;
+                    ambientState.blendRatio = 1.0;
+                    ambientState.playing = true;
+                    if(std::find(_runtime->playingTimelineLabels.begin(),
+                                 _runtime->playingTimelineLabels.end(),
+                                 nativeLabel) ==
+                       _runtime->playingTimelineLabels.end()) {
+                        _runtime->playingTimelineLabels.push_back(nativeLabel);
+                    }
+                }
+                if(emoteTimelineTraceEnabled() && LOGGER) {
+                    LOGGER->info(
+                        "[EMOTE_TIMELINE] native play motion={} requested={} native={} mirrored={} ambient={} flags={} main=[{}] diff=[{}]",
+                        _runtime->activeMotion
+                            ? _runtime->activeMotion->path
+                            : std::string{},
+                        timelineLabel, nativeLabel,
+                        nativeStarted ? 1 : 0,
+                        startedAmbientTimeline ? 1 : 0, nativeFlags,
+                        joinStrings(mainLabels), joinStrings(diffLabels));
+                }
+            }
         };
 
         bool started = false;
@@ -1577,9 +1763,6 @@ namespace motion {
         if(started && !label.IsEmpty()) {
             _motionKey = label;
         }
-        if(_allplaying) {
-            claimYuzuSdAutoProgress();
-        }
         return started;
     }
 
@@ -1604,8 +1787,14 @@ namespace motion {
         if(!_runtime->activeMotion) {
             return detail::makeArray({});
         }
+        // AnimKAGLayer compares this value with its previous result and only
+        // invalidates the Layer when it changes.  Expose the progress
+        // ping-pong token expected by that protocol.  Returning the static
+        // source-path list leaves the first transparent frame of fade-in
+        // motions resident forever because that list does not change while
+        // opacity, transforms and nested timelines advance.
         return detail::makeArray(
-            detail::stringsToVariants(activeSourceCandidates()));
+            {tTJSVariant(static_cast<tjs_int>(_commandListPulse ? 1 : 0))});
     }
 
     bool Player::getD3DAvailable() { return true; }
@@ -1723,7 +1912,32 @@ namespace motion {
         }
 
         const auto previousMatrix = nativeInstance->_runtime->drawAffineMatrix;
+        bool affineChanged = false;
+        for(size_t index = 0; index < matrix.size(); ++index) {
+            if(std::fabs(previousMatrix[index] - matrix[index]) > 1e-7) {
+                affineChanged = true;
+                break;
+            }
+        }
         nativeInstance->_runtime->drawAffineMatrix = matrix;
+        if(affineChanged) {
+            // The affine matrix is part of every prepared vertex position.
+            // A title/scene source can set it after the child motion has
+            // already prepared its first frame; keep that stale identity
+            // frame from being reused and make updateLayers propagate the
+            // new matrix through nested motion players before drawing.
+            nativeInstance->_runtime->preparedRenderItemsValid = false;
+            nativeInstance->_runtime->clearPresentationRenderReuse();
+            nativeInstance->_layersDirty = true;
+        }
+        nativeInstance->invokeNativeBackend(
+            "setpresentationaffine",
+            {MotionBackendValue::Number(matrix[0]),
+             MotionBackendValue::Number(matrix[1]),
+             MotionBackendValue::Number(matrix[2]),
+             MotionBackendValue::Number(matrix[3]),
+             MotionBackendValue::Number(matrix[4]),
+             MotionBackendValue::Number(matrix[5])});
         const auto motionPath =
             nativeInstance->_runtime && nativeInstance->_runtime->activeMotion
                 ? nativeInstance->_runtime->activeMotion->path
@@ -1906,18 +2120,6 @@ namespace motion {
                 : std::string{};
         tTJSVariant *arg = (numparams > 0 && param) ? param[0] : nullptr;
         iTJSDispatch2 *paramObj = selectVariantDispatchTarget(arg);
-        if(nativeInstance->isYuzuSdPreviewAnimationFrozen() &&
-           nativeInstance->restoreFrozenYuzuSdPreviewFrame(paramObj)) {
-            if(result) {
-                if(arg) {
-                    *result = *arg;
-                } else {
-                    *result = nativeInstance->_runtime->lastCanvas;
-                }
-            }
-            releaseDeferredEndedTimelineHold();
-            return TJS_S_OK;
-        }
         tTJSNI_BaseLayer *argLayer = nullptr;
         const bool argIsLayer = arg && tryGetLayerObject(*arg, argLayer);
         iTJSDispatch2 *resolvedLayerObject =
@@ -2355,7 +2557,6 @@ namespace motion {
             self->_runtime->nodes.clear();
             self->_runtime->nodesBuilt = false;
             self->_runtime->nodeLabelMap.clear();
-            self->claimYuzuSdAutoProgress();
         }
         if(motionDebugEnabled() && LOGGER) {
             std::string controlSummary = "<none>";
@@ -2412,12 +2613,6 @@ namespace motion {
         if(delta < 0 || delta > 60000) {
             delta = 0;
         }
-        if(self->isYuzuSdPreviewAnimationFrozen()) {
-            if(result) {
-                *result = tTJSVariant(self->getProgressCompat());
-            }
-            return TJS_S_OK;
-        }
 
         self->_runtime->pendingEvents.clear();
         self->frameProgress(delta * kMotionFramesPerMillisecond);
@@ -2450,126 +2645,11 @@ namespace motion {
         }
         self->calcBounds();
 
-        // MotionAffineSourceLayer calls progress() immediately before draw().
-        // Rendering an SD here as well races KAG's back/front-page clone and
-        // lets the outgoing page overwrite the new composite surface.
-        const bool scriptOwnedYuzuSdDraw =
-            isYuzuSdPresentationMotionPath(motionPath) &&
-            self->_targetLayer.Type() == tvtObject;
-        if(!scriptOwnedYuzuSdDraw && !self->_autoProgressRendering &&
-           !self->_presentationHoldRendering) {
-            iTJSDispatch2 *target = nullptr;
-            std::string staleSdTargetName;
-            if(self->_targetLayer.Type() == tvtObject) {
-                tTJSVariant targetValue = self->_targetLayer;
-                target = tryResolveLayerDispatch(targetValue);
-            }
-            if(!target && objthis) {
-                tTJSVariant dispatchValue(objthis, objthis);
-                target = tryResolveLayerDispatch(dispatchValue);
-            }
-            if(!target && self->_runtime->lastCanvas.Type() == tvtObject) {
-                target = tryResolveLayerDispatch(self->_runtime->lastCanvas);
-            }
-            if(target && isYuzuSdPresentationMotionPath(motionPath) &&
-               !yuzuSdPresentationTargetIsUsable(target)) {
-                staleSdTargetName =
-                    yuzuSdPresentationTargetLayerName(target);
-                if(LOGGER && motionDebugEnabled()) {
-                    LOGGER->info(
-                        "motion progress discarded stale sd presentation target: motion={} target={}",
-                        motionPath, static_cast<const void *>(target));
-                }
-                target = nullptr;
-                self->_targetLayer.Clear();
-            }
-            if(!target) {
-                target = resolveYuzuTitlePresentationTargetFromLayerTree(
-                    motionPath);
-                if(target) {
-                    self->_targetLayer = tTJSVariant(target, target);
-                }
-            }
-            if(!target) {
-                target = resolveRememberedYuzuSdPresentationTarget(
-                    motionPath);
-                if(target) {
-                    self->_targetLayer = tTJSVariant(target, target);
-                    if(LOGGER && motionDebugEnabled()) {
-                        LOGGER->info(
-                            "motion progress reused sd presentation target: motion={} target={}",
-                            motionPath, static_cast<const void *>(target));
-                    }
-                }
-            }
-            if(!target) {
-                target = resolveYuzuSdPresentationTargetFromLayerTree(
-                    motionPath,
-                    self->_runtime->lastExplicitTimelineLabel,
-                    staleSdTargetName);
-                if(target) {
-                    self->_targetLayer = tTJSVariant(target, target);
-                }
-            }
-            if(target) {
-                tTJSVariant targetValue(target, target);
-                tTJSNI_BaseLayer *targetLayer = nullptr;
-                tryGetLayerObject(targetValue, targetLayer);
-                if(layerBelongsToCgViewForQuery(targetLayer)) {
-                    if(LOGGER && motionDebugEnabled()) {
-                        LOGGER->info(
-                            "motion progress render skipped for CG View scripted layer: motion={} target=[{}]",
-                            motionPath,
-                            describeLayerForQueryDebug(targetLayer));
-                    }
-                    // CustomCgViewLayer drives its AffineLayer through the SLA
-                    // draw that immediately follows progress(). A second direct
-                    // render here bypasses the script-owned zoom and produces a
-                    // differently sized duplicate frame.
-                    target = nullptr;
-                }
-            }
-            if(target) {
-                rememberYuzuSdPresentationTarget(motionPath, target);
-                self->_autoProgressRendering = true;
-                try {
-                    if(LOGGER && motionDebugEnabled()) {
-                        LOGGER->info(
-                            "motion progress render target: motion={} target={}",
-                            motionPath, static_cast<const void *>(target));
-                    }
-                    if(self->_d3dDrawMode) {
-                        self->renderViaSharedD3DAdaptor(target);
-                    } else {
-                        self->renderToLayer(target);
-                    }
-                } catch(const std::exception &e) {
-                    if(LOGGER) {
-                        LOGGER->warn(
-                            "motion progress render failed: motion={} error={}",
-                            motionPath, e.what());
-                    }
-                } catch(...) {
-                    if(LOGGER) {
-                        LOGGER->warn(
-                            "motion progress render failed: motion={} error=<unknown>",
-                            motionPath);
-                    }
-                }
-                self->_autoProgressRendering = false;
-            } else if(LOGGER && motionDebugEnabled() &&
-                      motionPath.find("title") != std::string::npos) {
-                static int missingProgressTargetLogs = 0;
-                if(missingProgressTargetLogs < 12) {
-                    ++missingProgressTargetLogs;
-                    LOGGER->info(
-                        "motion progress render target missing: motion={} objthis={} targetLayerType={} lastCanvasType={}",
-                        motionPath, static_cast<const void *>(objthis),
-                        static_cast<int>(self->_targetLayer.Type()),
-                        static_cast<int>(self->_runtime->lastCanvas.Type()));
-                }
-            }
-        }
+        // Match krkrsdl3: progress() advances/evaluates state only.  The TJS
+        // MotionAffineSourceLayer immediately follows it with draw(), which
+        // selects Layer, D3DAdaptor or SeparateLayerAdaptor.  Presenting here
+        // as well creates a second frame that bypasses the authored affine
+        // owner and is visible for one host frame at a different origin.
 
         if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
            motionPath.find("m2logo.mtn") != std::string::npos &&

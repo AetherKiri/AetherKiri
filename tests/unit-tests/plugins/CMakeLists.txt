@@ -4,6 +4,7 @@ project(TestPlugins LANGUAGES CXX)
 add_executable(motionplayer-dll
     main.cpp
     motionplayer-dll.cpp
+    psb-media.cpp
     registry.cpp
     kbad-data-pack.cpp
     textrender-timing.cpp
@@ -12,6 +13,7 @@ add_executable(motionplayer-dll
     font-compat.cpp
     font-baseline.cpp
     godot-texture.cpp
+    godot-runtime-timing.cpp
     krkrgles-aliases.cpp
     kag-load-contract.cpp
     render-simd.cpp
@@ -39,6 +41,11 @@ if(AETHERKIRI_INTERNAL_ENABLED)
     target_link_libraries(motionplayer-dll PRIVATE lz4::lz4)
     target_compile_definitions(motionplayer-dll PRIVATE
         AETHERKIRI_EXPECT_INTERNAL_EMOTE=1)
+endif()
+
+if(AETHERKIRI_INTERNAL_ENABLED AND NOT BUILD_GPU_BRIDGE)
+    target_compile_definitions(motionplayer-dll PRIVATE
+        AETHERKIRI_EXPECT_INTERNAL_GRAPHICS=1)
 endif()
 
 if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_krkr2plugin_tests)

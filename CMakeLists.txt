@@ -11,6 +11,8 @@ endif ()
 add_compile_definitions(
         $<$<CONFIG:Debug>:DEBUG>
         $<$<CONFIG:Debug>:_DEBUG>   # 对于 MSVC 兼容性
+        # Artemis is a supported runtime in every product configuration.
+        AETHERKIRI_ENABLE_ARTEMIS_RUNTIME
         $<$<NOT:$<CONFIG:Debug>>:NDEBUG>
 )
 
@@ -80,6 +82,10 @@ option(BUILD_TOOLS "build tools execute build(exclude android ios)" ON)
 option(BUILD_ENGINE_API "build engine_api bridge shared library" ON)
 option(BUILD_GODOT_EXTENSION "build Godot GDExtension host library" ON)
 option(BUILD_GPU_BRIDGE "build legacy external GPU bridge renderer" OFF)
+option(AETHERKIRI_ENABLE_ONSCRIPTER
+       "enable the bundled OnscripterYuri runtime" ON)
+option(AETHERKIRI_ENABLE_MINORI
+       "enable the independent Rust Minori runtime" ON)
 option(AETHERKIRI_ENABLE_CODE_OBFUSCATION
        "obfuscate private Internal translation units in release builds" OFF)
 set(AETHERKIRI_OBFUSCATOR_PLUGIN "" CACHE FILEPATH
@@ -88,8 +94,9 @@ set(AETHERKIRI_OBFUSCATION_BUILD_ID "local" CACHE STRING
     "non-secret identifier mixed into deterministic obfuscation output")
 option(AETHERKIRI_ENABLE_INTERNAL
        "enable optional private AetherInternal packages when available" ON)
-set(AETHERKIRI_MOTIONPLAYER_BACKEND_API_VERSION 3)
+set(AETHERKIRI_MOTIONPLAYER_BACKEND_API_VERSION 4)
 set(AETHERKIRI_LIVE2D_HOST_API_VERSION 1)
+set(AETHERKIRI_FRAME_EFFECT_HOST_API_VERSION 2)
 set(AETHERKIRI_INTERNAL_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/packages/AetherInternal"
     CACHE PATH "path to an AetherInternal package checkout")
@@ -105,15 +112,20 @@ if(AETHERKIRI_ENABLE_INTERNAL)
     find_package(AetherInternal CONFIG QUIET
         NO_DEFAULT_PATH)
     if(AetherInternal_FOUND)
-        if(NOT AETHERINTERNAL_PACKAGE_API_VERSION EQUAL 5 OR
+        if(NOT AETHERINTERNAL_PACKAGE_API_VERSION EQUAL 7 OR
            NOT AETHERINTERNAL_REQUIRED_MOTIONPLAYER_API_VERSION EQUAL
                AETHERKIRI_MOTIONPLAYER_BACKEND_API_VERSION OR
            NOT AETHERINTERNAL_REQUIRED_LIVE2D_HOST_API_VERSION EQUAL
                AETHERKIRI_LIVE2D_HOST_API_VERSION OR
+           NOT AETHERINTERNAL_REQUIRED_FRAME_EFFECT_HOST_API_VERSION EQUAL
+               AETHERKIRI_FRAME_EFFECT_HOST_API_VERSION OR
            NOT COMMAND aetherinternal_extend_motionplayer OR
            NOT COMMAND aetherinternal_extend_psbfile OR
            NOT COMMAND aetherinternal_extend_legacy_plugins OR
            NOT COMMAND aetherinternal_extend_live2d OR
+           NOT COMMAND aetherinternal_extend_artemis OR
+           NOT COMMAND aetherinternal_extend_text_translation OR
+           NOT COMMAND aetherinternal_extend_godot_extension OR
            NOT COMMAND aetherinternal_extend_krkr2plugin OR
            NOT COMMAND aetherinternal_extend_krkr2plugin_tests)
             message(FATAL_ERROR
@@ -186,8 +198,28 @@ if(IOS AND AETHERKIRI_INTERNAL_ENABLED AND AETHERKIRI_ENABLE_CODE_OBFUSCATION)
     endif()
 endif()
 
-if(BUILD_ENGINE_API)
+set(AETHERKIRI_BUILD_NATIVE_ONSCRIPTER_TESTS OFF)
+if(ENABLE_TESTS AND AETHERKIRI_ENABLE_ONSCRIPTER AND
+   NOT (IOS OR ANDROID OR WEB OR EMSCRIPTEN))
+    # The provider contract links the real ONS runtime and runtime registry.
+    # Keep those targets available in the native test-only configuration used
+    # by CI even when product bridge targets are otherwise disabled.
+    set(AETHERKIRI_BUILD_NATIVE_ONSCRIPTER_TESTS ON)
+endif()
+
+if(BUILD_ENGINE_API OR AETHERKIRI_BUILD_NATIVE_ONSCRIPTER_TESTS)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/engine_api)
+endif()
+if(AETHERKIRI_ENABLE_ONSCRIPTER AND
+   (BUILD_GODOT_EXTENSION OR AETHERKIRI_BUILD_NATIVE_ONSCRIPTER_TESTS))
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/onscripter_runtime)
+endif()
+# The Rust provider has targets for Linux, Apple, Android, and Emscripten.
+# Keep it out of unsupported native targets, but do not make Linux the only
+# product platform that can register Minori.
+if(AETHERKIRI_ENABLE_MINORI AND BUILD_GODOT_EXTENSION AND
+   (LINUX OR APPLE OR ANDROID OR EMSCRIPTEN))
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/rust/minori_runtime)
 endif()
 if(BUILD_GODOT_EXTENSION)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/godot_extension)

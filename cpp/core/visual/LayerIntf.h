@@ -11,6 +11,8 @@
 #ifndef LayerIntfH
 #define LayerIntfH
 
+#include <memory>
+
 #include "tjsNative.h"
 #include "tvpfontstruc.h"
 #include "ComplexRect.h"
@@ -26,6 +28,10 @@
 extern bool TVPFreeUnusedLayerCache;
 extern tjs_int TVPGetLayerCount();
 extern tjs_uint64 TVPGetLayerTotalBitmapBytes();
+// Drop compatibility-routing state whose keys are native Layer addresses.
+// Embedded hosts can create another TJS world in the same process, where an
+// allocator may reuse an address from the previous title.
+extern void TVPResetLayerStateForHostSession();
 // E-mote may replace a visible GPU texture without contributing the full
 // character bounds to KiriKiri's normal dirty region. Request one complete
 // window composite after such a replacement; cached/static host frames can
@@ -427,6 +433,15 @@ public:
     // management --
     tTVPBaseTexture *MainImage;
 
+    // A large TLG can take hundreds of milliseconds to decode.  Keep the
+    // currently displayed image in place while that decode runs on the image
+    // worker, and use a generation to discard stale results when the scene
+    // advances again before the worker finishes.
+    std::shared_ptr<unsigned char> DeferredImageLoadToken;
+    tjs_uint64 DeferredImageLoadGeneration = 0;
+    ttstr DeferredImageLoadName;
+    tjs_uint32 DeferredImageLoadColorKey = TVP_clNone;
+
 protected:
     ttstr _evictedImageName;
     tjs_uint32 _evictedColorKey = 0;
@@ -455,6 +470,11 @@ public:
     // to the scratch layer. The destination's previous image becomes the next
     // reusable scratch buffer.
     void AssignMotionImages(tTJSNI_BaseLayer *src);
+    // Transfer a completed producer image into this display layer and return
+    // this layer's previous image to the producer for its next update. This
+    // keeps streaming producers from writing into a texture already visible
+    // in the layer tree.
+    bool ExchangeMainImage(tTVPBaseTexture *&bitmap);
 
     void AssignMainImage(iTVPBaseBitmap *bmp);
     // assign single main bitmap image. the image size assigned must
@@ -462,6 +482,13 @@ public:
 
     void AssignMainImageWithUpdate(iTVPBaseBitmap *bmp);
     void CopyFromMainImage(class tTJSNI_Bitmap *bmp);
+
+    // Complete a deferred large-image load started by LoadImages().  The
+    // callback is intentionally owned by the layer so a stale worker result
+    // cannot replace a newer scene image.
+    void CompleteDeferredImageLoad(const ttstr &name, tjs_uint32 colorkey,
+                                   tjs_uint64 generation,
+                                   tTVPBaseBitmap *bitmap, bool success);
 #ifndef TVP_REVRGB
 #define TVP_REVRGB(v)                                                          \
     ((v & 0xFF00FF00) | ((v >> 16) & 0xFF) | ((v & 0xFF) << 16))
@@ -1060,7 +1087,8 @@ private:
 
     void InternalComplete2(tTVPComplexRect &updateregion,
                            tTVPDrawable *drawable);
-    void InternalComplete2_GPU(tTVPRect updateregion, tTVPDrawable *drawable);
+    void InternalComplete2_GPU(tTVPRect updateregion, tTVPDrawable *drawable,
+                               bool localDestination);
     void InternalComplete(tTVPComplexRect &updateregion,
                           tTVPDrawable *drawable);
     void CompleteForWindow(tTVPDrawable *drawable);

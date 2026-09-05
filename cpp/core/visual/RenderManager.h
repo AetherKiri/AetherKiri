@@ -124,6 +124,12 @@ public:
     virtual void *GetScanLineForWrite(tjs_uint l) {
         return (void *)GetScanLineForRead(l);
     }
+    // The caller promises to overwrite the complete destination texture (or
+    // the complete destination region) before reading it. GPU-backed textures
+    // can use this to skip a synchronizing readback of stale destination data.
+    virtual void *GetScanLineForWriteUninitialized(tjs_uint l) {
+        return GetScanLineForWrite(l);
+    }
     virtual tjs_int GetPitch() const { return 0x100000; }
     bool IsIndependent() const { return RefCount == 1; }
 
@@ -134,6 +140,12 @@ public:
     virtual void SetPoint(int x, int y, uint32_t clr) = 0;
     virtual bool IsStatic() = 0; // aka. is readonly
     virtual bool IsOpaque() = 0;
+    // A layer-manager draw buffer is composed by the KAG software semantics
+    // and can be read back by the window presenter immediately afterwards.
+    // Backends may use this role to avoid asynchronous in-place operations
+    // whose source/destination aliasing is not defined by the GPU API.
+    virtual bool IsCpuCompositeTarget() const { return false; }
+    virtual void SetCpuCompositeTarget(bool) {}
     // virtual void RefreshBitmap() = 0;
     virtual krkr::Texture2D *
     GetAdapterTexture(krkr::Texture2D *origTex) = 0;

@@ -2,6 +2,8 @@
 #include "ncbind.hpp"
 #include "TransIntf.h"
 
+#include <vector>
+
 // ============================================================================
 // extNagano.dll Structural Replication
 // ============================================================================
@@ -66,27 +68,46 @@ public:
     }
 };
 
+static std::vector<iTVPTransHandlerProvider *> ExtNaganoProviders;
+
+static void addExtNaganoProvider(const tjs_char *name,
+                                 const tjs_char *fallbackName) {
+    auto *provider = new tExtNaganoDummyProvider(name, fallbackName);
+    try {
+        TVPAddTransHandlerProvider(provider);
+    } catch(...) {
+        provider->Release();
+        throw;
+    }
+    ExtNaganoProviders.push_back(provider);
+}
+
 static void extNagano_init() {
-    TVPAddTransHandlerProvider(new tExtNaganoDummyProvider(TJS_W("3duniversal"), TJS_W("universal")));
-    TVPAddTransHandlerProvider(new tExtNaganoDummyProvider(TJS_W("blurfade"), TJS_W("crossfade")));
-    TVPAddTransHandlerProvider(new tExtNaganoDummyProvider(TJS_W("book"), TJS_W("crossfade")));
-    TVPAddTransHandlerProvider(new tExtNaganoDummyProvider(TJS_W("bookLR"), TJS_W("crossfade")));
-    TVPAddTransHandlerProvider(new tExtNaganoDummyProvider(TJS_W("bookRL"), TJS_W("crossfade")));
-    TVPAddTransHandlerProvider(new tExtNaganoDummyProvider(TJS_W("flut" "ter"), TJS_W("universal")));
-    TVPAddTransHandlerProvider(new tExtNaganoDummyProvider(TJS_W("honeyturn"), TJS_W("universal")));
-    TVPAddTransHandlerProvider(new tExtNaganoDummyProvider(TJS_W("imagewipe"), TJS_W("universal")));
-    TVPAddTransHandlerProvider(new tExtNaganoDummyProvider(TJS_W("morphing"), TJS_W("crossfade")));
-    TVPAddTransHandlerProvider(new tExtNaganoDummyProvider(TJS_W("multiripple"), TJS_W("universal")));
-    TVPAddTransHandlerProvider(new tExtNaganoDummyProvider(TJS_W("rgbfade"), TJS_W("crossfade")));
-    TVPAddTransHandlerProvider(new tExtNaganoDummyProvider(TJS_W("scanline"), TJS_W("universal")));
-    TVPAddTransHandlerProvider(new tExtNaganoDummyProvider(TJS_W("spinfade"), TJS_W("crossfade")));
-    TVPAddTransHandlerProvider(new tExtNaganoDummyProvider(TJS_W("zoomfade"), TJS_W("crossfade")));
+    addExtNaganoProvider(TJS_W("3duniversal"), TJS_W("universal"));
+    addExtNaganoProvider(TJS_W("blurfade"), TJS_W("crossfade"));
+    addExtNaganoProvider(TJS_W("book"), TJS_W("crossfade"));
+    addExtNaganoProvider(TJS_W("bookLR"), TJS_W("crossfade"));
+    addExtNaganoProvider(TJS_W("bookRL"), TJS_W("crossfade"));
+    // flutter callers may omit the rule image required by universal.
+    // Crossfade accepts that option set and preserves the transition flow.
+    addExtNaganoProvider(TJS_W("flut" "ter"), TJS_W("crossfade"));
+    addExtNaganoProvider(TJS_W("honeyturn"), TJS_W("universal"));
+    addExtNaganoProvider(TJS_W("imagewipe"), TJS_W("universal"));
+    addExtNaganoProvider(TJS_W("morphing"), TJS_W("crossfade"));
+    addExtNaganoProvider(TJS_W("multiripple"), TJS_W("universal"));
+    addExtNaganoProvider(TJS_W("rgbfade"), TJS_W("crossfade"));
+    addExtNaganoProvider(TJS_W("scanline"), TJS_W("universal"));
+    addExtNaganoProvider(TJS_W("spinfade"), TJS_W("crossfade"));
+    addExtNaganoProvider(TJS_W("zoomfade"), TJS_W("crossfade"));
 }
 
 static void extNagano_uninit() {
-    // TransHandlerProviders are automatically safely cleaned up at shutdown 
-    // by TVPClearTransHandlerProvider() from core implementation, but a
-    // manual unregistration routine could be placed here if dynamically mapped.
+    for(auto it = ExtNaganoProviders.rbegin();
+        it != ExtNaganoProviders.rend(); ++it) {
+        TVPRemoveTransHandlerProvider(*it);
+        (*it)->Release();
+    }
+    ExtNaganoProviders.clear();
 }
 
 #define NCB_MODULE_NAME TJS_W("extnagano.dll")

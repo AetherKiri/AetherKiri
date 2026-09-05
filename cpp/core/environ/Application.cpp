@@ -617,6 +617,15 @@ void tTVPApplication::ShowException(const ttstr &e) {
     if (result == 1) { // 1 is the 0-indexed position of Copy to Clipboard button
         TVPClipboardSetText(msg);
     }
+    if(TVPHostSuppressProcessExit) {
+        // The host owns the process and can open another title after this
+        // session. Do not run one-shot process shutdown handlers here; mark
+        // this runtime terminated and let engine_destroy perform session
+        // cleanup after the TJS stack has unwound.
+        TVPTerminated = true;
+        TVPTerminateCode = 1;
+        return;
+    }
     TVPSystemUninit();
     TVPExitApplication(0);
 }
@@ -629,6 +638,8 @@ void tTVPApplication::Run() {
 #if defined(__ANDROID__)
             TVPAndroidAppLog("Application::Run terminated branch");
 #endif
+            if(TVPHostSuppressProcessExit)
+                return;
             TVPSystemUninit();
             TVPExitApplication(TVPTerminateCode);
         }
@@ -717,7 +728,7 @@ void tTVPApplication::ProcessMessages() {
             msg_host = std::get<0>(m_lstUserMsg.front());
             msg_id = std::get<1>(m_lstUserMsg.front());
             msg = std::move(std::get<2>(m_lstUserMsg.front()));
-            m_lstUserMsg.erase(m_lstUserMsg.begin());
+            m_lstUserMsg.pop_front();
         }
         if(msg) {
 #if defined(__ANDROID__)
@@ -924,7 +935,7 @@ void tTVPApplication::PostUserMessage(const std::function<void()> &func,
 }
 
 void tTVPApplication::FilterUserMessage(
-    const std::function<void(std::vector<std::tuple<void *, int, tMsg>> &)>
+    const std::function<void(std::deque<std::tuple<void *, int, tMsg>> &)>
         &func) {
     std::lock_guard<std::mutex> cs(m_msgQueueLock);
     func(m_lstUserMsg);
@@ -1009,8 +1020,16 @@ void tTVPApplication::OnExit() {
 
     delete TVPSystemControl;
     TVPSystemControl = nullptr;
+    TVPSystemControlAlive = false;
 
     CloseConsole();
+}
+
+void tTVPApplication::ResetForHostSession() {
+    tarminate_ = false;
+    application_activating_ = true;
+    _project_startup = false;
+    m_activeEvents.clear();
 }
 
 void tTVPApplication::OnLowMemory() {

@@ -55,7 +55,9 @@ RUNTIME_CJK_FONT_SOURCE="$GODOT_APP_DIR/assets/fonts/aetherkiri-runtime-cjk.otf"
 RUNTIME_SYMBOL_FONT_SOURCE="$GODOT_APP_DIR/assets/fonts/aetherkiri-runtime-symbols.ttf"
 PARALLEL_JOBS="${JOBS:-8}"
 FORCE_LOAD_PLUGIN_ARCHIVES=(
+    "libSDL2.a"
     "libkrkr2plugin.a"
+    "libextkagparser.a"
     "libkagparserex.a"
     "liblayerExDraw.a"
     "libmotionplayer.a"
@@ -64,14 +66,30 @@ FORCE_LOAD_PLUGIN_ARCHIVES=(
     "libpsdparse.a"
 )
 FORCE_LOAD_PLUGIN_SOURCES=(
+    "vcpkg_installed/$VCPKG_TRIPLET_DIR/lib/libSDL2.a"
     "cpp/plugins/libkrkr2plugin.a"
+    "cpp/plugins/extkagparser/libextkagparser.a"
     "cpp/plugins/kagparserex/libkagparserex.a"
     "cpp/plugins/layerex_draw/liblayerExDraw.a"
     "cpp/plugins/motionplayer/libmotionplayer.a"
     "cpp/plugins/psbfile/libpsbfile.a"
     "cpp/plugins/psdfile/libpsdfile.a"
-    "cpp/plugins/psdfile/psdparse/libpsdparse.a"
+    "cpp/plugins/psdfile/psdparse/psdparse/libpsdparse.a"
 )
+PRIVATE_RUNTIME_ARCHIVE_LISTER="$PROJECT_ROOT/packages/AetherInternal/tools/list_ios_runtime_archives.sh"
+if [[ -x "$PRIVATE_RUNTIME_ARCHIVE_LISTER" ]]; then
+    private_runtime_target="device"
+    if [[ "$SIMULATOR" == true ]]; then
+        private_runtime_target="simulator-$SIMULATOR_ARCH"
+    fi
+    while IFS=$'\t' read -r archive source; do
+        if [[ -z "$archive" || -z "$source" ]]; then
+            continue
+        fi
+        FORCE_LOAD_PLUGIN_ARCHIVES+=("$archive")
+        FORCE_LOAD_PLUGIN_SOURCES+=("$source")
+    done < <("$PRIVATE_RUNTIME_ARCHIVE_LISTER" "$private_runtime_target")
+fi
 IOS_SDK_COMPAT_ARCHIVE="libios_sdk_compat_symbols.a"
 
 ensure_vcpkg() {
@@ -193,7 +211,7 @@ build_ios_sdk_compat_archive() {
     local triplet="$2"
     local arch="arm64"
     local sdk="iphoneos"
-    local min_flag="-mios-version-min=${IOS_MIN_VERSION:-17.0}"
+    local min_flag="-mios-version-min=${IOS_MIN_VERSION:-16.0}"
     local work_dir="$CMAKE_BUILD_DIR/ios_sdk_compat"
     local source="$work_dir/ios_sdk_compat_symbols.mm"
     local object="$work_dir/ios_sdk_compat_symbols.o"
@@ -201,10 +219,10 @@ build_ios_sdk_compat_archive() {
     if [[ "$triplet" == "x64-ios-simulator" ]]; then
         arch="x86_64"
         sdk="iphonesimulator"
-        min_flag="-mios-simulator-version-min=${IOS_MIN_VERSION:-17.0}"
+        min_flag="-mios-simulator-version-min=${IOS_MIN_VERSION:-16.0}"
     elif [[ "$triplet" == "arm64-ios-simulator" ]]; then
         sdk="iphonesimulator"
-        min_flag="-mios-simulator-version-min=${IOS_MIN_VERSION:-17.0}"
+        min_flag="-mios-simulator-version-min=${IOS_MIN_VERSION:-16.0}"
     fi
 
     mkdir -p "$work_dir"
@@ -257,6 +275,7 @@ combine_ios_static_extension() {
     local godot_cpp_lib=""
     local libs=(
         "$CMAKE_BUILD_DIR/bridge/godot_extension/libaether_kiri_godot.a"
+        "$CMAKE_BUILD_DIR/bridge/onscripter_runtime/libaether_onscripter_runtime.a"
         "$CMAKE_BUILD_DIR/bridge/engine_api/libengine_api.a"
         "$CMAKE_BUILD_DIR/cpp/core/base/libcore_base_module.a"
         "$CMAKE_BUILD_DIR/cpp/core/environ/libcore_environ_module.a"
@@ -269,12 +288,13 @@ combine_ios_static_extension() {
         "$CMAKE_BUILD_DIR/cpp/core/visual/libcore_visual_module.a"
         "$CMAKE_BUILD_DIR/cpp/core/visual/simd/libtvpgl_simd.a"
         "$CMAKE_BUILD_DIR/cpp/plugins/libkrkr2plugin.a"
+        "$CMAKE_BUILD_DIR/cpp/plugins/extkagparser/libextkagparser.a"
         "$CMAKE_BUILD_DIR/cpp/plugins/kagparserex/libkagparserex.a"
         "$CMAKE_BUILD_DIR/cpp/plugins/layerex_draw/liblayerExDraw.a"
         "$CMAKE_BUILD_DIR/cpp/plugins/motionplayer/libmotionplayer.a"
         "$CMAKE_BUILD_DIR/cpp/plugins/psbfile/libpsbfile.a"
         "$CMAKE_BUILD_DIR/cpp/plugins/psdfile/libpsdfile.a"
-        "$CMAKE_BUILD_DIR/cpp/plugins/psdfile/psdparse/libpsdparse.a"
+        "$CMAKE_BUILD_DIR/cpp/plugins/psdfile/psdparse/psdparse/libpsdparse.a"
         "$CMAKE_BUILD_DIR/cpp/plugins/libCubismFramework.a"
         "$CMAKE_BUILD_DIR/cpp/external/libbpg/liblibbpg.a"
     )
@@ -300,6 +320,22 @@ combine_ios_static_extension() {
         ! -name 'libgodot-cpp*.a' \
         ! -name 'libSDL2main.a' | sort)
 
+    # Some vcpkg ports (e.g. tiff on iOS) install static libraries as
+    # <name>.framework bundles instead of lib<name>.a. Merge their archive
+    # binaries too, otherwise consumers of those ports fail to link.
+    while IFS= read -r framework; do
+        fw_name="$(basename "$framework" .framework)"
+        fw_binary="$framework/Versions/Current/$fw_name"
+        if [[ ! -e "$fw_binary" ]]; then
+            fw_binary="$framework/$fw_name"
+        fi
+        if [[ -f "$fw_binary" && "$(head -c 8 "$fw_binary" 2>/dev/null)" == '!<arch>'* ]]; then
+            libs+=("$fw_binary")
+        else
+            echo "warning: skipping non-static framework: $framework" >&2
+        fi
+    done < <(find "$vcpkg_lib_dir" -maxdepth 1 -name '*.framework' | sort)
+
     local existing_libs=()
     local lib
     for lib in "${libs[@]}"; do
@@ -319,9 +355,17 @@ combine_ios_static_extension() {
 stage_force_load_plugin_archives() {
     local destination="$1"
     local source
+    local resolved
     mkdir -p "$destination"
     for source in "${FORCE_LOAD_PLUGIN_SOURCES[@]}"; do
-        cp -f "$CMAKE_BUILD_DIR/$source" "$destination/" 2>/dev/null || true
+        resolved="$source"
+        if [[ ! -f "$resolved" ]]; then
+            resolved="$CMAKE_BUILD_DIR/$source"
+        fi
+        if [[ ! -f "$resolved" ]]; then
+            resolved="$PROJECT_ROOT/$source"
+        fi
+        cp -f "$resolved" "$destination/" 2>/dev/null || true
     done
 }
 
@@ -395,7 +439,7 @@ patch_ios_export_project() {
     for archive in "${FORCE_LOAD_PLUGIN_ARCHIVES[@]}"; do
         flags+=" -Wl,-force_load,Aether/bin/ios/$export_build_type/$archive"
     done
-    flags+=' -framework AudioToolbox -framework AVFoundation -framework CoreBluetooth -framework CoreHaptics -framework CoreMedia -framework CoreMotion -framework CoreVideo -framework GameController -framework VideoToolbox -framework CoreGraphics -framework QuartzCore -framework Metal -framework MetalKit -framework Security -framework StoreKit -framework SystemConfiguration -framework MobileCoreServices'
+    flags+=' -liconv -framework Accelerate -framework AudioToolbox -framework AVFoundation -framework CoreBluetooth -framework CoreHaptics -framework CoreMedia -framework CoreMotion -framework CoreVideo -framework GameController -framework VideoToolbox -framework CoreGraphics -framework QuartzCore -framework Metal -framework MetalKit -framework OpenGLES -framework Security -framework StoreKit -framework SystemConfiguration -framework MobileCoreServices'
 
     if [[ -f "$project_file" ]]; then
         FLAGS="$flags" perl -0pi -e 's/OTHER_LDFLAGS = "[^"]*";/"OTHER_LDFLAGS = \"" . $ENV{FLAGS} . "\";"/eg' "$project_file"
@@ -427,6 +471,12 @@ EOF
             /usr/libexec/PlistBuddy -c 'Add :UIFileSharingEnabled bool true' "$info_plist"
         /usr/libexec/PlistBuddy -c 'Set :LSSupportsOpeningDocumentsInPlace true' "$info_plist" 2>/dev/null || \
             /usr/libexec/PlistBuddy -c 'Add :LSSupportsOpeningDocumentsInPlace bool true' "$info_plist"
+        /usr/libexec/PlistBuddy -c 'Set :UIStatusBarHidden false' "$info_plist" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c 'Add :UIStatusBarHidden bool false' "$info_plist"
+        /usr/libexec/PlistBuddy -c 'Set :UIViewControllerBasedStatusBarAppearance false' "$info_plist" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c 'Add :UIViewControllerBasedStatusBarAppearance bool false' "$info_plist"
+        /usr/libexec/PlistBuddy -c 'Set :SKIncludeConsumableInAppPurchaseHistory true' "$info_plist" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c 'Add :SKIncludeConsumableInAppPurchaseHistory bool true' "$info_plist"
         /usr/libexec/PlistBuddy \
             -c "Set :NSBluetoothAlwaysUsageDescription $bluetooth_purpose" \
             "$info_plist" 2>/dev/null || \

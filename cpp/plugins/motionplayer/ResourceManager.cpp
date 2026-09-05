@@ -185,16 +185,133 @@ namespace {
         return lastLoaded;
     }
 
-    tTJSVariant &recentMotionModule() {
-        static tTJSVariant module;
-        return module;
+    struct WarmMotionModule {
+        tTJSVariant module;
+        std::shared_ptr<motion::detail::MotionSnapshot> snapshot;
+        std::string placedPath;
+        tjs_int decryptSeed = 0;
+        std::uint64_t lastUse = 0;
+    };
+
+    struct WarmMotionModuleCache {
+        std::vector<WarmMotionModule> entries;
+        std::uint64_t useCounter = 0;
+    };
+
+    std::string placedMotionPath(const ttstr &path) {
+        if(path.IsEmpty()) {
+            return {};
+        }
+        const auto placed = TVPGetPlacedPath(path);
+        return lowercase(
+            placed.IsEmpty() ? path.AsStdString() : placed.AsStdString());
     }
 
-    void rememberRecentMotionModule(const tTJSVariant &loaded) {
-        if(loaded.Type() == tvtObject &&
-           motion::detail::lookupModuleSnapshot(loaded)) {
-            recentMotionModule() = loaded;
+    WarmMotionModuleCache &warmMotionModuleCache() {
+        // TJS dispatch objects must be released while the host session is
+        // alive, not from a process-global destructor after TJS teardown.
+        // resetStaticStateForHostSession() performs the explicit clear.
+        static auto *cache = new WarmMotionModuleCache();
+        return *cache;
+    }
+
+    void clearWarmMotionModuleCache() {
+        auto &cache = warmMotionModuleCache();
+        cache.entries.clear();
+        cache.useCounter = 0;
+    }
+
+    void rememberWarmMotionModule(
+        const tTJSVariant &loaded,
+        std::shared_ptr<motion::detail::MotionSnapshot> snapshot = {}) {
+        if(loaded.Type() != tvtObject) {
+            return;
         }
+        if(!snapshot) {
+            snapshot = motion::detail::lookupModuleSnapshot(loaded);
+        }
+        if(!snapshot || snapshot->path.empty()) {
+            return;
+        }
+        const auto placedPath = placedMotionPath(
+            motion::detail::widen(snapshot->path));
+        if(placedPath.empty()) {
+            return;
+        }
+
+        auto &cache = warmMotionModuleCache();
+        const auto decryptSeed =
+            motion::ResourceManager::getEmotePSBDecryptSeed();
+        const auto existing = std::find_if(
+            cache.entries.begin(), cache.entries.end(),
+            [&placedPath, decryptSeed](const auto &entry) {
+                return entry.decryptSeed == decryptSeed &&
+                    entry.placedPath == placedPath;
+            });
+        if(existing != cache.entries.end()) {
+            existing->module = loaded;
+            existing->snapshot = std::move(snapshot);
+            existing->lastUse = ++cache.useCounter;
+            return;
+        }
+
+        cache.entries.push_back({ loaded, std::move(snapshot), placedPath,
+                                  decryptSeed, ++cache.useCounter });
+        // Kiri scenes commonly rotate through six character resources. Keep
+        // more than one parsed module warm so a later expression/source clone
+        // does not synchronously reopen and parse the PSB after its short-lived
+        // ResourceManager has been released.
+        constexpr std::size_t kMaximumWarmMotionModules = 12;
+        if(cache.entries.size() > kMaximumWarmMotionModules) {
+            const auto oldest = std::min_element(
+                cache.entries.begin(), cache.entries.end(),
+                [](const auto &left, const auto &right) {
+                    return left.lastUse < right.lastUse;
+                });
+            if(oldest != cache.entries.end()) {
+                if(motionResourceDebugEnabled()) {
+                    LOGGER->info(
+                        "Motion resource warm cache evict: path={}",
+                        oldest->placedPath);
+                }
+                cache.entries.erase(oldest);
+            }
+        }
+    }
+
+    WarmMotionModule reuseExactWarmMotionModule(
+        const ttstr &path, const tjs_int decryptSeed) {
+        const auto placedPath = placedMotionPath(path);
+        if(placedPath.empty()) {
+            return {};
+        }
+        auto &cache = warmMotionModuleCache();
+        const auto found = std::find_if(
+            cache.entries.begin(), cache.entries.end(),
+            [&placedPath, decryptSeed](const auto &entry) {
+                return entry.decryptSeed == decryptSeed &&
+                    entry.placedPath == placedPath && entry.snapshot &&
+                    entry.module.Type() == tvtObject;
+            });
+        if(found == cache.entries.end()) {
+            return {};
+        }
+        found->lastUse = ++cache.useCounter;
+        if(motionResourceDebugEnabled()) {
+            LOGGER->info("Motion resource warm cache hit: path={}",
+                         placedPath);
+        }
+        return *found;
+    }
+
+    tTJSVariant mostRecentWarmMotionModule() {
+        auto &cache = warmMotionModuleCache();
+        const auto recent = std::max_element(
+            cache.entries.begin(), cache.entries.end(),
+            [](const auto &left, const auto &right) {
+                return left.lastUse < right.lastUse;
+            });
+        return recent != cache.entries.end() ? recent->module : tTJSVariant{};
     }
 
     std::uint16_t readU16LE(const std::uint8_t *data) {
@@ -365,6 +482,16 @@ tjs_int motion::ResourceManager::getEmotePSBDecryptSeed() {
     return _decryptSeed;
 }
 
+void motion::ResourceManager::resetStaticStateForHostSession() {
+    clearWarmMotionModuleCache();
+    _decryptFunc.Clear();
+    _decryptSeed = 0;
+}
+
+void motion::ResourceManager::trimStaticStateForMemoryPressure() {
+    clearWarmMotionModuleCache();
+}
+
 bool motion::ResourceManager::applyEmotePSBDecryptFunc(
     std::uint8_t *data, const std::size_t size) {
     if(_decryptFunc.Type() != tvtObject ||
@@ -386,6 +513,9 @@ tjs_error motion::ResourceManager::setEmotePSBDecryptSeed(tTJSVariant *,
     if(!tryParseDecryptSeed(*p[0], parsedSeed)) {
         return TJS_E_INVALIDPARAM;
     }
+    if(_decryptSeed != parsedSeed) {
+        clearWarmMotionModuleCache();
+    }
     _decryptSeed = parsedSeed;
     LOGGER->info("setEmotePSBDecryptSeed: {}", _decryptSeed);
     return TJS_S_OK;
@@ -396,6 +526,7 @@ tjs_error motion::ResourceManager::setEmotePSBDecryptFunc(tTJSVariant *r,
                                                           tTJSVariant **p,
                                                           iTJSDispatch2 *obj) {
     if(n == 0) {
+        clearWarmMotionModuleCache();
         _decryptFunc.Clear();
         LOGGER->info("setEmotePSBDecryptFunc: cleared");
         return TJS_S_OK;
@@ -407,6 +538,7 @@ tjs_error motion::ResourceManager::setEmotePSBDecryptFunc(tTJSVariant *r,
         return TJS_E_INVALIDPARAM;
     }
 
+    clearWarmMotionModuleCache();
     _decryptFunc = *p[0];
     if(_decryptFunc.Type() == tvtObject && _decryptFunc.AsObjectNoAddRef()) {
         LOGGER->info("setEmotePSBDecryptFunc: callback registered");
@@ -432,8 +564,19 @@ tTJSVariant motion::ResourceManager::load(ttstr path) const {
     if(const auto cached = findLoaded(path); cached.Type() != tvtVoid) {
         _state->lastLoadedPath = rawPath;
         _state->lastLoadedModule = cached;
-        rememberRecentMotionModule(cached);
+        rememberWarmMotionModule(cached);
         return cached;
+    }
+
+    // KAG layer clones and scene transitions construct independent resource
+    // managers for the same motions. Reuse a recently parsed immutable
+    // snapshot when both the resolved storage path and decrypt seed match;
+    // otherwise each expression/source replacement reparses the large PSB on
+    // the application thread.
+    if(const auto warm = reuseExactWarmMotionModule(path, _decryptSeed);
+       warm.module.Type() == tvtObject) {
+        rememberLoadedModule(path, warm.module, warm.snapshot);
+        return warm.module;
     }
 
     const auto alias = _state
@@ -441,13 +584,15 @@ tTJSVariant motion::ResourceManager::load(ttstr path) const {
         : tTJSVariant{};
     if(alias.Type() != tvtVoid) {
         rememberLoadedModule(path, alias);
+        rememberWarmMotionModule(alias);
         return alias;
     }
 
     const auto recentAlias = fallbackSplitEmoteModule(
-        recentMotionModule(), path);
+        mostRecentWarmMotionModule(), path);
     if(recentAlias.Type() != tvtVoid) {
         rememberLoadedModule(path, recentAlias);
+        rememberWarmMotionModule(recentAlias);
         return recentAlias;
     }
 
@@ -455,7 +600,8 @@ tTJSVariant motion::ResourceManager::load(ttstr path) const {
     const auto loaded = detail::loadPSBVariant(
         path, _decryptSeed, &loadedSnapshot);
     if(loaded.Type() != tvtVoid && _state) {
-        rememberLoadedModule(path, loaded, std::move(loadedSnapshot));
+        rememberLoadedModule(path, loaded, loadedSnapshot);
+        rememberWarmMotionModule(loaded, std::move(loadedSnapshot));
     }
     return loaded;
 }
@@ -525,7 +671,6 @@ void motion::ResourceManager::rememberLoadedModule(
             ++it;
         }
     }
-    rememberRecentMotionModule(loaded);
 }
 
 void motion::ResourceManager::unload(ttstr path) const {

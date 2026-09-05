@@ -3,7 +3,13 @@
 
 //---------------------------------------------------------------------------
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
+#include <cstring>
+#include <spdlog/spdlog.h>
 #include "SystemControl.h"
+
+#include "../../plugins/motionplayer/MotionRenderProfile.h"
 #include "EventIntf.h"
 #include "MsgIntf.h"
 // #include "WindowFormUnit.h"
@@ -511,6 +517,19 @@ void tTVPSystemControl::DeliverEvents() {
 }
 
 void tTVPSystemControl::SystemWatchTimerTimer() {
+    static const bool profileEnabled = [] {
+        const char *value = std::getenv("AETHERKIRI_MOTION_RENDER_PROFILE");
+        return value && *value && std::strcmp(value, "0") != 0;
+    }();
+    const auto profileStarted = profileEnabled
+        ? std::chrono::steady_clock::now()
+        : std::chrono::steady_clock::time_point{};
+    // A script onFire can be entered before DeliverEvents() and can post
+    // onPaint callbacks that run later in this same host tick. Keep the
+    // render counters alive for the complete system-watch pass so the
+    // profile describes the user-visible stall rather than one queue slice.
+    motion::detail::ScopedMotionRenderBatchProfile systemWatchBatchProfile(
+        profileEnabled);
     if(TVPTerminated) {
         // this will ensure terminating the application.
         // the WM_QUIT message disappears in some unknown
@@ -554,14 +573,26 @@ void tTVPSystemControl::SystemWatchTimerTimer() {
 	}
 #endif
     // check status and deliver events
+    const auto eventsStarted = profileEnabled
+        ? std::chrono::steady_clock::now()
+        : std::chrono::steady_clock::time_point{};
     DeliverEvents();
+    const auto eventsFinished = profileEnabled
+        ? std::chrono::steady_clock::now()
+        : std::chrono::steady_clock::time_point{};
 
     // call TickBeat
+    const auto tickBeatStarted = profileEnabled
+        ? std::chrono::steady_clock::now()
+        : std::chrono::steady_clock::time_point{};
     tjs_int count = TVPGetWindowCount();
     for(tjs_int i = 0; i < count; i++) {
         tTJSNI_Window *win = TVPGetWindowListAt(i);
         win->TickBeat();
     }
+    const auto tickBeatFinished = profileEnabled
+        ? std::chrono::steady_clock::now()
+        : std::chrono::steady_clock::time_point{};
 
 #ifndef __ANDROID__
     if(!ContinuousEventCalling && tick - LastCompactedTick > 4000) {
@@ -587,6 +618,35 @@ void tTVPSystemControl::SystemWatchTimerTimer() {
         // events to prevent hash table fragmentation and memory waste.
         LastRehashedTick = tick;
         TJSDoRehash();
+    }
+    if(profileEnabled) {
+        const double eventsMs = std::chrono::duration<double, std::milli>(
+            eventsFinished - eventsStarted).count();
+        const double tickBeatMs = std::chrono::duration<double, std::milli>(
+            tickBeatFinished - tickBeatStarted).count();
+        const double totalMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - profileStarted).count();
+        if(systemWatchBatchProfile.owns()) {
+            const auto &stats = systemWatchBatchProfile.stats();
+            if(const auto logger = spdlog::get("core")) {
+                logger->info(
+                    "motion system watch render batch: events_ms={:.3f} "
+                    "total_ms={:.3f} onPaint_calls={} onPaint_ms={:.3f} "
+                    "drawCompat_calls={} drawCompat_ms={:.3f} "
+                    "native_render_calls={} native_render_ms={:.3f}",
+                    eventsMs, totalMs, stats.onPaintCalls, stats.onPaintMs,
+                    stats.drawCompatCalls, stats.drawCompatMs,
+                    stats.nativeRenderCalls, stats.nativeRenderMs);
+            }
+        }
+        if(eventsMs >= 5.0 || tickBeatMs >= 5.0 || totalMs >= 20.0) {
+            if(const auto logger = spdlog::get("core")) {
+                logger->info(
+                    "system watch profile: events_ms={:.3f} tickbeat_ms={:.3f} "
+                    "total_ms={:.3f} windows={}",
+                    eventsMs, tickBeatMs, totalMs, count);
+            }
+        }
     }
     // ensure modal window visible
     if(tick > LastShowModalWindowSentTick + 4100) {

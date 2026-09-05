@@ -352,8 +352,15 @@ func modal_out(scrim: CanvasItem, dialog: Control, background: Control = null, f
         spring_property(background, "scale", REST_SCALE, 0.34, 1.0)
         _fade(background, 1.0, 0.16, "modal_background")
 
-func loading_in(panel: Control, card: Control) -> void:
+func loading_in(panel: Control, card: Control, immediate: bool = false) -> void:
     if panel == null or card == null:
+        return
+    _stop_tweens(panel)
+    if immediate:
+        active_springs.erase(_motion_key(card, "scale"))
+        panel.visible = true
+        panel.modulate.a = 1.0
+        card.scale = REST_SCALE
         return
     panel.visible = true
     panel.modulate.a = 0.0

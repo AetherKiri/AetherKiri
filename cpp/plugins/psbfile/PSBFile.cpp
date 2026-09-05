@@ -3,6 +3,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <limits>
 #if defined(__APPLE__) || (defined(__linux__) && !defined(__ANDROID__))
 #define AETHERKIRI_HAS_EXECINFO 1
@@ -44,11 +45,162 @@ namespace PSB {
                 (static_cast<std::uint32_t>(data[3]) << 24);
         }
 
+        void WriteU16LE(std::uint8_t *data, const std::uint16_t value) {
+            data[0] = static_cast<std::uint8_t>(value);
+            data[1] = static_cast<std::uint8_t>(value >> 8);
+        }
+
+        void WriteU32LE(std::uint8_t *data, const std::uint32_t value) {
+            data[0] = static_cast<std::uint8_t>(value);
+            data[1] = static_cast<std::uint8_t>(value >> 8);
+            data[2] = static_cast<std::uint8_t>(value >> 16);
+            data[3] = static_cast<std::uint8_t>(value >> 24);
+        }
+
+        // Scenario PSBs are compiled data rather than text.  Keep an
+        // opt-in, bounded tree dump beside the parser so compatibility work
+        // can inspect authored layer commands without changing normal game
+        // behaviour.  This is intentionally disabled unless the caller sets
+        // AETHERKIRI_PSB_DUMP_PATH.
+        void DumpPSBValue(const std::shared_ptr<IPSBValue> &value,
+                          std::ostream &out, const std::string &path,
+                          std::size_t &nodes, const std::size_t maxNodes,
+                          const int depth = 0) {
+            if(!value || nodes++ >= maxNodes) {
+                return;
+            }
+            const auto indent = std::string(static_cast<std::size_t>(depth) * 2,
+                                            ' ');
+            if(auto dict = std::dynamic_pointer_cast<PSBDictionary>(value)) {
+                out << indent << path << " {\n";
+                for(const auto &[key, child] : *dict) {
+                    DumpPSBValue(child, out, path + "." + key, nodes,
+                                 maxNodes, depth + 1);
+                    if(nodes >= maxNodes)
+                        break;
+                }
+                out << indent << "}\n";
+                return;
+            }
+            if(auto list = std::dynamic_pointer_cast<PSBList>(value)) {
+                out << indent << path << " [\n";
+                std::size_t index = 0;
+                for(const auto &child : *list) {
+                    DumpPSBValue(child, out,
+                                 path + "[" + std::to_string(index++) + "]",
+                                 nodes, maxNodes, depth + 1);
+                    if(nodes >= maxNodes)
+                        break;
+                }
+                out << indent << "]\n";
+                return;
+            }
+            std::string repr;
+            try {
+                repr = value->toString();
+            } catch(...) {
+                repr = "<toString threw>";
+            }
+            constexpr std::size_t maxString = 320;
+            if(repr.size() > maxString)
+                repr.resize(maxString), repr += "...";
+            out << indent << path << " = " << repr << "\n";
+        }
+
+        void MaybeDumpPSBTree(const ttstr &sourceName,
+                              const std::shared_ptr<IPSBValue> &root) {
+            const char *dumpPath = std::getenv("AETHERKIRI_PSB_DUMP_PATH");
+            if(!dumpPath || !*dumpPath || !root)
+                return;
+            const char *match = std::getenv("AETHERKIRI_PSB_DUMP_MATCH");
+            const std::string source = sourceName.AsStdString();
+            if(match && *match && source.find(match) == std::string::npos)
+                return;
+            std::size_t maxNodes = 200000;
+            if(const char *limit = std::getenv("AETHERKIRI_PSB_DUMP_MAX_NODES")) {
+                try {
+                    maxNodes = std::max<std::size_t>(1, std::stoull(limit));
+                } catch(...) {
+                }
+            }
+            std::ofstream out(dumpPath, std::ios::app);
+            if(!out)
+                return;
+            out << "\n=== PSB " << source << " type="
+                << static_cast<int>(root->getType()) << " ===\n";
+            std::size_t nodes = 0;
+            DumpPSBValue(root, out, "$", nodes, maxNodes);
+            out << "=== END PSB nodes=" << nodes << " ===\n";
+        }
+
+        void NormalizeObjectHeader(std::uint8_t *data, const size_t size,
+                                   const PSBHeader &header) {
+            if(!data || size < header.GetHeaderLength()) {
+                return;
+            }
+            std::memcpy(data, header.signature, sizeof(header.signature));
+            WriteU16LE(data + 4, header.version);
+            // The parser already applied the title's E-mote transform and
+            // seed cipher. Mark the retained object as plain so a native backend
+            // does not try to interpret the normalized bytes as encrypted.
+            WriteU16LE(data + 6, 0);
+            WriteU32LE(data + 8, header.offsetEncrypt);
+            WriteU32LE(data + 12, header.offsetNames);
+            WriteU32LE(data + 16, header.offsetStrings);
+            WriteU32LE(data + 20, header.offsetStringsData);
+            WriteU32LE(data + 24, header.offsetChunkOffsets);
+            WriteU32LE(data + 28, header.offsetChunkLengths);
+            WriteU32LE(data + 32, header.offsetChunkData);
+            WriteU32LE(data + 36, header.offsetEntries);
+            if(header.version > 2) {
+                WriteU32LE(data + 40, header.checksum);
+            }
+            if(header.version > 3) {
+                WriteU32LE(data + 44, header.offsetExtraChunkOffsets);
+                WriteU32LE(data + 48, header.offsetExtraChunkLengths);
+                WriteU32LE(data + 52, header.offsetExtraChunkData);
+            }
+        }
+
         void LogPSBStage(const ttstr &filePath, const char *stage) {
             if(IsPSBLoadDebugEnabled()) {
                 LOGGER->info("PSBFile stage: {} ({})", stage,
                              filePath.AsStdString());
             }
+        }
+
+        bool ContainsUtf16LeAscii(const std::uint8_t *data,
+                                  const size_t size,
+                                  const char *needle) {
+            if(!data || !needle)
+                return false;
+            const size_t needleLength = std::strlen(needle);
+            if(needleLength == 0 || size < needleLength * 2)
+                return false;
+            for(size_t offset = 0; offset + needleLength * 2 <= size;
+                offset += 2) {
+                bool matched = true;
+                for(size_t index = 0; index < needleLength; ++index) {
+                    if(data[offset + index * 2] !=
+                           static_cast<std::uint8_t>(needle[index]) ||
+                       data[offset + index * 2 + 1] != 0) {
+                        matched = false;
+                        break;
+                    }
+                }
+                if(matched)
+                    return true;
+            }
+            return false;
+        }
+
+        bool IsExternalPimgIndex(const std::uint8_t *data, const size_t size,
+                                 const ttstr &sourceName) {
+            return size >= 4 && data[0] == 0xff && data[1] == 0xfe &&
+                TVPExtractStorageExt(sourceName).AsLowerCase() ==
+                    TJS_W(".pimg") &&
+                ContainsUtf16LeAscii(data + 2, size - 2,
+                                     "_extra_binary_file_");
         }
     } // namespace
 
@@ -70,6 +222,8 @@ namespace PSB {
         extraResources.clear();
 
         _root.reset();
+        _compatRoot.Clear();
+        _objectImage.reset();
         _header = PSBHeader{};
         _type = PSBType::PSB;
     }
@@ -385,7 +539,7 @@ namespace PSB {
     }
 
     bool PSBFile::loadPSBData(const void *data, size_t readSize,
-                              const ttstr &sourceName) {
+                              const ttstr &sourceName, bool loadResources) {
         const bool traceLoad = IsPSBLoadDebugEnabled();
         if(traceLoad) {
             LOGGER->info("PSBFile load begin: path={} seed={}",
@@ -435,6 +589,29 @@ namespace PSB {
                     readSize, sourceName.AsStdString());
                 return false;
             }
+        }
+
+        if(IsExternalPimgIndex(fileData, readSize, sourceName)) {
+            if(extension == nullptr || extension->loadExternalPimg == nullptr) {
+                LOGGER->warn("External-resource PIMG is unsupported: {}",
+                             sourceName.AsStdString());
+                return false;
+            }
+            std::string error;
+            tTJSVariant root;
+            if(!extension->loadExternalPimg(fileData, readSize, sourceName,
+                                            root, error) ||
+               root.Type() != tvtObject || root.AsObjectNoAddRef() == nullptr) {
+                LOGGER->warn("External-resource PIMG load failed: {} ({})",
+                             error.empty() ? "invalid root" : error,
+                             sourceName.AsStdString());
+                return false;
+            }
+            _compatRoot = root;
+            _type = PSBType::Pimg;
+            LOGGER->debug("External-resource PIMG loaded: {}",
+                          sourceName.AsStdString());
+            return true;
         }
 
         char outerSign[4];
@@ -616,6 +793,14 @@ namespace PSB {
             return false;
         }
 
+        auto objectImage = std::make_shared<std::vector<std::uint8_t>>(
+            static_cast<const std::uint8_t *>(stream.GetInternalBuffer()),
+            static_cast<const std::uint8_t *>(stream.GetInternalBuffer()) +
+                stream.GetSize());
+        NormalizeObjectHeader(objectImage->data(), objectImage->size(),
+                              _header);
+        _objectImage = std::move(objectImage);
+
         // Pre Load Strings
         LogPSBStage(sourceName, "load string offsets");
         stream.SetPosition(_header.offsetStrings);
@@ -710,20 +895,26 @@ namespace PSB {
         }
 
         _root = std::move(obj);
-        // Load Resource
-        LogPSBStage(sourceName, "load resources");
-        for(auto &res : resources) {
-            loadResource(*res, &stream);
-        }
+        // Load resource payloads only when the caller will consume them.  The
+        // object graph keeps resource indices intact, so metadata-only users
+        // can still inspect labels and file names without paying the cost of
+        // copying every embedded image/audio chunk.
+        if(loadResources) {
+            LogPSBStage(sourceName, "load resources");
+            for(auto &res : resources) {
+                loadResource(*res, &stream);
+            }
 
-        if(_header.version >= 4) {
-            LogPSBStage(sourceName, "load extra resources");
-            for(auto &res : extraResources) {
-                loadExtraResource(*res, &stream);
+            if(_header.version >= 4) {
+                LogPSBStage(sourceName, "load extra resources");
+                for(auto &res : extraResources) {
+                    loadExtraResource(*res, &stream);
+                }
             }
         }
 
         afterLoad();
+        MaybeDumpPSBTree(sourceName, _root);
         if(traceLoad) {
             LOGGER->info(
                 "PSBFile load ok: path={} type={} strings={} resources={} "

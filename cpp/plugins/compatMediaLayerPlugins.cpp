@@ -908,12 +908,17 @@ NCB_PRE_REGIST_CALLBACK(keepCoreRegExpOnig);
 NCB_PRE_REGIST_CALLBACK(keepCoreRegExpXpressive);
 
 // -------------------------------------------------------------------------
-// wuvorbis.dll / wumsadp.dll
+// wuffmpeg.dll / wuvorbis.dll / wumsadp.dll
 // AETHERKIRI_COMPAT_STUB: host audio core handles supported sound codecs.
 // -------------------------------------------------------------------------
 
+static void wuffmpegCompat() { codecHandledByCore(TJS_W("wuffmpeg.dll")); }
 static void wuvorbisCompat() { codecHandledByCore(TJS_W("wuvorbis.dll")); }
 static void wumsadpCompat() { codecHandledByCore(TJS_W("wumsadp.dll")); }
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("wuffmpeg.dll")
+NCB_PRE_REGIST_CALLBACK(wuffmpegCompat);
 
 #undef NCB_MODULE_NAME
 #define NCB_MODULE_NAME TJS_W("wuvorbis.dll")

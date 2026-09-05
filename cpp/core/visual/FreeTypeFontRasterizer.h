@@ -5,20 +5,26 @@
 #include "tjsCommHead.h"
 #include "CharacterData.h"
 #include "FontRasterizer.h"
+#include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 class FreeTypeFontRasterizer : public FontRasterizer {
     tjs_int RefCount;
-    class tFreeTypeFace *Face; //!< Faceオブジェクト
+    class tFreeTypeFace *Face; //!< Non-owning current face
     std::vector<class tFreeTypeFace *> FaceFallbacks;
+    std::unordered_map<std::string, std::unique_ptr<class tFreeTypeFace>>
+        FaceCache;
     class tTVPNativeBaseBitmap *LastBitmap;
     tTVPFont CurrentFont;
     std::string CurrentExtentCacheFontKey;
     std::recursive_mutex Mutex;
     void ApplyFallbackFaces();
     void ClearFallbackFaces();
+    class tFreeTypeFace *GetOrCreateFace(const ttstr &name,
+                                         tjs_uint32 options);
     void ApplyFaceOptions(class tFreeTypeFace *face);
 
 public:

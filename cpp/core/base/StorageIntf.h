@@ -26,6 +26,11 @@ extern tjs_char TVPArchiveDelimiter; //  = '>';
 ttstr TVPStringFromBMPUnicode(const tjs_uint16 *src, tjs_int maxlen = -1);
 //---------------------------------------------------------------------------
 
+// KAG AffineSourceVector's solid_<colour>.emf/.wmf resources are virtual
+// storage entries.  Graphic metadata/loaders use this predicate to provide
+// the same generic bridge as the storage existence check.
+bool TVPIsVirtualSolidVectorStorage(const ttstr &name);
+
 //---------------------------------------------------------------------------
 // tTVPArchive base archive class
 //---------------------------------------------------------------------------
@@ -224,6 +229,19 @@ bool TVPCreateFolders(const ttstr &folder);
 TJS_EXP_FUNC_DEF(void, TVPRegisterStorageMedia, (iTVPStorageMedia * media));
 // register storage media
 TJS_EXP_FUNC_DEF(void, TVPUnregisterStorageMedia, (iTVPStorageMedia * media));
+
+// Optional compatibility hook for plug-ins which expose a logical storage
+// name backed by another archive entry.  The resolver is consulted only after
+// the normal placement/media lookup misses; it must return a concrete storage
+// name that the regular file/archive media can open.  Keeping this hook at the
+// storage boundary lets private plug-ins implement their own virtual-resource
+// protocol without putting game-specific aliases in the public engine.
+using tTVPStorageResolver = bool (*)(const ttstr &requested,
+                                     ttstr &resolved);
+TJS_EXP_FUNC_DEF(void, TVPRegisterStorageResolver,
+                 (tTVPStorageResolver resolver));
+TJS_EXP_FUNC_DEF(void, TVPUnregisterStorageResolver,
+                 (tTVPStorageResolver resolver));
 // remove storage media
 
 extern tTJSBinaryStream *TVPCreateStream(const ttstr &name,
@@ -263,6 +281,12 @@ TJS_EXP_FUNC_DEF(ttstr, TVPChopStorageExt, (const ttstr &name));
 // chop storage's extension and return it.
 // extensition delimiter '.' will not be held.
 
+// Returns an existing alternate raster for narrowly recognized legacy save
+// thumbnail names (data_continue, numbered slots, and quick saves). Besides
+// graphic lookup, text streams use this to recover old compound BMP saves
+// when a newer plain thumbnail with another suffix exists beside them.
+ttstr TVPFindLegacySaveThumbnail(const ttstr &name);
+
 TJS_EXP_FUNC_DEF(void, TVPAddAutoPath, (const ttstr &name));
 // add given path to auto search path
 
@@ -281,6 +305,7 @@ TJS_EXP_FUNC_DEF(bool, TVPIsExistentStorage, (const ttstr &name));
 // this searches auto search path.
 
 TJS_EXP_FUNC_DEF(void, TVPClearStorageCaches, ());
+void TVPResetAutoPathsForGameSession();
 
 // clear all internal storage related caches.
 void TVPRemoveFromStorageCache(const ttstr &name);

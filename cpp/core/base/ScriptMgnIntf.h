@@ -79,12 +79,20 @@ TJS_EXP_FUNC_DEF(void, TVPExecuteBytecode,
                   const tjs_char *name = nullptr));
 
 extern void TVPExecuteStartupScript();
+
+// Native plug-ins can use this hook to refresh script members after the
+// framework's root patch and AfterStartup.tjs have replaced global classes.
+// Re-registering the same callback is harmless.
+using tTVPPostStartupScriptHook = void (*)();
+extern void TVPRegisterPostStartupScriptHook(tTVPPostStartupScriptHook hook);
 extern const tjs_char *TVPGetStartupPatchPrerequisitesScript();
 extern const tjs_char *TVPGetPatchWindowPrerequisitesScript();
 extern const tjs_char *TVPGetKagLoadContractGuardScript();
 extern const tjs_char *TVPGetPatchRuntimeRegistryExpression();
 extern const tjs_char *TVPGetPatchRuntimeInstanceRecoveryScript();
 extern const tjs_char *TVPGetD3DStandSourcePatchScript();
+extern const tjs_char *TVPGetLayeredPimgSourcePatchScript();
+extern const tjs_char *TVPGetD3DEmoteGpuBatchPatchScript();
 extern bool TVPMergeObjectMembers(iTJSDispatch2 *destination,
                                   iTJSDispatch2 *source);
 extern bool TVPMergeMissingObjectMembers(iTJSDispatch2 *destination,
@@ -93,6 +101,11 @@ extern bool TVPMergeMissingObjectMembers(iTJSDispatch2 *destination,
 // Adds the face-visibility snapshot repair to compatible World._updateAll
 // implementations. The three dependent insertions are applied atomically.
 extern bool TVPPatchWorldRestoreFaceVisibility(ttstr &script);
+
+// Adds transparent lookup of D3D-prefixed E-mote resources to compatible
+// AffineSourceMotion implementations. The fallback is based solely on the
+// logical resource being absent; these scripts do not expose a _useD3D member.
+extern bool TVPPatchAffineSourceMotionStorageFallback(ttstr &script);
 
 using tTVPStorageExistenceProbe = bool (*)(const ttstr &name);
 

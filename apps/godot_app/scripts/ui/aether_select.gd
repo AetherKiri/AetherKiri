@@ -6,6 +6,9 @@ const CONTROL_HEIGHT := 40.0
 const MENU_GAP := 6.0
 const MENU_PADDING := 6.0
 const ITEM_HEIGHT := 40.0
+const OVERLAY_INPUT_GROUP := "aether_select_input_overlay"
+const TOUCH_DRAG_THRESHOLD := 6.0
+const TOUCH_MOUSE_SUPPRESS_MS := 500
 
 var tokens
 var motion
@@ -16,8 +19,15 @@ var selected_index := -1
 var overlay: Control
 var popup_panel: PanelContainer
 var menu_highlight: PanelContainer
+var popup_scroll: ScrollContainer
+var popup_menu: VBoxContainer
 var chevron: TextureRect
 var popup_tween: Tween
+var popup_touch_index := -1
+var popup_touch_start := Vector2.ZERO
+var popup_touch_last := Vector2.ZERO
+var popup_touch_dragging := false
+var suppress_emulated_mouse_until_msec := 0
 
 var item_count: int:
     get:
@@ -98,7 +108,9 @@ func _open_popup() -> void:
     overlay.name = "AetherSelectOverlay"
     overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
     overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+    overlay.mouse_force_pass_scroll_events = false
     overlay.z_index = 200
+    overlay.add_to_group(OVERLAY_INPUT_GROUP)
     scene.add_child(overlay)
     overlay.move_to_front()
 
@@ -106,6 +118,7 @@ func _open_popup() -> void:
     dismiss_area.color = Color.TRANSPARENT
     dismiss_area.set_anchors_preset(Control.PRESET_FULL_RECT)
     dismiss_area.mouse_filter = Control.MOUSE_FILTER_STOP
+    dismiss_area.mouse_force_pass_scroll_events = false
     dismiss_area.gui_input.connect(func(event: InputEvent):
         var dismiss: bool = event is InputEventMouseButton and event.pressed
         dismiss = dismiss or (event is InputEventScreenTouch and event.pressed)
@@ -116,32 +129,47 @@ func _open_popup() -> void:
 
     popup_panel = PanelContainer.new()
     popup_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+    popup_panel.mouse_force_pass_scroll_events = false
     popup_panel.add_theme_stylebox_override("panel", _popup_box())
     overlay.add_child(popup_panel)
 
-    # Host keeps the sliding jelly highlight behind the menu rows
-    var menu_host := Control.new()
-    menu_host.mouse_filter = Control.MOUSE_FILTER_PASS
-    menu_host.clip_contents = true
-    popup_panel.add_child(menu_host)
-
+    var trigger_rect := get_global_rect()
+    var viewport_size := get_viewport_rect().size
+    var desired_menu_height := MENU_PADDING * 2.0 + ITEM_HEIGHT * float(items.size())
+    var menu_height := minf(desired_menu_height, maxf(ITEM_HEIGHT + MENU_PADDING * 2.0, viewport_size.y - 24.0))
+    var menu_width := minf(maxf(size.x, 220.0), maxf(196.0, viewport_size.x - 24.0))
+    popup_scroll = ScrollContainer.new()
+    popup_scroll.name = "MenuScroll"
+    popup_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+    popup_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+    # Menu rows are Buttons. On touch platforms their drag events only reach
+    # this ScrollContainer when the rows allow GUI input to bubble upward.
+    # A zero deadzone also keeps short iOS finger drags responsive.
+    popup_scroll.scroll_deadzone = 0
+    # Do not bubble wheel/trackpad events at either scroll boundary. The popup
+    # owns scrolling for as long as it is open.
+    popup_scroll.mouse_force_pass_scroll_events = false
+    popup_scroll.custom_minimum_size = Vector2(
+        0,
+        maxf(ITEM_HEIGHT, menu_height - MENU_PADDING * 2.0)
+    )
+    popup_panel.add_child(popup_scroll)
+    # Sliding jelly highlight lives inside the scroll so it moves with the rows
     menu_highlight = PanelContainer.new()
+    menu_highlight.name = "MenuHighlight"
     menu_highlight.mouse_filter = Control.MOUSE_FILTER_IGNORE
     menu_highlight.visible = false
     menu_highlight.add_theme_stylebox_override("panel", tokens.panel(tokens.accent_fill, 6))
-    menu_host.add_child(menu_highlight)
-
-    var menu := VBoxContainer.new()
-    menu.set_anchors_preset(Control.PRESET_FULL_RECT)
-    menu.add_theme_constant_override("separation", 0)
-    menu_host.add_child(menu)
+    popup_scroll.add_child(menu_highlight)
+    popup_menu = VBoxContainer.new()
+    popup_menu.name = "MenuItems"
+    popup_menu.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    popup_menu.custom_minimum_size = Vector2(0, 0)
+    popup_menu.add_theme_constant_override("separation", 0)
+    popup_scroll.add_child(popup_menu)
     for index in range(items.size()):
-        menu.add_child(_menu_item(index))
+        popup_menu.add_child(_menu_item(index))
 
-    var menu_height := MENU_PADDING * 2.0 + ITEM_HEIGHT * float(items.size())
-    var trigger_rect := get_global_rect()
-    var viewport_size := get_viewport_rect().size
-    var menu_width := minf(maxf(size.x, 220.0), maxf(196.0, viewport_size.x - 24.0))
     var menu_position := Vector2(trigger_rect.position.x, trigger_rect.end.y + MENU_GAP)
     if menu_position.x + menu_width > viewport_size.x - 12.0:
         menu_position.x = viewport_size.x - menu_width - 12.0
@@ -161,6 +189,7 @@ func _menu_item(index: int) -> Button:
     button.text = String(items[index].get("label", ""))
     button.alignment = HORIZONTAL_ALIGNMENT_LEFT
     button.focus_mode = Control.FOCUS_ALL
+    button.mouse_filter = Control.MOUSE_FILTER_PASS
     button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
     button.custom_minimum_size = Vector2(0, ITEM_HEIGHT)
     button.add_theme_font_size_override("font_size", 14)
@@ -235,6 +264,70 @@ func _choose(index: int) -> void:
                 )
         item_selected.emit(index)
 
+func _input(event: InputEvent) -> void:
+    if overlay == null or not is_instance_valid(overlay):
+        return
+    if event is InputEventScreenTouch:
+        var touch := event as InputEventScreenTouch
+        if touch.pressed:
+            if popup_panel == null or not popup_panel.get_global_rect().has_point(touch.position):
+                return
+            popup_touch_index = touch.index
+            popup_touch_start = touch.position
+            popup_touch_last = touch.position
+            popup_touch_dragging = false
+            suppress_emulated_mouse_until_msec = Time.get_ticks_msec() + TOUCH_MOUSE_SUPPRESS_MS
+            get_viewport().set_input_as_handled()
+            return
+        if touch.index != popup_touch_index:
+            return
+        var choose_position := touch.position
+        var was_dragging := popup_touch_dragging
+        _reset_popup_touch()
+        suppress_emulated_mouse_until_msec = Time.get_ticks_msec() + TOUCH_MOUSE_SUPPRESS_MS
+        get_viewport().set_input_as_handled()
+        if not was_dragging:
+            _choose_item_at_position(choose_position)
+        return
+    if event is InputEventScreenDrag:
+        var drag := event as InputEventScreenDrag
+        if drag.index != popup_touch_index:
+            return
+        var delta := drag.position - popup_touch_last
+        popup_touch_last = drag.position
+        if not popup_touch_dragging and drag.position.distance_to(popup_touch_start) >= TOUCH_DRAG_THRESHOLD:
+            popup_touch_dragging = true
+        if popup_touch_dragging and popup_scroll != null and is_instance_valid(popup_scroll):
+            popup_scroll.scroll_vertical += int(round(-delta.y))
+        suppress_emulated_mouse_until_msec = Time.get_ticks_msec() + TOUCH_MOUSE_SUPPRESS_MS
+        get_viewport().set_input_as_handled()
+        return
+    if Time.get_ticks_msec() >= suppress_emulated_mouse_until_msec:
+        return
+    if event is InputEventMouseButton:
+        var mouse_button := event as InputEventMouseButton
+        if mouse_button.button_index == MOUSE_BUTTON_LEFT:
+            get_viewport().set_input_as_handled()
+    elif event is InputEventMouseMotion:
+        get_viewport().set_input_as_handled()
+
+func _choose_item_at_position(position: Vector2) -> void:
+    if popup_scroll == null or popup_menu == null:
+        return
+    if not popup_scroll.get_global_rect().has_point(position):
+        return
+    for index in range(popup_menu.get_child_count()):
+        var button := popup_menu.get_child(index) as Button
+        if button != null and button.get_global_rect().has_point(position):
+            _choose(index)
+            return
+
+func _reset_popup_touch() -> void:
+    popup_touch_index = -1
+    popup_touch_start = Vector2.ZERO
+    popup_touch_last = Vector2.ZERO
+    popup_touch_dragging = false
+
 func _close_popup() -> void:
     if overlay == null or not is_instance_valid(overlay):
         return
@@ -271,16 +364,13 @@ func _animate_chevron(open: bool) -> void:
     motion.spring_property(chevron, "rotation", target, 0.28, 1.0)
 
 func _focus_selected_item() -> void:
-    if popup_panel == null or not is_instance_valid(popup_panel):
+    if popup_scroll == null or popup_menu == null:
         return
-    if popup_panel.get_child_count() < 1:
-        return
-    var host := popup_panel.get_child(0)
-    if host.get_child_count() < 2:
-        return
-    var menu := host.get_child(1)
-    if selected_index >= 0 and selected_index < menu.get_child_count():
-        menu.get_child(selected_index).grab_focus()
+    if selected_index >= 0 and selected_index < popup_menu.get_child_count():
+        var selected_control := popup_menu.get_child(selected_index) as Control
+        selected_control.grab_focus()
+        popup_scroll.ensure_control_visible(selected_control)
+        _slide_menu_highlight(false, selected_index)
 
 func _free_overlay() -> void:
     if overlay != null and is_instance_valid(overlay):
@@ -288,6 +378,9 @@ func _free_overlay() -> void:
     overlay = null
     popup_panel = null
     menu_highlight = null
+    popup_scroll = null
+    popup_menu = null
+    _reset_popup_touch()
     grab_focus()
 
 func _unhandled_key_input(event: InputEvent) -> void:

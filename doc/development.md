@@ -76,10 +76,12 @@ Native first, then GPU Bridge where native coverage is incomplete.
 | `apps/godot_app/scripts/sequence_perf_probe.gd` | Longer sequence FPS probe. |
 | `apps/godot_app/scripts/gui_render_probe.gd` | GUI render screenshot probe. |
 | `apps/godot_app/scripts/gpu_blend_self_test.gd` | Godot GPU blend self-test harness. |
-| `bridge/godot_extension/src/aether_kiri_godot.cpp` | Godot-visible `AetherKiriPlayer` implementation and Godot method bindings. |
+| `bridge/godot_extension/src/aether_runtime_player.cpp` | Godot-visible `AetherRuntimePlayer` implementation and Godot method bindings. |
 | `bridge/engine_api/include/engine_api.h` | C ABI exported by the engine bridge. |
+| `bridge/engine_api/include/engine_runtime_provider.h` | Versioned runtime-provider ABI behind `AetherRuntimePlayer`. New engines implement this contract instead of another Godot Player. |
 | `bridge/engine_api/include/engine_options.h` | Engine option keys/values shared with host code. |
 | `bridge/engine_api/src/engine_api.cpp` | C ABI implementation that creates, opens, ticks, renders, and receives input. |
+| `bridge/onscripter_runtime/src/onscripter_runtime_provider.cpp` | ONScripterYuri adapter for the shared runtime-provider ABI. |
 | `cpp/core/environ/EngineLoop.*` | Main runtime lifecycle, tick loop, and host input conversion into TVP events. |
 | `cpp/core/visual/LayerManager.*` | Layer hit testing, focus/capture, mouse/touch/key dispatch, and compatibility input behavior. |
 | `cpp/core/visual/impl/DrawDevice.*` | Draw device bridge between window/layer updates and render managers. |
@@ -307,10 +309,35 @@ The Godot shell mirrors the old mobile app flow:
 7. Settings persist renderer, performance overlay, frame limit, orientation,
    and developer toggles.
 
+## Runtime Architecture
+
+Godot owns exactly one native-facing class. Runtime implementations do not
+register their own Godot Nodes or duplicate texture, enhancement, media,
+diagnostic, StoreKit, and platform-file-picker behavior:
+
+```text
+Godot
+  └── AetherRuntimePlayer
+        └── engine API dispatcher
+              ├── KiriRuntime ───── KiriKiri
+              ├── OnsRuntime ────── ONScripterYuri
+              └── A Runtime
+```
+
+`AetherRuntimePlayer` is the stable host facade. KiriRuntime is the existing
+legacy engine API backend; OnsRuntime and A Runtime implement the
+versioned `engine_runtime_provider_v1_t` ABI. A new visual-novel engine belongs
+behind that ABI and must not introduce another `Aether*Player` Godot class.
+The dispatcher owns probing and lifecycle selection, while the Player owns all
+Godot-specific presentation and platform services.
+
 ## Input Pipeline
 
 Godot events are handled in `apps/godot_app/scripts/main.gd` and forwarded to
-`AetherKiriPlayer`, then through `EngineLoop` into TVP input events.
+`AetherRuntimePlayer`, then through the engine API dispatcher into the selected
+runtime. KiriRuntime converts them through `EngineLoop` into TVP events;
+provider runtimes translate the same stable input ABI into their native event
+systems.
 
 Important rules:
 
@@ -488,6 +515,34 @@ The desktop UI log panel is not shown on mobile. Use `--console` or device
 syslog/crash logs for iOS release diagnostics. Use `--console` only when
 actively collecting logs, because it waits for the process and can keep a
 terminal session occupied.
+
+### Compiled TJS2 analysis
+
+`packages/tjs2Decompiler` is an optional developer-only Rust helper. It is a
+git submodule and is deliberately not part of any application or native runtime
+target. Initialize and build it with:
+
+```bash
+git submodule update --init packages/tjs2Decompiler
+cargo build --release --manifest-path packages/tjs2Decompiler/Cargo.toml
+```
+
+The resulting `packages/tjs2Decompiler/target/release/tjs2dec` accepts a
+structured `TJS2100` bytecode file. Useful views are:
+
+```bash
+packages/tjs2Decompiler/target/release/tjs2dec disasm /path/to/script.tjs
+packages/tjs2Decompiler/target/release/tjs2dec ssa /path/to/script.tjs
+packages/tjs2Decompiler/target/release/tjs2dec ssa --hlir /path/to/script.tjs
+packages/tjs2Decompiler/target/release/tjs2dec tjs /path/to/script.tjs
+packages/tjs2Decompiler/target/release/tjs2dec emit-tjs /path/to/script.tjs
+```
+
+Treat decompiler output as analysis evidence, not as authoritative source.
+Before implementing a compatibility plugin, cross-check class/object counts,
+call flow, constants, and native method boundaries against the engine's own
+bytecode dump and the original plugin's native disassembly. Do not commit game
+scripts, extracted bytecode, DLLs, or machine-local paths.
 
 ## Code Change Guidelines
 

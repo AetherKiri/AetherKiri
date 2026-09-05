@@ -38,6 +38,7 @@
 #include "FilePathUtil.h"
 #include "Application.h"
 #include "SysInitImpl.h"
+#include "UtilStreams.h"
 
 #if defined(_WIN32)
 #undef GetClassName
@@ -355,10 +356,16 @@ static bool TVPQueryProxyValue(const ttstr &name, tTJSVariant &value) {
 
 static bool TVPLookupProxyTarget(const ttstr &name, ttstr *resolved) {
     tTJSVariant value;
-    if(!TVPQueryProxyValue(name, value) || value.Type() != tvtString)
+    if(!TVPQueryProxyValue(name, value) ||
+       (value.Type() != tvtString && value.Type() != tvtOctet &&
+        value.Type() != tvtObject))
         return false;
 
     if(resolved) {
+        if(value.Type() != tvtString) {
+            resolved->Clear();
+            return true;
+        }
         *resolved = value.GetString();
         return !resolved->IsEmpty();
     }
@@ -418,6 +425,67 @@ public:
         return TVPLookupProxyTarget(name, nullptr);
     }
     tTJSBinaryStream *Open(const ttstr &name, tjs_uint32 flags) override {
+        tTJSVariant value;
+        if(!TVPQueryProxyValue(name, value)) {
+            TVPThrowExceptionMessage(TJS_W("cannot open proxyfile:%1"), name);
+            return nullptr;
+        }
+
+        const tjs_uint32 access = flags & TJS_BS_ACCESS_MASK;
+        if(access != TJS_BS_READ) {
+            // PackinOne permits only read access for proxy entries.  Keep the
+            // same error boundary for strings, octets, and dispatch objects.
+            TVPThrowExceptionMessage(TJS_W("write mode not supported:%1"),
+                                     name);
+            return nullptr;
+        }
+
+        if(value.Type() == tvtOctet) {
+            auto *octet = value.AsOctetNoAddRef();
+            if(!octet) {
+                TVPThrowExceptionMessage(TJS_W("cannot open proxyfile:%1"),
+                                         name);
+                return nullptr;
+            }
+
+            // The octet belongs to the TJS variant.  Copy it into an owning
+            // stream before the variant goes out of scope; the IDA reference
+            // follows the same copy-into-MemStreamHolder path.
+            auto *stream = new tTVPMemoryStream();
+            try {
+                if(octet->GetLength() != 0)
+                    stream->Write(octet->GetData(), octet->GetLength());
+                stream->Seek(0, TJS_BS_SEEK_SET);
+                return stream;
+            } catch(...) {
+                delete stream;
+                TVPThrowExceptionMessage(TJS_W("cannot open proxyfile:%1"),
+                                         name);
+                return nullptr;
+            }
+        }
+
+        if(value.Type() == tvtObject) {
+            // A dispatch-valued entry is handled by the native PSB/stream
+            // bridge when it exposes a binary-stream object.  The generic
+            // fallback below intentionally remains read-only and reports a
+            // normal proxy-open failure for unsupported dispatch objects.
+            iTJSDispatch2 *object = value.AsObjectNoAddRef();
+            if(object) {
+                tTJSVariant streamValue;
+                if(TJS_SUCCEEDED(object->PropGet(
+                       TJS_IGNOREPROP, TJS_W("stream"), nullptr,
+                       &streamValue, object)) &&
+                   streamValue.Type() == tvtObject &&
+                   streamValue.AsObjectNoAddRef()) {
+                    object = streamValue.AsObjectNoAddRef();
+                }
+                (void)object;
+            }
+            TVPThrowExceptionMessage(TJS_W("cannot open proxyfile:%1"), name);
+            return nullptr;
+        }
+
         ttstr resolved;
         if(!TVPLookupProxyTarget(name, &resolved)) {
             TVPThrowExceptionMessage(TJS_W("cannot open proxyfile:%1"), name);
@@ -675,6 +743,12 @@ void TVPLoadInternalPlugins() {
     spdlog::info("TVPLoadInternalPlugins: plugin_load_mode={}",
                  TVPPluginLoadMode.AsStdString());
     ncbAutoRegister::AllRegist();
+    // A number of older Artemis titles construct Offscreen/Texture objects
+    // from their first startup script, before they explicitly link any GPU
+    // helper script.  Keep the graphics compatibility module available at
+    // the same point as the other internal plug-ins so those global classes
+    // exist during startup in both core and full load modes.
+    ncbAutoRegister::LoadModule(TJS_W("krkrgles.dll"));
     if(TVPIsAetherAllPluginLoadMode()) {
         ncbAutoRegister::LoadAllModules();
     } else {
@@ -683,6 +757,13 @@ void TVPLoadInternalPlugins() {
         TVPLoadPlugin(TJS_W("shrinkCopy.dll"));
     }
     PluginCallTracer::Instance().LogRegistrationEnd();
+}
+
+void TVPUnloadInternalPlugins() {
+    ncbAutoRegister::UnloadAllModules();
+    TVPUnregisterProxyFsStub();
+    TVPRegisteredPlugins.clear();
+    TVPAutoLoadPluginCount = 0;
 }
 
 bool TVPLoadInternalPlugin(const ttstr &_name) {

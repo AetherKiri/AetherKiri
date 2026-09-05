@@ -2,6 +2,7 @@
 #include "PluginCallTracer.hpp"
 #include <set>
 #include <spdlog/spdlog.h>
+#include <cstdlib>
 
 // static変数の実体
 
@@ -36,6 +37,21 @@ ttstr ResolveModuleAlias(const ttstr &_name)
 	return _name.AsLowerCase();
 }
 
+std::vector<ttstr> &LoadedInternalModules()
+{
+	// Preserve actual registration order so session teardown can unwind native
+	// classes and callbacks in the opposite order.
+	static std::vector<ttstr> modules;
+	return modules;
+}
+
+void ForgetLoadedInternalModule(const ttstr &name)
+{
+	auto &modules = LoadedInternalModules();
+	modules.erase(std::remove(modules.begin(), modules.end(), name),
+	              modules.end());
+}
+
 } // namespace
 
 void ncbAutoRegister::RegisterModuleAlias(NameT alias, NameT canonical)
@@ -65,9 +81,26 @@ bool ncbAutoRegister::LoadModule(const ttstr &_name)
     }
 	auto it = _internal_plugins.find(name);
 	if (it != _internal_plugins.end()) {
+        if (std::getenv("AETHERKIRI_PLUGIN_REG_TRACE")) {
+            TVPAddLog(ttstr(TJS_W("ncbAutoRegister module entries: ")) + name +
+                      TJS_W(" count=") +
+                      ttstr(static_cast<tjs_int>(
+                          it->second.lists[PreRegist].size() +
+                          it->second.lists[ClassRegist].size() +
+                          it->second.lists[PostRegist].size())));
+            for (int line = 0; line < LINE_COUNT; ++line) {
+                for (auto entry : it->second.lists[line]) {
+                    if (entry && entry->modulename)
+                        TVPAddLog(ttstr(TJS_W("  entry line=")) +
+                                  ttstr(line) + TJS_W(" name=") +
+                                  ttstr(entry->modulename));
+                }
+            }
+        }
         PluginCallTracer::Instance().LogModuleStart(name.AsStdString());
         spdlog::trace("ncbAutoRegister::LoadModule('{}'): found internal module",
                       name.AsStdString());
+		std::vector<ThisClassT const *> registered_entries;
 		for (int line = 0; line < LINE_COUNT; ++line) {
             const auto &plugin_list = it->second.lists[line];
             for (auto i : plugin_list) {
@@ -81,14 +114,24 @@ bool ncbAutoRegister::LoadModule(const ttstr &_name)
                     spdlog::error(
                         "ncbAutoRegister::LoadModule('{}'): Regist threw at line={} entry='{}'",
                         name.AsStdString(), line, module.AsStdString());
+					// A registrar can fail after publishing part of its class
+					// metadata. Best-effort rollback keeps the next load attempt
+					// from observing an "already registered" half-module.
+					try { i->Unregist(); } catch(...) {}
+					for (auto rollback = registered_entries.rbegin();
+					     rollback != registered_entries.rend(); ++rollback) {
+						try { (*rollback)->Unregist(); } catch(...) {}
+					}
                     throw;
                 }
+				registered_entries.push_back(i);
                 spdlog::trace(
                     "ncbAutoRegister::LoadModule('{}'): Regist end line={} entry='{}'",
                     name.AsStdString(), line, module.AsStdString());
 			}
 		}
 		TVPRegisteredPlugins.insert(name);
+		LoadedInternalModules().push_back(name);
         spdlog::trace("ncbAutoRegister::LoadModule('{}'): regist complete",
                       name.AsStdString());
 		return true;
@@ -133,6 +176,7 @@ bool ncbAutoRegister::UnloadModule(const ttstr &_name)
 		}
 	}
 	TVPRegisteredPlugins.erase(name);
+	ForgetLoadedInternalModule(name);
 	return true;
 }
 
@@ -146,36 +190,29 @@ void ncbAutoRegister::LoadAllModules()
 {
     spdlog::trace("ncbAutoRegister::LoadAllModules: begin ({} modules in map)",
                   static_cast<int>(_internal_plugins.size()));
-	for (auto &kv : _internal_plugins) {
-		const ttstr &name = kv.first;
-		if (TVPRegisteredPlugins.find(name) != TVPRegisteredPlugins.end())
-			continue;
-        PluginCallTracer::Instance().LogModuleStart(name.AsStdString());
-        spdlog::trace("ncbAutoRegister::LoadAllModules: register '{}'",
-                      name.AsStdString());
-		for (int line = 0; line < LINE_COUNT; ++line) {
-            const auto &plugin_list = kv.second.lists[line];
-			for (auto i : plugin_list) {
-                const ttstr module = i->modulename ? ttstr(i->modulename) : ttstr();
-                spdlog::trace(
-                    "ncbAutoRegister::LoadAllModules('{}'): Regist begin line={} entry='{}'",
-                    name.AsStdString(), line, module.AsStdString());
-                try {
-				    i->Regist();
-                } catch(...) {
-                    spdlog::error(
-                        "ncbAutoRegister::LoadAllModules('{}'): Regist threw at line={} entry='{}'",
-                        name.AsStdString(), line, module.AsStdString());
-                    throw;
-                }
-                spdlog::trace(
-                    "ncbAutoRegister::LoadAllModules('{}'): Regist end line={} entry='{}'",
-                    name.AsStdString(), line, module.AsStdString());
-			}
-		}
-		TVPRegisteredPlugins.insert(name);
-        spdlog::trace("ncbAutoRegister::LoadAllModules: module '{}' done",
-                      name.AsStdString());
-	}
+	for (const auto &kv : _internal_plugins)
+		LoadModule(kv.first);
     spdlog::trace("ncbAutoRegister::LoadAllModules: end");
+}
+
+void ncbAutoRegister::UnloadAllModules()
+{
+	auto loaded = LoadedInternalModules();
+	for (auto it = loaded.rbegin(); it != loaded.rend(); ++it) {
+		try {
+			UnloadModule(*it);
+		} catch(...) {
+			spdlog::error(
+				"ncbAutoRegister::UnloadAllModules('{}'): ignored exception",
+				it->AsStdString());
+			TVPRegisteredPlugins.erase(*it);
+			ForgetLoadedInternalModule(*it);
+		}
+	}
+
+	// Also discard internal entries left by an interrupted registration or by
+	// an older host session which predates load-order tracking.
+	for (const auto &kv : _internal_plugins)
+		TVPRegisteredPlugins.erase(kv.first);
+	LoadedInternalModules().clear();
 }

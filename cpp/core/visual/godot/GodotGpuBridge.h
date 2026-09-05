@@ -6,6 +6,10 @@
 struct tTVPRect;
 struct tTVPPointD;
 
+// Texture synchronization on the producer side and queue execution in the
+// Godot bridge must agree on the unset environment-variable behavior.
+constexpr bool TVP_GODOT_DEFER_GPU_DRAIN_DEFAULT = false;
+
 struct TVPGodotGpuBridgeCallbacks {
     uint64_t (*create_rgba)(uint32_t width, uint32_t height,
                             const void *pixels, uint32_t stride_bytes);
@@ -47,8 +51,78 @@ struct TVPGodotGpuBridgeCallbacks {
                         int opacity, uint32_t color);
     bool (*read_rgba)(uint64_t texture, void *out_pixels,
                       size_t out_pixels_size, uint32_t stride_bytes);
+    uint64_t (*begin_read_rgba)(uint64_t texture);
+    bool (*poll_read_rgba)(uint64_t request, void *out_pixels,
+                           size_t out_pixels_size, uint32_t stride_bytes,
+                           bool *ready);
+    void (*discard_read_rgba)(uint64_t request);
     bool (*flush)();
 };
+
+// Keep batch controls in a separate table: TVPGodotGpuBridgeCallbacks predates
+// size/version fields and is copied by value across the engine/GDExtension ABI.
+// Appending fields to that table would make a new engine read past an older
+// extension's allocation when cached components are mixed.
+struct TVPGodotGpuBatchCallbacks {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    uint64_t (*begin_batch)();
+    bool (*end_batch)(uint64_t batch_token);
+};
+
+constexpr uint32_t TVP_GODOT_GPU_BATCH_CALLBACKS_ABI_VERSION = 1;
+
+// Optional cross-API texture import used by native runtimes which render in
+// their own graphics context. Keep this separate from the original callback
+// table: the latter predates size/version fields and cannot be extended
+// without making mixed public/private builds read past an older allocation.
+struct TVPGodotGpuExternalTextureCallbacks {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    // On Apple platforms native_image is a retained CVPixelBufferRef whose
+    // IOSurface is shared by OpenGL ES and Metal. The callback does not take
+    // ownership; the producer must keep it alive until release_texture.
+    uint64_t (*import_apple_pixel_buffer)(void *native_image,
+                                          uint32_t width,
+                                          uint32_t height);
+    // Optional. Wait until every previously queued Godot use of this texture
+    // has completed before the producer writes the shared IOSurface again.
+    // Producers must use a multi-buffered target when this callback is null.
+    bool (*prepare_for_native_write)(uint64_t texture);
+    // On Android native_image is an AHardwareBuffer whose storage is shared
+    // by the producer's OpenGL ES context and Godot's Vulkan RenderingDevice. The
+    // callback retains its own buffer reference until release_texture.
+    uint64_t (*import_android_hardware_buffer)(void *native_image,
+                                                uint32_t width,
+                                                uint32_t height);
+    // Optional publication hook for backends whose native producer and
+    // Godot use different graphics APIs. Called after the producer fence has
+    // completed and before the texture is exposed to Godot composition.
+    bool (*publish_native_write)(uint64_t texture);
+};
+
+constexpr uint32_t TVP_GODOT_GPU_EXTERNAL_TEXTURE_CALLBACKS_ABI_VERSION = 1;
+
+// Limits deferred GPU draining to a producer-defined command group.  The
+// bridge callbacks are optional so non-Godot renderers retain their current
+// immediate behavior.
+class TVPGodotGpuBatchScope {
+public:
+    explicit TVPGodotGpuBatchScope(bool enabled = true);
+    ~TVPGodotGpuBatchScope() noexcept;
+
+    TVPGodotGpuBatchScope(const TVPGodotGpuBatchScope &) = delete;
+    TVPGodotGpuBatchScope &operator=(const TVPGodotGpuBatchScope &) = delete;
+
+    bool active() const { return batch_token_ != 0; }
+    bool finish();
+
+private:
+    uint64_t batch_token_ = 0;
+    bool (*end_batch_)(uint64_t batch_token) = nullptr;
+};
+
+bool TVPGodotGpuBridgeBatchActive();
 
 enum TVPGodotGpuBlendMode : uint32_t {
     TVP_GODOT_GPU_BLEND_ALPHA = 1,
@@ -79,6 +153,22 @@ enum TVPGodotGpuBlendMode : uint32_t {
     TVP_GODOT_GPU_BLEND_ALPHA_D_MASK_MULTIPLY = 21,
     // Threshold-mask src1 at alpha 64, then AlphaBlend_d it into dst.
     TVP_GODOT_GPU_BLEND_ALPHA_D_MASK_THRESHOLD = 22,
+    // Apply an 8-bit glyph mask using KiriKiri additive-alpha color mapping.
+    TVP_GODOT_GPU_BLEND_APPLY_COLOR_MAP_A = 23,
+    // Composite an additive-alpha source while preserving destination alpha.
+    TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA = 24,
+    TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA_A = 25,
+    // Symmetric box blur. The x radius is passed in opacity and the y radius
+    // in the low byte of color; this reuses the stable blend callback ABI.
+    TVP_GODOT_GPU_BLEND_BOX_BLUR_ALPHA = 26,
+    // Copy RGB from the source and force destination alpha to opaque.
+    TVP_GODOT_GPU_BLEND_COPY_OPAQUE = 27,
+    // Photoshop soft-light blend, preserving destination alpha.
+    TVP_GODOT_GPU_BLEND_PS_SOFT_LIGHT = 28,
+    // Convert straight-alpha RGB to additive/premultiplied-alpha RGB in place.
+    TVP_GODOT_GPU_BLEND_ALPHA_TO_ADDITIVE_ALPHA = 29,
+    // Convert additive/premultiplied-alpha RGB to straight-alpha RGB in place.
+    TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA_TO_ALPHA = 30,
     // draw_triangles is shared by Cubism (whose low bits describe Cubism
     // colour/alpha modes) and KiriKiri (whose low bits are the modes above).
     // Tag the latter so AlphaBlend/AlphaBlend_d are not mistaken for Cubism
@@ -95,7 +185,17 @@ enum TVPGodotGpuBlendMode : uint32_t {
 // bridge shader can preserve both interpretations without an ABI expansion.
 constexpr uint32_t TVP_GODOT_GPU_TRIANGLE_TVP_BLEND =
     TVP_GODOT_GPU_BLEND_TVP_OPERATION;
+// The source stores premultiplied RGB (native E-mote/OpenGL output). The
+// triangle sampler must not multiply RGB by alpha a second time.
+constexpr uint32_t TVP_GODOT_GPU_TRIANGLE_SOURCE_PREMULTIPLIED = 0x20000000u;
 
 extern "C" void TVPGodotGpuBridgeRegister(
     const TVPGodotGpuBridgeCallbacks *callbacks);
 const TVPGodotGpuBridgeCallbacks *TVPGodotGpuBridgeGet();
+extern "C" void TVPGodotGpuBatchRegister(
+    const TVPGodotGpuBatchCallbacks *callbacks);
+const TVPGodotGpuBatchCallbacks *TVPGodotGpuBatchGet();
+extern "C" void TVPGodotGpuExternalTextureRegister(
+    const TVPGodotGpuExternalTextureCallbacks *callbacks);
+const TVPGodotGpuExternalTextureCallbacks *
+TVPGodotGpuExternalTextureGet();

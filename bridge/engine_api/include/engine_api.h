@@ -27,7 +27,7 @@ extern "C" {
 #endif
 
 /* ABI version: major(8bit), minor(8bit), patch(16bit). */
-#define ENGINE_API_VERSION 0x01050000u
+#define ENGINE_API_VERSION 0x01060000u
 #define ENGINE_API_MAKE_VERSION(major, minor, patch) \
   ((((uint32_t)(major)&0xFFu) << 24u) | (((uint32_t)(minor)&0xFFu) << 16u) | \
    ((uint32_t)(patch)&0xFFFFu))
@@ -37,6 +37,15 @@ typedef struct engine_media_handle_s* engine_media_handle_t;
 
 /* Registers host renderer callbacks. The callback table is renderer-specific. */
 ENGINE_API_EXPORT void engine_register_godot_gpu_bridge(
+    const void* callbacks);
+/* Registers optional producer-batch callbacks separately so the legacy Godot
+ * GPU callback table remains ABI-stable. */
+ENGINE_API_EXPORT void engine_register_godot_gpu_batch_bridge(
+    const void* callbacks);
+/* Registers the optional native shared-texture import table. It is kept
+ * separate from the legacy GPU bridge ABI so older private packages remain
+ * binary-safe. */
+ENGINE_API_EXPORT void engine_register_godot_gpu_external_texture_bridge(
     const void* callbacks);
 
 typedef enum engine_result_t {
@@ -179,6 +188,17 @@ typedef enum engine_input_event_type_t {
   ENGINE_INPUT_EVENT_BACK = 8
 } engine_input_event_type_t;
 
+/* A gesture recognizer sets this on POINTER_UP when a forwarded press was
+ * reclassified and must be cancelled without completing a click. */
+typedef enum engine_input_modifier_t {
+  ENGINE_INPUT_MODIFIER_POINTER_CANCEL = 1u << 30
+} engine_input_modifier_t;
+
+typedef enum engine_text_input_state_flag_t {
+  ENGINE_TEXT_INPUT_STATE_NONE = 0,
+  ENGINE_TEXT_INPUT_STATE_ACTIVE = 1u << 0
+} engine_text_input_state_flag_t;
+
 typedef enum engine_startup_state_t {
   ENGINE_STARTUP_STATE_IDLE = 0,
   ENGINE_STARTUP_STATE_RUNNING = 1,
@@ -193,7 +213,7 @@ typedef struct engine_input_event_t {
   double x;
   double y;
   double delta_x;
-  double delta_y;
+  double delta_y;  /* Pointer scroll: positive=up, negative=down. */
   int32_t pointer_id;
   int32_t button;
   int32_t key_code;
@@ -244,6 +264,26 @@ ENGINE_API_EXPORT engine_result_t engine_create(const engine_create_desc_t* desc
  * Idempotent: passing a null handle returns ENGINE_RESULT_OK.
  */
 ENGINE_API_EXPORT engine_result_t engine_destroy(engine_handle_t handle);
+
+/*
+ * Retrieves one platform operation emitted by a runtime provider. Requests
+ * are queued across asynchronous startup and must be consumed on the host UI
+ * thread. If no request is pending, out_available is set to zero and the
+ * function returns OK. A too-small output buffer leaves the request queued.
+ */
+ENGINE_API_EXPORT engine_result_t engine_poll_platform_request(
+    engine_handle_t handle, char* operation_buffer,
+    uint32_t operation_buffer_size, char* argument_buffer,
+    uint32_t argument_buffer_size, uint32_t* out_available);
+
+/*
+ * Returns the asynchronous result of a platform request to the active runtime
+ * provider. operation_utf8 must match the request operation; argument_utf8 is
+ * provider-defined UTF-8 data.
+ */
+ENGINE_API_EXPORT engine_result_t engine_submit_platform_response(
+    engine_handle_t handle, const char* operation_utf8,
+    const char* argument_utf8);
 
 /*
  * Opens a game package/root directory.
@@ -305,8 +345,87 @@ ENGINE_API_EXPORT engine_result_t engine_resume(engine_handle_t handle);
 ENGINE_API_EXPORT engine_result_t engine_set_option(engine_handle_t handle,
                                                     const engine_option_t* option);
 
+/* Returns 1 when the private local-model text transformer is linked. */
+ENGINE_API_EXPORT uint32_t engine_is_text_translation_available(void);
+
+typedef enum engine_text_translation_state_t {
+  ENGINE_TEXT_TRANSLATION_DISABLED = 0,
+  ENGINE_TEXT_TRANSLATION_LOADING = 1,
+  ENGINE_TEXT_TRANSLATION_READY = 2,
+  ENGINE_TEXT_TRANSLATION_FAILED = 3,
+} engine_text_translation_state_t;
+
+typedef enum engine_text_translation_backend_t {
+  ENGINE_TEXT_TRANSLATION_BACKEND_NONE = 0,
+  ENGINE_TEXT_TRANSLATION_BACKEND_CPU = 1,
+  ENGINE_TEXT_TRANSLATION_BACKEND_GPU = 2,
+} engine_text_translation_backend_t;
+
 /*
- * Sets logical render surface size in pixels.
+ * Process-wide local translation model statistics. Model tensor/file sizes
+ * describe the logical model storage, while model_resident_bytes_estimate is
+ * the observed process-memory increase during model/context initialization.
+ */
+typedef struct engine_text_translation_stats_t {
+  uint32_t struct_size;
+  uint32_t state;
+  uint32_t backend;
+  uint32_t active_jobs;
+
+  uint64_t model_file_bytes;
+  uint64_t model_tensor_bytes;
+  uint64_t context_state_bytes;
+  uint64_t model_resident_bytes_estimate;
+
+  uint32_t priority_queue_entries;
+  uint32_t prefetch_queue_entries;
+  uint32_t cache_entries;
+  uint32_t failed_entries;
+
+  uint64_t cache_hits;
+  uint64_t cache_misses;
+  uint64_t translations_started;
+  uint64_t translations_completed;
+  uint64_t translations_failed;
+  uint64_t translations_cancelled;
+
+  uint64_t model_load_us;
+  uint64_t last_inference_us;
+  uint64_t max_inference_us;
+  uint64_t last_synchronous_wait_us;
+  uint64_t total_synchronous_wait_us;
+
+  uint64_t reserved_u64[4];
+  void* reserved_ptr[4];
+} engine_text_translation_stats_t;
+
+/* Returns the process-wide state of the optional external translation model. */
+ENGINE_API_EXPORT uint32_t engine_get_text_translation_state(void);
+
+/* Gets a process-wide snapshot of local translation resource usage/timing. */
+ENGINE_API_EXPORT engine_result_t engine_get_text_translation_stats(
+    engine_text_translation_stats_t* out_stats);
+
+/*
+ * Applies the configured text transformer to one UTF-8 runtime string.
+ * out_required_size includes the trailing NUL.  A null/short buffer is a
+ * successful size query and leaves the buffer untouched.
+ */
+ENGINE_API_EXPORT engine_result_t engine_transform_text_utf8(
+    const char* runtime_id_utf8, const char* input_utf8, char* out_buffer,
+    uint32_t buffer_size, uint32_t* out_required_size);
+
+/* Queues a low-priority translation without waiting for inference. */
+ENGINE_API_EXPORT engine_result_t engine_prefetch_text_utf8(
+    const char* runtime_id_utf8, const char* input_utf8);
+
+/* Cancels/suppresses queued translation work while a runtime is skipping. */
+ENGINE_API_EXPORT engine_result_t engine_set_text_translation_skipping(
+    const char* runtime_id_utf8, uint32_t skipping);
+
+/*
+ * Sets the host presentation surface size in pixels. Runtime-specific game
+ * coordinates remain in the game's logical coordinate space.
  * width and height must be greater than zero.
  */
 ENGINE_API_EXPORT engine_result_t engine_set_surface_size(engine_handle_t handle,
@@ -387,6 +506,13 @@ ENGINE_API_EXPORT engine_result_t engine_media_read_frame_rgba(
 ENGINE_API_EXPORT engine_result_t engine_get_godot_native_frame_texture(
     engine_handle_t handle, uint64_t* out_texture_id, uint32_t* out_width,
     uint32_t* out_height, uint64_t* out_frame_serial);
+
+/* Runtime-specific state for the most recent Godot-native frame. */
+#define ENGINE_GODOT_PRESENTATION_STATE_NONE 0u
+#define ENGINE_GODOT_PRESENTATION_STATE_RESET_HISTORY (1u << 0)
+
+ENGINE_API_EXPORT engine_result_t engine_get_godot_presentation_state(
+    engine_handle_t handle, uint32_t* out_state_flags);
 
 /*
  * Gets host-native render window handle.

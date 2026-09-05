@@ -8,8 +8,10 @@
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <vector>
 #include <spdlog/spdlog.h>
+#include "godot/GodotGpuBridge.h"
 #include "tjs.h"
 #include "LayerIntf.h"
 
@@ -67,6 +69,33 @@ namespace motion {
         void registerCaption() {}
         void unloadUnusedTextures() {}
 
+        // Keep one explicit bridge batch open across the complete D3DEmote
+        // transaction (draw, capture, redraw, and final layer assignment).
+        // Player's own render scopes nest inside this one without draining.
+        bool beginGpuBatch() {
+            if(_gpuBatchDepth != 0) {
+                ++_gpuBatchDepth;
+                return _gpuBatch && _gpuBatch->active();
+            }
+
+            // Commit the local nesting state only after the scope has been
+            // constructed.  If allocation or the bridge callback throws, a
+            // script-side compatibility wrapper can continue drawing without
+            // leaving this adaptor permanently stuck at depth one.
+            auto batch = std::make_unique<TVPGodotGpuBatchScope>();
+            _gpuBatch = std::move(batch);
+            _gpuBatchDepth = 1;
+            return _gpuBatch->active();
+        }
+
+        bool endGpuBatch() {
+            if(_gpuBatchDepth == 0) return true;
+            if(--_gpuBatchDepth != 0) return true;
+            if(!_gpuBatch) return true;
+            auto batch = std::move(_gpuBatch);
+            return batch->finish();
+        }
+
         // Retain the layer produced by Player::renderToD3DAdaptor so
         // captureCanvas can keep the transfer on the active render backend.
         // The legacy CPU buffer remains available as a compatibility fallback
@@ -108,6 +137,89 @@ namespace motion {
             }
         }
 
+        // AffineSourceMotion draws into the shared adaptor and commits the
+        // completed surface to its authored character layer in TJS. During a
+        // cold native-player replacement, keep that final layer untouched for
+        // the first rendered frame so the SDK's default pose is never
+        // published as a whole-character flash.
+        void setPresentationTarget(tTJSVariant target) {
+            _presentationTarget = target;
+            _presentationHold = false;
+            _presentationProbeLogged = false;
+        }
+
+        void clearPresentationTarget() {
+            _presentationTarget.Clear();
+            _presentationHold = false;
+        }
+
+        bool getPresentationHold() const { return _presentationHold; }
+
+        // True when the most recent captureCanvas call copied an already
+        // rendered layer through the GPU path. D3DEmote can then hand the
+        // captured frame directly to AssignMotionImages; calling the legacy
+        // script-side _redrawImage would redraw the same frame a second time.
+        bool getGpuCapture() const { return _lastCaptureGpu; }
+
+        // A freshly cloned native E-mote player can be drawn once while KAG
+        // is still assembling the destination page. Keep that rendered frame
+        // in the private adaptor surface, but let captureCanvas decide whether
+        // the currently visible authored target already has a stable image.
+        // A hidden page is the destination of the transition and must still
+        // receive the new frame; otherwise the transition source becomes an
+        // empty page and the character disappears before the fade starts.
+        void deferNativePresentationOnce() {
+            _deferNativePresentationOnce = true;
+        }
+
+        bool preparePresentationHoldIfTargetHasImage() {
+            _presentationHold = false;
+            auto logger = spdlog::get("plugin");
+            const char *debug = std::getenv("AETHERKIRI_MOTION_DEBUG");
+            const bool logProbe = debug && *debug && std::strcmp(debug, "0") != 0 &&
+                                  logger && !_presentationProbeLogged;
+            if(_presentationTarget.Type() != tvtObject) {
+                if(logProbe) {
+                    logger->info(
+                        "native motion presentation target probe: targetType={} targetObject=<null> result=no-object",
+                        static_cast<int>(_presentationTarget.Type()));
+                    _presentationProbeLogged = true;
+                }
+                return false;
+            }
+            auto *targetObject = _presentationTarget.AsObjectNoAddRef();
+            tTJSNI_BaseLayer *targetLayer = nullptr;
+            const bool layerResolved = targetObject &&
+                TJS_SUCCEEDED(targetObject->NativeInstanceSupport(
+                    TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+                    reinterpret_cast<iTJSNativeInstance **>(&targetLayer))) &&
+                targetLayer;
+            if(logProbe) {
+                logger->info(
+                    "native motion presentation target probe: targetObject={} layerResolved={} layer={} hasImage={} mainImage={} size={}x{} visible={} parentVisible={} result={}",
+                    static_cast<const void *>(targetObject),
+                    layerResolved ? 1 : 0,
+                    static_cast<const void *>(targetLayer),
+                    layerResolved && targetLayer->GetHasImage() ? 1 : 0,
+                    layerResolved && targetLayer->GetMainImage() ? 1 : 0,
+                    layerResolved ? targetLayer->GetImageWidth() : 0,
+                    layerResolved ? targetLayer->GetImageHeight() : 0,
+                    layerResolved && targetLayer->GetVisible() ? 1 : 0,
+                    layerResolved && targetLayer->GetParentVisible() ? 1 : 0,
+                    layerResolved && targetLayer->GetHasImage() &&
+                            targetLayer->GetMainImage()
+                        ? "hold"
+                        : "publish");
+                _presentationProbeLogged = true;
+            }
+            if(!layerResolved) {
+                return false;
+            }
+            _presentationHold = targetLayer->GetHasImage() &&
+                                targetLayer->GetMainImage() != nullptr;
+            return _presentationHold;
+        }
+
         // captureCanvas: copies the most recently rendered image into a TJS
         // Layer. Godot-backed layers preserve this CopyRect on the ordered GPU
         // queue instead of downloading the complete canvas and uploading it
@@ -115,6 +227,12 @@ namespace motion {
         tjs_error captureCanvas(tTJSVariant *result, tjs_int numparams,
                                 tTJSVariant **param, iTJSDispatch2 *objthis) {
             if(numparams < 1 || !param[0]) return TJS_E_BADPARAMCOUNT;
+
+            const bool profileCapture = captureProfileEnabled();
+            _lastCaptureGpu = false;
+            const auto captureStarted =
+                profileCapture ? std::chrono::steady_clock::now()
+                               : std::chrono::steady_clock::time_point{};
 
             iTJSDispatch2 *layerObj = param[0]->AsObjectNoAddRef();
             if(!layerObj) return TJS_E_INVALIDPARAM;
@@ -141,6 +259,9 @@ namespace motion {
                    reinterpret_cast<iTJSNativeInstance **>(&layer))) || !layer) {
                 return TJS_E_INVALIDPARAM;
             }
+            const bool deferNativePresentation =
+                _deferNativePresentationOnce;
+            _deferNativePresentationOnce = false;
             if(_renderedLayer.Type() == tvtObject) {
                 auto *renderedLayerObj =
                     _renderedLayer.AsObjectNoAddRef();
@@ -151,6 +272,21 @@ namespace motion {
                        reinterpret_cast<iTJSNativeInstance **>(
                            &renderedLayer))) &&
                    renderedLayer) {
+                    if(deferNativePresentation && layer != renderedLayer &&
+                       layer->GetVisible() && layer->GetParentVisible() &&
+                       layer->GetHasImage() && layer->GetMainImage()) {
+                        if(auto logger = spdlog::get("plugin")) {
+                            logger->info(
+                                "motion d3d capture deferred native first frame: "
+                                "target={} rendered={} size={}x{}",
+                                static_cast<const void *>(layer),
+                                static_cast<const void *>(renderedLayer),
+                                layer->GetImageWidth(),
+                                layer->GetImageHeight());
+                        }
+                        if(result) *result = *param[0];
+                        return TJS_S_OK;
+                    }
                     if(!_captureDebugLogged) {
                         const char *debug =
                             std::getenv("AETHERKIRI_MOTION_DEBUG");
@@ -205,15 +341,34 @@ namespace motion {
                     const auto height = static_cast<tjs_uint>(
                         renderedLayer->GetImageHeight());
                     if(width > 0 && height > 0) {
+                        double copyMs = 0.0;
                         if(layer != renderedLayer) {
                             if(!layer->GetHasImage()) layer->SetHasImage(true);
                             layer->SetImageSize(width, height);
+                            const auto copyStarted =
+                                std::chrono::steady_clock::now();
                             layer->CopyRect(
                                 0, 0, renderedLayer->GetMainImage(), nullptr,
                                 tTVPRect(0, 0, static_cast<tjs_int>(width),
                                          static_cast<tjs_int>(height)));
+                            copyMs = std::chrono::duration<double, std::milli>(
+                                         std::chrono::steady_clock::now() -
+                                         copyStarted)
+                                         .count();
                         }
+                        const auto updateStarted =
+                            std::chrono::steady_clock::now();
                         layer->Update(false);
+                        const double updateMs =
+                            std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() -
+                                updateStarted)
+                                .count();
+                        logCaptureProfile(
+                            layer == renderedLayer ? "gpu-same-layer"
+                                                   : "gpu-copy-rect",
+                            width, height, captureStarted, copyMs, updateMs);
+                        _lastCaptureGpu = true;
                         if(result) *result = *param[0];
                         return TJS_S_OK;
                     }
@@ -234,13 +389,25 @@ namespace motion {
             if(!dst || dstPitch <= 0) return TJS_S_OK;
 
             const auto srcPitch = static_cast<tjs_int>(_width * 4);
+            const auto copyStarted = std::chrono::steady_clock::now();
             for(int y = 0; y < _height; ++y) {
                 std::memcpy(dst + dstPitch * y,
                             _buffer.data() + srcPitch * y,
                             static_cast<size_t>(srcPitch));
             }
+            const double copyMs = std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() -
+                                      copyStarted)
+                                      .count();
 
+            const auto updateStarted = std::chrono::steady_clock::now();
             layer->Update(false);
+            const double updateMs = std::chrono::duration<double, std::milli>(
+                                        std::chrono::steady_clock::now() -
+                                        updateStarted)
+                                        .count();
+            logCaptureProfile("cpu-buffer-copy", _width, _height,
+                              captureStarted, copyMs, updateMs);
 
             if(result) *result = *param[0];
             return TJS_S_OK;
@@ -273,6 +440,45 @@ namespace motion {
         }
 
     private:
+        static bool captureProfileEnabled() {
+            const char *value =
+                std::getenv("AETHERKIRI_MOTION_RENDER_PROFILE");
+            return value != nullptr && value[0] != '\0' &&
+                   std::strcmp(value, "0") != 0;
+        }
+
+        static double captureProfileSlowMs() {
+            const char *value =
+                std::getenv("AETHERKIRI_MOTION_COPY_SLOW_MS");
+            if(value == nullptr || value[0] == '\0') return 5.0;
+            char *end = nullptr;
+            const double parsed = std::strtod(value, &end);
+            return end != value && parsed > 0.0 ? parsed : 5.0;
+        }
+
+        static void logCaptureProfile(
+            const char *route, uint32_t width, uint32_t height,
+            std::chrono::steady_clock::time_point started, double copyMs,
+            double updateMs) {
+            if(started.time_since_epoch().count() == 0) return;
+            const double totalMs =
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - started)
+                    .count();
+            if(totalMs < captureProfileSlowMs() &&
+               copyMs < captureProfileSlowMs() &&
+               updateMs < captureProfileSlowMs()) {
+                return;
+            }
+            if(auto logger = spdlog::get("plugin")) {
+                logger->info(
+                    "motion capture profile: route={} total_ms={:.3f} "
+                    "copy_ms={:.3f} update_ms={:.3f} size={}x{}",
+                    route != nullptr ? route : "unknown", totalMs, copyMs,
+                    updateMs, width, height);
+            }
+        }
+
         void allocBuffer() {
             if(_width > 0 && _height > 0) {
                 _buffer.resize(static_cast<size_t>(_width) * _height * 4, 0);
@@ -291,10 +497,17 @@ namespace motion {
         bool _alphaOpAdd = false;
         int _clearColor = 0;
         tTJSVariant _renderedLayer;
+        std::unique_ptr<TVPGodotGpuBatchScope> _gpuBatch;
+        std::uint32_t _gpuBatchDepth = 0;
         tTJSVariant _retainedPresentationLayer;
         std::chrono::steady_clock::time_point _uncapturedDrawStartedAt{};
         std::size_t _drawsSinceCapture = 0;
         bool _captureDebugLogged = false;
+        tTJSVariant _presentationTarget;
+        bool _presentationHold = false;
+        bool _lastCaptureGpu = false;
+        bool _presentationProbeLogged = false;
+        bool _deferNativePresentationOnce = false;
         std::vector<std::uint8_t> _buffer;
     };
 

@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstring>
 #include <optional>
 #include <spdlog/spdlog.h>
 #include <unordered_map>
@@ -637,6 +638,73 @@ namespace motion::detail {
             if (auto v = nodeTreePsbNumber(psbNode, "meshDivision"))
                 node.meshDivision = static_cast<int>(*v);
 
+            // E-mote's secondary-motion layers store their animated 4x4
+            // patches in meshCombinator raw resources instead of frame.mesh.bp.
+            // Each resource is meshCount consecutive arrays of 32 little-endian
+            // floats. The entries are sampled by their controller variable and
+            // additively combined during Player::updateLayers.
+            const auto meshCombinator =
+                std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                    (*psbNode)["meshCombinator"]);
+            const auto combinatorList = meshCombinator
+                ? nodeTreePsbList(meshCombinator, "combinatorList")
+                : nullptr;
+            if(combinatorList) {
+                node.meshCombinators.reserve(combinatorList->size());
+                for(int combinatorIndex = 0;
+                    combinatorIndex < static_cast<int>(combinatorList->size());
+                    ++combinatorIndex) {
+                    const auto item =
+                        std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                            (*combinatorList)[combinatorIndex]);
+                    const auto variable = item
+                        ? std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                              (*item)["variable"])
+                        : nullptr;
+                    const auto resource = item
+                        ? std::dynamic_pointer_cast<PSB::PSBResource>(
+                              (*item)["rawMeshList"])
+                        : nullptr;
+                    if(!item || !variable || !resource) {
+                        continue;
+                    }
+
+                    MotionNode::MeshCombinatorEntry entry;
+                    entry.variable = nodeTreePsbString(variable, "key");
+                    entry.rangeBegin =
+                        nodeTreePsbNumber(variable, "rangeBegin").value_or(0.0);
+                    entry.rangeEnd =
+                        nodeTreePsbNumber(variable, "rangeEnd").value_or(0.0);
+                    entry.meshCount = static_cast<int>(
+                        nodeTreePsbNumber(variable, "meshCount").value_or(0.0));
+                    entry.neutralIndex = static_cast<int>(
+                        nodeTreePsbNumber(item, "neutralIndex").value_or(0.0));
+                    entry.meshType = static_cast<int>(
+                        nodeTreePsbNumber(item, "meshType").value_or(0.0));
+
+                    constexpr std::size_t kPatchFloatCount = 32;
+                    constexpr std::size_t kFloatBytes = sizeof(float);
+                    const std::size_t availableFloats =
+                        resource->data.size() / kFloatBytes;
+                    if(entry.meshCount <= 0) {
+                        entry.meshCount = static_cast<int>(
+                            availableFloats / kPatchFloatCount);
+                    }
+                    const std::size_t requiredFloats =
+                        static_cast<std::size_t>(entry.meshCount) *
+                        kPatchFloatCount;
+                    if(entry.variable.empty() || entry.meshCount <= 0 ||
+                       availableFloats < requiredFloats) {
+                        continue;
+                    }
+
+                    entry.rawMeshes.resize(requiredFloats);
+                    std::memcpy(entry.rawMeshes.data(), resource->data.data(),
+                                requiredFloats * kFloatBytes);
+                    node.meshCombinators.push_back(std::move(entry));
+                }
+            }
+
             // "stencilType" → stencilType (node+52)
             if (auto v = nodeTreePsbNumber(psbNode, "stencilType")) {
                 node.stencilTypeBase = static_cast<int>(*v);
@@ -698,7 +766,7 @@ namespace motion::detail {
                     node.childPlayerVar = tTJSVariant(dispatch, dispatch);
                     dispatch->Release();
                 } else {
-                    delete childNative;
+                    node.nativeChildPlayer.reset(childNative);
                 }
             } else if (node.nodeType == 4) {
                 // Aligned to sub_6B3C78 case 4 (0x6B45D8..0x6B45E4):

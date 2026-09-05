@@ -10,6 +10,12 @@ target_sources(${PROJECT_NAME} PRIVATE
     base64.cpp
     encode.cpp
     expat.cpp
+    mdkparser/LexicalAnalyzer.cpp
+    mdkparser/MDKMessages.cpp
+    mdkparser/MDKParser.cpp
+    mdkparser/Parser.cpp
+    mdkparser/ReservedWord.cpp
+    mdkparser/plugin.cpp
     imagesaver.cpp
     lineParser.cpp
     memfile.cpp
@@ -137,6 +143,7 @@ if(NOT WEB AND NOT EMSCRIPTEN)
 endif()
 add_subdirectory(motionplayer)
 add_subdirectory(kagparserex)
+add_subdirectory(extkagparser)
 
 #add_subdirectory(json)
 #add_subdirectory(steam)
@@ -146,6 +153,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
         psbfile
         motionplayer
         kagparserex
+        extkagparser
 #        json steam DrawDeviceForSteam
 )
 if(NOT WEB AND NOT EMSCRIPTEN)

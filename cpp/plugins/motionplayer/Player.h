@@ -24,7 +24,9 @@ namespace PSB {
 
 namespace motion {
     class D3DAdaptor;
+    class MotionNativePlayerBackend;
     class SeparateLayerAdaptor;
+    struct MotionBackendValue;
 }
 
 namespace aetherinternal {
@@ -80,6 +82,7 @@ namespace motion {
 
     class Player {
         friend class ::aetherinternal::EmoteRuntimeExtension;
+        friend struct PlayerTestAccess;
 
     public:
         explicit Player(ResourceManager rm = ResourceManager{});
@@ -134,7 +137,7 @@ namespace motion {
         // to Player+1161, not to the ordinary Motion.Player queuing byte.
         // libgame's generated setters only ever enable this mode (the input
         // value is intentionally ignored).
-        void enableEmoteAnimatorQueuing() { _emoteAnimatorFlag = true; }
+        void enableEmoteAnimatorQueuing();
         bool getEmoteAnimatorQueuing() const { return _emoteAnimatorFlag; }
 
         void setDirectEdit(bool v) { _directEdit = v; }
@@ -311,7 +314,10 @@ namespace motion {
         // Load from a pre-loaded snapshot (used by EmotePlayer.setModule)
         // Aligned to libkrkr2.so: EmoteObject_init (sub_67DBAC) sets Player's
         // activeMotion directly from loaded PSB data without file I/O.
-        void loadFromSnapshot(std::shared_ptr<detail::MotionSnapshot> snapshot);
+        void loadFromSnapshot(
+            std::shared_ptr<detail::MotionSnapshot> snapshot,
+            std::vector<std::shared_ptr<detail::MotionSnapshot>>
+                nativeObjectSnapshots = {});
         void bindMotionModuleKey(ttstr storageKey);
         [[nodiscard]] bool hasActiveMotion() const;
 
@@ -341,6 +347,34 @@ namespace motion {
         void copyRect(tTJSVariant args);
         void adjustGamma(tTJSVariant args);
         void draw();
+        // Headless render entry used by runtime providers such as Artemis.
+        // The caller owns an RGBA8 output buffer and no KAG Window is needed.
+        bool renderToRgba(std::uint8_t *pixels, int width, int height,
+                          int pitch,
+                          std::array<int, 4> *visibleBounds = nullptr,
+                          bool *alphaBoundsKnown = nullptr,
+                          bool *alphaOpaque = nullptr);
+        bool renderToRgbaRegion(
+            std::uint8_t *pixels, int stageWidth, int stageHeight,
+            int regionLeft, int regionTop, int regionWidth, int regionHeight,
+            int pitch, std::array<int, 4> *visibleBounds = nullptr,
+            bool *alphaBoundsKnown = nullptr,
+            bool *alphaOpaque = nullptr);
+        bool beginRenderToRgbaRegion(
+            int stageWidth, int stageHeight,
+            int regionLeft, int regionTop, int regionWidth, int regionHeight);
+        bool finishRenderToRgbaRegion(
+            std::uint8_t *pixels, int pitch,
+            std::array<int, 4> *visibleBounds = nullptr,
+            bool *alphaBoundsKnown = nullptr,
+            bool *alphaOpaque = nullptr);
+        bool requestRenderToRgbaReadback();
+        bool pollRenderToRgbaReadback(
+            std::uint8_t *pixels, int pitch, bool *ready,
+            std::array<int, 4> *visibleBounds = nullptr,
+            bool *alphaBoundsKnown = nullptr,
+            bool *alphaOpaque = nullptr);
+        void discardRenderToRgbaReadback();
         void frameProgress(double dt);
         void frameProgressManually(double dt) {
             noteManualProgress();
@@ -488,9 +522,17 @@ namespace motion {
         void setLeft(double v) { setX(v); }
         void setTop(double v) { setY(v); }
         void presentationHoldFromContinuousTick(tjs_uint64 tick);
+        bool assignNativeBackendState(const Player &source);
 
     private:
         bool ensureMotionLoaded();
+        bool invokeNativeBackend(
+            const std::string &method,
+            const std::vector<MotionBackendValue> &arguments = {},
+            std::vector<MotionBackendValue> *results = nullptr);
+        bool renderNativeBackendToLayer(iTJSDispatch2 *layerObject,
+                                        int canvasWidth, int canvasHeight,
+                                        bool skipUpdate);
         void ensureNodeTreeBuilt();
         Player *findLayerNodeForQuery(const std::string &key,
                                       int &nodeIndex);
@@ -573,10 +615,6 @@ namespace motion {
         bool executeLayerRenderCommands(iTJSDispatch2 *renderLayerObject,
                                          bool skipUpdate);
         bool updateLayerAfterDraw(iTJSDispatch2 *targetLayerObject);
-        bool updateAccurateSLAAfterDraw(iTJSDispatch2 *targetLayerObject);
-        void claimYuzuSdAutoProgress();
-        void releaseYuzuSdAutoProgressClaim();
-        void retireYuzuSdAutoProgress();
         void enableAutoProgress(iTJSDispatch2 *objthis);
         void disableAutoProgress();
         void enablePresentationHold(iTJSDispatch2 *targetLayerObject,
@@ -589,10 +627,6 @@ namespace motion {
         void releaseDeferredEndedTimelineRenderHoldAfterDraw(bool force = false);
         bool hasPlayingChildPlayers() const;
         bool shouldReportPlayingChildPlayers() const;
-        bool isYuzuSdPreviewAnimationFrozen() const;
-        void captureYuzuSdPreviewFrame(iTJSDispatch2 *renderTargetObject,
-                                       const std::string &motionPath);
-        bool restoreFrozenYuzuSdPreviewFrame(iTJSDispatch2 *targetObject);
         void dispatchPendingEvents(iTJSDispatch2 *objthis);
         // updateLayers sub-phases (aligned to libkrkr2.so sub-functions)
         void updateLayersPhase1_PreLoop(double currentTime);
@@ -609,6 +643,14 @@ namespace motion {
         void updateLayersPhase3_AnchorNode();                 // sub_6C0528
 
         std::shared_ptr<detail::PlayerRuntime> _runtime;
+        std::unique_ptr<MotionNativePlayerBackend> _nativeBackend;
+        std::string _nativeBackendSourcePath;
+        // A newly-created native E-mote player starts with the SDK's default
+        // pose. Keep the previous presentation until the first timeline
+        // progress has applied the restored/scripted variables, otherwise a
+        // cold expression switch exposes that default pose for one frame.
+        bool _nativeBackendPresentationReady = true;
+        bool _nativeBackendPresentationHoldLogged = false;
         ResourceManager _resourceManagerNative;
         int _completionType = 0;
         tTJSVariant _metadata;
@@ -639,6 +681,11 @@ namespace motion {
         double _cameraTargetX = 0, _cameraTargetY = 0, _cameraTargetZ = 0;
         bool _speed = true;           // Aligned to libkrkr2.so +1093: bool flag
         double _frameTickCount = 0.0;
+        // getCommandList() is polled by AnimKAGLayer after every progress()
+        // call to decide whether its backing Layer needs repainting.  The
+        // compatible list is a one-value ping-pong token, not a list of the
+        // motion's static source paths.
+        bool _commandListPulse = false;
         tjs_int _maskMode = 0;                         // libkrkr2.so +1148
         std::uint32_t _colorWeightPacked = 0xFF808080u; // libkrkr2.so +1156
         bool _independentLayerInherit = false;          // libkrkr2.so +1097
@@ -677,10 +724,6 @@ namespace motion {
         bool _presentationHoldRendering = false;
         std::string _deferredEndedTimelineRenderHoldLabel;
         std::string _completedEndedTimelineRenderHoldLabel;
-        double _yuzuSdChildContinuationFrames = 0.0;
-        std::shared_ptr<tTVPBaseBitmap> _yuzuSdPreviewFrame;
-        std::string _yuzuSdPreviewFrameMotion;
-        std::string _yuzuSdPreviewFrameLabel;
         std::string _endedTimelineRenderHoldRestoreLabel;
         double _endedTimelineRenderHoldRestoreTime = 0.0;
         double _endedTimelineRenderHoldRestoreEvalTime = 0.0;
@@ -806,6 +849,7 @@ namespace motion {
             std::array<float, 4> rgbaBytes{0.f, 0.f, 0.f, 0.f};
             double transition = 0.0;
             double ease = 0.0;
+            bool explicitlySet = false;
         } _emoteColorState;
 
         struct WindState {

@@ -29,6 +29,11 @@ func _initialize() -> void:
     assert(not app._begin_iap_checked_access("game", games[1], "detail"))
     assert(app.iap_pending_launch.is_empty())
     assert(not app.modal_layer.visible)
+    assert(not app._runtime_requires_beta_access(app.RUNTIME_ONSCRIPTER))
+    assert(app._runtime_requires_beta_access(app.RUNTIME_MINORI))
+    assert(not app._runtime_requires_beta_access(app.RUNTIME_KIRIKIRI))
+    assert(not app._beta_access_enforcement_enabled("Android"))
+    assert(not app._beta_access_enforcement_enabled("iOS"))
 
     var settings_action := Button.new()
     app._configure_settings_action_button(settings_action)
@@ -41,6 +46,10 @@ func _initialize() -> void:
         assert(not String(app._t("iap.list_limit.title")).is_empty())
         assert(not String(app._t("iap.limit_body")).is_empty())
         assert(not String(app._t("iap.restore")).is_empty())
+        assert(not String(app._t("iap.coffee.title")).is_empty())
+        assert(not String(app._t("iap.coffee.desc")).is_empty())
+        assert(not String(app._t("iap.coffee.active_until", ["2030-01-01"])).is_empty())
+        assert(not String(app._t("iap.beta_runtime_unavailable")).is_empty())
 
     settings_action.free()
     app.modal_layer.free()

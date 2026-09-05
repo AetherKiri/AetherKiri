@@ -7,8 +7,9 @@ class FakePlayer:
 
     var last_seek := -1.0
 
-    func media_seek(position: float) -> void:
+    func media_seek(position: float) -> int:
         last_seek = position
+        return 0
 
 func _initialize() -> void:
     call_deferred("_run")
@@ -65,6 +66,23 @@ func _run() -> void:
     app._begin_video_seek_gesture(Vector2(500, 300))
     app._finish_video_seek_gesture(Vector2(500, 300))
     assert(app.video_controls_visible)
+
+    app.video_pending_resume_position = 321.0
+    var waiting_state := {"position": 0.0, "duration": 0.0, "seekable": false}
+    assert(not app._apply_pending_video_resume(waiting_state))
+    assert(is_equal_approx(app.video_pending_resume_position, 321.0))
+    var ready_state := {"position": 0.0, "duration": 1000.0, "seekable": true}
+    assert(app._apply_pending_video_resume(ready_state))
+    assert(is_equal_approx(app.player.last_seek, 321.0))
+    assert(is_equal_approx(float(ready_state["position"]), 321.0))
+    assert(is_zero_approx(app.video_pending_resume_position))
+
+    var progress_card := Control.new()
+    app.add_child(progress_card)
+    app._add_video_card_progress(progress_card, 250.0, 1000.0)
+    var progress_track := progress_card.get_node("PlaybackProgressTrack") as ColorRect
+    var progress_fill := progress_track.get_node("PlaybackProgressFill") as ColorRect
+    assert(is_equal_approx(progress_fill.anchor_right, 0.25))
 
     app.queue_free()
     print("VIDEO_SEEK_GESTURE_OK")

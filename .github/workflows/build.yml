@@ -46,6 +46,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
@@ -59,6 +60,9 @@ env:
   # Forward the checkout decision to build.sh so a stale or partial package
   # checkout cannot accidentally enable private extensions in public builds.
   AETHERKIRI_ENABLE_INTERNAL: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]') }}
+  # Trusted same-repository changes may populate the package cache. Fork and
+  # Dependabot pull requests receive read-only package access.
+  AETHERKIRI_VCPKG_CACHE_WRITE: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]') }}
   AETHERKIRI_RELEASE_VERSION: ${{ inputs.release_version || '' }}
   AETHERKIRI_BUILD_NUMBER: ${{ inputs.release_build_number || github.run_number }}
   AETHERKIRI_BUILD_ATTEMPT: ${{ github.run_attempt }}
@@ -84,6 +88,37 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
+      - name: Set up Rust for Minori
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Resolve private runtime dependency cache
+        id: private-runtime-cache-key
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: |
+          key="$(packages/AetherInternal/tools/prepare_ci_dependencies.sh \
+            --platform android --print-cache-key)"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Restore private runtime dependencies
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        uses: actions/cache@v5
+        with:
+          path: packages/AetherInternal/.ci-cache/runtime-dependencies/android
+          key: ${{ runner.os }}-${{ steps.private-runtime-cache-key.outputs.key }}
+
+      - name: Initialize private runtime dependencies
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: packages/AetherInternal/tools/prepare_ci_dependencies.sh --platform android
+
+      - name: Initialize public runtime packages
+        if: env.AETHERKIRI_WITH_INTERNAL != 'true'
+        run: |
+          git submodule update --init --depth 1 packages/OnscripterYuri
+          git -c submodule.packages/psdfile.url=https://github.com/AetherKiri/psdfile.git \
+            submodule update --init --recursive --depth 1 packages/psdfile
+
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''
         run: |
@@ -103,18 +138,21 @@ jobs:
       - name: Install Build Systems
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build pkg-config autoconf automake libtool gettext bison flex curl unzip zip zstd ccache jq
+          sudo apt-get install -y cmake ninja-build pkg-config autoconf autoconf-archive automake libtool gettext bison flex curl unzip zip zstd ccache jq mono-complete
 
       - name: Restore ccache
         id: restore-ccache
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-android-ccache
+          key: ${{ runner.os }}-android-ccache-v2
+          restore-keys: |
+            ${{ runner.os }}-android-ccache-
 
       - name: Setup ccache config
         run: |
-          ccache --max-size=1000M
+          ccache --max-size=400M
+          ccache --cleanup
           ccache -z
 
       - name: Set up Java
@@ -123,8 +161,19 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: Validate Gradle wrappers
+        uses: gradle/actions/wrapper-validation@v6
+        with:
+          # OnscripterYuri pins SDL at da19244f; that revision contains an
+          # upstream-generated wrapper which is not in Gradle's checksum list.
+          allow-checksums: 2c23278a62dc9f96ab11bee897d9f53e6479d6419135e4560ce822a6431df5e5
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
+        with:
+          # Validation is performed explicitly above so the pinned SDL wrapper
+          # can be allowed without disabling checks for every other wrapper.
+          validate-wrappers: false
 
       - name: Install Godot export tools
         run: |
@@ -189,17 +238,6 @@ jobs:
           fi
           echo "ANDROID_NDK_HOME=${ndk_root}" >> "$GITHUB_ENV"
 
-      - name: Restore vcpkg cache
-        id: restore-vcpkg
-        uses: actions/cache/restore@v5
-        with:
-          path: |
-            .devtools/vcpkg
-            ~/.cache/vcpkg/archives
-          key: ${{ runner.os }}-android-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
-          restore-keys: |
-            ${{ runner.os }}-android-vcpkg-
-
       - name: Bootstrap vcpkg
         run: |
           set -euo pipefail
@@ -214,6 +252,11 @@ jobs:
             (cd .devtools/vcpkg && ./bootstrap-vcpkg.sh -disableMetrics)
           fi
           echo "VCPKG_ROOT=${GITHUB_WORKSPACE}/.devtools/vcpkg" >> "$GITHUB_ENV"
+
+      - name: Configure vcpkg binary cache
+        env:
+          VCPKG_PACKAGES_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/configure-vcpkg-binary-cache.sh "$VCPKG_ROOT/vcpkg"
 
       - name: Configure Android signing
         env:
@@ -297,21 +340,12 @@ jobs:
           path: out/godot/android/release/Aether-release.apk
           retention-days: 7
 
-      - name: Save vcpkg cache
-        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-matched-key == ''
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            .devtools/vcpkg
-            ~/.cache/vcpkg/archives
-          key: ${{ runner.os }}-android-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
-
       - name: Save ccache
-        if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-matched-key == ''
+        if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-android-ccache
+          key: ${{ runner.os }}-android-ccache-v2
 
   ios:
     name: Build iOS App
@@ -329,6 +363,37 @@ jobs:
           submodules: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && 'recursive' || 'false' }}
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
+
+      - name: Set up Rust for Minori
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - name: Resolve private runtime dependency cache
+        id: private-runtime-cache-key
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: |
+          key="$(packages/AetherInternal/tools/prepare_ci_dependencies.sh \
+            --platform apple --print-cache-key)"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Restore private runtime dependencies
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        uses: actions/cache@v5
+        with:
+          path: packages/AetherInternal/.ci-cache/runtime-dependencies/apple
+          key: ${{ runner.os }}-${{ steps.private-runtime-cache-key.outputs.key }}
+
+      - name: Initialize private runtime dependencies
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: packages/AetherInternal/tools/prepare_ci_dependencies.sh --platform apple
+
+      - name: Initialize public runtime packages
+        if: env.AETHERKIRI_WITH_INTERNAL != 'true'
+        run: |
+          git submodule update --init --depth 1 packages/OnscripterYuri
+          git -c submodule.packages/psdfile.url=https://github.com/AetherKiri/psdfile.git \
+            submodule update --init --recursive --depth 1 packages/psdfile
 
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''
@@ -379,7 +444,7 @@ jobs:
 
       - name: Install Build Systems
         run: |
-          brew install cmake ninja pkg-config autoconf automake autoconf-archive libtool gettext coreutils bison ccache
+          brew install cmake ninja pkg-config autoconf automake autoconf-archive libtool gettext coreutils bison nasm ccache mono
           echo "$(brew --prefix gettext)/bin" >> $GITHUB_PATH
           echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
 
@@ -411,23 +476,15 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-ios-ccache
+          key: ${{ runner.os }}-ios-ccache-v2
+          restore-keys: |
+            ${{ runner.os }}-ios-ccache-
 
       - name: Setup ccache config
         run: |
-          ccache --max-size=1000M
+          ccache --max-size=400M
+          ccache --cleanup
           ccache -z
-
-      - name: Restore vcpkg cache
-        id: restore-vcpkg
-        uses: actions/cache/restore@v5
-        with:
-          path: |
-            .devtools/vcpkg
-            ~/.cache/vcpkg/archives
-          key: ${{ runner.os }}-ios-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
-          restore-keys: |
-            ${{ runner.os }}-ios-vcpkg-
 
       - name: Bootstrap vcpkg
         run: |
@@ -443,6 +500,11 @@ jobs:
             (cd .devtools/vcpkg && ./bootstrap-vcpkg.sh -disableMetrics)
           fi
           echo "VCPKG_ROOT=${GITHUB_WORKSPACE}/.devtools/vcpkg" >> "$GITHUB_ENV"
+
+      - name: Configure vcpkg binary cache
+        env:
+          VCPKG_PACKAGES_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/configure-vcpkg-binary-cache.sh "$VCPKG_ROOT/vcpkg"
 
       - name: Build iOS Release
         run: |
@@ -496,6 +558,14 @@ jobs:
           )"
           if [[ -z "$bluetooth_purpose" ]]; then
             echo "The packaged iOS release is missing its Bluetooth purpose string." >&2
+            exit 1
+          fi
+          uses_non_exempt_encryption="$(
+            plutil -extract ITSAppUsesNonExemptEncryption raw "$info_plist" \
+              2>/dev/null || true
+          )"
+          if [[ "$uses_non_exempt_encryption" != "false" ]]; then
+            echo "The packaged iOS release is missing the exempt-encryption declaration." >&2
             exit 1
           fi
           if [[ -n "$AETHERKIRI_RELEASE_VERSION" ]]; then
@@ -557,21 +627,12 @@ jobs:
           path: out/godot/ios/release/Aether-App-Store.ipa
           retention-days: 7
 
-      - name: Save vcpkg cache
-        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-matched-key == ''
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            .devtools/vcpkg
-            ~/.cache/vcpkg/archives
-          key: ${{ runner.os }}-ios-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
-
       - name: Save ccache
-        if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-matched-key == ''
+        if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-ios-ccache
+          key: ${{ runner.os }}-ios-ccache-v2
 
   macos:
     name: Build macOS App
@@ -581,6 +642,7 @@ jobs:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       GODOT_RELEASE: 4.7-stable
       GODOT_TEMPLATE_VERSION: 4.7.stable
+      AETHERKIRI_MACOS_ARCH: x86_64
 
     steps:
       - name: Checkout Repository
@@ -589,6 +651,37 @@ jobs:
           submodules: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && 'recursive' || 'false' }}
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
+
+      - name: Set up Rust for Minori
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+
+      - name: Resolve private runtime dependency cache
+        id: private-runtime-cache-key
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: |
+          key="$(packages/AetherInternal/tools/prepare_ci_dependencies.sh \
+            --platform apple --print-cache-key)"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Restore private runtime dependencies
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        uses: actions/cache@v5
+        with:
+          path: packages/AetherInternal/.ci-cache/runtime-dependencies/apple
+          key: ${{ runner.os }}-${{ steps.private-runtime-cache-key.outputs.key }}
+
+      - name: Initialize private runtime dependencies
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: packages/AetherInternal/tools/prepare_ci_dependencies.sh --platform apple
+
+      - name: Initialize public runtime packages
+        if: env.AETHERKIRI_WITH_INTERNAL != 'true'
+        run: |
+          git submodule update --init --depth 1 packages/OnscripterYuri
+          git -c submodule.packages/psdfile.url=https://github.com/AetherKiri/psdfile.git \
+            submodule update --init --recursive --depth 1 packages/psdfile
 
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''
@@ -630,7 +723,7 @@ jobs:
 
       - name: Install Build Systems
         run: |
-          brew install cmake ninja pkg-config autoconf automake autoconf-archive libtool gettext coreutils bison ccache
+          brew install cmake ninja pkg-config autoconf automake autoconf-archive libtool gettext coreutils bison nasm ccache mono
           echo "$(brew --prefix gettext)/bin" >> $GITHUB_PATH
           echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
 
@@ -662,23 +755,15 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-macos-ccache
+          key: ${{ runner.os }}-macos-ccache-v2
+          restore-keys: |
+            ${{ runner.os }}-macos-ccache-
 
       - name: Setup ccache config
         run: |
-          ccache --max-size=1000M
+          ccache --max-size=400M
+          ccache --cleanup
           ccache -z
-
-      - name: Restore vcpkg cache
-        id: restore-vcpkg
-        uses: actions/cache/restore@v5
-        with:
-          path: |
-            .devtools/vcpkg
-            ~/.cache/vcpkg/archives
-          key: ${{ runner.os }}-macos-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
-          restore-keys: |
-            ${{ runner.os }}-macos-vcpkg-
 
       - name: Bootstrap vcpkg
         run: |
@@ -695,6 +780,20 @@ jobs:
           fi
           echo "VCPKG_ROOT=${GITHUB_WORKSPACE}/.devtools/vcpkg" >> "$GITHUB_ENV"
 
+      - name: Configure vcpkg binary cache
+        env:
+          VCPKG_PACKAGES_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/configure-vcpkg-binary-cache.sh "$VCPKG_ROOT/vcpkg"
+
+      - name: Restore vcpkg source cache
+        id: restore-vcpkg-downloads
+        uses: actions/cache/restore@v5
+        with:
+          path: .devtools/vcpkg/downloads
+          key: ${{ runner.os }}-vcpkg-downloads-${{ hashFiles('vcpkg-configuration.json', 'vcpkg.json', 'vcpkg/ports/**', 'vcpkg/triplets/**') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-downloads-
+
       - name: Build macOS Release
         run: |
           set -euo pipefail
@@ -702,6 +801,13 @@ jobs:
           export CMAKE_C_COMPILER_LAUNCHER=ccache
           export CMAKE_CXX_COMPILER_LAUNCHER=ccache
           ./build.sh macos release --jobs=4
+
+      - name: Save vcpkg source cache
+        if: always() && steps.restore-vcpkg-downloads.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: .devtools/vcpkg/downloads
+          key: ${{ runner.os }}-vcpkg-downloads-${{ hashFiles('vcpkg-configuration.json', 'vcpkg.json', 'vcpkg/ports/**', 'vcpkg/triplets/**') }}
 
       - name: Build macOS Debug
         run: |
@@ -711,20 +817,29 @@ jobs:
           export CMAKE_CXX_COMPILER_LAUNCHER=ccache
           ./build.sh macos debug --jobs=4
 
+      - name: Run OnscripterYuri Godot smoke test
+        env:
+          AETHERKIRI_SMOKE_GAME: ${{ github.workspace }}/tests/fixtures/onscripter_smoke
+        run: |
+          set -euo pipefail
+          arch -x86_64 "$GODOT_BIN" --headless \
+            --path apps/godot_app \
+            --script res://scripts/smoke_test.gd
+
       - name: Run native motionplayer contract tests
         run: |
           set -euo pipefail
-          test_build_dir="${GITHUB_WORKSPACE}/out/macos/ci-tests"
+          test_build_dir="${GITHUB_WORKSPACE}/out/macos-x64/ci-tests"
           configure_log="${RUNNER_TEMP}/aetherkiri-test-configure.log"
 
-          cmake --preset "MacOS Debug Config" --fresh \
+          cmake --preset "MacOS x64 Debug Config" --fresh \
             -B "$test_build_dir" \
             -D ENABLE_TESTS=ON \
             -D BUILD_TOOLS=OFF \
             -D BUILD_ENGINE_API=OFF \
             -D BUILD_GODOT_EXTENSION=OFF \
             -D VCPKG_MANIFEST_INSTALL=OFF \
-            -D VCPKG_INSTALLED_DIR="${GITHUB_WORKSPACE}/out/macos/debug/vcpkg_installed" \
+            -D VCPKG_INSTALLED_DIR="${GITHUB_WORKSPACE}/out/macos-x64/debug/vcpkg_installed" \
             -D CMAKE_C_COMPILER_LAUNCHER=ccache \
             -D CMAKE_CXX_COMPILER_LAUNCHER=ccache \
             2>&1 | tee "$configure_log"
@@ -742,13 +857,21 @@ jobs:
         run: |
           set -euo pipefail
           for build_type in release debug; do
-            APP_PATH="out/godot/macos/${build_type}/Aether.app"
+            APP_PATH="out/godot/macos-x64/${build_type}/Aether.app"
             if [[ ! -d "$APP_PATH" ]]; then
               echo "Built Godot ${build_type} .app bundle not found: $APP_PATH" >&2
               exit 1
             fi
             codesign --verify --deep --strict --verbose=2 "$APP_PATH"
             if [[ "$build_type" == "release" ]]; then
+              uses_non_exempt_encryption="$(
+                plutil -extract ITSAppUsesNonExemptEncryption raw "$APP_PATH/Contents/Info.plist" \
+                  2>/dev/null || true
+              )"
+              if [[ "$uses_non_exempt_encryption" != "false" ]]; then
+                echo "The packaged macOS Release is missing the exempt-encryption declaration." >&2
+                exit 1
+              fi
               if [[ -n "$AETHERKIRI_RELEASE_VERSION" ]]; then
                 info_plist="$APP_PATH/Contents/Info.plist"
                 actual_bundle_id="$(plutil -extract CFBundleIdentifier raw "$info_plist")"
@@ -782,7 +905,7 @@ jobs:
           AETHER_APPLE_TEAM_ID: 3JL7FE9XQT
         run: |
           .github/scripts/package-macos-app-store.sh \
-            out/godot/macos/release/Aether.app \
+            out/godot/macos-x64/release/Aether.app \
             out/godot/macos/app-store
 
       - name: Upload Release App
@@ -790,7 +913,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: macos-release-app
-          path: out/godot/macos/release/
+          path: out/godot/macos-x64/release/
           retention-days: 7
 
       - name: Upload Mac App Store installer
@@ -801,21 +924,12 @@ jobs:
           path: out/godot/macos/app-store/Aether-Mac-App-Store.pkg
           retention-days: 7
 
-      - name: Save vcpkg cache
-        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-matched-key == ''
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            .devtools/vcpkg
-            ~/.cache/vcpkg/archives
-          key: ${{ runner.os }}-macos-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
-
       - name: Save ccache
-        if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-matched-key == ''
+        if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-macos-ccache
+          key: ${{ runner.os }}-macos-ccache-v2
 
   web:
     name: Build Web App
@@ -834,6 +948,19 @@ jobs:
           submodules: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && 'recursive' || 'false' }}
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
+
+      - name: Set up Rust for Minori
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+          targets: wasm32-unknown-emscripten
+
+      - name: Initialize public runtime packages
+        if: env.AETHERKIRI_WITH_INTERNAL != 'true'
+        run: |
+          git submodule update --init --depth 1 packages/OnscripterYuri
+          git -c submodule.packages/psdfile.url=https://github.com/AetherKiri/psdfile.git \
+            submodule update --init --recursive --depth 1 packages/psdfile
 
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''
@@ -854,7 +981,7 @@ jobs:
       - name: Install Build Systems
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build pkg-config autoconf automake libtool gettext bison flex curl unzip zip zstd ccache jq python3
+          sudo apt-get install -y cmake ninja-build pkg-config autoconf autoconf-archive automake libtool gettext bison flex curl unzip zip zstd ccache jq python3 mono-complete
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -924,23 +1051,15 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-web-ccache
+          key: ${{ runner.os }}-web-ccache-v2
+          restore-keys: |
+            ${{ runner.os }}-web-ccache-
 
       - name: Setup ccache config
         run: |
-          ccache --max-size=1000M
+          ccache --max-size=400M
+          ccache --cleanup
           ccache -z
-
-      - name: Restore vcpkg cache
-        id: restore-vcpkg
-        uses: actions/cache/restore@v5
-        with:
-          path: |
-            .devtools/vcpkg
-            ~/.cache/vcpkg/archives
-          key: ${{ runner.os }}-web-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
-          restore-keys: |
-            ${{ runner.os }}-web-vcpkg-
 
       - name: Bootstrap vcpkg
         run: |
@@ -956,6 +1075,11 @@ jobs:
             (cd .devtools/vcpkg && ./bootstrap-vcpkg.sh -disableMetrics)
           fi
           echo "VCPKG_ROOT=${GITHUB_WORKSPACE}/.devtools/vcpkg" >> "$GITHUB_ENV"
+
+      - name: Configure vcpkg binary cache
+        env:
+          VCPKG_PACKAGES_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/configure-vcpkg-binary-cache.sh "$VCPKG_ROOT/vcpkg"
 
       - name: Install npm dependencies
         run: npm ci
@@ -995,15 +1119,6 @@ jobs:
           path: out/godot/web/release
           retention-days: 7
 
-      - name: Save vcpkg cache
-        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-matched-key == ''
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            .devtools/vcpkg
-            ~/.cache/vcpkg/archives
-          key: ${{ runner.os }}-web-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
-
       - name: Save Emscripten cache
         if: success() && github.event_name != 'pull_request' && steps.restore-emsdk.outputs.cache-matched-key == ''
         uses: actions/cache/save@v5
@@ -1012,8 +1127,8 @@ jobs:
           key: ${{ runner.os }}-emsdk-${{ env.EMSDK_VERSION }}
 
       - name: Save ccache
-        if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-matched-key == ''
+        if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-web-ccache
+          key: ${{ runner.os }}-web-ccache-v2

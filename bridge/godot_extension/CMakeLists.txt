@@ -94,18 +94,50 @@ if(WEB OR EMSCRIPTEN)
     endif()
 endif()
 
+set(AETHERKIRI_GODOT_SOURCES
+    src/aether_runtime_player.cpp
+    src/frame_effect_host.cpp
+    src/presentation/RuntimePresentationSprite.cpp
+)
+
 if(WEB OR EMSCRIPTEN)
-    add_executable(aether_kiri_godot src/aether_kiri_godot.cpp)
+    add_executable(aether_kiri_godot ${AETHERKIRI_GODOT_SOURCES})
 elseif(IOS)
-    add_library(aether_kiri_godot STATIC src/aether_kiri_godot.cpp)
+    add_library(aether_kiri_godot STATIC ${AETHERKIRI_GODOT_SOURCES})
 else()
-    add_library(aether_kiri_godot SHARED src/aether_kiri_godot.cpp)
+    add_library(aether_kiri_godot SHARED ${AETHERKIRI_GODOT_SOURCES})
 endif()
 
 if(APPLE)
-    target_sources(aether_kiri_godot PRIVATE src/apple_storekit.swift)
+    target_sources(aether_kiri_godot PRIVATE
+        src/apple_external_texture.mm
+        src/apple_native_file_picker.swift
+        src/apple_storekit.swift)
+    set_source_files_properties(src/apple_external_texture.mm
+        PROPERTIES LANGUAGE CXX COMPILE_FLAGS "-x objective-c++")
     set_property(TARGET aether_kiri_godot PROPERTY Swift_LANGUAGE_VERSION 5)
-    target_link_libraries(aether_kiri_godot PRIVATE "-framework StoreKit")
+    target_link_libraries(aether_kiri_godot PRIVATE
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework UniformTypeIdentifiers"
+        "-framework Security"
+        "-framework StoreKit")
+endif()
+
+if(APPLE AND NOT IOS)
+    find_package(VulkanHeaders CONFIG REQUIRED)
+    target_sources(aether_kiri_godot PRIVATE
+        src/apple_vulkan_external_texture.mm)
+    set_source_files_properties(src/apple_vulkan_external_texture.mm
+        PROPERTIES LANGUAGE CXX COMPILE_FLAGS "-x objective-c++")
+    target_link_libraries(aether_kiri_godot PRIVATE Vulkan::Headers)
+endif()
+
+if(ANDROID)
+    target_sources(aether_kiri_godot PRIVATE
+        src/android_external_texture.cpp)
+    target_link_libraries(aether_kiri_godot PRIVATE
+        android vulkan ${CMAKE_DL_LIBS})
 endif()
 
 target_compile_features(aether_kiri_godot PRIVATE cxx_std_17)
@@ -127,8 +159,45 @@ target_include_directories(aether_kiri_godot PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:${CMAKE_BINARY_DIR}/cpp/core/tjs2/gen>
 )
 
+if(AETHERKIRI_INTERNAL_ENABLED AND
+   COMMAND aetherinternal_extend_godot_extension)
+    aetherinternal_extend_godot_extension(
+        aether_kiri_godot
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+endif()
+
 if(TARGET engine_api)
     target_link_libraries(aether_kiri_godot PRIVATE engine_api)
+endif()
+if(TARGET aether_onscripter_runtime)
+    target_link_libraries(aether_kiri_godot PRIVATE
+        aether_onscripter_runtime)
+    target_compile_definitions(aether_kiri_godot PRIVATE
+        AETHERKIRI_WITH_ONSCRIPTER=1)
+endif()
+if(TARGET aether_minori_runtime)
+    target_link_libraries(aether_kiri_godot PRIVATE
+        aether_minori_runtime)
+    target_compile_definitions(aether_kiri_godot PRIVATE
+        AETHERKIRI_WITH_MINORI=1)
+    if(IOS)
+        # Godot's iOS exporter links this static extension archive directly
+        # into the app and does not propagate CMake archive dependencies.
+        # Merge Minori's Rust archive so its provider registration symbol is
+        # present in the final Xcode link.
+        find_program(AETHERKIRI_LIBTOOL_EXECUTABLE libtool REQUIRED)
+        set(AETHERKIRI_MERGED_GODOT_ARCHIVE
+            "${CMAKE_CURRENT_BINARY_DIR}/libaether_kiri_godot_merged.a")
+        add_custom_command(TARGET aether_kiri_godot POST_BUILD
+            COMMAND "${AETHERKIRI_LIBTOOL_EXECUTABLE}" -static
+                -o "${AETHERKIRI_MERGED_GODOT_ARCHIVE}"
+                "$<TARGET_FILE:aether_kiri_godot>"
+                "$<TARGET_FILE:aether_minori_runtime>"
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "${AETHERKIRI_MERGED_GODOT_ARCHIVE}"
+                "$<TARGET_FILE:aether_kiri_godot>"
+            VERBATIM)
+    endif()
 endif()
 if(TARGET krkr2plugin)
     if(WEB OR EMSCRIPTEN)
@@ -162,6 +231,25 @@ set_target_properties(aether_kiri_godot PROPERTIES
 )
 
 aetherkiri_limit_runtime_exports(aether_kiri_godot GODOT_EXTENSION)
+
+if(APPLE AND NOT IOS AND TARGET engine_api)
+    # Godot exports the libraries referenced by aether_kiri.gdextension from
+    # apps/godot_app/bin. Keep that staging directory tied to the actual CMake
+    # outputs so an export cannot silently package an older runtime.
+    set(_aetherkiri_macos_godot_bin
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../apps/godot_app/bin/macos/$<LOWER_CASE:$<CONFIG>>")
+    add_custom_command(TARGET aether_kiri_godot POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "${_aetherkiri_macos_godot_bin}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:aether_kiri_godot>"
+            "${_aetherkiri_macos_godot_bin}/libaether_kiri_godot.dylib"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:engine_api>"
+            "${_aetherkiri_macos_godot_bin}/libengine_api.dylib"
+        VERBATIM
+    )
+endif()
 
 if(WIN32)
     string(TOLOWER "${CMAKE_BUILD_TYPE}" AETHERKIRI_WINDOWS_CONFIG_DIR)

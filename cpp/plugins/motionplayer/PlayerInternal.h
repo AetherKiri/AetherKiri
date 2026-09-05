@@ -46,12 +46,53 @@
 namespace motion {
 namespace internal {
 
+        inline bool sameMotionOwnershipIdentity(
+            const std::string &childPath,
+            const ttstr &childChara,
+            const ttstr &childMotion,
+            const std::string &ancestorPath,
+            const ttstr &ancestorChara,
+            const ttstr &ancestorMotion) {
+            // One PSB commonly owns several independent objects whose clips
+            // share generic names such as `show`, `normal`, or `off`.  Those
+            // are valid ownership edges (for example TITLE2/show ->
+            // char/show), not recursion.  A cycle requires the complete
+            // resource/object/clip identity to repeat.
+            return childPath == ancestorPath &&
+                childChara == ancestorChara &&
+                childMotion == ancestorMotion;
+        }
+
         // Binder layers are structural containers. Kirikiri allows them to
         // participate in the layer tree, but drawable-only APIs such as
         // GetImageWidth/SetHasImage must never be used on them.
         inline bool presentationLayerTypeCanReceivePixels(
             tTVPLayerType type) {
             return type != ltBinder;
+        }
+
+        inline bool d3dEmoteFrameReuseRouteEligible(
+            bool isEmoteMode,
+            bool retainD3DPresentation,
+            std::size_t commandCount) {
+            return isEmoteMode && !retainD3DPresentation &&
+                commandCount != 0;
+        }
+
+        inline bool d3dEmoteFrameCacheMatches(
+            const detail::PlayerRuntime::EmoteRenderFrameCacheEntry &entry,
+            const std::string &motion,
+            double frame,
+            int canvasWidth,
+            int canvasHeight,
+            std::size_t commandSignature) {
+            return entry.bitmap && entry.motion == motion &&
+                entry.canvasWidth == canvasWidth &&
+                entry.canvasHeight == canvasHeight &&
+                std::fabs(entry.frame - frame) < 0.0001 &&
+                entry.bitmap->GetWidth() == canvasWidth &&
+                entry.bitmap->GetHeight() == canvasHeight &&
+                entry.commandSignature == commandSignature;
         }
 
         inline const MotionRenderPolicyV1 *motionRenderPolicy() {
@@ -634,6 +675,159 @@ namespace internal {
             return false;
         }
 
+        inline std::uint8_t expandPsb5To8(const std::uint16_t value) {
+            return static_cast<std::uint8_t>((value << 3u) | (value >> 2u));
+        }
+
+        inline std::uint8_t expandPsb6To8(const std::uint16_t value) {
+            return static_cast<std::uint8_t>((value << 2u) | (value >> 4u));
+        }
+
+        inline void decodePsbBcColorPalette(
+            const std::uint8_t *block,
+            bool allowDxt1Transparency,
+            std::array<std::array<std::uint8_t, 4>, 4> &palette) {
+            const auto color0 = static_cast<std::uint16_t>(block[0]) |
+                (static_cast<std::uint16_t>(block[1]) << 8u);
+            const auto color1 = static_cast<std::uint16_t>(block[2]) |
+                (static_cast<std::uint16_t>(block[3]) << 8u);
+            const auto decode565 = [](const std::uint16_t value) {
+                return std::array<std::uint8_t, 4>{
+                    expandPsb5To8(static_cast<std::uint16_t>((value >> 11u) & 0x1fu)),
+                    expandPsb6To8(static_cast<std::uint16_t>((value >> 5u) & 0x3fu)),
+                    expandPsb5To8(static_cast<std::uint16_t>(value & 0x1fu)),
+                    0xffu,
+                };
+            };
+            palette[0] = decode565(color0);
+            palette[1] = decode565(color1);
+            if(!allowDxt1Transparency || color0 > color1) {
+                for(size_t channel = 0; channel < 3; ++channel) {
+                    palette[2][channel] = static_cast<std::uint8_t>(
+                        (2u * palette[0][channel] + palette[1][channel]) / 3u);
+                    palette[3][channel] = static_cast<std::uint8_t>(
+                        (palette[0][channel] + 2u * palette[1][channel]) / 3u);
+                }
+                palette[2][3] = 0xffu;
+                palette[3][3] = 0xffu;
+            } else {
+                for(size_t channel = 0; channel < 3; ++channel) {
+                    palette[2][channel] = static_cast<std::uint8_t>(
+                        (palette[0][channel] + palette[1][channel]) / 2u);
+                    palette[3][channel] = 0u;
+                }
+                palette[2][3] = 0xffu;
+                palette[3][3] = 0u;
+            }
+        }
+
+        // Decode only the selected icon rectangle from a BC1/DXT1 or
+        // BC3/DXT5 atlas. E-mote character PSBs commonly keep a 4096x4096
+        // DXT5 texture in source/<group>/texture/pixel and reference small
+        // rectangles from source/<group>/icon/*.
+        inline bool decodePsbBlockCompressedAtlasRegion(
+            const std::vector<std::uint8_t> &compressed,
+            const std::string &formatName,
+            int atlasWidth,
+            int atlasHeight,
+            int left,
+            int top,
+            int width,
+            int height,
+            std::vector<std::uint8_t> &rgbaOut) {
+            const auto format = psbDebugLowercase(formatName);
+            const bool isDxt1 = format == "dxt1" || format == "bc1";
+            const bool isDxt5 = format == "dxt5" || format == "bc3";
+            if((!isDxt1 && !isDxt5) || atlasWidth <= 0 || atlasHeight <= 0 ||
+               left < 0 || top < 0 || width <= 0 || height <= 0 ||
+               left + width > atlasWidth || top + height > atlasHeight) {
+                return false;
+            }
+
+            const size_t blockBytes = isDxt5 ? 16u : 8u;
+            const size_t blocksWide =
+                (static_cast<size_t>(atlasWidth) + 3u) / 4u;
+            const size_t blocksHigh =
+                (static_cast<size_t>(atlasHeight) + 3u) / 4u;
+            if(compressed.size() < blocksWide * blocksHigh * blockBytes) {
+                return false;
+            }
+
+            rgbaOut.assign(static_cast<size_t>(width) *
+                               static_cast<size_t>(height) * 4u,
+                           0u);
+            const int firstBlockX = left / 4;
+            const int firstBlockY = top / 4;
+            const int lastBlockX = (left + width - 1) / 4;
+            const int lastBlockY = (top + height - 1) / 4;
+            for(int blockY = firstBlockY; blockY <= lastBlockY; ++blockY) {
+                for(int blockX = firstBlockX; blockX <= lastBlockX; ++blockX) {
+                    const size_t blockOffset =
+                        (static_cast<size_t>(blockY) * blocksWide +
+                         static_cast<size_t>(blockX)) * blockBytes;
+                    const auto *block = compressed.data() + blockOffset;
+                    const auto *colorBlock = block + (isDxt5 ? 8u : 0u);
+                    std::array<std::array<std::uint8_t, 4>, 4> colors{};
+                    decodePsbBcColorPalette(colorBlock, isDxt1, colors);
+                    const std::uint32_t colorIndices =
+                        static_cast<std::uint32_t>(colorBlock[4]) |
+                        (static_cast<std::uint32_t>(colorBlock[5]) << 8u) |
+                        (static_cast<std::uint32_t>(colorBlock[6]) << 16u) |
+                        (static_cast<std::uint32_t>(colorBlock[7]) << 24u);
+
+                    std::array<std::uint8_t, 8> alphas{};
+                    std::uint64_t alphaIndices = 0;
+                    if(isDxt5) {
+                        alphas[0] = block[0];
+                        alphas[1] = block[1];
+                        if(alphas[0] > alphas[1]) {
+                            for(size_t index = 2; index < 8; ++index) {
+                                alphas[index] = static_cast<std::uint8_t>(
+                                    ((8u - index) * alphas[0] +
+                                     (index - 1u) * alphas[1]) / 7u);
+                            }
+                        } else {
+                            for(size_t index = 2; index < 6; ++index) {
+                                alphas[index] = static_cast<std::uint8_t>(
+                                    ((6u - index) * alphas[0] +
+                                     (index - 1u) * alphas[1]) / 5u);
+                            }
+                            alphas[6] = 0u;
+                            alphas[7] = 0xffu;
+                        }
+                        for(size_t byte = 0; byte < 6; ++byte) {
+                            alphaIndices |= static_cast<std::uint64_t>(
+                                block[2u + byte]) << (8u * byte);
+                        }
+                    }
+
+                    for(int localY = 0; localY < 4; ++localY) {
+                        const int atlasY = blockY * 4 + localY;
+                        if(atlasY < top || atlasY >= top + height) continue;
+                        for(int localX = 0; localX < 4; ++localX) {
+                            const int atlasX = blockX * 4 + localX;
+                            if(atlasX < left || atlasX >= left + width) continue;
+                            const int blockPixel = localY * 4 + localX;
+                            const auto colorIndex = static_cast<size_t>(
+                                (colorIndices >> (2u * blockPixel)) & 0x3u);
+                            const size_t outOffset =
+                                (static_cast<size_t>(atlasY - top) *
+                                     static_cast<size_t>(width) +
+                                 static_cast<size_t>(atlasX - left)) * 4u;
+                            rgbaOut[outOffset + 0u] = colors[colorIndex][0];
+                            rgbaOut[outOffset + 1u] = colors[colorIndex][1];
+                            rgbaOut[outOffset + 2u] = colors[colorIndex][2];
+                            rgbaOut[outOffset + 3u] = isDxt5
+                                ? alphas[static_cast<size_t>(
+                                      (alphaIndices >> (3u * blockPixel)) & 0x7u)]
+                                : colors[colorIndex][3];
+                        }
+                    }
+                }
+            }
+            return true;
+        }
+
         constexpr double kMotionFramesPerMillisecond = 60.0 / 1000.0;
 
         inline std::string basenameWithoutExtension(const std::string &value) {
@@ -1083,365 +1277,6 @@ namespace internal {
                 motion.find("titlebg") != std::string::npos;
         }
 
-        inline std::string yuzuSdPresentationMotionName(
-            const std::string &motionPath) {
-            auto name = psbDebugLowercase(motionPath);
-            const auto slash = name.find_last_of("/\\");
-            if(slash != std::string::npos) {
-                name.erase(0, slash + 1);
-            }
-            return name;
-        }
-
-        inline bool isYuzuSdPresentationMotionPath(
-            const std::string &motionPath) {
-            const auto name = yuzuSdPresentationMotionName(motionPath);
-            if(name.size() < 4 || name.rfind("sd", 0) != 0 ||
-               !std::isdigit(static_cast<unsigned char>(name[2]))) {
-                return false;
-            }
-            const auto dot = name.find_last_of('.');
-            if(dot == std::string::npos) {
-                return false;
-            }
-            const auto extension = name.substr(dot);
-            return extension == ".psb" || extension == ".mtn";
-        }
-
-        inline std::unordered_map<std::string, std::vector<tTJSVariant>> &
-        yuzuSdPresentationTargetCache() {
-            static std::unordered_map<
-                std::string, std::vector<tTJSVariant>> cache;
-            return cache;
-        }
-
-        inline void forgetYuzuSdPresentationTargets(
-            const std::string &motionPath) {
-            if(!isYuzuSdPresentationMotionPath(motionPath)) {
-                return;
-            }
-            yuzuSdPresentationTargetCache().erase(
-                psbDebugLowercase(motionPath));
-        }
-
-        inline bool yuzuSdPresentationTargetBelongsToCurrentLayerTree(
-            iTJSDispatch2 *target) {
-            if(!target || !TVPMainWindow ||
-               !TVPMainWindow->GetDrawDevice()) {
-                return false;
-            }
-
-            tTJSVariant targetValue(target, target);
-            tTJSNI_BaseLayer *layer = nullptr;
-            if(!tryGetLayerObject(targetValue, layer) || !layer) {
-                return false;
-            }
-
-            auto *primary =
-                TVPMainWindow->GetDrawDevice()->GetPrimaryLayer();
-            if(!primary || !primary->GetManager()) {
-                return false;
-            }
-            const auto &nodes = primary->GetManager()->GetAllNodes();
-            return std::find(nodes.begin(), nodes.end(), layer) != nodes.end();
-        }
-
-        inline std::string yuzuSdPresentationTargetLayerName(
-            iTJSDispatch2 *target) {
-            if(!target) {
-                return {};
-            }
-            tTJSVariant targetValue(target, target);
-            tTJSNI_BaseLayer *layer = nullptr;
-            if(!tryGetLayerObject(targetValue, layer) || !layer) {
-                return {};
-            }
-            std::string firstName;
-            for(auto *current = layer; current; current = current->GetParent()) {
-                const auto name = psbDebugLowercase(
-                    current->GetName().AsStdString());
-                if(firstName.empty() && !name.empty()) {
-                    firstName = name;
-                }
-                if(name == "ev" || name == "trans_ev" || name == "sd" ||
-                   name == "trans_sd") {
-                    return name;
-                }
-            }
-            return firstName;
-        }
-
-        inline bool yuzuSdPresentationTargetIsUsable(
-            iTJSDispatch2 *target) {
-            if(!target ||
-               !yuzuSdPresentationTargetBelongsToCurrentLayerTree(target)) {
-                return false;
-            }
-            tTJSVariant targetValue(target, target);
-            tTJSNI_BaseLayer *layer = nullptr;
-            if(!tryGetLayerObject(targetValue, layer) || !layer ||
-               layer->GetOpacity() <= 0) {
-                return false;
-            }
-            const auto logicalLayerName =
-                yuzuSdPresentationTargetLayerName(target);
-            if(logicalLayerName == "ev" || logicalLayerName == "sd") {
-                // KAG draws the next event/SD frame into the hidden stable
-                // buffer, then reveals it when the transition completes.
-                return true;
-            }
-            return layer->GetVisible() && layer->GetParentVisible();
-        }
-
-        inline void rememberYuzuSdPresentationTarget(
-            const std::string &motionPath,
-            iTJSDispatch2 *target) {
-            if(!isYuzuSdPresentationMotionPath(motionPath) || !target) {
-                return;
-            }
-            tTJSVariant targetValue(target, target);
-            auto *resolved = tryResolveLayerDispatch(targetValue);
-            if(!resolved) {
-                return;
-            }
-            auto &targets = yuzuSdPresentationTargetCache()[
-                psbDebugLowercase(motionPath)];
-            targets.erase(
-                std::remove_if(
-                    targets.begin(), targets.end(),
-                    [resolved](const tTJSVariant &candidate) {
-                        return candidate.Type() != tvtObject ||
-                            tryResolveLayerDispatch(candidate) == resolved;
-                    }),
-                targets.end());
-            targets.emplace_back(resolved, resolved);
-            constexpr size_t kMaxTargetsPerMotion = 8;
-            if(targets.size() > kMaxTargetsPerMotion) {
-                targets.erase(
-                    targets.begin(),
-                    targets.begin() +
-                        static_cast<std::ptrdiff_t>(
-                            targets.size() - kMaxTargetsPerMotion));
-            }
-        }
-
-        inline iTJSDispatch2 *resolveRememberedYuzuSdPresentationTarget(
-            const std::string &motionPath) {
-            if(!isYuzuSdPresentationMotionPath(motionPath)) {
-                return nullptr;
-            }
-
-            auto &cache = yuzuSdPresentationTargetCache();
-            const auto it = cache.find(psbDebugLowercase(motionPath));
-            if(it == cache.end()) {
-                return nullptr;
-            }
-
-            auto &targets = it->second;
-            targets.erase(
-                std::remove_if(
-                    targets.begin(), targets.end(),
-                    [](const tTJSVariant &candidate) {
-                        if(candidate.Type() != tvtObject) {
-                            return true;
-                        }
-                        auto *resolved =
-                            tryResolveLayerDispatch(candidate);
-                        return !resolved ||
-                            !yuzuSdPresentationTargetBelongsToCurrentLayerTree(
-                                resolved);
-                    }),
-                targets.end());
-            if(targets.empty()) {
-                cache.erase(it);
-                return nullptr;
-            }
-
-            iTJSDispatch2 *best = nullptr;
-            int bestScore = -1;
-            for(size_t index = 0; index < targets.size(); ++index) {
-                auto *resolved = tryResolveLayerDispatch(targets[index]);
-                if(!resolved) {
-                    continue;
-                }
-                tTJSNI_BaseLayer *layer = nullptr;
-                tTJSVariant resolvedValue(resolved, resolved);
-                if(!tryGetLayerObject(resolvedValue, layer) || !layer) {
-                    continue;
-                }
-                int score = static_cast<int>(index);
-                if(layer->GetVisible() && layer->GetParentVisible() &&
-                   layer->GetOpacity() > 0) {
-                    score += 1000;
-                }
-                if(layer->GetWidth() > 0 && layer->GetHeight() > 0) {
-                    score += 500;
-                }
-                const auto layerName = psbDebugLowercase(
-                    layer->GetName().AsStdString());
-                if(layerName.rfind("trans_", 0) != 0) {
-                    score += 100000;
-                }
-                if(score > bestScore) {
-                    best = resolved;
-                    bestScore = score;
-                }
-            }
-            return best;
-        }
-
-        inline iTJSDispatch2 *resolveYuzuSdPresentationTargetFromLayerTree(
-            const std::string &motionPath,
-            const std::string &timelineLabel,
-            const std::string &preferredLayerName = {}) {
-            if(!isYuzuSdPresentationMotionPath(motionPath) ||
-               !TVPMainWindow || !TVPMainWindow->GetDrawDevice()) {
-                return nullptr;
-            }
-
-            auto *primary = TVPMainWindow->GetDrawDevice()->GetPrimaryLayer();
-            if(!primary || !primary->GetManager()) {
-                return nullptr;
-            }
-
-            auto motionName = yuzuSdPresentationMotionName(motionPath);
-            const auto dot = motionName.find_last_of('.');
-            if(dot != std::string::npos) {
-                motionName.erase(dot);
-            }
-            const auto label = psbDebugLowercase(timelineLabel);
-            const auto preferredName =
-                psbDebugLowercase(preferredLayerName);
-
-            tTJSNI_BaseLayer *best = nullptr;
-            int bestScore = -1;
-            auto &nodes = primary->GetManager()->GetAllNodes();
-            for(auto *node : nodes) {
-                if(!node || !node->GetOwnerNoAddRef() ||
-                   !node->GetVisible() || !node->GetParentVisible() ||
-                   node->GetOpacity() <= 0) {
-                    continue;
-                }
-
-                const auto name =
-                    psbDebugLowercase(node->GetName().AsStdString());
-                const auto marker = name.find("cg view layer :");
-                if(marker == std::string::npos) {
-                    continue;
-                }
-
-                auto key = name.substr(marker + std::strlen("cg view layer :"));
-                const auto first = key.find_first_not_of(" \t");
-                if(first == std::string::npos) {
-                    continue;
-                }
-                key.erase(0, first);
-                const auto last = key.find_last_not_of(" \t");
-                if(last != std::string::npos) {
-                    key.erase(last + 1);
-                }
-
-                const bool exactLabel = !label.empty() && key == label;
-                const bool matchingMotion = !motionName.empty() &&
-                    key.rfind(motionName, 0) == 0;
-                if(!exactLabel && !matchingMotion) {
-                    continue;
-                }
-
-                bool hasVisibleAffineSurface = false;
-                const auto childCount = node->GetCount();
-                for(tjs_uint i = 0; i < childCount; ++i) {
-                    auto *child = node->GetChildren(static_cast<tjs_int>(i));
-                    if(!child || !child->GetOwnerNoAddRef() ||
-                       !child->GetVisible() || !child->GetParentVisible() ||
-                       child->GetOpacity() <= 0) {
-                        continue;
-                    }
-                    const auto childName = psbDebugLowercase(
-                        child->GetName().AsStdString());
-                    if(childName.find("affinelayer") != std::string::npos) {
-                        hasVisibleAffineSurface = true;
-                        break;
-                    }
-                }
-                if(!hasVisibleAffineSurface) {
-                    continue;
-                }
-
-                int score = exactLabel ? 2000 : 1000;
-                score += static_cast<int>(node->GetOverallOrderIndex());
-                score += static_cast<int>(node->GetOrderIndex()) * 2;
-                if(score > bestScore) {
-                    best = node;
-                    bestScore = score;
-                }
-            }
-
-            // Gallery previews provide a labelled CG View Layer. During the
-            // story, Yuzu titles use either the dedicated `sd` pair or the
-            // generic event-CG `ev` pair. These are commonly Binder layers,
-            // so a freshly cloned motion player must be able to find them
-            // before the first rendered child image exists.
-            if(!best) {
-                for(auto *node : nodes) {
-                    if(!node || !node->GetOwnerNoAddRef() ||
-                       node->GetOpacity() <= 0) {
-                        continue;
-                    }
-                    const auto name = psbDebugLowercase(
-                        node->GetName().AsStdString());
-                    const bool sdLayer = name == "sd" || name == "trans_sd";
-                    const bool eventLayer =
-                        name == "ev" || name == "trans_ev";
-                    if(!sdLayer && !eventLayer) {
-                        continue;
-                    }
-
-                    const bool exactPreferred =
-                        !preferredName.empty() && name == preferredName;
-                    const bool stableLayer =
-                        name.rfind("trans_", 0) != 0;
-                    const bool visibleLayer =
-                        node->GetVisible() && node->GetParentVisible();
-                    if(!visibleLayer && !exactPreferred && !stableLayer) {
-                        continue;
-                    }
-                    const int score =
-                        (exactPreferred ? 1000000 : 0) +
-                        (stableLayer ? 100000 : 0) +
-                        (visibleLayer ? 10000 : 0) +
-                        static_cast<int>(node->GetOverallOrderIndex()) * 100 +
-                        static_cast<int>(node->GetOrderIndex()) * 10 +
-                        (sdLayer ? 2 : 0) +
-                        (stableLayer ? 1 : 0);
-                    if(score > bestScore) {
-                        best = node;
-                        bestScore = score;
-                    }
-                }
-            }
-
-            if(!best) {
-                return nullptr;
-            }
-            const char *debug = std::getenv("AETHERKIRI_MOTION_DEBUG");
-            if(LOGGER && debug && *debug && std::strcmp(debug, "0") != 0) {
-                static std::unordered_set<std::string> loggedTargets;
-                const auto logKey = motionPath + "|" + timelineLabel + "|" +
-                    best->GetName().AsStdString();
-                if(loggedTargets.insert(logKey).second) {
-                    LOGGER->info(
-                        "motion yuzu sd target fallback: motion={} label={} layer={} visible={} parentVisible={} opacity={}",
-                        motionPath, timelineLabel,
-                        best->GetName().AsStdString(),
-                        best->GetVisible() ? 1 : 0,
-                        best->GetParentVisible() ? 1 : 0,
-                        static_cast<int>(best->GetOpacity()));
-                }
-            }
-            return best->GetOwnerNoAddRef();
-        }
-
         inline iTJSDispatch2 *resolveYuzuTitlePresentationTargetFromLayerTree(
             const std::string &motionPath) {
             if(!isYuzuTitlePresentationMotionPath(motionPath) ||
@@ -1715,6 +1550,93 @@ namespace internal {
                 return value;
             }();
             return points;
+        }
+
+        template<typename ResolveVariable>
+        inline bool evaluateMeshCombinators(
+            std::vector<detail::MotionNode::MeshCombinatorEntry> &entries,
+            ResolveVariable &&resolveVariable,
+            std::vector<float> &controlPoints) {
+            constexpr std::size_t kPatchFloatCount = 32;
+            bool havePatch = false;
+            bool modified = false;
+            for(auto &entry : entries) {
+                if(entry.meshCount <= 0 ||
+                   entry.rawMeshes.size() <
+                       static_cast<std::size_t>(entry.meshCount) *
+                           kPatchFloatCount) {
+                    continue;
+                }
+
+                double neutralValue = entry.rangeBegin;
+                if(entry.meshCount > 1) {
+                    neutralValue +=
+                        (entry.rangeEnd - entry.rangeBegin) *
+                        std::clamp(entry.neutralIndex, 0,
+                                   entry.meshCount - 1) /
+                        static_cast<double>(entry.meshCount - 1);
+                }
+                const double rawValue = resolveVariable(entry.variable,
+                                                        neutralValue);
+                const double range = entry.rangeEnd - entry.rangeBegin;
+                const double normalized = std::abs(range) > 0.0000001
+                    ? std::clamp((rawValue - entry.rangeBegin) / range,
+                                 0.0, 1.0)
+                    : 0.0;
+                const double meshPosition =
+                    normalized * static_cast<double>(entry.meshCount - 1);
+                const float nativeMeshPosition =
+                    static_cast<float>(meshPosition);
+                havePatch = true;
+                // libartemis.so 0x6D9A84 and compatible-v2 0x6DB8A8 use an
+                // exact float comparison here.  The sampled Bezier patch and
+                // its layer sum survive until a controller actually moves.
+                if(entry.sampledPatchValid &&
+                   entry.sampledPosition == nativeMeshPosition) {
+                    continue;
+                }
+                const int meshA = std::clamp(
+                    static_cast<int>(nativeMeshPosition), 0,
+                    entry.meshCount - 1);
+                const int meshB = std::min(meshA + 1,
+                                           entry.meshCount - 1);
+                const float ratio = nativeMeshPosition - meshA;
+                const std::size_t offsetA =
+                    static_cast<std::size_t>(meshA) * kPatchFloatCount;
+                const std::size_t offsetB =
+                    static_cast<std::size_t>(meshB) * kPatchFloatCount;
+                for(std::size_t point = 0; point < kPatchFloatCount;
+                    ++point) {
+                    const double valueA = entry.rawMeshes[offsetA + point];
+                    const double valueB = entry.rawMeshes[offsetB + point];
+                    entry.sampledPatch[point] = static_cast<float>(
+                        valueA * (1.0 - ratio) + valueB * ratio);
+                }
+                entry.sampledPosition = nativeMeshPosition;
+                entry.sampledPatchValid = true;
+                modified = true;
+            }
+            if(!havePatch) {
+                controlPoints.clear();
+                return false;
+            }
+            if(!modified && controlPoints.size() == kPatchFloatCount) {
+                return true;
+            }
+            // The binary chooses SumAllMesh when at least half of a layer's
+            // operators changed and DiffModifiedMesh otherwise.  A portable
+            // node rarely has more than a handful of 32-float contributors;
+            // summing their retained samples gives the same result while
+            // avoiding a second mutable patch and all raw-resource reads.
+            std::array<float, kPatchFloatCount> combined{};
+            for(const auto &entry : entries) {
+                if(!entry.sampledPatchValid) continue;
+                for(std::size_t point = 0; point < kPatchFloatCount; ++point) {
+                    combined[point] += entry.sampledPatch[point];
+                }
+            }
+            controlPoints.assign(combined.begin(), combined.end());
+            return true;
         }
 
         inline std::optional<double>
@@ -2691,12 +2613,18 @@ namespace internal {
                 state.hasTransformOrder = true;
             }
 
-            // type=2: static display, no interpolation
+            // Native ForwardFrame (libartemis.so 0x6B30F0,
+            // compatible-v2 0x6B43E8) toggles LayerInfo::activeSlot before
+            // loading the following frame into the other slot. BuildFrameParam
+            // (0x6B4988 / 0x6B5F7C) then tests activeSlot+241, so type=3 is a
+            // property of frameA and controls the span leaving that frame.
+            // This distinction is visible in E-mote mouth tracks authored as
+            // 0:type2, 12:type3, 60:type3: values below the first mouth
+            // threshold stay closed, then the 12..60 span opens monotonically.
             if(!frameA.interpolate) {
                 return state;
             }
 
-            // type=3: interpolate with next frame's slot
             const int nextIndex = activeIndex + 1;
             if(nextIndex >= static_cast<int>(parsedLayer.frames.size())) {
                 return state;  // no next frame, just use slot A
@@ -2812,7 +2740,10 @@ namespace internal {
             bool *outDecodedIsBgra = nullptr,
             bool decodePixelData = true,
             std::string *outResourcePath = nullptr,
-            std::string *outCompressName = nullptr) {
+            std::string *outCompressName = nullptr,
+            int *outDecodedWidth = nullptr,
+            int *outDecodedHeight = nullptr,
+            std::array<int, 4> *outDecodedSourceRect = nullptr) {
             outWidth = 0;
             outHeight = 0;
             outOriginX = 0.0;
@@ -2826,6 +2757,15 @@ namespace internal {
             }
             if(outCompressName) {
                 outCompressName->clear();
+            }
+            if(outDecodedWidth) {
+                *outDecodedWidth = 0;
+            }
+            if(outDecodedHeight) {
+                *outDecodedHeight = 0;
+            }
+            if(outDecodedSourceRect) {
+                *outDecodedSourceRect = {0, 0, 0, 0};
             }
             if(source.empty() || isMotionCrossReference(source)) {
                 return nullptr;
@@ -3021,6 +2961,11 @@ namespace internal {
                                     ? psbDictionaryString(
                                           atlasNode, "compress")
                                     : std::string{};
+                                const auto textureType = atlasNode
+                                    ? psbDictionaryString(atlasNode, "type")
+                                    : std::string{};
+                                const auto resourceEncoding = textureType.empty()
+                                    ? compressStr : textureType;
                                 if(outResourcePath) {
                                     *outResourcePath = iconPath +
                                         fmt::format(
@@ -3029,9 +2974,71 @@ namespace internal {
                                             outWidth, outHeight);
                                 }
                                 if(outCompressName) {
-                                    *outCompressName = compressStr;
+                                    *outCompressName = resourceEncoding;
+                                }
+
+                                // Native MPSBTex keeps the complete atlas
+                                // bound while RenderMesh addresses the icon
+                                // rectangle inside it.  A tightly cropped
+                                // replacement texture clamps its outermost
+                                // texel instead, turning the common 0.5x
+                                // E-mote presentation into a dark, serrated
+                                // silhouette.  Callers which consume the
+                                // decoded layout request a small piece of the
+                                // original atlas gutter and sample only the
+                                // logical icon rectangle within it.
+                                constexpr int kFilterGutter = 2;
+                                const bool preserveFilterGutter =
+                                    outDecodedWidth || outDecodedHeight ||
+                                    outDecodedSourceRect;
+                                const int decodedLeft = preserveFilterGutter
+                                    ? std::max(0, atlasLeft - kFilterGutter)
+                                    : atlasLeft;
+                                const int decodedTop = preserveFilterGutter
+                                    ? std::max(0, atlasTop - kFilterGutter)
+                                    : atlasTop;
+                                const int decodedRight = preserveFilterGutter
+                                    ? std::min(atlasWidth,
+                                               atlasLeft + outWidth +
+                                                   kFilterGutter)
+                                    : atlasLeft + outWidth;
+                                const int decodedBottom = preserveFilterGutter
+                                    ? std::min(atlasHeight,
+                                               atlasTop + outHeight +
+                                                   kFilterGutter)
+                                    : atlasTop + outHeight;
+                                const int decodedWidth =
+                                    decodedRight - decodedLeft;
+                                const int decodedHeight =
+                                    decodedBottom - decodedTop;
+                                const int insetLeft = atlasLeft - decodedLeft;
+                                const int insetTop = atlasTop - decodedTop;
+                                if(outDecodedWidth) {
+                                    *outDecodedWidth = decodedWidth;
+                                }
+                                if(outDecodedHeight) {
+                                    *outDecodedHeight = decodedHeight;
+                                }
+                                if(outDecodedSourceRect) {
+                                    *outDecodedSourceRect = {
+                                        insetLeft, insetTop,
+                                        insetLeft + outWidth,
+                                        insetTop + outHeight};
                                 }
                                 if(!decodePixelData) {
+                                    return atlasIt->second.get();
+                                }
+
+                                if(decodePsbBlockCompressedAtlasRegion(
+                                       atlasIt->second->data,
+                                       resourceEncoding,
+                                       atlasWidth, atlasHeight,
+                                       decodedLeft, decodedTop,
+                                       decodedWidth, decodedHeight,
+                                       decompressedOut)) {
+                                    if(outDecodedIsBgra) {
+                                        *outDecodedIsBgra = false;
+                                    }
                                     return atlasIt->second.get();
                                 }
 
@@ -3071,17 +3078,17 @@ namespace internal {
                                 if(atlasData &&
                                    atlasData->size() >= atlasByteCount) {
                                     const size_t rowBytes =
-                                        static_cast<size_t>(outWidth) * 4u;
+                                        static_cast<size_t>(decodedWidth) * 4u;
                                     decompressedOut.resize(
                                         rowBytes *
-                                        static_cast<size_t>(outHeight));
-                                    for(int row = 0; row < outHeight; ++row) {
+                                        static_cast<size_t>(decodedHeight));
+                                    for(int row = 0; row < decodedHeight; ++row) {
                                         const auto sourceOffset =
                                             (static_cast<size_t>(
-                                                 atlasTop + row) *
+                                                 decodedTop + row) *
                                                  static_cast<size_t>(
                                                      atlasWidth) +
-                                             static_cast<size_t>(atlasLeft)) *
+                                             static_cast<size_t>(decodedLeft)) *
                                             4u;
                                         std::memcpy(
                                             decompressedOut.data() +

@@ -25,7 +25,7 @@
 #include "TimerIntf.h"
 #include "EventIntf.h"
 #include "SystemIntf.h"
-#include "PluginIntf.h"
+#include "PluginImpl.h"
 #include "MenuItemIntf.h"
 #include "ClipboardIntf.h"
 #include "MsgIntf.h"
@@ -64,12 +64,36 @@
 #include <android/log.h>
 #endif
 
+#include <algorithm>
 #include <atomic>
 #include <cstdlib>
 #include <utility>
 #include <vector>
 
 namespace {
+
+std::vector<tTVPPostStartupScriptHook> &TVPGetPostStartupScriptHooks() {
+    static std::vector<tTVPPostStartupScriptHook> hooks;
+    return hooks;
+}
+
+void TVPRunPostStartupScriptHooks() {
+    // A hook may register itself again while refreshing. Iterate over a copy
+    // so registration cannot invalidate this pass.
+    const auto hooks = TVPGetPostStartupScriptHooks();
+    for(const auto hook : hooks) {
+        if(!hook)
+            continue;
+        try {
+            hook();
+        } catch(const TJS::eTJS &e) {
+            spdlog::warn("Post-startup script hook failed: {}",
+                         e.GetMessage().AsStdString());
+        } catch(...) {
+            spdlog::warn("Post-startup script hook failed");
+        }
+    }
+}
 
 // Monotonically records actual entries into the engine's storage executor.
 // Script-side loader wrappers can use this to detect that they returned
@@ -82,6 +106,14 @@ tjs_uint64 TVPGetStorageExecutionSerial() {
 
 } // namespace
 
+void TVPRegisterPostStartupScriptHook(tTVPPostStartupScriptHook hook) {
+    auto &hooks = TVPGetPostStartupScriptHooks();
+    if(!hook ||
+       std::find(hooks.begin(), hooks.end(), hook) != hooks.end())
+        return;
+    hooks.push_back(hook);
+}
+
 //---------------------------------------------------------------------------
 // Script system initialization script
 //---------------------------------------------------------------------------
@@ -92,9 +124,10 @@ static const tjs_nchar *TVPInitTJSScript =
  /* tTVPBorderStyle */ bsNone=0,  bsSingle=1,  bsSizeable=2,  bsDialog=3,  bsToolWindow=4,  bsSizeToolWin=5,
  /* tTVPUpdateType */ utNormal=0,  utEntire =1,
  /* tTVPMouseButton */  mbLeft=0,  mbRight=1,  mbMiddle=2, mbX1=3, mbX2=4,
+ /* tTVPPointerType */ ptUnknown=0, ptMouseLeft=1, ptMouseRight=2, ptMouseMiddle=3, ptMouseX1=4, ptMouseX2=5, ptMouse=6, ptTouch=7, ptPen=8,
  /* tTVPMouseCursorState */ mcsVisible=0, mcsTempHidden=1, mcsHidden=2,
  /* tTVPImeMode */ imDisable=0, imClose=1, imOpen=2, imDontCare=3, imSAlpha=4, imAlpha=5, imHira=6, imSKata=7, imKata=8, imChinese=9, imSHanguel=10, imHanguel=11,
- /* Set of shift state */  ssShift=(1<<0),  ssAlt=(1<<1),  ssCtrl=(1<<2),  ssLeft=(1<<3),  ssRight=(1<<4),  ssMiddle=(1<<5),  ssDouble =(1<<6),  ssRepeat = (1<<7),
+ /* Set of shift state */  ssShift=(1<<0),  ssAlt=(1<<1),  ssCtrl=(1<<2),  ssLeft=(1<<3),  ssRight=(1<<4),  ssMiddle=(1<<5),  ssDouble =(1<<6),  ssRepeat = (1<<7), ssX1=(1<<8), ssX2=(1<<9),
  /* TVP_FSF_???? */ fsfFixedPitch=1, fsfSameCharSet=2, fsfNoVertical=4, 
 	fsfTrueTypeOnly=8, fsfUseFontFace=0x100, fsfIgnoreSymbol=0x10,
  /* tTVPLayerType */ ltBinder=0, ltCoverRect=1, ltOpaque=1, ltTransparent=2, ltAlpha=2, ltAdditive=3, ltSubtractive=4, ltMultiplicative=5, ltEffect=6, ltFilter=7, ltDodge=8, ltDarken=9, ltLighten=10, ltScreen=11, ltAddAlpha = 12,
@@ -423,11 +456,14 @@ class tTVPTJSGCCallback : public tTVPCompactEventCallbackIntf {
 // TVPInitScriptEngine
 //---------------------------------------------------------------------------
 static bool TVPScriptEngineInit = false;
+static bool TVPScriptEngineUninit = false;
+static bool TVPScriptEngineCompactHookRegistered = false;
 
 void TVPInitScriptEngine() {
-    if(TVPScriptEngineInit)
+    if(TVPScriptEngineInit && TVPScriptEngine)
         return;
     TVPScriptEngineInit = true;
+    TVPScriptEngineUninit = false;
 
     tTJSVariant val;
 
@@ -576,27 +612,36 @@ void TVPInitScriptEngine() {
     TVPCauseAtInstallExtensionClass(global);
 
     // Garbage Collection Hook
-    TVPAddCompactEventHook(&TVPTJSGCCallback);
+    if(!TVPScriptEngineCompactHookRegistered) {
+        TVPAddCompactEventHook(&TVPTJSGCCallback);
+        TVPScriptEngineCompactHookRegistered = true;
+    }
 }
 //---------------------------------------------------------------------------
 
 //---------------------------------------------------------------------------
 // TVPUninitScriptEngine
 //---------------------------------------------------------------------------
-static bool TVPScriptEngineUninit = false;
-
 void TVPUninitScriptEngine() {
-    if(TVPScriptEngineUninit)
+    if(TVPScriptEngineUninit && !TVPScriptEngine)
         return;
     TVPScriptEngineUninit = true;
 
+    // Internal ncbind classes retain process-global metadata. Unregister them
+    // while the old global TJS object is still alive, then release the script
+    // engine. Otherwise the next embedded game session either skips plugins
+    // as already loaded or fails their first registration.
+    TVPUnloadInternalPlugins();
+
     // TVPScriptEngine->Shutdown();
-    TVPScriptEngine->Release();
+    if(TVPScriptEngine)
+        TVPScriptEngine->Release();
     /*
         Objects, theirs lives are contolled by reference counter, may
        not be all freed here in some occations.
     */
     TVPScriptEngine = nullptr;
+    TVPScriptEngineInit = false;
 }
 //---------------------------------------------------------------------------
 
@@ -605,7 +650,6 @@ void TVPUninitScriptEngine() {
 //---------------------------------------------------------------------------
 void TVPRestartScriptEngine() {
     TVPUninitScriptEngine();
-    TVPScriptEngineInit = false;
     TVPInitScriptEngine();
 }
 //---------------------------------------------------------------------------
@@ -973,6 +1017,57 @@ tjs_int TVPRepairShiftedNumberedMovieMappings(
     return static_cast<tjs_int>(corrections.size());
 }
 
+bool TVPPatchAffineSourceMotionStorageFallback(ttstr &script) {
+    ttstr patched(script);
+
+    // Some titles feed the regular AffineSourceMotion path while packaging
+    // only D3D-prefixed E-mote PSBs. Resolve the physical storage name without
+    // changing _innerStorage, which remains the title's logical identity.
+    // AffineSourceMotion has no _useD3D member, so the safe discriminator is
+    // whether the logical resource itself exists.
+    patched.Replace(
+        TJS_W("\t\t\t\t\tvar s = remove[i];\r\n"
+              "\t\t\t\t\tif (s != \"\") {\r\n"
+              "\t\t\t\t\t\t_motion_manager.unload(s);\r\n"
+              "\t\t\t\t\t}\r\n"),
+        TJS_W("\t\t\t\t\tvar s = remove[i];\r\n"
+              "\t\t\t\t\tif (s != \"\") {\r\n"
+              "\t\t\t\t\t\tvar unloadStorage = s;\r\n"
+              "\t\t\t\t\t\tif (!Storages.isExistentStorage(unloadStorage)) {\r\n"
+              "\t\t\t\t\t\t\tif (Storages.isExistentStorage(\"dx_\" + unloadStorage)) unloadStorage = \"dx_\" + unloadStorage;\r\n"
+              "\t\t\t\t\t\t\telse if (Storages.isExistentStorage(\"dxlow_\" + unloadStorage)) unloadStorage = \"dxlow_\" + unloadStorage;\r\n"
+              "\t\t\t\t\t\t}\r\n"
+              "\t\t\t\t\t\t_motion_manager.unload(unloadStorage);\r\n"
+              "\t\t\t\t\t}\r\n"),
+        false);
+    patched.Replace(
+        TJS_W("\t\t\t\tvar s = create[i];\r\n"
+              "\t\t\t\tif (s != \"\") {\r\n"
+              "\t\t\t\t\tif (!Storages.isExistentStorage(s)) {\r\n"
+              "\t\t\t\t\t\terror(@\"警告:モーション用画像が見つからない:${s}\");\r\n"
+              "\t\t\t\t\t} else {\r\n"
+              "\t\t\t\t\t\ttry {\r\n"
+              "\t\t\t\t\t\t\tvar obj = _motion_manager.load(s);\r\n"),
+        TJS_W("\t\t\t\tvar s = create[i];\r\n"
+              "\t\t\t\tif (s != \"\") {\r\n"
+              "\t\t\t\t\tvar loadStorage = s;\r\n"
+              "\t\t\t\t\tif (!Storages.isExistentStorage(loadStorage)) {\r\n"
+              "\t\t\t\t\t\tif (Storages.isExistentStorage(\"dx_\" + loadStorage)) loadStorage = \"dx_\" + loadStorage;\r\n"
+              "\t\t\t\t\t\telse if (Storages.isExistentStorage(\"dxlow_\" + loadStorage)) loadStorage = \"dxlow_\" + loadStorage;\r\n"
+              "\t\t\t\t\t}\r\n"
+              "\t\t\t\t\tif (!Storages.isExistentStorage(loadStorage)) {\r\n"
+              "\t\t\t\t\t\terror(@\"警告:モーション用画像が見つからない:${s}\");\r\n"
+              "\t\t\t\t\t} else {\r\n"
+              "\t\t\t\t\t\ttry {\r\n"
+              "\t\t\t\t\t\t\tvar obj = _motion_manager.load(loadStorage);\r\n"),
+        false);
+
+    if(patched == script)
+        return false;
+    script = patched;
+    return true;
+}
+
 static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
                                                ttstr &buffer) {
     const ttstr lower = shortname.AsLowerCase();
@@ -998,6 +1093,70 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
         // this fingerprint/anchor pair to gate a game compatibility profile.
         TVPRepairShiftedNumberedMovieMappings(buffer,
                                               TVPIsExistentStorage);
+    }
+
+    if(lower == TJS_W("kagenvimage.tjs")) {
+        ttstr patched(buffer);
+        // Resolve the title/event name collision before KAGEnvImage caches
+        // its source.  Patching later on the world-side layer is too late:
+        // the failed event lookup leaves no redraw record to forward.
+        patched.Replace(
+            TJS_W("\tfunction setImageFile(file, elm) {\r\n"
+                  "\t\tif (file != \"\") {\r\n"),
+            TJS_W("\tfunction setImageFile(file, elm) {\r\n"
+                  "\t\tif (name == \"title_bg\" && file == \"title_bg\") {\r\n"
+                  "\t\t\ttry {\r\n"
+                  "\t\t\t\tvar useTitleMotion = env.world.enableSceneAnimEffect &&\r\n"
+                  "\t\t\t\t\tenv.world.enableMotionAnimEffect &&\r\n"
+                  "\t\t\t\t\tenv.world.getMotionObject(\"title_bg\") !== void;\r\n"
+                  "\t\t\t\tif (!useTitleMotion && Storages.isExistentStorage(\"main/title_bg.png\"))\r\n"
+                  "\t\t\t\t\tfile = \"main/title_bg.png\";\r\n"
+                  "\t\t\t} catch(e) {\r\n"
+                  "\t\t\t\tif (Storages.isExistentStorage(\"main/title_bg.png\"))\r\n"
+                  "\t\t\t\t\tfile = \"main/title_bg.png\";\r\n"
+                  "\t\t\t}\r\n"
+                  "\t\t}\r\n"
+                  "\t\tif (file != \"\") {\r\n"),
+            false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info(
+                "Applied compatibility patch for title_bg image source initialization");
+        }
+    }
+
+    if(lower == TJS_W("kagenvironment.tjs")) {
+        ttstr patched(buffer);
+        // `title_bg` is an event command in this title, but its show-only
+        // invocation omits `file`.  The event's init value points back to
+        // the same logical name, which resolves to event metadata instead
+        // of a renderable source. Supply the authored static image before
+        // the environment creates/synchronizes the object.
+        patched.Replace(
+            TJS_W("\t\tvar tagname = elm.tagname;\r\n"),
+            TJS_W("\t\tvar tagname = elm.tagname;\r\n"
+                  "\t\tif (tagname == \"title_bg\" && (elm.file === void || elm.file == \"\")) {\r\n"
+                  "\t\t\ttry {\r\n"
+                  "\t\t\t\tvar useTitleMotion = world.enableSceneAnimEffect &&\r\n"
+                  "\t\t\t\t\tworld.enableMotionAnimEffect &&\r\n"
+                  "\t\t\t\t\tworld.getMotionObject(\"title_bg\") !== void;\r\n"
+                  "\t\t\t\tif (!useTitleMotion && Storages.isExistentStorage(\"main/title_bg.png\")) {\r\n"
+                  "\t\t\t\t\telm = Scripts.clone(elm);\r\n"
+                  "\t\t\t\t\tinsertTagParam(elm, \"file\", \"main/title_bg.png\");\r\n"
+                  "\t\t\t\t}\r\n"
+                  "\t\t\t} catch(e) {\r\n"
+                  "\t\t\t\tif (Storages.isExistentStorage(\"main/title_bg.png\")) {\r\n"
+                  "\t\t\t\t\telm = Scripts.clone(elm);\r\n"
+                  "\t\t\t\t\tinsertTagParam(elm, \"file\", \"main/title_bg.png\");\r\n"
+                  "\t\t\t\t}\r\n"
+                  "\t\t\t}\r\n"
+                  "\t\t}\r\n"),
+            false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info(
+                "Applied compatibility patch for title_bg command source resolution");
+        }
     }
 
     if(lower == TJS_W("messagelayer.tjs")) {
@@ -1131,49 +1290,7 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
     }
 
     if(lower == TJS_W("affinesourcemotion.tjs")) {
-        ttstr patched(buffer);
-        // Some titles feed the regular AffineSourceMotion path while D3D
-        // motion is enabled, but package only the D3D-prefixed E-mote PSBs.
-        // Resolve the physical storage name without changing _innerStorage,
-        // which remains the title's logical (unprefixed) resource identity.
-        patched.Replace(
-            TJS_W("\t\t\t\t\tvar s = remove[i];\r\n"
-                  "\t\t\t\t\tif (s != \"\") {\r\n"
-                  "\t\t\t\t\t\t_motion_manager.unload(s);\r\n"
-                  "\t\t\t\t\t}\r\n"),
-            TJS_W("\t\t\t\t\tvar s = remove[i];\r\n"
-                  "\t\t\t\t\tif (s != \"\") {\r\n"
-                  "\t\t\t\t\t\tvar unloadStorage = s;\r\n"
-                  "\t\t\t\t\t\tif (_useD3D && !Storages.isExistentStorage(unloadStorage)) {\r\n"
-                  "\t\t\t\t\t\t\tif (Storages.isExistentStorage(\"dx_\" + unloadStorage)) unloadStorage = \"dx_\" + unloadStorage;\r\n"
-                  "\t\t\t\t\t\t\telse if (Storages.isExistentStorage(\"dxlow_\" + unloadStorage)) unloadStorage = \"dxlow_\" + unloadStorage;\r\n"
-                  "\t\t\t\t\t\t}\r\n"
-                  "\t\t\t\t\t\t_motion_manager.unload(unloadStorage);\r\n"
-                  "\t\t\t\t\t}\r\n"),
-            false);
-        patched.Replace(
-            TJS_W("\t\t\t\tvar s = create[i];\r\n"
-                  "\t\t\t\tif (s != \"\") {\r\n"
-                  "\t\t\t\t\tif (!Storages.isExistentStorage(s)) {\r\n"
-                  "\t\t\t\t\t\terror(@\"警告:モーション用画像が見つからない:${s}\");\r\n"
-                  "\t\t\t\t\t} else {\r\n"
-                  "\t\t\t\t\t\ttry {\r\n"
-                  "\t\t\t\t\t\t\tvar obj = _motion_manager.load(s);\r\n"),
-            TJS_W("\t\t\t\tvar s = create[i];\r\n"
-                  "\t\t\t\tif (s != \"\") {\r\n"
-                  "\t\t\t\t\tvar loadStorage = s;\r\n"
-                  "\t\t\t\t\tif (_useD3D && !Storages.isExistentStorage(loadStorage)) {\r\n"
-                  "\t\t\t\t\t\tif (Storages.isExistentStorage(\"dx_\" + loadStorage)) loadStorage = \"dx_\" + loadStorage;\r\n"
-                  "\t\t\t\t\t\telse if (Storages.isExistentStorage(\"dxlow_\" + loadStorage)) loadStorage = \"dxlow_\" + loadStorage;\r\n"
-                  "\t\t\t\t\t}\r\n"
-                  "\t\t\t\t\tif (!Storages.isExistentStorage(loadStorage)) {\r\n"
-                  "\t\t\t\t\t\terror(@\"警告:モーション用画像が見つからない:${s}\");\r\n"
-                  "\t\t\t\t\t} else {\r\n"
-                  "\t\t\t\t\t\ttry {\r\n"
-                  "\t\t\t\t\t\t\tvar obj = _motion_manager.load(loadStorage);\r\n"),
-            false);
-        if(patched != buffer) {
-            buffer = patched;
+        if(TVPPatchAffineSourceMotionStorageFallback(buffer)) {
             spdlog::info(
                 "Applied compatibility patch for D3D-prefixed AffineSourceMotion resources");
         }
@@ -1283,7 +1400,6 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
                   "\t\t\tinstance._storageType = _storageType;\r\n"
                   "\t\t\tinstance._aetherKiriHasMotion = _aetherKiriHasMotion;\r\n"
                   "\t\t\tinstance._aetherKiriLastMotion = _aetherKiriLastMotion;\r\n"
-                  "\t\t\tinstance._aetherKiriImmediateMotionOwner = void;\r\n"
                   "\t\t\tinstance.createPlayer(this);\r\n"),
             false);
         if(hasStorageTypePlayerLifecycle) {
@@ -1312,8 +1428,7 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
             TJS_W("\t// 最後に指定した否ループタイムライン\r\n"
                   "\tvar _lastTimeline; \r\n"
                   "\tvar _aetherKiriHasMotion = false;\r\n"
-                  "\tvar _aetherKiriLastMotion;\r\n"
-                  "\tvar _aetherKiriImmediateMotionOwner;\r\n"),
+                  "\tvar _aetherKiriLastMotion;\r\n"),
             false);
         patched.Replace(
             TJS_W("\tfunction checkOption(name) {\r\n"
@@ -1346,30 +1461,9 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
                   "\t\t\tif (owner !== void && owner instanceof \"AffineLayer\") {\r\n"
                   "\t\t\t\tif (_separate && typeof owner._motionSeparateAdaptor != \"undefined\") return;\r\n"
                   "\t\t\t\towner.calcUpdate();\r\n"
-                  "\t\t\t\towner.entryFlip();\r\n"
+                  "\t\t\t\tif (typeof owner.entryFlip != \"undefined\") owner.entryFlip();\r\n"
                   "\t\t\t}\r\n"
                   "\t\t} catch(e) {}\r\n"
-                  "\t}\r\n"
-                  "\r\n"
-                  "\tfunction _aetherKiriDrawMotionOwnerNow(owner) {\r\n"
-                  "\t\ttry {\r\n"
-                  "\t\t\tif (owner === void || _player === void || !_aetherKiriHasMotion || _aetherKiriImmediateMotionOwner === owner) return false;\r\n"
-                  "\t\t\tvar motion = ((string)_aetherKiriLastMotion).toLowerCase();\r\n"
-                  "\t\t\tif (motion.substr(0, 2) != \"sd\" || !(owner instanceof \"AffineLayer\")) return false;\r\n"
-                  "\t\t\tif (_separate && typeof owner._motionSeparateAdaptor == \"undefined\") {\r\n"
-                  "\t\t\t\towner._motionSeparateAdaptor = new Motion.SeparateLayerAdaptor(owner incontextof global.Layer);\r\n"
-                  "\t\t\t\towner._motionSeparateAdaptorCount = 0;\r\n"
-                  "\t\t\t\towner.type = ltBinder if owner.type == ltAlpha;\r\n"
-                  "\t\t\t}\r\n"
-                  "\t\t\t_aetherKiriBindMotionTarget(owner);\r\n"
-                  "\t\t\tdrawAffine(owner, owner);\r\n"
-                  "\t\t\t_aetherKiriImmediateMotionOwner = owner;\r\n"
-                  "\t\t\tif (typeof owner.entryFlip != \"undefined\") owner.entryFlip();\r\n"
-                  "\t\t\treturn true;\r\n"
-                  "\t\t} catch(e) {\r\n"
-                  "\t\t\t_aetherKiriImmediateMotionOwner = void if _aetherKiriImmediateMotionOwner === owner;\r\n"
-                  "\t\t\treturn false;\r\n"
-                  "\t\t}\r\n"
                   "\t}\r\n"
                   "\r\n"
                   "\tfunction removePlayer() {\r\n"),
@@ -1380,8 +1474,7 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
             TJS_W("\t\t\t_player = void;\r\n"
                   "\t\t\t_lastTimeline = void;\r\n"
                   "\t\t\t_aetherKiriHasMotion = false;\r\n"
-                  "\t\t\t_aetherKiriLastMotion = void;\r\n"
-                  "\t\t\t_aetherKiriImmediateMotionOwner = void;\r\n"),
+                  "\t\t\t_aetherKiriLastMotion = void;\r\n"),
             false);
         patched.Replace(
             TJS_W("\t\t\t}\r\n"
@@ -1394,12 +1487,6 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
                   "\t\t_aetherKiriBindMotionTarget(owner);\r\n"
                   "\t\tif (_aetherKiriHasMotion) {\r\n"
                   "\t\t\t_aetherKiriTouchMotionOwner(owner);\r\n"
-                  "\t\t\ttry {\r\n"
-                  "\t\t\t\tvar __akMotion = ((string)_aetherKiriLastMotion).toLowerCase();\r\n"
-                  "\t\t\t\tif (__akMotion.substr(0, 2) == \"sd\" && owner instanceof \"AffineLayer\" && _aetherKiriImmediateMotionOwner !== owner) {\r\n"
-                  "\t\t\t\t\ttry { drawAffine(owner, owner); _aetherKiriImmediateMotionOwner = owner; } catch(__akImmediateDrawE) { throw __akImmediateDrawE; }\r\n"
-                  "\t\t\t\t}\r\n"
-                  "\t\t\t} catch(__akDrawE) {}\r\n"
                   "\t\t}\r\n"
                   "\t}\r\n"
                   "\r\n"
@@ -1439,7 +1526,6 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
                   "\t\t\t\t\t_player.play(elm.motion, flags);\r\n"
                   "\t\t\t\t\t_aetherKiriHasMotion = true;\r\n"
                   "\t\t\t\t\t_aetherKiriLastMotion = elm.motion;\r\n"
-                  "\t\t\t\t\t_aetherKiriImmediateMotionOwner = void;\r\n"
                   "\t\t\t\t\tstart = true;\r\n"
                   "\t\t\t\t\tret = \"motion\" if ret === void;\r\n"
                   "\t\t\t\t}\r\n"),
@@ -1502,6 +1588,42 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
                   "\t\t\t\t}\r\n"),
             TJS_W("\t\t\t\t// AetherKiri: renderToLayer clears the target; native clear rejects some TJS layer wrappers.\r\n"),
             false);
+        if(!hasStorageTypePlayerLifecycle) {
+            patched.Replace(
+                TJS_W("\tvar _actionCount = 0;\r\n"),
+                TJS_W("\tvar _actionCount = 0;\r\n"
+                      "\tvar _aetherKiriInitialDrawOwner;\r\n"
+                      "\tvar _aetherKiriInitialDrawPending = false;\r\n"),
+                false);
+            patched.Replace(
+                TJS_W("\t\t_interval = tick - _lastTick;\r\n"),
+                TJS_W("\t\t_interval = tick - _lastTick;\r\n"
+                      "\t\tif (_aetherKiriInitialDrawOwner !== void && _aetherKiriInitialDrawPending) {\r\n"
+                      "\t\t\tvar drawOwner = _aetherKiriInitialDrawOwner;\r\n"
+                      "\t\t\t_aetherKiriInitialDrawOwner = void;\r\n"
+                      "\t\t\t_aetherKiriInitialDrawPending = false;\r\n"
+                      "\t\t\ttry { drawAffine(drawOwner, drawOwner); } catch(e) {}\r\n"
+                      "\t\t}\r\n"),
+                false);
+            // The legacy MotionAffineSourceLayer implementation creates the
+            // player before it is entered into an AffineLayer owner.  During
+            // save restore that owner can receive its one redraw before the
+            // motion adaptor is attached, leaving only a nested effect layer
+            // visible until the next user action invalidates the layer.  Once
+            // the owner is attached, force the normal affine update path so
+            // the restored SD frame is presented immediately.
+            patched.Replace(
+                TJS_W("\t\t\towner.type = ltBinder;\r\n"
+                      "\t\t}\r\n"
+                      "\t}\r\n"),
+                TJS_W("\t\t\towner.type = ltBinder;\r\n"
+                      "\t\t\ttry { if (_player.motion != \"\") _player.play(_player.motion, Motion.PlayFlagForce); } catch(e) {}\r\n"
+                      "\t\t\t_aetherKiriInitialDrawOwner = owner;\r\n"
+                      "\t\t\t_aetherKiriInitialDrawPending = true;\r\n"
+                      "\t\t}\r\n"
+                      "\t}\r\n"),
+                false);
+        }
         if(patched != buffer) {
             buffer = patched;
             spdlog::info(
@@ -1511,6 +1633,136 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
 
     if(lower == TJS_W("world.tjs")) {
         ttstr patched(buffer);
+        // Some KAG titles use an event and a motion resource with the same
+        // `title_bg` name.  EnvLayerObject.update resolves that name through
+        // the event table first, so the title layer receives metadata rather
+        // than a drawable image and remains black.  Normalize only when the
+        // authored static title asset exists; this keeps the fix generic for
+        // compatible titles without changing other event-backed layers.
+        const ttstr titleUpdateAnchor(
+            TJS_W("\tfunction update(elm) {\r\n"
+                  "\t\tif (targetLayer !== void) {\r\n"));
+        const bool hasTitleUpdateAnchor =
+            buffer.IndexOf(titleUpdateAnchor) >= 0;
+        patched.Replace(
+            titleUpdateAnchor,
+            TJS_W("\tfunction update(elm) {\r\n"
+                  "\t\tif (name == \"title_bg\" && elm !== void &&\r\n"
+                  "\t\t\t elm.redraw !== void && elm.redraw.imageFile !== void &&\r\n"
+                  "\t\t\t ((typeof elm.redraw.imageFile == \"String\" &&\r\n"
+                  "\t\t\t   elm.redraw.imageFile == \"title_bg\") ||\r\n"
+                  "\t\t\t  (typeof elm.redraw.imageFile == \"Object\" &&\r\n"
+                  "\t\t\t   elm.redraw.imageFile.file == \"title_bg\"))) {\r\n"
+                  "\t\t\ttry {\r\n"
+                  "\t\t\t\tif (Storages.isExistentStorage(\"main/title_bg.png\")) {\r\n"
+                  "\t\t\t\t\telm = Scripts.clone(elm);\r\n"
+                  "\t\t\t\t\tif (typeof elm.redraw.imageFile == \"Object\") {\r\n"
+                  "\t\t\t\t\t\telm.redraw.imageFile = Scripts.clone(elm.redraw.imageFile);\r\n"
+                  "\t\t\t\t\t\telm.redraw.imageFile.file = \"main/title_bg.png\";\r\n"
+                  "\t\t\t\t\t} else {\r\n"
+                  "\t\t\t\t\t\telm.redraw.imageFile = %[file:\"main/title_bg.png\"];\r\n"
+                  "\t\t\t\t\t}\r\n"
+                  "\t\t\t\t}\r\n"
+                  "\t\t\t} catch(e) {}\r\n"
+                  "\t\t}\r\n"
+                  "\t\tif (targetLayer !== void) {\r\n"),
+            false);
+        if(hasTitleUpdateAnchor && patched != buffer) {
+            spdlog::info("Applied compatibility patch for title_bg source resolution");
+        }
+        // The title loop can be entered after an initial backlay while the
+        // environment transition flag is still set. In that case a newly-
+        // created title_bg target is attached to the hidden back page even
+        // though the title script has already reached its stable wait state.
+        // Rebind only this layer in the title scene; other transition layers
+        // retain their authored page routing.
+        const ttstr titlePlaneAnchor(
+            TJS_W("\tfunction update(elm) {\r\n"
+                  "\t\tvisible = (elm.showmode & 1);\r\n"
+                  "\t\tif (visible) {\r\n"
+                  "\t\t\tinitTarget();\r\n"
+                  "\t\t\tupdateImage(elm);\r\n"));
+        const bool hasTitlePlaneAnchor = patched.IndexOf(titlePlaneAnchor) >= 0;
+        patched.Replace(
+            titlePlaneAnchor,
+            TJS_W("\tfunction update(elm) {\r\n"
+                  "\t\tvisible = (elm.showmode & 1);\r\n"
+                  "\t\tif (visible) {\r\n"
+                  "\t\t\tinitTarget();\r\n"
+                  "\t\t\t// Some titles reach their stable wait state with the\r\n"
+                  "\t\t\t// environment transition flag still set. A title_bg\r\n"
+                  "\t\t\t// created on that path remains on the hidden back page,\r\n"
+                  "\t\t\t// so repair only this layer while the title scene is active.\r\n"
+                  "\t\t\tif (name == \"title_bg\" && targetLayer.plane != 0 &&\r\n"
+                  "\t\t\t\t(kag.currentStorage == \"title.ks\" || kag.currentStorage == \"custom.ks\")) {\r\n"
+                  "\t\t\t\ttry { targetLayer.setPlane(0); } catch(e) {}\r\n"
+                  "\t\t\t}\r\n"
+                  "\t\t\tupdateImage(elm);\r\n"),
+            false);
+        if(hasTitlePlaneAnchor && patched != buffer) {
+            spdlog::info("Applied compatibility patch for title_bg page routing");
+        }
+        // `title_bg` is present in both the event table (the static fallback)
+        // and the motion table (the authored PSB scene animation).  The
+        // stock resolver always prefers the event entry, which makes a
+        // show-only title redraw lose its PSB metadata and leaves only a
+        // static background.  Keep the event-first behavior for every other
+        // image and opt into the motion entry only when the title animation
+        // is enabled and its motion resource is available.
+        const ttstr titleImageDataAnchor(
+            TJS_W("\t\t\tvar info;\r\n"
+                  "\t\t\tif ((info = getEventObject(name)) !== void) {\r\n"));
+        const bool hasTitleImageDataAnchor =
+            patched.IndexOf(titleImageDataAnchor) >= 0;
+        patched.Replace(
+            titleImageDataAnchor,
+            TJS_W("\t\t\tvar info;\r\n"
+                  "\t\t\tvar useTitleMotion = false;\r\n"
+                  "\t\t\tif (name == \"title_bg\") {\r\n"
+                  "\t\t\t\ttry {\r\n"
+                  "\t\t\t\t\tuseTitleMotion = enableSceneAnimEffect &&\r\n"
+                  "\t\t\t\t\t\tenableMotionAnimEffect &&\r\n"
+                  "\t\t\t\t\t\tgetMotionObject(name) !== void;\r\n"
+                  "\t\t\t\t} catch(e) {}\r\n"
+                  "\t\t\t}\r\n"
+                  "\t\t\tif (!useTitleMotion && (info = getEventObject(name)) !== void) {\r\n"),
+            false);
+        if(hasTitleImageDataAnchor && patched != buffer) {
+            spdlog::info("Applied compatibility patch for title_bg motion source resolution");
+        }
+        // On a return from the system menu, this title recreates the
+        // title_bg event with a show-only redraw record.  The record has no
+        // imageFile because the original Windows event source is unavailable
+        // on the native backend; seed the redraw with the authored static
+        // title image before EnvLayerObject.update resolves it.
+        const ttstr titleObjUpdateAnchor(
+            TJS_W("\tfunction objUpdate(elm) {\r\n"
+                  "\t\t//dm(@\"${name}:objUpdate:${elm.showmode}:${elm.trans}:${elm.redraw}:${elm.update}:${world.envTransMode}\");\r\n"
+                  "\t\t// 表示状態\r\n"
+                  "\t\tvisible = (elm.showmode & 1);\r\n"));
+        const bool hasTitleObjUpdateAnchor =
+            patched.IndexOf(titleObjUpdateAnchor) >= 0;
+        patched.Replace(
+            titleObjUpdateAnchor,
+            TJS_W("\tfunction objUpdate(elm) {\r\n"
+                  "\t\t//dm(@\"${name}:objUpdate:${elm.showmode}:${elm.trans}:${elm.redraw}:${elm.update}:${world.envTransMode}\");\r\n"
+                  "\t\tif (name == \"title_bg\" && (elm.showmode & 1) &&\r\n"
+                  "\t\t\t(elm.redraw === void || elm.redraw.imageFile === void)) {\r\n"
+                  "\t\t\ttry {\r\n"
+                  "\t\t\t\tif (Storages.isExistentStorage(\"main/title_bg.png\")) {\r\n"
+                  "\t\t\t\t\telm = Scripts.clone(elm);\r\n"
+                  "\t\t\t\t\tif (elm.redraw === void) elm.redraw = %[];\r\n"
+                  "\t\t\t\t\telse elm.redraw = Scripts.clone(elm.redraw);\r\n"
+                  "\t\t\t\t\telm.redraw.imageFile = %[file:\"main/title_bg.png\"];\r\n"
+                  "\t\t\t\t}\r\n"
+                  "\t\t\t} catch(e) {}\r\n"
+                  "\t\t}\r\n"
+                  "\t\t// 表示状態\r\n"
+                  "\t\tvisible = (elm.showmode & 1);\r\n"),
+            false);
+        if(hasTitleObjUpdateAnchor && patched != buffer) {
+            spdlog::info("Applied compatibility patch for title_bg show-only redraw");
+        }
         patched.Replace(
             TJS_W("\t\tvar e = createMsgTag(text, lastText);\r\n"),
             TJS_W("\t\tvar e = createMsgTag(text, lastText);\r\n"
@@ -1520,21 +1772,10 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
             TJS_W("\t\t\tvar delays = tagconv.convert(text.text);\r\n"),
             TJS_W("\t\t\tvar delays = tagconv.convert(kag.getLangInfo(text, \"text\"));\r\n"),
             false);
-        patched.Replace(
-            TJS_W("\t\towner[name] = imageSource;\r\n"
-                  "\t\towner.calcUpdate();\r\n"),
-            TJS_W("\t\towner[name] = imageSource;\r\n"
-                  "\t\ttry {\r\n"
-                  "\t\t\tif (imageSource !== void && imageSource instanceof \"MotionAffineSourceLayer\" && typeof imageSource._aetherKiriDrawMotionOwnerNow != \"undefined\") {\r\n"
-                  "\t\t\t\timageSource._aetherKiriDrawMotionOwnerNow(owner);\r\n"
-                  "\t\t\t}\r\n"
-                  "\t\t} catch(__akMotionDrawE) {}\r\n"
-                  "\t\towner.calcUpdate();\r\n"),
-            false);
         if(patched != buffer) {
             buffer = patched;
             spdlog::info(
-                "Applied compatibility patches for localized scene text and immediate SD motion presentation");
+                "Applied compatibility patches for localized scene text");
         }
     }
 
@@ -1899,7 +2140,7 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
                   "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] layer.update name:${name} target:${targetLayer !== void} redraw:${elm.redraw !== void} update:${elm.update !== void}\"); } catch(e) {}\r\n"
                   "\t\tif (targetLayer !== void) {\r\n"
                   "\t\t\tif (elm.redraw !== void) with (elm.redraw) {\r\n"
-                  "\t\t\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] layer.redraw name:${name} imageType:${typeof .imageFile} file:${.imageFile !== void ? .imageFile.file : void}\"); } catch(e) {}\r\n"),
+                  "\t\t\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] layer.redraw name:${name} imageType:${typeof .imageFile} file:${.imageFile !== void ? (typeof .imageFile == \"Object\" ? .imageFile.file : .imageFile) : void}\"); } catch(e) {}\r\n"),
             false);
         patched.Replace(
             TJS_W("\tfunction objUpdate(elm) {\r\n"
@@ -1976,20 +2217,9 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
             false);
         patched.Replace(
             TJS_W("\t\towner[name] = imageSource;\r\n"
-                  "\t\ttry {\r\n"
-                  "\t\t\tif (imageSource !== void && imageSource instanceof \"MotionAffineSourceLayer\" && typeof imageSource._aetherKiriDrawMotionOwnerNow != \"undefined\") {\r\n"
-                  "\t\t\t\timageSource._aetherKiriDrawMotionOwnerNow(owner);\r\n"
-                  "\t\t\t}\r\n"
-                  "\t\t} catch(__akMotionDrawE) {}\r\n"
                   "\t\towner.calcUpdate();\r\n"),
             TJS_W("\t\towner[name] = imageSource;\r\n"
                   "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] updateImageSource result owner:${owner !== void ? owner.name : void} slot:${name} source:${imageSource} filename:${imageSource !== void ? imageSource.filename : void}\"); } catch(e) {}\r\n"
-                  "\t\ttry {\r\n"
-                  "\t\t\tif (imageSource !== void && imageSource instanceof \"MotionAffineSourceLayer\" && typeof imageSource._aetherKiriDrawMotionOwnerNow != \"undefined\") {\r\n"
-                  "\t\t\t\tvar __akImmediateDraw = imageSource._aetherKiriDrawMotionOwnerNow(owner);\r\n"
-                  "\t\t\t\tDebug.notice(@\"[AETHERKIRI_SCENE] updateImageSource immediate motion draw owner:${owner !== void ? owner.name : void} file:${file} drawn:${__akImmediateDraw}\");\r\n"
-                  "\t\t\t}\r\n"
-                  "\t\t} catch(__akMotionDrawE) { Debug.notice(@\"[AETHERKIRI_SCENE] updateImageSource immediate motion draw failed:${__akMotionDrawE.message}\"); }\r\n"
                   "\t\towner.calcUpdate();\r\n"),
             false);
         patched.Replace(
@@ -2395,17 +2625,293 @@ const tjs_char *TVPGetD3DStandSourcePatchScript() {
         "})();\r\n");
 }
 
+// Some layered CGs have a flat PNG with the same basename.  When the scene
+// supplies layer-selection options, prefer the PIMG source so later seton
+// changes redraw its layers instead of leaving the flat PNG on screen.
+const tjs_char *TVPGetLayeredPimgSourcePatchScript() {
+    return TJS_W(
+        "(function() {\r\n"
+        "\tif (typeof global.findAffineSource == \"undefined\") return;\r\n"
+        "\tif (typeof global.__aetherKiriOrigFindAffineSource != \"undefined\") return;\r\n"
+        "\tglobal.__aetherKiriOrigFindAffineSource = &global.findAffineSource;\r\n"
+        "\tglobal.findAffineSource = function(filename, options=void) {\r\n"
+        "\t\tvar sourceInfo = global.__aetherKiriOrigFindAffineSource(filename, options);\r\n"
+        "\t\tif (sourceInfo === void || sourceInfo.sourceClass !== void) return sourceInfo;\r\n"
+        "\t\tif (options === void || typeof global.AffineSourcePSD == \"undefined\") return sourceInfo;\r\n"
+        "\t\tvar layered = false;\r\n"
+        "\t\ttry {\r\n"
+        "\t\t\tlayered = options.seton !== void || options.layon !== void || options.layoff !== void || options.diff !== void;\r\n"
+        "\t\t} catch(e) {}\r\n"
+        "\t\tif (!layered || Storages.extractStorageExt(filename) != \"\") return sourceInfo;\r\n"
+        "\t\tvar pimgStorage = filename + \".pimg\";\r\n"
+        "\t\tif (!Storages.isExistentStorage(pimgStorage)) return sourceInfo;\r\n"
+        "\t\tsourceInfo.sourceClass = global.AffineSourcePSD;\r\n"
+        "\t\tsourceInfo.storage = pimgStorage;\r\n"
+        "\t\tsourceInfo.ext = \".PIMG\";\r\n"
+        "\t\treturn sourceInfo;\r\n"
+        "\t};\r\n"
+        "})();\r\n");
+}
+
+const tjs_char *TVPGetD3DEmoteGpuBatchPatchScript() {
+    return TJS_W(
+        "(function() {\r\n"
+        "\tif (typeof global.AffineSourceMotion == \"undefined\") return;\r\n"
+        "\tvar klass = global.AffineSourceMotion;\r\n"
+        "\tif (typeof klass.drawAffine == \"undefined\") return;\r\n"
+        "\tif (typeof klass.__aetherKiriOrigDrawAffine != \"undefined\") return;\r\n"
+        "\tklass.__aetherKiriOrigDrawAffine = &klass.drawAffine;\r\n"
+        "\tklass.drawAffine = function(target, mtx, src) {\r\n"
+        "\t\tvar adaptor = void;\r\n"
+        "\t\tvar batchSupported = false;\r\n"
+        "\t\ttry {\r\n"
+        "\t\t\tif (this._useD3D && this._window !== void) {\r\n"
+        "\t\t\t\tadaptor = this._window.motionD3DAdaptor;\r\n"
+        "\t\t\t\tbatchSupported = adaptor !== void && typeof adaptor.beginGpuBatch != \"undefined\" && typeof adaptor.endGpuBatch != \"undefined\";\r\n"
+        "\t\t\t}\r\n"
+        "\t\t} catch(e) {}\r\n"
+        "\t\tvar began = false;\r\n"
+        "\t\tif (batchSupported) {\r\n"
+        "\t\t\ttry { adaptor.beginGpuBatch(); began = true; } catch(e) {}\r\n"
+        "\t\t}\r\n"
+        "\t\tvar result;\r\n"
+        "\t\ttry {\r\n"
+        "\t\t\tresult = this.__aetherKiriOrigDrawAffine(target, mtx, src);\r\n"
+        "\t\t} catch(e) {\r\n"
+        "\t\t\tif (began) try { adaptor.endGpuBatch(); } catch(endError) {}\r\n"
+        "\t\t\tthrow e;\r\n"
+        "\t\t}\r\n"
+        "\t\tif (began) try { adaptor.endGpuBatch(); } catch(endError) {}\r\n"
+        "\t\treturn result;\r\n"
+        "\t};\r\n"
+        "})();\r\n");
+}
+
+// KAG action.tjs routes animated properties through a script helper named
+// getProperty/setProperty.  In the desktop TJS implementation a function
+// invocation receives an object/global proxy as `this`; probing
+// target.getProperty from that helper can therefore resolve the helper itself
+// through the global fallback instead of reaching a native layer property.
+// That leaves MoveAction values in the script object while the actual layer
+// (opacity/visible/geometry) never changes.  Preserve the original helper for
+// custom action targets, but route layer-like targets through their native
+// property access directly.
+static const tjs_char *TVPGetActionPropertyRoutingPatchScript() {
+    return TJS_W(
+        "(function() {\r\n"
+        "\tif (typeof global.getProperty == \"undefined\" || typeof global.setProperty == \"undefined\") return;\r\n"
+        "\tif (typeof global.__aetherKiriOrigGetProperty != \"undefined\") return;\r\n"
+        "\tglobal.__aetherKiriOrigGetProperty = &global.getProperty;\r\n"
+        "\tglobal.__aetherKiriOrigSetProperty = &global.setProperty;\r\n"
+        "\tglobal.__aetherKiriIsLayerActionTarget = function(target) {\r\n"
+        "\t\ttry {\r\n"
+        "\t\t\tvar type = target.type;\r\n"
+        "\t\t\treturn typeof type == \"Integer\" && type >= 0 && type <= 28;\r\n"
+        "\t\t} catch(e) {}\r\n"
+        "\t\treturn false;\r\n"
+        "\t};\r\n"
+        "\tglobal.getProperty = function(target, name, a2=0, a3=0) {\r\n"
+        "\t\tif (target !== void && name !== void && name.charAt(0) != \"$\" && global.__aetherKiriIsLayerActionTarget(target)) {\r\n"
+        "\t\t\ttry { return target[name]; } catch(e) {}\r\n"
+        "\t\t}\r\n"
+        "\t\treturn (global.__aetherKiriOrigGetProperty incontextof this)(target, name, a2, a3);\r\n"
+        "\t};\r\n"
+        "\tglobal.setProperty = function(target, name, value, a3=0, a4=0) {\r\n"
+        "\t\tif (target !== void && name !== void && name.charAt(0) != \"$\" && global.__aetherKiriIsLayerActionTarget(target)) {\r\n"
+        "\t\t\ttry { target[name] = value; return; } catch(e) {}\r\n"
+        "\t\t}\r\n"
+        "\t\treturn (global.__aetherKiriOrigSetProperty incontextof this)(target, name, value, a3, a4);\r\n"
+        "\t};\r\n"
+        "})();\r\n");
+}
+
+// The game's language selector (and several save/load/option sheets) are
+// constructed through PulldownPanelLayer.  Keep an opt-in trace around the
+// generic panel lifecycle so a failed sheet can be distinguished from a
+// missing image pack.  This is deliberately diagnostic-only; the wrappers
+// return the original result and do not alter panel state.
+static const tjs_char *TVPGetDialogLifecycleTracePatchScript() {
+    return TJS_W(
+        "(function() {\r\n"
+        "\tif (typeof global.ScrollablePulldownBase != \"undefined\" &&\r\n"
+        "\t\ttypeof global.ScrollablePulldownBase.__aetherKiriTraceUiloaded == \"undefined\" &&\r\n"
+        "\t\ttypeof global.ScrollablePulldownBase.onUiloaded != \"undefined\") {\r\n"
+        "\t\tglobal.ScrollablePulldownBase.__aetherKiriTraceUiloaded = &global.ScrollablePulldownBase.onUiloaded;\r\n"
+        "\t\tglobal.ScrollablePulldownBase.onUiloaded = function(a0=void, a1=void) {\r\n"
+        "\t\t\tvar ret = (global.ScrollablePulldownBase.__aetherKiriTraceUiloaded incontextof this)(a0, a1);\r\n"
+        "\t\t\ttry {\r\n"
+        "\t\t\t\tvar n = this.names; var d = this.dragscr;\r\n"
+        "\t\t\t\tvar itemSummary = \"\";\r\n"
+        "\t\t\t\tfor (var i = 0; i < 8; i++) { var key = \"item\" + i; itemSummary += key + \"=\" + (n[key] !== void ? typeof n[key] : \"missing\") + \";\"; }\r\n"
+        "\t\t\t\tif (typeof global.kag != \"undefined\" && typeof global.kag.warning != \"undefined\") global.kag.warning(\"AetherKiri uiloaded name=\" + this.name + \" items=\" + (this.items !== void ? this.items.count : \"missing\") + \" dragscr=\" + (d !== void ? typeof d : \"missing\") + \" names=\" + (n !== void ? typeof n : \"missing\") + \" \" + itemSummary);\r\n"
+        "\t\t\t} catch(e) {}\r\n"
+        "\t\t\treturn ret;\r\n"
+        "\t\t};\r\n"
+        "\t}\r\n"
+        "\tif (typeof global.PulldownPanelLayer != \"undefined\" &&\r\n"
+        "\t\ttypeof global.PulldownPanelLayer.__aetherKiriTraceOpen == \"undefined\") {\r\n"
+        "\t\tglobal.PulldownPanelLayer.__aetherKiriTraceOpen = &global.PulldownPanelLayer.open;\r\n"
+        "\t\tglobal.PulldownPanelLayer.open = function(duration=void) {\r\n"
+        "\t\t\tvar ret = (global.PulldownPanelLayer.__aetherKiriTraceOpen incontextof this)(duration);\r\n"
+        "\t\t\ttry { if (typeof global.kag != \"undefined\" && typeof global.kag.warning != \"undefined\") global.kag.warning(\"AetherKiri panel.open name=\" + this.name + \" visible=\" + this.visible + \" enabled=\" + this.enabled + \" window=\" + typeof this.window + \" panelLayer=\" + typeof this.window.panelLayer); } catch(e) {}\r\n"
+        "\t\t\treturn ret;\r\n"
+        "\t\t};\r\n"
+        "\t}\r\n"
+        "\tif (typeof global.KAGWindow != \"undefined\" &&\r\n"
+        "\t\ttypeof global.KAGWindow.__aetherKiriTraceShowPanel == \"undefined\" &&\r\n"
+        "\t\ttypeof global.KAGWindow.showPanel != \"undefined\") {\r\n"
+        "\t\tglobal.KAGWindow.__aetherKiriTraceShowPanel = &global.KAGWindow.showPanel;\r\n"
+        "\t\tglobal.KAGWindow.showPanel = function(panel, absolute=void) {\r\n"
+        "\t\t\tvar ret = (global.KAGWindow.__aetherKiriTraceShowPanel incontextof this)(panel, absolute);\r\n"
+        "\t\t\ttry { if (typeof global.kag != \"undefined\" && typeof global.kag.warning != \"undefined\") global.kag.warning(\"AetherKiri showPanel panel=\" + typeof panel + \" name=\" + panel.name + \" visible=\" + panel.visible + \" enabled=\" + panel.enabled + \" current=\" + this.panelLayer.name + \" showing=\" + this.panelShowing); } catch(e) {}\r\n"
+        "\t\t\treturn ret;\r\n"
+        "\t\t};\r\n"
+        "\t}\r\n"
+        "\tif (typeof global.uiloadEntry != \"undefined\" &&\r\n"
+        "\t\ttypeof global.__aetherKiriTraceUiloadEntry == \"undefined\") {\r\n"
+        "\t\tglobal.__aetherKiriTraceUiloadEntry = &global.uiloadEntry;\r\n"
+        "\t\tglobal.uiloadEntry = function(a0=void, a1=void, a2=void, a3=void, a4=void, a5=void, a6=void) {\r\n"
+        "\t\t\ttry {\r\n"
+        "\t\t\t\tvar names = (a1 !== void ? a1 : void); var result = (a2 !== void ? a2 : void); var cfg = (a3 !== void ? a3 : void); var evals = (a5 !== void ? a5 : void);\r\n"
+        "\t\t\t\tvar s = \"AetherKiri uiloadEntry names=\" + (names !== void ? names.count : \"missing\") + \" item=\" + (result !== void && result.item !== void ? \"yes\" : \"no\") + \" item0=\" + (result !== void && result.item0 !== void ? \"yes\" : \"no\") + \" evals=\" + (evals !== void ? typeof evals : \"missing\") + \" evalsCount=\" + (evals !== void && evals.count !== void ? evals.count : \"na\") + \" extra=\" + (cfg !== void && cfg.extratype !== void ? typeof cfg.extratype : \"missing\");\r\n"
+        "\t\t\t\tif (typeof global.kag != \"undefined\" && typeof global.kag.warning != \"undefined\") global.kag.warning(s);\r\n"
+        "\t\t\t} catch(e) {}\r\n"
+        "\t\t\treturn (global.__aetherKiriTraceUiloadEntry incontextof this)(a0, a1, a2, a3, a4, a5, a6);\r\n"
+        "\t\t};\r\n"
+        "\t}\r\n"
+        "})();\r\n");
+}
+
 static void TVPApplyPostScriptCompatibilityPatches(const ttstr &shortname) {
     const ttstr lower = shortname.AsLowerCase();
+    // The stand/utility scripts are bytecode in the affected title.  Keep a
+    // narrowly scoped, opt-in snapshot at the point each block has finished
+    // executing; this distinguishes a missing global registration from a
+    // later class/prototype dispatch failure without changing script state.
+    if((lower == TJS_W("utils.tjs") ||
+        lower == TJS_W("standinformation.tjs") ||
+        lower == TJS_W("world.tjs")) && [] {
+           const char *value = std::getenv("AETHERKIRI_STAND_CONTRACT_TRACE");
+           return value && *value && *value != '0';
+       }()) {
+        try {
+            tTJSVariant snapshot;
+            TVPExecuteExpression(
+                TJS_W("(function(){var g=global;return \"utils=\"+typeof g.loadConfigFile+\",map=\"+typeof g.loadConfigMap+\",find=\"+typeof g.findConfigFiles+\",stand=\"+typeof g.getStandInformation+\",psd=\"+typeof g.getExistPSDImageName+\",SI=\"+typeof g.StandInformation+\",KW=\"+typeof g.KAGWorldPlugin;})()"),
+                &snapshot);
+            spdlog::info("AetherKiri stand contract after {}: {}",
+                         shortname.AsStdString(), ttstr(snapshot).AsStdString());
+        } catch(...) {
+            spdlog::warn("AetherKiri stand contract snapshot failed after {}",
+                         shortname.AsStdString());
+        }
+    }
     const bool patchWorld = lower == TJS_W("world.tjs");
+    const bool patchAffineSource =
+        lower == TJS_W("affinesource.tjs") ||
+        lower == TJS_W("affinesourcelayer.tjs");
     const bool patchD3DLayer = lower == TJS_W("d3d.tjs");
     const bool patchD3DMotion =
         patchD3DLayer || lower == TJS_W("d3daffinesourcemotion.tjs");
+    const bool patchD3DEmote =
+        lower == TJS_W("motion.tjs") || lower == TJS_W("d3demote.tjs") ||
+        lower == TJS_W("affinesourcemotion.tjs");
     const bool patchMessageText = lower == TJS_W("msghack.tjs");
     const bool patchQuickMenu = lower == TJS_W("quickmenu.tjs");
-    if(!patchWorld && !patchD3DLayer && !patchD3DMotion &&
-       !patchMessageText && !patchQuickMenu)
+    const bool patchSimpleAnim = lower == TJS_W("simpleanim.tjs");
+    const bool patchAction = lower == TJS_W("action.tjs");
+    const bool patchDialogTrace = lower == TJS_W("dialoglayer.tjs") ||
+                                  lower == TJS_W("mainwindow.tjs");
+    const bool patchUiAutoTrace = lower == TJS_W("uiloader.tjs") ||
+                                  lower == TJS_W("saveload.tjs") ||
+                                  lower == TJS_W("uimain.tjs") ||
+                                  ([] {
+                                      const char *trace = std::getenv("AETHERKIRI_DIALOG_TRACE");
+                                      return trace && *trace && *trace != '0';
+                                  })();
+    if(!patchWorld && !patchAffineSource && !patchD3DLayer && !patchD3DMotion &&
+       !patchD3DEmote && !patchMessageText && !patchQuickMenu &&
+       !patchSimpleAnim && !patchAction && !patchDialogTrace &&
+       !patchUiAutoTrace)
         return;
+
+    if(patchDialogTrace || patchUiAutoTrace) {
+        const char *trace = std::getenv("AETHERKIRI_DIALOG_TRACE");
+        if(trace && *trace && *trace != '0') {
+            try {
+                TVPExecuteScript(TVPGetDialogLifecycleTracePatchScript(),
+                                 TJS_W("AetherKiriDialogLifecycleTrace"), 0,
+                                 (tTJSVariant *)nullptr);
+                spdlog::info("Applied opt-in dialog lifecycle trace");
+            } catch(...) {
+                spdlog::warn("Failed to apply dialog lifecycle trace");
+            }
+        }
+    }
+
+    // The title's simpleanim classes are script-defined and are loaded on
+    // demand.  Keep an opt-in snapshot of their class dispatch after the
+    // bytecode has executed; this distinguishes a missing script from a
+    // broken inherited member lookup without affecting normal runs.
+    if(patchSimpleAnim) {
+        const char *trace = std::getenv("AETHERKIRI_SIMPLEANIM_TRACE");
+        if(trace && *trace && *trace != '0') {
+            try {
+                tTJSVariant result;
+                TVPExecuteExpression(
+                    TJS_W("(function(){var a=global.GUIAnimButtonObject;"
+                          "var b=global.GUIAnimButtonObjectBase;"
+                          "var c=global.GUIAnimButtonForMsg;"
+                          "var d=global.SystemButtonLayer;"
+                          "return \"GUI=\"+typeof a+\",setup=\"+"
+                          "typeof a.setup+\",getNum=\"+typeof a.getNum+"
+                          "\",Base=\"+typeof b+\",BaseSetup=\"+"
+                          "typeof b.setup+\",Msg=\"+typeof c+\",MsgPaint=\"+"
+                          "typeof c.onPaint+\",Sys=\"+typeof d+\",SysPaint=\"+"
+                          "typeof d.onPaint;})()"),
+                    &result);
+                spdlog::info("simpleanim dispatch snapshot: {}",
+                             ttstr(result).AsStdString());
+            } catch(...) {
+                spdlog::warn("simpleanim dispatch snapshot failed");
+            }
+        }
+        return;
+    }
+
+    if(patchAction) try {
+        TVPExecuteScript(TVPGetActionPropertyRoutingPatchScript(),
+                         TJS_W("AetherKiriActionPropertyRoutingPatch"), 0,
+                         (tTJSVariant *)nullptr);
+        spdlog::info("Applied compatibility hook for action layer properties");
+    } catch(...) {
+        spdlog::warn(
+            "Failed to apply compatibility hook for action layer properties");
+    }
+
+    if(patchAffineSource) try {
+        TVPExecuteScript(
+            TVPGetLayeredPimgSourcePatchScript(),
+            TJS_W("AetherKiriLayeredPimgSourcePatch"), 0,
+            (tTJSVariant *)nullptr);
+        spdlog::info(
+            "Applied compatibility hook for layered PIMG source routing");
+    } catch(...) {
+        spdlog::warn(
+            "Failed to apply compatibility hook for layered PIMG source routing");
+    }
+
+    if(patchD3DEmote) try {
+        TVPExecuteScript(
+            TVPGetD3DEmoteGpuBatchPatchScript(),
+            TJS_W("AetherKiriD3DEmoteGpuBatchPatch"), 0,
+            (tTJSVariant *)nullptr);
+        spdlog::info(
+            "Applied compatibility hook for D3DEmote GPU transaction batching");
+    } catch(...) {
+        spdlog::warn(
+            "Failed to apply compatibility hook for D3DEmote GPU transaction batching");
+    }
 
     // YuzuSoft quick menus still use the generic cursor SE when their proxied
     // window buttons have no per-control onenter script. Keep that fallback on
@@ -2487,6 +2993,42 @@ static void TVPApplyPostScriptCompatibilityPatches(const ttstr &shortname) {
         spdlog::info("Applied compatibility hook for world layer clone state");
     } catch(...) {
         spdlog::warn("Failed to apply compatibility hook for world layer clone state");
+    }
+
+    // CafeStella ships system/world.tjs as compiled bytecode. Its internal
+    // getImageData call is lexical, so wrapping that method cannot change the
+    // selected source. Route title_bg at the KAG update boundary instead,
+    // where the argument is still replaceable with the authored motion.
+    if(patchWorld) try {
+        TVPExecuteScript(
+            TJS_W(
+                "(function() {\r\n"
+                "\tif (typeof global.KAGWorldPlugin != \"undefined\" &&\r\n"
+                "\t\ttypeof global.KAGWorldPlugin.updateImageSource != \"undefined\" &&\r\n"
+                "\t\ttypeof global.KAGWorldPlugin.__aetherKiriOrigKAGUpdateImageSource == \"undefined\") {\r\n"
+                "\t\tglobal.KAGWorldPlugin.__aetherKiriOrigKAGUpdateImageSource = &global.KAGWorldPlugin.updateImageSource;\r\n"
+                "\t\tglobal.KAGWorldPlugin.updateImageSource = function(layer, file, name=\"_image\") {\r\n"
+                "\t\t\tvar replacement = file;\r\n"
+                "\t\t\ttry {\r\n"
+                "\t\t\t\tvar imageName = file;\r\n"
+                "\t\t\t\tif (typeof imageName == \"Object\" && imageName.file !== void) imageName = imageName.file;\r\n"
+                "\t\t\t\tif (typeof imageName == \"String\" && imageName.toLowerCase() == \"title_bg\" && this.enableSceneAnimEffect) {\r\n"
+                "\t\t\t\t\tvar motion = this.getMotionObject(\"title_bg\");\r\n"
+                "\t\t\t\t\tif (motion !== void) {\r\n"
+                "\t\t\t\t\t\tvar ext = Storages.extractStorageExt(motion.storage).toLowerCase();\r\n"
+                "\t\t\t\t\t\tif (ext != \".psb\" || this.enableMotionAnimEffect) replacement = motion;\r\n"
+                "\t\t\t\t\t}\r\n"
+                "\t\t\t\t}\r\n"
+                "\t\t\t} catch(e) {}\r\n"
+                "\t\t\treturn (global.KAGWorldPlugin.__aetherKiriOrigKAGUpdateImageSource incontextof this)(layer, replacement, name);\r\n"
+                "\t\t};\r\n"
+                "\t}\r\n"
+                "})();\r\n"),
+            TJS_W("AetherKiriWorldTitleMotionUpdateResolver"), 0,
+            (tTJSVariant *)nullptr);
+        spdlog::info("Applied compatibility hook for compiled world title motion resolver");
+    } catch(...) {
+        spdlog::warn("Failed to apply compatibility hook for compiled world title motion resolver");
     }
 
     if(patchD3DLayer) try {
@@ -2948,22 +3490,37 @@ private:
     iTJSDispatch2 *destination_;
 };
 
-using tTVPGlobalFunctionSnapshot =
+using tTVPGlobalCallableSnapshot =
     std::vector<std::pair<ttstr, tTJSVariant>>;
 
-static bool TVPVariantIsFunction(const tTJSVariant &value) {
+enum class tTVPGlobalCallableKind {
+    None,
+    Function,
+    Class,
+};
+
+static tTVPGlobalCallableKind TVPGetGlobalCallableKind(
+    const tTJSVariant &value) {
     if(value.Type() != tvtObject)
-        return false;
+        return tTVPGlobalCallableKind::None;
     const tTJSVariantClosure closure = value.AsObjectClosureNoAddRef();
-    return closure.Object &&
-           closure.IsInstanceOf(0, nullptr, nullptr, TJS_W("Function"),
-                                nullptr) == TJS_S_TRUE;
+    if(!closure.Object)
+        return tTVPGlobalCallableKind::None;
+    if(closure.IsInstanceOf(0, nullptr, nullptr, TJS_W("Function"),
+                            nullptr) == TJS_S_TRUE) {
+        return tTVPGlobalCallableKind::Function;
+    }
+    if(closure.IsInstanceOf(0, nullptr, nullptr, TJS_W("Class"),
+                            nullptr) == TJS_S_TRUE) {
+        return tTVPGlobalCallableKind::Class;
+    }
+    return tTVPGlobalCallableKind::None;
 }
 
-class tTVPCollectGlobalFunctionsCallback final : public tTJSDispatch {
+class tTVPCollectGlobalCallablesCallback final : public tTJSDispatch {
 public:
-    explicit tTVPCollectGlobalFunctionsCallback(
-        tTVPGlobalFunctionSnapshot &snapshot) :
+    explicit tTVPCollectGlobalCallablesCallback(
+        tTVPGlobalCallableSnapshot &snapshot) :
         snapshot_(snapshot) {}
 
     tjs_error FuncCall(tjs_uint32, const tjs_char *, tjs_uint32 *,
@@ -2975,7 +3532,8 @@ public:
         const tjs_uint32 flags =
             static_cast<tjs_uint32>(param[1]->AsInteger());
         if(!(flags & TJS_HIDDENMEMBER) &&
-           TVPVariantIsFunction(*param[2])) {
+           TVPGetGlobalCallableKind(*param[2]) !=
+               tTVPGlobalCallableKind::None) {
             snapshot_.emplace_back(ttstr(*param[0]), *param[2]);
         }
         if(result)
@@ -2984,18 +3542,18 @@ public:
     }
 
 private:
-    tTVPGlobalFunctionSnapshot &snapshot_;
+    tTVPGlobalCallableSnapshot &snapshot_;
 };
 
-static tTVPGlobalFunctionSnapshot TVPCaptureGlobalFunctions() {
-    tTVPGlobalFunctionSnapshot snapshot;
+static tTVPGlobalCallableSnapshot TVPCaptureGlobalCallables() {
+    tTVPGlobalCallableSnapshot snapshot;
     tTJS *engine = TVPGetScriptEngine();
     iTJSDispatch2 *global =
         engine ? engine->GetGlobalNoAddRef() : nullptr;
     if(!global)
         return snapshot;
 
-    auto *callback = new tTVPCollectGlobalFunctionsCallback(snapshot);
+    auto *callback = new tTVPCollectGlobalCallablesCallback(snapshot);
     tTJSVariantClosure closure(callback);
     try {
         global->EnumMembers(TJS_IGNOREPROP, &closure, global);
@@ -3007,20 +3565,21 @@ static tTVPGlobalFunctionSnapshot TVPCaptureGlobalFunctions() {
     return snapshot;
 }
 
-static size_t TVPRestoreMissingGlobalFunctionMembers(
-    const tTVPGlobalFunctionSnapshot &snapshot) {
+static size_t TVPRestoreMissingGlobalCallableMembers(
+    const tTVPGlobalCallableSnapshot &snapshot) {
     tTJS *engine = TVPGetScriptEngine();
     iTJSDispatch2 *global =
         engine ? engine->GetGlobalNoAddRef() : nullptr;
     if(!global)
         return 0;
 
-    size_t restored_functions = 0;
+    size_t restored_callables = 0;
     for(const auto &[name, original] : snapshot) {
         tTJSVariant replacement;
         if(TJS_FAILED(global->PropGet(TJS_IGNOREPROP, name.c_str(), nullptr,
                                       &replacement, global)) ||
-           !TVPVariantIsFunction(replacement)) {
+           TVPGetGlobalCallableKind(replacement) !=
+               TVPGetGlobalCallableKind(original)) {
             continue;
         }
 
@@ -3031,12 +3590,22 @@ static size_t TVPRestoreMissingGlobalFunctionMembers(
         if(original_closure.Object == replacement_closure.Object)
             continue;
 
-        if(TVPMergeMissingObjectMembers(replacement_closure.Object,
-                                       original_closure.Object)) {
-            ++restored_functions;
+        try {
+            if(TVPMergeMissingObjectMembers(replacement_closure.Object,
+                                            original_closure.Object)) {
+                ++restored_callables;
+            }
+        } catch(const TJS::eTJS &e) {
+            spdlog::debug(
+                "Skipping incompatible late-patched callable '{}': {}",
+                name.AsStdString(), e.GetMessage().AsStdString());
+        } catch(...) {
+            spdlog::debug(
+                "Skipping incompatible late-patched callable '{}'",
+                name.AsStdString());
         }
     }
-    return restored_functions;
+    return restored_callables;
 }
 
 static bool TVPReadPatchRuntimeRegistry(tTJSVariant &registry) {
@@ -3576,11 +4145,12 @@ void TVPExecuteStartupScript() {
         if(TVPIsExistentStorageNoSearch(patch)) {
             TVPInstallPatchWindowPrerequisites();
             // Root-level compatibility patches run after the framework
-            // startup scripts. If one replaces a global function, retain
-            // nested helpers that the replacement did not redefine while
-            // leaving every member explicitly supplied by the patch intact.
-            const tTVPGlobalFunctionSnapshot savedGlobalFunctions =
-                TVPCaptureGlobalFunctions();
+            // startup scripts. If one replaces a global function or class,
+            // retain nested helpers that the replacement did not redefine
+            // while leaving every member explicitly supplied by the patch
+            // intact.
+            const tTVPGlobalCallableSnapshot savedGlobalCallables =
+                TVPCaptureGlobalCallables();
             // A late compatibility patch can replace framework classes and
             // their singleton instances.  Preserve runtime extension hooks
             // registered by game scripts, then merge them into the new
@@ -3593,13 +4163,13 @@ void TVPExecuteStartupScript() {
                 TVPExecuteStorage(patch);
             } catch(...) {
             }
-            const size_t restoredFunctionCount =
-                TVPRestoreMissingGlobalFunctionMembers(
-                    savedGlobalFunctions);
-            if(restoredFunctionCount != 0) {
+            const size_t restoredCallableCount =
+                TVPRestoreMissingGlobalCallableMembers(
+                    savedGlobalCallables);
+            if(restoredCallableCount != 0) {
                 spdlog::info(
-                    "Restored missing members on {} late-patched functions",
-                    restoredFunctionCount);
+                    "Restored missing members on {} late-patched functions or classes",
+                    restoredCallableCount);
             }
             if(hasSavedRuntimeRegistry) {
                 tTJSVariant replacementRuntimeRegistry;
@@ -3643,6 +4213,7 @@ void TVPExecuteStartupScript() {
         } catch(...) {
         }
         TVPInstallKagLoadContractGuard();
+        TVPRunPostStartupScriptHooks();
 
     }
     TJS_CONVERT_TO_TJS_EXCEPTION
@@ -3913,8 +4484,10 @@ void TVPShowScriptException(eTJSScriptError &e) {
         // Application->GetTitle(), mtStop, mbOK );
 
 #ifdef TVP_ENABLE_EXECUTE_AT_EXCEPTION
-        const tjs_char *scriptName = e.GetBlockNoAddRef()->GetName();
-        if(scriptName != nullptr && scriptName[0] != 0) {
+        auto *scriptBlock = e.GetBlockNoAddRef();
+        const tjs_char *scriptName = scriptBlock ? scriptBlock->GetName()
+                                                 : nullptr;
+        if(scriptBlock && scriptName != nullptr && scriptName[0] != 0) {
             ttstr path(scriptName);
             try {
                 ttstr newpath = TVPGetPlacedPath(path);
@@ -3925,9 +4498,9 @@ void TVPShowScriptException(eTJSScriptError &e) {
                 }
                 TVPGetLocalName(path);
                 std::wstring scriptPath(path.AsStdString());
-                tjs_int lineno = 1 +
-                    e.GetBlockNoAddRef()->SrcPosToLine(e.GetPosition()) -
-                    e.GetBlockNoAddRef()->GetLineOffset();
+                tjs_int lineno =
+                    1 + scriptBlock->SrcPosToLine(e.GetPosition()) -
+                    scriptBlock->GetLineOffset();
 
 #if defined(WIN32) && defined(_DEBUG) && !defined(ENABLE_DEBUGGER)
                 // デバッガ実行されている時、Visual Studio

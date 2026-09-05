@@ -9,9 +9,9 @@ func _run() -> void:
         push_error("AETHERKIRI_TEST_VIDEO is required")
         quit(2)
         return
-    var instance: Object = ClassDB.instantiate("AetherKiriPlayer")
+    var instance: Object = ClassDB.instantiate("AetherRuntimePlayer")
     if instance == null or not (instance is Node):
-        push_error("AetherKiriPlayer is unavailable")
+        push_error("AetherRuntimePlayer is unavailable")
         quit(3)
         return
     root.add_child(instance as Node)

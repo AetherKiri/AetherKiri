@@ -3,21 +3,18 @@
 
 #define NCB_MODULE_NAME TJS_W("psd.dll")
 
-// #define LOAD_MEMORY
 #include "typedefine.h"
 #if defined(_WIN32)
 #undef GetMessage
 #endif
 #include "tp_stub.h"
-#include "psdparse/psdfile.h"
+#include "psdfile.h"
 #include "ncbind.hpp"
 
 class PSDStorage;
-class PSDIterator;
 
 class PSD : public psd::PSDFile {
     friend class PSDStorage;
-    friend class PSDIterator;
 
 public:
     /**
@@ -150,24 +147,8 @@ protected:
     iTJSDispatch2 *objthis; ///< 自己オブジェクト情報の参照
     ttstr dname; ///< 登録用ベース名
 
-#ifdef LOAD_MEMORY
-    HGLOBAL hBuffer; // オンメモリ保持用ハンドル
-    bool loadMemory(const ttstr &filename);
-    void clearMemory();
-#else
-    // ストリームから読み込み
-    IStream *pStream;
-    tTVInteger mStreamSize;
+    // psdparse の StreamReader を通して KiriKiri のストリームから読み込む
     bool loadStream(const ttstr &filename);
-    void clearStream();
-    unsigned char &getStreamValue(const tTVInteger &pos);
-    void copyToBuffer(uint8_t *buf, tTVInteger pos, int size);
-
-    //< PSDファイル読み込みキャッシュ用バッファ
-    tTVInteger mBufferPos;
-    ULONG mBufferSize;
-    unsigned char mBuffer[4 * 1024];
-#endif
 
     /**
      * レイヤ番号が適切かどうか判定

@@ -5,7 +5,7 @@
 <h1 align="center">AetherKiri</h1>
 
 <p align="center">
-  A Godot-hosted KiriKiri2 runtime with a C++ engine core and native mobile/desktop exports.
+  A Godot-hosted, extensible multi-runtime platform for visual novels.
 </p>
 
 <p align="center">
@@ -31,10 +31,12 @@
 
 ## Overview
 
-AetherKiri runs KiriKiri2 content inside a Godot 4.7 application shell. The
-runtime is split into a native C++17 engine core, a C ABI bridge, and a Godot
-GDExtension host that owns the product UI, render resources, settings, export
-presets, and platform packaging.
+AetherKiri is a multi-runtime visual-novel platform inside a Godot 4.7
+application shell. A single `AetherRuntimePlayer` hosts multiple native
+runtimes behind a versioned provider interface, while Godot owns the product
+UI, final-frame presentation, input, settings, export presets, and platform
+packaging. The runtime dispatcher selects KiriRuntime, OnsRuntime, or optional
+A Runtime from each game's markers and capabilities.
 
 The default product renderer is **Godot Native**: engine frames are rendered
 through Godot-owned `RenderingDevice` resources. **GPU Bridge** remains an
@@ -44,17 +46,23 @@ diagnostic fallback only.
 
 ```text
 Godot App Shell
-  -> GDExtension Host
-    -> C ABI Engine API
-      -> C++ Engine Core
-        -> KiriKiri Runtime / Plugins
+  -> AetherRuntimePlayer
+    -> Runtime Dispatcher
+      -> KiriRuntime -> KiriKiri2 Core / Plugins
+      -> OnsRuntime -> OnscripterYuri
+      -> A Runtime
 ```
 
 ## Highlights
 
 - Godot 4.7 app shell with native GDExtension integration.
+- One stable `AetherRuntimePlayer` and a versioned provider ABI for current and
+  future runtimes.
 - C++17 KiriKiri2 runtime core with visual, audio, storage, VM, and plugin
   support.
+- OnscripterYuri integration whose composed RGBA frames are displayed by a
+  Godot `ImageTexture`, with Godot pointer, touch, and keyboard input mapped
+  back to ONS events.
 - Export paths for macOS, iOS/iPadOS, Android, and Web.
 - Runtime-selectable render backend with persisted settings.
 - Bundled multilingual KAG3 demo that can be played from the library and
@@ -72,9 +80,12 @@ Godot App Shell
 | `apps/godot_app/` | Godot project, scenes, settings UI, performance/log panel, icons, and export presets. |
 | `bridge/godot_extension/` | Godot native host library entry points. |
 | `bridge/engine_api/` | C ABI used by the host layer to drive the C++ engine. |
+| `bridge/onscripter_runtime/` | Headless OnscripterYuri host, frame capture, and input bridge. |
 | `cpp/core/` | KiriKiri2 runtime, visual system, audio, storage, VM, and plugin support. |
 | `cpp/plugins/` | Bundled native plugin implementations and compatibility stubs. |
 | `packages/AetherInternal/` | Optional private E-mote package submodule; public builds work without it. |
+| `packages/OnscripterYuri/` | Public OnscripterYuri git submodule. |
+| `packages/tjs2Decompiler/` | Optional Rust helper for disassembling and analyzing compiled TJS2 bytecode; it is not linked into runtime builds. |
 | `demos/aetherkiri-kag3/` | Source tree for the built-in AetherKiri KAG3 demo. |
 | `tests/profiles/` | Per-game probe profiles. Committed profiles must not contain machine-local game paths. |
 | `tools/` | Developer and compatibility tools built outside iOS/Android targets. |
@@ -125,7 +136,7 @@ iOS and Android export presets reference the generated PNG sizes under
 | Platform | Minimum version | Notes |
 | --- | --- | --- |
 | macOS | macOS 13.0 (Ventura) | The Godot app export is universal, but the current native build triplet is `arm64`; Intel support needs an `x86_64` native build. |
-| iOS / iPadOS | iOS / iPadOS 17.0 | `arm64` devices; `arm64` and `x86_64` simulator builds are available for development. |
+| iOS / iPadOS | iOS / iPadOS 16.0 | `arm64` devices; `arm64` and `x86_64` simulator builds are available for development. |
 | Android | Android 7.0 (API 24) | The product export currently packages `arm64-v8a` only. |
 | Web | No OS version floor | Requires a browser with WebAssembly SIMD, WebAssembly threads, and `SharedArrayBuffer`, served with cross-origin isolation (COOP/COEP). |
 | Linux | Build from source | No official prebuilt product package; compile the `x86_64` export locally. |
@@ -175,6 +186,22 @@ under `out/`; remove a Linux configuration with
 
 ## Build
 
+Initialize the public ONS runtime after cloning:
+
+```bash
+git submodule update --init packages/OnscripterYuri
+```
+
+Plugin compatibility work that needs compiled TJS2 analysis can additionally
+initialize the optional developer helper:
+
+```bash
+git submodule update --init packages/tjs2Decompiler
+```
+
+See [`doc/development.md`](doc/development.md#compiled-tjs2-analysis) for its
+build and evidence-validation workflow.
+
 The public repository builds and runs CI without access to private packages.
 Maintainers with access to the complete E-mote and native Live2D
 implementations can initialize the optional package before building:
@@ -220,6 +247,57 @@ The scripts build the native engine and Godot host library, stage them under
 available. Linux exports include the required vcpkg shared libraries beside
 the executable, so their engine runtime does not depend on the local build
 tree. Android is currently wired for `arm64-v8a`.
+
+## ONScripter Games
+
+OnscripterYuri is included as a public Git submodule. The public request and
+commitments concerning integration permission and licensing are recorded in
+[upstream issue #75](https://github.com/YuriSizuku/OnscripterYuri/issues/75).
+The applicable rights remain governed by OnscripterYuri's GPL notices and the
+copyright notices preserved in its source tree.
+
+Add the game directory to the library as usual. AetherKiri selects
+OnscripterYuri when it finds `0.txt`, `00.txt`, `nscript.dat`,
+`nscr_sec.dat`, `nscript.___`, `onscript.nt2`, or `onscript.nt3`. The engine
+composes at the script's native resolution; AetherKiri uploads the final RGBA
+frame to a Godot texture and presents it through the existing aspect-preserving
+`TextureRect`, without a second native window.
+
+ONS saves are stored in the game's `savedata/` directory so they stay with the
+game across app updates or reinstalls whenever the game directory is retained.
+Existing saves from the former app-owned
+`onscripter_saves/<game-name-path-hash>/` location are copied on first launch
+without overwriting files already in `savedata/`. Read-only game folders fall
+back to the app-owned location. The default script encoding matches upstream
+and is GBK; set `AETHERKIRI_ONS_ENCODING=gbk|sjis|utf8` to override it. Like
+the existing KiriKiri runtime, one app process owns one visual-novel session;
+restart Aether after a game exits.
+
+The repository includes a minimal ONS render fixture:
+
+```bash
+AETHERKIRI_SMOKE_GAME="$PWD/tests/fixtures/onscripter_smoke" \
+  /Applications/Godot.app/Contents/MacOS/Godot \
+  --headless --path apps/godot_app \
+  --script res://scripts/smoke_test.gd
+```
+
+The ONS `mpegplay`, `avi`, and `movie` commands share AetherKiri's FFmpeg
+media pipeline. `movie click`, `loop`, `pos`, `async`, and `movie stop` are
+implemented; decoded video frames are composited at script coordinates and
+audio is played by the media pipeline. Movies stored in NSA/NS2/SAR archives
+are extracted on demand to the user cache.
+
+To exercise the complete movie-command bridge, place a test video at
+`tests/fixtures/onscripter_movie_smoke/video.avi`, then run:
+
+```bash
+AETHERKIRI_SMOKE_GAME="$PWD/tests/fixtures/onscripter_movie_smoke" \
+AETHERKIRI_SMOKE_EXPECT_SCRIPT_MEDIA=1 \
+  /Applications/Godot.app/Contents/MacOS/Godot \
+  --headless --path apps/godot_app \
+  --script res://scripts/smoke_test.gd
+```
 
 ## Tagged Releases
 
@@ -535,9 +613,9 @@ CPU is only a diagnostic fallback.
 
 AetherKiri is distributed under GPL-3.0-or-later. See `LICENSE` for the full
 license text. Third-party notices are preserved in `THIRD_PARTY_LICENSES.md`.
-For iOS App Store distribution, `COPYING.iOS` records the limited additional
+For Apple App Store distribution, `COPYING.iOS` records the limited additional
 permission granted by approving copyright holders solely for the official
-Aether iOS release or a distributor they authorize in writing. Third-party
-forks and derivative apps may not rely on that additional permission. It does
-not grant rights in upstream or third-party material on behalf of other
-copyright holders, or revoke rights already granted by the GPL.
+Aether iOS or macOS release, or a distributor they authorize in writing.
+Third-party forks and derivative apps may not rely on that additional
+permission. It does not grant rights in upstream or third-party material on
+behalf of other copyright holders, or revoke rights already granted by the GPL.

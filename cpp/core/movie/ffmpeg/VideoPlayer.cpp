@@ -687,15 +687,13 @@ void BasePlayer::Process() {
             if(m_playSpeed == DVD_PLAYSPEED_PAUSE)
                 continue;
 
-            if(m_iLoopSegmentBegin != -1) { // process loop info
-                double start = DVD_NOPTS_VALUE;
-                if(m_pDemuxer &&
-                   m_pDemuxer->SeekTime(m_iLoopSegmentBegin / GetFPS() *
-                                            DVD_PLAYSPEED_NORMAL,
-                                        true, &start)) {
-                    continue;
-                }
-            }
+            // Do not rewind as soon as the demuxer reaches EOF. Demuxing runs
+            // ahead of presentation, so seeking here leaves decoded frames in
+            // the queues and keeps the playback clock at the end of the first
+            // pass. Frames from the next pass then have timestamps near zero
+            // and are discarded as late. Drain the queues and emit Ended
+            // below; the VideoOverlay/layerExMovie loop handlers perform the
+            // synchronized rewind and resume after the final frame is shown.
 
 #ifdef _WIN32
 #undef SendMessage

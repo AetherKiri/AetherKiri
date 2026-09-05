@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "tjs.h"
+#include "tjsError.h"
+#include "tjsInterCodeGen.h"
 
 #include <memory>
 
@@ -82,4 +84,133 @@ TEST_CASE("TJS missing dispatch is independent of compatibility mocks") {
         0, TJS_W("forwardedCall"), nullptr, &call_result, 1, arguments,
         dispatch)));
     CHECK(call_result.AsInteger() == 42);
+}
+
+TEST_CASE("KAG layer type conversion accepts integer enum values") {
+    std::unique_ptr<tTJS, TJSReleaser> engine(new tTJS());
+    tTJSVariant result;
+
+    REQUIRE_NOTHROW(engine->ExecScript(
+        TJS_W("function convLayerType(value) { return value.type; }\n"
+              "return convLayerType(3);"),
+        &result, nullptr, TJS_W("world.tjs")));
+    CHECK(result.AsInteger() == 3);
+}
+
+TEST_CASE("integer pseudo-property remains scoped to KAG layer conversion") {
+    std::unique_ptr<tTJS, TJSReleaser> engine(new tTJS());
+    tTJSVariant result;
+
+    REQUIRE_THROWS(engine->ExecScript(
+        TJS_W("function readType(value) { return value.type; }\n"
+              "return readType(3);"),
+        &result, nullptr, TJS_W("world.tjs")));
+    REQUIRE_THROWS(engine->ExecScript(
+        TJS_W("function convLayerType(value) { return value.type; }\n"
+              "return convLayerType(29);"),
+        &result, nullptr, TJS_W("world.tjs")));
+}
+
+TEST_CASE(
+    "exceptions from cached expression functions survive orphaned source blocks") {
+    std::unique_ptr<tTJS, TJSReleaser> engine(new tTJS());
+    tTJSVariant function;
+
+    REQUIRE_NOTHROW(engine->EvalExpression(
+        TJS_W("(function() { return 1; })"),
+        &function));
+    REQUIRE(function.Type() == tvtObject);
+
+    tTJSVariantClosure closure = function.AsObjectClosureNoAddRef();
+    REQUIRE(closure.Object != nullptr);
+    auto *context = dynamic_cast<TJS::tTJSInterCodeContext *>(closure.Object);
+    REQUIRE(context != nullptr);
+    engine->CompactScriptCache(3);
+    REQUIRE(context->GetBlock() == nullptr);
+    try {
+        TJS::TJS_eTJSScriptError(TJS_W("orphaned source"), context, 0);
+        FAIL("the script error helper did not throw");
+    } catch(const TJS::eTJSScriptError &error) {
+        CHECK(error.GetBlockNoAddRef() == nullptr);
+        CHECK(TJS_strlen(error.GetBlockName()) == 0);
+        CHECK(error.GetSourceLine() == 0);
+    }
+}
+
+TEST_CASE("TJS strings support prefix and suffix checks") {
+    std::unique_ptr<tTJS, TJSReleaser> engine(new tTJS());
+    tTJSVariant result;
+
+    REQUIRE_NOTHROW(engine->EvalExpression(
+        TJS_W("'scenario/start.ks'.startsWith('scenario/')"), &result));
+    CHECK(result.AsInteger() == 1);
+    REQUIRE_NOTHROW(engine->EvalExpression(TJS_W("''.startsWith('')"),
+                                            &result));
+    CHECK(result.AsInteger() == 1);
+    REQUIRE_NOTHROW(engine->EvalExpression(
+        TJS_W("'scenario/start.ks'.startsWith('start')"), &result));
+    CHECK(result.AsInteger() == 0);
+    REQUIRE_NOTHROW(engine->EvalExpression(
+        TJS_W("'scenario/start.ks'.endsWith('.ks')"), &result));
+    CHECK(result.AsInteger() == 1);
+    REQUIRE_NOTHROW(engine->EvalExpression(
+        TJS_W("'scenario/start.ks'.endsWith('.tjs')"), &result));
+    CHECK(result.AsInteger() == 0);
+    REQUIRE_NOTHROW(
+        engine->EvalExpression(TJS_W("''.endsWith('')"), &result));
+    CHECK(result.AsInteger() == 1);
+}
+
+TEST_CASE("TJS arrays support membership checks") {
+    std::unique_ptr<tTJS, TJSReleaser> engine(new tTJS());
+    tTJSVariant result;
+
+    REQUIRE_NOTHROW(engine->EvalExpression(
+        TJS_W("(const)[1, 2, 3].includes(2)"), &result));
+    CHECK(result.AsInteger() == 1);
+    REQUIRE_NOTHROW(engine->EvalExpression(
+        TJS_W("(const)[1, 2, 3].includes(4)"), &result));
+    CHECK(result.AsInteger() == 0);
+    REQUIRE_NOTHROW(engine->EvalExpression(
+        TJS_W("(const)[1, 2, 3].includes(1, 1)"), &result));
+    CHECK(result.AsInteger() == 0);
+    REQUIRE_NOTHROW(engine->EvalExpression(
+        TJS_W("(const)[1, 2, 3].includes(3, -1)"), &result));
+    CHECK(result.AsInteger() == 1);
+}
+
+TEST_CASE("TJS in operator checks object members") {
+    STATIC_REQUIRE(TJS::VM_CHKIN == 128);
+    std::unique_ptr<tTJS, TJSReleaser> engine(new tTJS());
+    tTJSVariant result;
+
+    REQUIRE_NOTHROW(engine->EvalExpression(
+        TJS_W("'attribute' in %[ 'attribute' => 1 ]"), &result));
+    CHECK(result.AsInteger() == 1);
+    REQUIRE_NOTHROW(engine->EvalExpression(
+        TJS_W("'missing' in %[ 'attribute' => 1 ]"), &result));
+    CHECK(result.AsInteger() == 0);
+}
+
+TEST_CASE("TJS dictionary static helpers expose keys, values, and count") {
+    std::unique_ptr<tTJS, TJSReleaser> engine(new tTJS());
+    tTJSVariant result;
+
+    REQUIRE_NOTHROW(engine->EvalExpression(
+        TJS_W("(function() {"
+              "  var dictionary = %[ 'z' => 3, 'a' => 1, 'm' => 2 ];"
+              "  var keys = Dictionary.keys(dictionary);"
+              "  var values = Dictionary.values(dictionary);"
+              "  values.sort();"
+              "  return keys.join(',') + ':' + values.join(',') + ':' + "
+              "Dictionary.getCount(dictionary);"
+              "})()"),
+        &result));
+    CHECK(ttstr(result) == TJS_W("a,m,z:1,2,3:3"));
+
+    REQUIRE_NOTHROW(engine->EvalExpression(
+        TJS_W("Dictionary.values(%[ 'akira' => 'cg_akira_01a' ])"
+              ".includes('cg_akira_01a')"),
+        &result));
+    CHECK(result.AsInteger() == 1);
 }

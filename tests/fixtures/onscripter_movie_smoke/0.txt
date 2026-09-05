@@ -1,0 +1,15 @@
+*define
+caption "AetherKiri ONScripter movie command smoke test"
+game
+
+*start
+bg "white",1
+movie "video.avi",pos,64,48,512,384,async,loop
+delay 150
+movie stop
+mpegplay "video.avi",1
+avi "video.avi",1
+movie "video.avi",pos,96,72,448,336,async,loop
+delay 30000
+movie stop
+end

@@ -38,6 +38,86 @@ namespace {
 
     std::mutex sOrphanMutex;
     std::unordered_map<TJS::tTJSInterCodeContext*, TimePoint> sOrphanICCs;
+
+    // Minimal UTF-8 <-> UTF-16 conversion for compiler diagnostics. The tjs2
+    // module cannot depend on core/base's character set helpers, and Bison
+    // reports parse errors as std::string (UTF-8) while tjs_char is UTF-16.
+    std::u16string Utf8ToUtf16(const std::string &text) {
+        std::u16string out;
+        out.reserve(text.size());
+        for(size_t i = 0; i < text.size();) {
+            const unsigned char c = static_cast<unsigned char>(text[i]);
+            char32_t cp = 0;
+            int extra = 0;
+            if(c < 0x80) {
+                cp = c;
+            } else if((c & 0xE0) == 0xC0) {
+                cp = c & 0x1F;
+                extra = 1;
+            } else if((c & 0xF0) == 0xE0) {
+                cp = c & 0x0F;
+                extra = 2;
+            } else if((c & 0xF8) == 0xF0) {
+                cp = c & 0x07;
+                extra = 3;
+            } else {
+                ++i; // stray byte; skip
+                continue;
+            }
+            if(i + extra >= text.size() + 1 && extra > 0)
+                break;
+            for(int k = 1; k <= extra; ++k) {
+                const unsigned char cc =
+                    static_cast<unsigned char>(text[i + k]);
+                if((cc & 0xC0) != 0x80) {
+                    cp = 0xFFFD;
+                    i += k;
+                    extra = 0;
+                    break;
+                }
+                cp = (cp << 6) | (cc & 0x3F);
+            }
+            i += extra + 1;
+            if(cp > 0x10FFFF)
+                cp = 0xFFFD;
+            if(cp >= 0x10000) {
+                cp -= 0x10000;
+                out.push_back(static_cast<char16_t>(0xD800 + (cp >> 10)));
+                out.push_back(static_cast<char16_t>(0xDC00 + (cp & 0x3FF)));
+            } else {
+                out.push_back(static_cast<char16_t>(cp));
+            }
+        }
+        return out;
+    }
+
+    std::string Utf16ToUtf8(const tjs_char *text) {
+        std::string out;
+        for(const tjs_char *p = text; p && *p; ++p) {
+            char32_t cp = *p;
+            if(cp >= 0xD800 && cp <= 0xDBFF && p[1] >= 0xDC00 &&
+               p[1] <= 0xDFFF) {
+                cp = 0x10000 + ((cp - 0xD800) << 10) + (p[1] - 0xDC00);
+                ++p;
+            }
+            if(cp < 0x80) {
+                out.push_back(static_cast<char>(cp));
+            } else if(cp < 0x800) {
+                out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+                out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+            } else if(cp < 0x10000) {
+                out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+                out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+                out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+            } else {
+                out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+                out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+                out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+                out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+            }
+        }
+        return out;
+    }
 }
 
 static void RegisterOrphanICC(TJS::tTJSInterCodeContext *icc) {
@@ -102,11 +182,12 @@ namespace TJS // following is in the namespace
     }
 
     void parser::error(const std::string &msg) {
-        spdlog::get("tjs2")->critical(msg);
-        // Bison may recover from a syntax error and leave a partially built
-        // context. Mark the block as failed so SetText/Parse throws before
-        // that incomplete intermediate code can be executed.
-        _yyerror(TJSSyntaxError, ptr);
+        // Forward Bison's actual message (e.g. "syntax error" or the verbose
+        // "syntax error, unexpected X, expecting Y") so _yyerror can wrap it
+        // in the "Syntax error (%1)" template instead of reporting the raw
+        // template text. The block is marked failed below so a partially
+        // built intermediate context can never execute.
+        _yyerror(Utf8ToUtf16(msg).c_str(), ptr);
     }
 
     //---------------------------------------------------------------------------
@@ -143,6 +224,62 @@ namespace TJS // following is in the namespace
         sb->CompileErrorCount++;
         str += { fmt::format(" at line {}", 1 + sb->SrcPosToLine(errpos)) };
         sb->GetTJS()->OutputToConsole(str.c_str());
+
+        // Emit the fully-qualified error to the log channel too; the TJS
+        // console gateway output is not consumed by all hosts. Include the
+        // offending source line with a column caret when the position is
+        // resolvable.
+        const tjs_int line = sb->SrcPosToLine(errpos);
+        const tjs_int line_start = sb->LineToSrcPos(line);
+        const tjs_char *script = sb->GetScript();
+        const tjs_int script_len =
+            script ? static_cast<tjs_int>(TJS_strlen(script)) : 0;
+        if(script && errpos >= 0 && errpos <= script_len &&
+           line_start >= 0 && line_start <= script_len) {
+            // Extract the source line (up to CR/LF/end), trim trailing
+            // whitespace, and compute the caret column.
+            const tjs_char *line_ptr = script + line_start;
+            const tjs_char *line_end = line_ptr;
+            while(*line_end && *line_end != TJS_W('\n') &&
+                  *line_end != TJS_W('\r'))
+                ++line_end;
+            while(line_end > line_ptr &&
+                  (line_end[-1] == TJS_W(' ') || line_end[-1] == TJS_W('\t')))
+                --line_end;
+            tjs_int col = errpos - line_start;
+            if(col < 0)
+                col = 0;
+            if(col > line_end - line_ptr)
+                col = static_cast<tjs_int>(line_end - line_ptr);
+
+            // Keep the caret visible: show a window around the error column
+            // when the line is long.
+            const tjs_int window = 64;
+            const tjs_int line_len = static_cast<tjs_int>(line_end - line_ptr);
+            tjs_int window_start = 0;
+            if(line_len > window) {
+                window_start = col - window / 2;
+                if(window_start < 0)
+                    window_start = 0;
+                if(window_start + window > line_len)
+                    window_start = line_len - window;
+            }
+            const tjs_int shown_len = std::min(line_len - window_start, window);
+            ttstr line_text(line_ptr + window_start, shown_len);
+            if(shown_len < line_len)
+                line_text += TJS_W("...");
+            ttstr caret;
+            for(tjs_int i = 0; i < (col - window_start); ++i)
+                caret += TJS_W(" ");
+            caret += TJS_W("^");
+
+            spdlog::get("tjs2")->critical(
+                "{}\n  {}\n  {}", Utf16ToUtf8(str.c_str()),
+                Utf16ToUtf8(line_text.c_str()), Utf16ToUtf8(caret.c_str()));
+        } else {
+            spdlog::get("tjs2")->critical("{}",
+                                          Utf16ToUtf8(str.c_str()));
+        }
 
         return 0;
     }
@@ -1622,6 +1759,27 @@ namespace TJS // following is in the namespace
                 resaddr2 = _GenNodeCode(frame, (*node)[1], TJS_RT_NEEDED, 0,
                                         tSubParam());
                 PutCode(VM_CHKINS, node_pos);
+                PutCode(TJS_TO_VM_REG_ADDR(resaddr1), node_pos);
+                PutCode(TJS_TO_VM_REG_ADDR(resaddr2), node_pos);
+                return resaddr1;
+            }
+
+            case parser::token_kind_type::T_IN: // 'in' operator
+            {
+                // in operator
+                tjs_int resaddr1, resaddr2;
+                resaddr1 = _GenNodeCode(frame, (*node)[0], TJS_RT_NEEDED, 0,
+                                        tSubParam());
+                if(!TJSIsFrame(resaddr1)) {
+                    PutCode(VM_CP, node_pos);
+                    PutCode(TJS_TO_VM_REG_ADDR(frame), node_pos);
+                    PutCode(TJS_TO_VM_REG_ADDR(resaddr1), node_pos);
+                    resaddr1 = frame;
+                    frame++;
+                }
+                resaddr2 = _GenNodeCode(frame, (*node)[1], TJS_RT_NEEDED, 0,
+                                        tSubParam());
+                PutCode(VM_CHKIN, node_pos);
                 PutCode(TJS_TO_VM_REG_ADDR(resaddr1), node_pos);
                 PutCode(TJS_TO_VM_REG_ADDR(resaddr2), node_pos);
                 return resaddr1;

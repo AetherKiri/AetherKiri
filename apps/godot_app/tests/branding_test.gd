@@ -8,15 +8,48 @@ const EXPECTED_SUBTITLES := {
     "ja": "多機能メディアプレーヤー",
     "ko": "다기능 미디어 플레이어",
 }
+const EXPECTED_LIBRARY_LABELS := {
+    "zh_hans": "视觉小说",
+    "zh_hant": "視覺小說",
+    "en": "Visual Novels",
+    "ja": "ビジュアルノベル",
+    "ko": "비주얼 노벨",
+}
 
 func _initialize() -> void:
     assert(String(ProjectSettings.get_setting("application/config/name")) == "Aether")
     if OS.get_name() == "macOS":
         assert(OS.get_user_data_dir().ends_with("/Godot/app_userdata/AetherKiri"))
     var app = MAIN_SCRIPT.new()
+    assert(app.APP_DISPLAY_NAME == "Aether")
+    assert(app.style_mode == app.STYLE_CLASSIC)
+    assert(app._normalize_style_mode("invalid") == app.STYLE_CLASSIC)
+    var title_font: FontVariation = app._game_title_font()
+    var text_server := TextServerManager.get_primary_interface()
+    assert(int(title_font.opentype_features.get(text_server.name_to_tag("lnum"), 0)) == 1)
+    assert(int(title_font.opentype_features.get(text_server.name_to_tag("onum"), 1)) == 0)
     for language in EXPECTED_SUBTITLES:
         app.active_language = language
         assert(String(app._t("home.subtitle")) == String(EXPECTED_SUBTITLES[language]))
+        assert(String(app._t("nav.library")) == String(EXPECTED_LIBRARY_LABELS[language]))
+        assert(not String(app._t("search.games_placeholder")).is_empty())
+        assert(not String(app._t("search.videos_placeholder")).is_empty())
+        assert(not String(app._t("search.no_results_title")).is_empty())
+    assert(app._library_search_matches(
+        ["Cafe Stella", "/Games/CafeStella"],
+        "cafe stel"
+    ))
+    assert(app._library_search_matches(
+        ["[ANI] BanG Dream!", "episode-03.mkv"],
+        "dream 03"
+    ))
+    assert(not app._library_search_matches(
+        ["Cafe Stella", "/Games/CafeStella"],
+        "nekopara"
+    ))
+    assert(app._is_runtime_exit_error("runtime requested termination"))
+    assert(app._is_runtime_exit_error("runtime has been terminated"))
+    assert(not app._is_runtime_exit_error("unexpected renderer failure"))
     app.free()
     print("BRANDING_OK user_dir=%s" % OS.get_user_data_dir())
     quit(0)

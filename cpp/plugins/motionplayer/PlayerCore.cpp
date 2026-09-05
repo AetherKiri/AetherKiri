@@ -14,8 +14,11 @@
 
 #include "PlayerInternal.h"
 #include "TickCount.h"
+#include "tjsRandomGenerator.h"
 
 using namespace motion::internal;
+
+extern "C" void AetherKiriMotionEnsureCompactEventHook();
 
 namespace {
     class MotionPlayerAutoProgressHook :
@@ -35,13 +38,27 @@ namespace {
     MotionPlayerAutoProgressHook g_autoProgressHook;
     bool g_autoProgressHookRegistered = false;
 
-    std::mutex g_yuzuSdAutoProgressMutex;
-    motion::Player *g_yuzuSdAutoProgressPlayer = nullptr;
-
     std::mutex g_presentationHoldMutex;
     std::vector<motion::Player *> g_presentationHoldPlayers;
     MotionPlayerPresentationHoldHook g_presentationHoldHook;
     bool g_presentationHoldHookRegistered = false;
+
+    tTJSVariant createStandaloneRandomGenerator() {
+        // Artemis embeds motionplayer without starting the KiriKiri script
+        // host. Use the same TJS RandomGenerator native class directly so
+        // particle selection and authored random motion retain libkrkr2's
+        // semantics without requiring TVPScriptEngine.
+        static auto *generatorClass = new TJS::tTJSNC_RandomGenerator();
+        iTJSDispatch2 *instance = nullptr;
+        if(TJS_FAILED(generatorClass->CreateNew(
+               0, nullptr, nullptr, &instance, 0, nullptr,
+               generatorClass)) || !instance) {
+            return {};
+        }
+        tTJSVariant result(instance, instance);
+        instance->Release();
+        return result;
+    }
 
     void registerAutoProgressPlayer(motion::Player *player) {
         if(!player) {
@@ -98,74 +115,6 @@ namespace {
            g_presentationHoldPlayers.empty()) {
             TVPRemoveContinuousEventHook(&g_presentationHoldHook);
             g_presentationHoldHookRegistered = false;
-        }
-    }
-
-    bool isYuzuSdPreviewMotion(const motion::detail::PlayerRuntime &runtime,
-                               const std::string &label) {
-        if(!runtime.activeMotion || label.size() < 2) {
-            return false;
-        }
-
-        auto lower = [](std::string value) {
-            std::transform(value.begin(), value.end(), value.begin(),
-                           [](unsigned char ch) {
-                               return static_cast<char>(std::tolower(ch));
-                           });
-            return value;
-        };
-
-        std::string path = lower(runtime.activeMotion->path);
-        const size_t slash = path.find_last_of("/\\");
-        if(slash != std::string::npos) {
-            path.erase(0, slash + 1);
-        }
-        const std::string loweredLabel = lower(label);
-        const bool supportedMotionStorage =
-            path.find(".psb") != std::string::npos ||
-            path.find(".mtn") != std::string::npos;
-        return path.rfind("sd", 0) == 0 &&
-            loweredLabel.rfind("sd", 0) == 0 && supportedMotionStorage;
-    }
-
-    void suppressYuzuSdPreviewSyncEvents(
-        motion::detail::PlayerRuntime &runtime,
-        const std::string &label,
-        const char *reason) {
-        if(!isYuzuSdPreviewMotion(runtime, label)) {
-            return;
-        }
-
-        auto motionPath = runtime.activeMotion
-            ? runtime.activeMotion->path
-            : std::string{};
-        std::transform(motionPath.begin(), motionPath.end(), motionPath.begin(),
-                       [](unsigned char ch) {
-                           return static_cast<char>(std::tolower(ch));
-                       });
-        if(motionPath.find(".psb") == std::string::npos) {
-            return;
-        }
-
-        const auto oldSize = runtime.pendingEvents.size();
-        runtime.pendingEvents.erase(
-            std::remove_if(runtime.pendingEvents.begin(),
-                           runtime.pendingEvents.end(),
-                           [&label](const motion::detail::MotionEvent &event) {
-                               return event.type == 1 &&
-                                   event.param1 == label;
-                           }),
-            runtime.pendingEvents.end());
-        if(LOGGER && oldSize != runtime.pendingEvents.size()) {
-            const char *debug = std::getenv("AETHERKIRI_MOTION_DEBUG");
-            if(debug && *debug && std::strcmp(debug, "0") != 0) {
-                LOGGER->info(
-                    "motion suppress sd preview sync: reason={} motion={} label={} removed={}",
-                    reason ? reason : "<null>",
-                    runtime.activeMotion ? runtime.activeMotion->path
-                                         : std::string{},
-                    label, oldSize - runtime.pendingEvents.size());
-            }
         }
     }
 
@@ -238,6 +187,24 @@ namespace {
             ((packedColor >> 16) & 0xFFu) |
             ((packedColor & 0xFFu) << 16);
     }
+}
+
+extern "C" void AetherKiriMotionPlayerCoreResetForGameSession() {
+    {
+        std::lock_guard<std::mutex> lock(g_autoProgressMutex);
+        if(g_autoProgressHookRegistered)
+            TVPRemoveContinuousEventHook(&g_autoProgressHook);
+        g_autoProgressPlayers.clear();
+        g_autoProgressHookRegistered = false;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_presentationHoldMutex);
+        if(g_presentationHoldHookRegistered)
+            TVPRemoveContinuousEventHook(&g_presentationHoldHook);
+        g_presentationHoldPlayers.clear();
+        g_presentationHoldHookRegistered = false;
+    }
+    motion::ResourceManager::resetStaticStateForHostSession();
 }
 
 namespace motion {
@@ -408,110 +375,66 @@ namespace motion {
     Player::Player(ResourceManager rm) :
         _runtime(detail::makePlayerRuntime()),
         _resourceManagerNative(std::move(rm)) {
+        AetherKiriMotionEnsureCompactEventHook();
         // Aligned to sub_6A88CC (0x6A8988): create TJS Math.RandomGenerator
         // and store at player+992. Child Players inherit via sub_6CED30.
         try {
             TVPExecuteExpression(
                 TJS_W("new Math.RandomGenerator()"),
                 &_tjsRandomGenerator);
-        } catch (...) {
+        } catch(...) {
+            _tjsRandomGenerator = createStandaloneRandomGenerator();
+        }
+        if(_tjsRandomGenerator.Type() != tvtObject) {
+            _tjsRandomGenerator = createStandaloneRandomGenerator();
+        }
+        if(_tjsRandomGenerator.Type() != tvtObject) {
             LOGGER->warn("Player: failed to create Math.RandomGenerator");
         }
     }
 
     Player::~Player() {
+        discardRenderToRgbaReadback();
         disableAutoProgress();
         disablePresentationHold();
-        releaseYuzuSdAutoProgressClaim();
     }
 
-    void Player::claimYuzuSdAutoProgress() {
-        if(_motionParentPlayer || !_runtime || !_runtime->activeMotion ||
-           !isYuzuSdPresentationMotionPath(_runtime->activeMotion->path)) {
-            return;
+    bool Player::invokeNativeBackend(
+        const std::string &method,
+        const std::vector<MotionBackendValue> &arguments,
+        std::vector<MotionBackendValue> *results) {
+        if(!_nativeBackend) {
+            return false;
         }
-
-        const auto label =
-            psbDebugLowercase(_runtime->lastExplicitTimelineLabel);
-        if(label.rfind("sd", 0) != 0) {
-            return;
+        std::string error;
+        if(_nativeBackend->invoke(method, arguments, results, &error)) {
+            return true;
         }
-
-        Player *previous = nullptr;
-        {
-            std::lock_guard<std::mutex> lock(g_yuzuSdAutoProgressMutex);
-            if(g_yuzuSdAutoProgressPlayer != this) {
-                previous = g_yuzuSdAutoProgressPlayer;
-                g_yuzuSdAutoProgressPlayer = this;
-            }
+        if(LOGGER) {
+            LOGGER->warn("native motion backend {} failed: {}", method,
+                         error);
         }
-
-        _runtime->yuzuSdPresentationRetired = false;
-        if(previous && previous != this) {
-            if(LOGGER) {
-                const char *debug = std::getenv("AETHERKIRI_MOTION_DEBUG");
-                if(debug && *debug && std::strcmp(debug, "0") != 0) {
-                    LOGGER->info(
-                        "motion yuzu sd presentation replaced: incoming={} outgoing={}",
-                        _runtime->activeMotion->path,
-                        previous->_runtime && previous->_runtime->activeMotion
-                            ? previous->_runtime->activeMotion->path
-                            : std::string{});
-                }
-            }
-            previous->retireYuzuSdAutoProgress();
-        }
+        return false;
     }
 
-    void Player::releaseYuzuSdAutoProgressClaim() {
-        bool releasedActivePresentation = false;
-        {
-            std::lock_guard<std::mutex> lock(g_yuzuSdAutoProgressMutex);
-            if(g_yuzuSdAutoProgressPlayer == this) {
-                g_yuzuSdAutoProgressPlayer = nullptr;
-                releasedActivePresentation = true;
-            }
+    bool Player::assignNativeBackendState(const Player &source) {
+        if(!_nativeBackend || !source._nativeBackend) {
+            return false;
         }
-        if(releasedActivePresentation) {
-            retireYuzuSdAutoProgress();
+        std::string error;
+        if(_nativeBackend->assignState(*source._nativeBackend, &error)) {
+            return true;
         }
+        if(LOGGER) {
+            LOGGER->warn("native E-mote assignState failed: {}", error);
+        }
+        return false;
     }
 
-    void Player::retireYuzuSdAutoProgress() {
-        if(!_runtime) {
-            disableAutoProgress();
-            disablePresentationHold();
-            return;
-        }
-
-        _runtime->yuzuSdPresentationRetired = true;
-        if(_runtime->activeMotion) {
-            forgetYuzuSdPresentationTargets(_runtime->activeMotion->path);
-        }
-        if(_runtime->internalRenderLayer.Type() == tvtObject) {
-            auto *renderObject =
-                _runtime->internalRenderLayer.AsObjectNoAddRef();
-            if(auto *renderLayer = resolvePresentationHoldLayer(renderObject)) {
-                renderLayer->SetVisible(false);
-                if(auto *image = renderLayer->GetMainImage()) {
-                    const tTVPRect clearRect(
-                        0, 0, std::max<tjs_int>(renderLayer->GetImageWidth(), 0),
-                        std::max<tjs_int>(renderLayer->GetImageHeight(), 0));
-                    image->Fill(clearRect, 0x00000000);
-                }
-                renderLayer->Update(false);
-            }
-        }
-        for(auto &item : _runtime->timelines) {
-            item.second.playing = false;
-        }
-        _runtime->playingTimelineLabels.clear();
-        _runtime->pendingEvents.clear();
-        _allplaying = false;
-        disableAutoProgress();
-        disablePresentationHold();
-        _targetLayer.Clear();
-        _runtime->lastCanvas.Clear();
+    void Player::enableEmoteAnimatorQueuing() {
+        _emoteAnimatorFlag = true;
+        invokeNativeBackend(
+            "setqueuing", { MotionBackendValue::Boolean(true) });
     }
 
     void Player::setAllplaying(bool v) {
@@ -601,6 +524,7 @@ namespace motion {
 
         _autoProgressLastTick = 0;
         _autoProgressHasLastTick = false;
+        _manualProgressLastTick = 0;
         if(!_autoProgressRegistered) {
             registerAutoProgressPlayer(this);
             _autoProgressRegistered = true;
@@ -704,8 +628,14 @@ namespace motion {
 
     void Player::noteManualProgress() {
         _manualProgressLastTick = TVPGetTickCount();
-        _autoProgressLastTick = _manualProgressLastTick;
-        _autoProgressHasLastTick = true;
+        // A script-owned Motion.Player clock and the continuous callback must
+        // never advance the same clip.  The old 120 ms grace period let the
+        // automatic clock take over during a slow render, then the script's
+        // next wall-clock delta counted that same interval again.  That made
+        // title animations jump for one frame whenever loading exceeded the
+        // grace period.  A later play() call can explicitly opt the player
+        // back into automatic progression via enableAutoProgress().
+        disableAutoProgress();
     }
 
     std::string Player::beginEndedTimelineRenderHold() {
@@ -735,27 +665,10 @@ namespace motion {
         }
 
         auto &state = stateIt->second;
-        const bool completedYuzuSdPreview =
-            isYuzuSdPreviewMotion(*_runtime, label) &&
-            _completedEndedTimelineRenderHoldLabel == label;
-        // A completed ordinary one-shot has already committed its final
-        // frame. Re-entering the hold while an unrelated descendant keeps
-        // the owner ticking rebuilds the whole retained UI every frame and
-        // wipes interactive child state (hovered buttons immediately return
-        // to their default clip). Yuzu SD previews deliberately keep using
-        // the hold while their animated descendants continue.
-        if(_completedEndedTimelineRenderHoldLabel == label &&
-           !isYuzuSdPreviewMotion(*_runtime, label)) {
-            return {};
-        }
-        const bool deferredYuzuSdPreview =
-            isYuzuSdPreviewMotion(*_runtime, label) &&
-            _deferredEndedTimelineRenderHoldLabel == label;
-        const bool continuingYuzuSdPreview =
-            completedYuzuSdPreview || deferredYuzuSdPreview;
-        if(completedYuzuSdPreview &&
-           _yuzuSdChildContinuationFrames <= 0.0 &&
-           !hasPlayingChildPlayers()) {
+        // A completed one-shot has already committed its final frame.
+        // Re-entering the hold while an unrelated descendant keeps the owner
+        // ticking rebuilds retained UI state and creates duplicate frames.
+        if(_completedEndedTimelineRenderHoldLabel == label) {
             return {};
         }
         if(state.playing || state.totalFrames <= 0.0 ||
@@ -763,39 +676,11 @@ namespace motion {
             return {};
         }
 
-        if(isYuzuSdPreviewMotion(*_runtime, label)) {
-            const double renderTime =
-                std::max(0.0, std::nextafter(state.totalFrames, 0.0));
-            const bool firstHeldFrame = !_endedTimelineRenderHoldHasRestore;
-            if(firstHeldFrame) {
-                _endedTimelineRenderHoldRestoreLabel = label;
-                _endedTimelineRenderHoldRestoreTime = state.currentTime;
-                _endedTimelineRenderHoldRestoreEvalTime = _clampedEvalTime;
-                _endedTimelineRenderHoldHasRestore = true;
-            }
-            state.currentTime = renderTime;
-            _clampedEvalTime = renderTime;
-            if(firstHeldFrame && LOGGER) {
-                const char *debug = std::getenv("AETHERKIRI_MOTION_DEBUG");
-                if(debug && *debug && std::strcmp(debug, "0") != 0) {
-                    LOGGER->info(
-                        "motion hold ended sd timeline at last visible frame: motion={} label={} renderTime={:.6f} restoreTime={:.6f}",
-                        _runtime->activeMotion->path, label, renderTime,
-                        _endedTimelineRenderHoldRestoreTime);
-                }
-            }
-        }
-
         state.playing = true;
         _runtime->playingTimelineLabels.push_back(label);
         _allplaying = true;
         _syncActive = _syncWaiting;
-        // A one-frame SD selector is the static base for its animated child
-        // motions. Re-evaluate that final root frame while the children run,
-        // but keep the already-built tree on subsequent draws.
-        if(!continuingYuzuSdPreview) {
-            _runtime->nodesBuilt = false;
-        }
+        _runtime->nodesBuilt = false;
         _emoteDirty = true;
         if(LOGGER) {
             const char *debug = std::getenv("AETHERKIRI_MOTION_DEBUG");
@@ -814,8 +699,6 @@ namespace motion {
             return;
         }
 
-        suppressYuzuSdPreviewSyncEvents(*_runtime, label, "end-hold");
-
         _runtime->playingTimelineLabels.erase(
             std::remove(_runtime->playingTimelineLabels.begin(),
                         _runtime->playingTimelineLabels.end(), label),
@@ -827,10 +710,7 @@ namespace motion {
                stateIt->second.totalFrames) {
             stateIt->second.playing = false;
             stateIt->second.wasPlaying = false;
-            if(_runtime->activeMotion &&
-               !isYuzuSdPreviewMotion(*_runtime, label)) {
-                _completedEndedTimelineRenderHoldLabel = label;
-            }
+            _completedEndedTimelineRenderHoldLabel = label;
         }
         if(_endedTimelineRenderHoldHasRestore &&
            _endedTimelineRenderHoldRestoreLabel == label) {
@@ -854,31 +734,8 @@ namespace motion {
 
     bool Player::deferEndedTimelineRenderHoldUntilDraw(
         const std::string &label) {
-        if(label.empty() || !_runtime ||
-           !isYuzuSdPreviewMotion(*_runtime, label)) {
-            return false;
-        }
-
-        if(!_deferredEndedTimelineRenderHoldLabel.empty() &&
-           _deferredEndedTimelineRenderHoldLabel != label) {
-            const auto previous = _deferredEndedTimelineRenderHoldLabel;
-            _deferredEndedTimelineRenderHoldLabel.clear();
-            endEndedTimelineRenderHold(previous);
-        }
-
-        suppressYuzuSdPreviewSyncEvents(*_runtime, label, "defer-draw");
-        _deferredEndedTimelineRenderHoldLabel = label;
-        if(LOGGER) {
-            const char *debug = std::getenv("AETHERKIRI_MOTION_DEBUG");
-            if(debug && *debug && std::strcmp(debug, "0") != 0) {
-                LOGGER->info(
-                    "motion defer ended timeline release until draw: motion={} label={}",
-                    _runtime->activeMotion ? _runtime->activeMotion->path
-                                           : std::string{},
-                    label);
-            }
-        }
-        return true;
+        (void)label;
+        return false;
     }
 
     void Player::releaseDeferredEndedTimelineRenderHoldAfterDraw(bool force) {
@@ -889,35 +746,8 @@ namespace motion {
 
         const auto label = _deferredEndedTimelineRenderHoldLabel;
         _deferredEndedTimelineRenderHoldLabel.clear();
-        const bool firstCompletedDraw =
-            _completedEndedTimelineRenderHoldLabel != label;
         _completedEndedTimelineRenderHoldLabel = label;
-        // SD selectors are one-frame roots with animated child motions. Keep
-        // a short grace period for children that start on the following tick;
-        // live child timelines continue to drive rendering after it expires.
-        if(firstCompletedDraw) {
-            _yuzuSdChildContinuationFrames = 180.0;
-        }
         endEndedTimelineRenderHold(label);
-    }
-
-    bool Player::isYuzuSdPreviewAnimationFrozen() const {
-        if(_motionParentPlayer || !_runtime || !_runtime->activeMotion ||
-           _completedEndedTimelineRenderHoldLabel.empty() ||
-           _completedEndedTimelineRenderHoldLabel !=
-               _runtime->lastExplicitTimelineLabel ||
-           _yuzuSdChildContinuationFrames > 0.0 ||
-           hasPlayingChildPlayers() ||
-           !isYuzuSdPreviewMotion(
-               *_runtime, _completedEndedTimelineRenderHoldLabel)) {
-            return false;
-        }
-        const auto stateIt = _runtime->timelines.find(
-            _completedEndedTimelineRenderHoldLabel);
-        return stateIt == _runtime->timelines.end() ||
-            !stateIt->second.playing || stateIt->second.totalFrames <= 0.0 ||
-            stateIt->second.currentTime + 0.0001 >=
-                stateIt->second.totalFrames;
     }
 
     void Player::dispatchPendingEvents(iTJSDispatch2 *objthis) {
@@ -949,7 +779,7 @@ namespace motion {
     }
 
     void Player::autoProgressFromContinuousTick(tjs_uint64 tick) {
-        if(!_runtime || _runtime->yuzuSdPresentationRetired) {
+        if(!_runtime) {
             disableAutoProgress();
             return;
         }
@@ -1003,137 +833,14 @@ namespace motion {
 
         _runtime->pendingEvents.clear();
         frameProgress(deltaMs * kMotionFramesPerMillisecond);
-        const std::string renderHoldLabel = beginEndedTimelineRenderHold();
         ensureNodeTreeBuilt();
         if(!_runtime->nodes.empty()) {
             updateLayers();
         }
         calcBounds();
-        bool renderedEndedTimelineFrame = false;
-        if(!_autoProgressRendering && !_presentationHoldRendering) {
-            iTJSDispatch2 *target = nullptr;
-            std::string staleSdTargetName;
-            if(_targetLayer.Type() == tvtObject) {
-                tTJSVariant targetValue = _targetLayer;
-                target = tryResolveLayerDispatch(targetValue);
-            }
-            if(!target && dispatch) {
-                tTJSVariant dispatchValue(dispatch, dispatch);
-                target = tryResolveLayerDispatch(dispatchValue);
-            }
-            if(!target && _runtime->lastCanvas.Type() == tvtObject) {
-                target = tryResolveLayerDispatch(_runtime->lastCanvas);
-            }
-            if(target && _runtime->activeMotion &&
-               isYuzuSdPresentationMotionPath(
-                   _runtime->activeMotion->path) &&
-               !yuzuSdPresentationTargetIsUsable(target)) {
-                staleSdTargetName =
-                    yuzuSdPresentationTargetLayerName(target);
-                const char *debug =
-                    std::getenv("AETHERKIRI_MOTION_DEBUG");
-                if(debug && *debug && std::strcmp(debug, "0") != 0 &&
-                   LOGGER) {
-                    LOGGER->info(
-                        "motion auto-progress discarded stale sd presentation target: motion={} target={} layer={}",
-                        _runtime->activeMotion->path,
-                        static_cast<const void *>(target),
-                        staleSdTargetName.empty() ? std::string("<unnamed>")
-                                                  : staleSdTargetName);
-                }
-                target = nullptr;
-                _targetLayer.Clear();
-            }
-            if(!target && _runtime->activeMotion) {
-                target = resolveYuzuTitlePresentationTargetFromLayerTree(
-                    _runtime->activeMotion->path);
-                if(target) {
-                    _targetLayer = tTJSVariant(target, target);
-                }
-            }
-            if(!target && _runtime->activeMotion) {
-                target = resolveRememberedYuzuSdPresentationTarget(
-                    _runtime->activeMotion->path);
-                if(target) {
-                    _targetLayer = tTJSVariant(target, target);
-                    const char *debug =
-                        std::getenv("AETHERKIRI_MOTION_DEBUG");
-                    if(debug && *debug && std::strcmp(debug, "0") != 0 &&
-                       LOGGER) {
-                        LOGGER->info(
-                            "motion auto-progress reused sd presentation target: motion={} target={}",
-                            _runtime->activeMotion->path,
-                            static_cast<const void *>(target));
-                    }
-                }
-            }
-            if(!target && _runtime->activeMotion) {
-                target = resolveYuzuSdPresentationTargetFromLayerTree(
-                    _runtime->activeMotion->path,
-                    _runtime->lastExplicitTimelineLabel,
-                    staleSdTargetName);
-                if(target) {
-                    _targetLayer = tTJSVariant(target, target);
-                }
-            }
-            if(target) {
-                const auto logicalSdTargetName =
-                    yuzuSdPresentationTargetLayerName(target);
-                const bool allowHiddenStableSdTarget =
-                    _runtime->activeMotion &&
-                    isYuzuSdPresentationMotionPath(
-                        _runtime->activeMotion->path) &&
-                    (logicalSdTargetName == "ev" ||
-                     logicalSdTargetName == "sd") &&
-                    yuzuSdPresentationTargetIsUsable(target);
-                if(auto *layer = resolvePresentationHoldLayer(target);
-                   layer && layer->GetOpacity() > 0 &&
-                   ((layer->GetVisible() && layer->GetParentVisible()) ||
-                    allowHiddenStableSdTarget)) {
-                    rememberYuzuSdPresentationTarget(
-                        _runtime->activeMotion->path, target);
-                    _autoProgressRendering = true;
-                    try {
-                        const char *debug = std::getenv("AETHERKIRI_MOTION_DEBUG");
-                        if(debug && *debug && std::strcmp(debug, "0") != 0 &&
-                           LOGGER && _runtime->activeMotion) {
-                            LOGGER->info(
-                                "motion auto-progress render target: motion={} target={}",
-                                _runtime->activeMotion->path,
-                                static_cast<const void *>(target));
-                        }
-                        renderedEndedTimelineFrame = _d3dDrawMode
-                            ? renderViaSharedD3DAdaptor(target)
-                            : renderToLayer(target);
-                    } catch(const std::exception &e) {
-                        if(LOGGER) {
-                            LOGGER->warn(
-                                "motion auto-progress render failed: error={}",
-                                e.what());
-                        }
-                    } catch(...) {
-                        if(LOGGER) {
-                            LOGGER->warn(
-                                "motion auto-progress render failed: error=<unknown>");
-                        }
-                    }
-                    _autoProgressRendering = false;
-                }
-            }
-        }
-        if(renderedEndedTimelineFrame) {
-            // This path already performed the draw that drawCompat normally
-            // completes. Commit the held SD frame now so the next continuous
-            // tick reuses its child-player tree instead of rebuilding every
-            // looping motion from frame zero.
-            if(deferEndedTimelineRenderHoldUntilDraw(renderHoldLabel)) {
-                releaseDeferredEndedTimelineRenderHoldAfterDraw();
-            } else {
-                endEndedTimelineRenderHold(renderHoldLabel);
-            }
-        } else if(!deferEndedTimelineRenderHoldUntilDraw(renderHoldLabel)) {
-            endEndedTimelineRenderHold(renderHoldLabel);
-        }
+        // Match krkrsdl3: progress evaluates motion state only. Presentation
+        // belongs exclusively to draw(), which receives the authored Layer,
+        // D3DAdaptor or SeparateLayerAdaptor from the script.
         dispatchPendingEvents(dispatch);
 
         if(!_allplaying && _runtime->playingTimelineLabels.empty()) {
@@ -1185,7 +892,29 @@ namespace motion {
     // Sets activeMotion directly from a pre-loaded snapshot, bypassing file I/O.
     // Used by EmotePlayer.setModule() to bridge loaded PSB data into the Player pipeline.
     void Player::loadFromSnapshot(
-        std::shared_ptr<detail::MotionSnapshot> snapshot) {
+        std::shared_ptr<detail::MotionSnapshot> snapshot,
+        std::vector<std::shared_ptr<detail::MotionSnapshot>>
+            nativeObjectSnapshots) {
+        std::string nativeBackendSourcePath = snapshot ? snapshot->path
+                                                       : std::string{};
+        if(!nativeObjectSnapshots.empty()) {
+            nativeBackendSourcePath.clear();
+            for(const auto &objectSnapshot : nativeObjectSnapshots) {
+                if(!objectSnapshot || objectSnapshot->path.empty()) {
+                    continue;
+                }
+                if(!nativeBackendSourcePath.empty()) {
+                    nativeBackendSourcePath += ':';
+                }
+                nativeBackendSourcePath += objectSnapshot->path;
+            }
+            if(nativeBackendSourcePath.empty() && snapshot) {
+                nativeBackendSourcePath = snapshot->path;
+            }
+        }
+        const bool reuseNativeBackend =
+            snapshot && _nativeBackend &&
+            _nativeBackendSourcePath == nativeBackendSourcePath;
         // A newly bound motion starts on its own local timeline.  Motion
         // sub-nodes reuse Player instances while switching between clips
         // such as `select`, `over`, and `out`; carrying the previous clip's
@@ -1196,6 +925,7 @@ namespace motion {
         _loopTime = 0.0;
         _clampedEvalTime = 0.0;
         _frameTickCount = 0.0;
+        _commandListPulse = false;
         _runtime->activeMotion.reset();
         _runtime->clearMotionBitmapCaches();
         _runtime->timelines.clear();
@@ -1215,6 +945,12 @@ namespace motion {
         _mirrorPositiveCache.clear();
         _mirrorNegativeCache.clear();
         _motionExtensionState.reset();
+        if(!reuseNativeBackend) {
+            _nativeBackend.reset();
+            _nativeBackendSourcePath.clear();
+            _nativeBackendPresentationReady = snapshot == nullptr;
+            _nativeBackendPresentationHoldLogged = false;
+        }
         disableAutoProgress();
 
         if(snapshot) {
@@ -1224,6 +960,46 @@ namespace motion {
             }
             activateMotion(*_runtime, snapshot);
             syncVariableKeysFromActiveMotion();
+            if(!reuseNativeBackend) {
+                // A native player renders the complete model from
+                // the root. Motion child Players are only an implementation
+                // detail of the public compatibility renderer; attaching a
+                // second full native model to every child multiplies startup and
+                // frame work by the number of authored motion nodes.
+                if(!_motionParentPlayer) {
+                    const auto *extension = motionPlayerExtension();
+                    if(extension && extension->createNativePlayer &&
+                       snapshot->objectImage &&
+                       !snapshot->objectImage->empty()) {
+                        std::string error;
+                        detail::MotionSnapshot nativeRequest;
+                        nativeRequest.path = snapshot->path;
+                        nativeRequest.file = snapshot->file;
+                        nativeRequest.objectImage = snapshot->objectImage;
+                        nativeRequest.root = snapshot->root;
+                        nativeRequest.width = snapshot->width;
+                        nativeRequest.height = snapshot->height;
+                        nativeRequest.nativeObjectSnapshots =
+                            std::move(nativeObjectSnapshots);
+                        _nativeBackend = extension->createNativePlayer(
+                            nativeRequest, &error);
+                        _nativeBackendPresentationReady = !_nativeBackend;
+                        if(LOGGER) {
+                            if(_nativeBackend) {
+                                _nativeBackendSourcePath =
+                                    nativeBackendSourcePath;
+                                LOGGER->info(
+                                    "Kiri native motion backend active ({})",
+                                    snapshot->path);
+                            } else {
+                                LOGGER->warn(
+                                    "Kiri native motion backend unavailable for {}: {}",
+                                    snapshot->path, error);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1568,6 +1344,30 @@ namespace motion {
             return clip;
         }
 
+        // Yuzu title motion sources are cloned into an affine render layer.
+        // The render-side clone intentionally has no playback controller of
+        // its own, while the authored `title_trial` clip starts fully
+        // transparent.  Prefer the resource's explicit static state only for
+        // this distinctive title asset shape; other multi-clip resources keep
+        // their authored primary-label order.
+        const auto &motionPath = _runtime->activeMotion->path;
+        const auto slash = motionPath.find_last_of("/\\");
+        std::string motionName =
+            slash == std::string::npos ? motionPath : motionPath.substr(slash + 1);
+        std::transform(motionName.begin(), motionName.end(), motionName.begin(),
+                       [](const unsigned char ch) {
+                           return static_cast<char>(std::tolower(ch));
+                       });
+        if(!_runtime->isEmoteMode && motionName == "title_bg.psb" &&
+           _runtime->activeMotion->clipsByLabel.find("title_trial") !=
+               _runtime->activeMotion->clipsByLabel.end() &&
+           _runtime->activeMotion->clipsByLabel.find("title") !=
+               _runtime->activeMotion->clipsByLabel.end()) {
+            if(const auto *clip = selectByLabel("normal")) {
+                return clip;
+            }
+        }
+
         const auto &primaryLabels =
             !_runtime->activeMotion->mainTimelineLabels.empty()
                 ? _runtime->activeMotion->mainTimelineLabels
@@ -1887,6 +1687,7 @@ namespace motion {
                   { "value", static_cast<tjs_int64>(_emoteColorState.packed) },
                   { "transition", _emoteColorState.transition },
                   { "ease", _emoteColorState.ease },
+                  { "set", _emoteColorState.explicitlySet },
               }) },
             { "r", detail::makeDictionary({
                   { "value", _emoteRotState.value },
@@ -2178,6 +1979,9 @@ namespace motion {
             if(getObjectProperty(value, TJS_W("color"), component) &&
                component.Type() == tvtObject) {
                 double packed = static_cast<double>(_emoteColorState.packed);
+                bool hasExplicitFlag = readBool(
+                    component, TJS_W("set"),
+                    _emoteColorState.explicitlySet);
                 if(readNumber(component, TJS_W("value"), packed)) {
                     _emoteColorState.packed = static_cast<tjs_uint32>(packed);
                     const auto color = _emoteColorState.packed;
@@ -2189,6 +1993,14 @@ namespace motion {
                         static_cast<std::uint8_t>(color));
                     _emoteColorState.rgbaBytes[3] = static_cast<float>(
                         static_cast<std::uint8_t>(color >> 24));
+                }
+                if(!hasExplicitFlag) {
+                    // Older serialized players did not distinguish the
+                    // untouched default value (zero) from an explicit color.
+                    // Treat a non-zero legacy value as authored, while keeping
+                    // the native backend's visible default for untouched players.
+                    _emoteColorState.explicitlySet =
+                        _emoteColorState.packed != 0;
                 }
                 readNumber(component, TJS_W("transition"),
                            _emoteColorState.transition);
@@ -2399,6 +2211,153 @@ namespace motion {
             }
         }
 
+        if(restoredTimelines && _nativeBackend && _runtime->activeMotion) {
+            const auto nativeTimelineLabels = [this](
+                const char *countMethod, const char *labelMethod) {
+                std::vector<MotionBackendValue> countResults;
+                if(!invokeNativeBackend(countMethod, {}, &countResults) ||
+                   countResults.empty() ||
+                   countResults.front().type !=
+                       MotionBackendValue::Type::Number) {
+                    return std::vector<std::string>{};
+                }
+                const int count = std::max(
+                    0, static_cast<int>(countResults.front().number));
+                std::vector<std::string> labels;
+                labels.reserve(static_cast<std::size_t>(count));
+                for(int index = 0; index < count; ++index) {
+                    std::vector<MotionBackendValue> labelResults;
+                    if(invokeNativeBackend(
+                           labelMethod,
+                           {MotionBackendValue::Number(index)},
+                           &labelResults) &&
+                       !labelResults.empty() &&
+                       labelResults.front().type ==
+                           MotionBackendValue::Type::String) {
+                        labels.push_back(labelResults.front().string);
+                    }
+                }
+                return labels;
+            };
+            const auto mainLabels = nativeTimelineLabels(
+                "countmaintimelines", "getmaintimelinelabelat");
+            const auto diffLabels = nativeTimelineLabels(
+                "countdifftimelines", "getdifftimelinelabelat");
+            struct NativeTimelineRestore {
+                std::string label;
+                int flags = 0;
+                double blendRatio = 1.0;
+            };
+            std::vector<NativeTimelineRestore> nativeTimelines;
+            for(const auto &label : _runtime->playingTimelineLabels) {
+                const auto stateIt = _runtime->timelines.find(label);
+                if(stateIt == _runtime->timelines.end() ||
+                   !stateIt->second.playing) {
+                    continue;
+                }
+                const int nativeFlags = exactMotionBackendTimelineFlags(
+                    label, mainLabels, diffLabels);
+                if(nativeFlags == 0) {
+                    continue;
+                }
+                const auto duplicate = std::find_if(
+                    nativeTimelines.begin(), nativeTimelines.end(),
+                    [&label](const auto &entry) {
+                        return entry.label == label;
+                    });
+                if(duplicate == nativeTimelines.end()) {
+                    nativeTimelines.push_back(NativeTimelineRestore{
+                        label, (stateIt->second.flags & ~3) | nativeFlags,
+                        stateIt->second.blendRatio});
+                }
+            }
+
+            // D3DEmote.tjs changes model resolution by serializing the old
+            // player, creating a fresh one, and unserializing into it.  The
+            // compatibility state above made getTimelinePlaying() report the
+            // restored waiting loop, but the fresh native player had
+            // never received PlayTimeline.  The script therefore skipped its
+            // own restart and the visible model froze after its initial pose.
+            // Rebuild the native timeline set from restored state atomically.
+            if(!nativeTimelines.empty()) {
+                invokeNativeBackend(
+                    "stoptimeline", {MotionBackendValue::String({})});
+                for(const auto &timeline : nativeTimelines) {
+                    invokeNativeBackend(
+                        "playtimeline",
+                        {MotionBackendValue::String(timeline.label),
+                         MotionBackendValue::Number(timeline.flags)});
+                    invokeNativeBackend(
+                        "settimelineblendratio",
+                        {MotionBackendValue::String(timeline.label),
+                         MotionBackendValue::Number(timeline.blendRatio),
+                         MotionBackendValue::Number(0.0),
+                         MotionBackendValue::Number(0.0),
+                         MotionBackendValue::Boolean(false)});
+                }
+            }
+
+            invokeNativeBackend(
+                "setcoord", {MotionBackendValue::Number(_emoteCoordState.x),
+                              MotionBackendValue::Number(_emoteCoordState.y),
+                              MotionBackendValue::Number(0.0),
+                              MotionBackendValue::Number(0.0)});
+            invokeNativeBackend(
+                "setscale", {MotionBackendValue::Number(_emoteScaleState.value),
+                              MotionBackendValue::Number(0.0),
+                              MotionBackendValue::Number(0.0)});
+            invokeNativeBackend(
+                "setrot", {MotionBackendValue::Number(_emoteRotState.value),
+                            MotionBackendValue::Number(0.0),
+                            MotionBackendValue::Number(0.0)});
+            if(_emoteColorState.explicitlySet) {
+                invokeNativeBackend(
+                    "setcolor",
+                    {MotionBackendValue::Number(_emoteColorState.packed),
+                     MotionBackendValue::Number(0.0),
+                     MotionBackendValue::Number(0.0)});
+            }
+            invokeNativeBackend(
+                "setmeshdivisionratio",
+                {MotionBackendValue::Number(_emoteMeshDivisionRatio)});
+            invokeNativeBackend(
+                "sethairscale", {MotionBackendValue::Number(_hairScale)});
+            invokeNativeBackend(
+                "setpartsscale", {MotionBackendValue::Number(_partsScale)});
+            invokeNativeBackend(
+                "setbustscale", {MotionBackendValue::Number(_bustScale)});
+            if(_emoteAnimatorFlag) {
+                invokeNativeBackend(
+                    "setqueuing", {MotionBackendValue::Boolean(true)});
+            }
+            if(_windState.active) {
+                invokeNativeBackend(
+                    "startwind",
+                    {MotionBackendValue::Number(_windState.minAngle),
+                     MotionBackendValue::Number(_windState.maxAngle),
+                     MotionBackendValue::Number(_windState.amplitude),
+                     MotionBackendValue::Number(_windState.freqX),
+                     MotionBackendValue::Number(_windState.freqY)});
+            }
+            for(const auto &[label, force] :
+                std::initializer_list<std::pair<const char *,
+                                                const OuterForceState &>>{
+                    {"bust", _bustOuterForce},
+                    {"h", _hairOuterForce},
+                    {"parts", _partsOuterForce},
+                }) {
+                if(force.active) {
+                    invokeNativeBackend(
+                        "setouterforce",
+                        {MotionBackendValue::String(label),
+                         MotionBackendValue::Number(force.x),
+                         MotionBackendValue::Number(force.y),
+                         MotionBackendValue::Number(0.0),
+                         MotionBackendValue::Number(0.0)});
+                }
+            }
+        }
+
         _allplaying = !_runtime->playingTimelineLabels.empty();
         _layersDirty = true;
         _emoteDirty = true;
@@ -2414,6 +2373,11 @@ namespace motion {
         _emoteCoordState.ease = ease;
         setX(x);
         setY(y);
+        invokeNativeBackend(
+            "setcoord", { MotionBackendValue::Number(x),
+                           MotionBackendValue::Number(y),
+                           MotionBackendValue::Number(transition),
+                           MotionBackendValue::Number(ease) });
         _emoteDirty = true;
     }
 
@@ -2427,6 +2391,10 @@ namespace motion {
         _emoteScaleState.ease = ease;
         _emoteDirty = true;
         _layersDirty = true;
+        invokeNativeBackend(
+            "setscale", { MotionBackendValue::Number(scale),
+                           MotionBackendValue::Number(transition),
+                           MotionBackendValue::Number(ease) });
         if(LOGGER && std::getenv("AETHERKIRI_EMOTE_AFFINE_TRACE") &&
            std::fabs(previousScale - scale) > 1e-7) {
             LOGGER->info(
@@ -2449,6 +2417,10 @@ namespace motion {
         _emoteRotState.ease = ease;
         _emoteDirty = true;
         _layersDirty = true;
+        invokeNativeBackend(
+            "setrot", { MotionBackendValue::Number(rot),
+                         MotionBackendValue::Number(transition),
+                         MotionBackendValue::Number(ease) });
     }
 
     // Aligned to libkrkr2.so D3DEmotePlayer_setColor (0x530314):
@@ -2457,6 +2429,7 @@ namespace motion {
     void Player::setEmoteColor(tjs_uint32 color, double transition,
                                double ease) {
         _emoteColorState.packed = color;
+        _emoteColorState.explicitlySet = true;
         _emoteColorState.rgbaBytes[0] =
             static_cast<float>(static_cast<std::uint8_t>(color >> 16));
         _emoteColorState.rgbaBytes[1] =
@@ -2470,6 +2443,10 @@ namespace motion {
         _colorWeightPacked = swapPackedRbLike_0x6CD710(color);
         _emoteDirty = true;
         _layersDirty = true;
+        invokeNativeBackend(
+            "setcolor", { MotionBackendValue::Number(color),
+                           MotionBackendValue::Number(transition),
+                           MotionBackendValue::Number(ease) });
     }
 
     void Player::setMirror(bool mirror) {
@@ -2486,6 +2463,8 @@ namespace motion {
 
     void Player::setEmoteMeshDivisionRatio(double v) {
         _emoteMeshDivisionRatio = v;
+        invokeNativeBackend(
+            "setmeshdivisionratio", { MotionBackendValue::Number(v) });
     }
 
     // Aligned to libkrkr2.so:
@@ -2497,6 +2476,8 @@ namespace motion {
                          _hairScale, s);
         }
         _hairScale = s;
+        invokeNativeBackend("sethairscale",
+                            { MotionBackendValue::Number(s) });
     }
     // sub_681F28: player+1192 = a2
     void Player::setPartsScale(double s) {
@@ -2506,6 +2487,8 @@ namespace motion {
                          _partsScale, s);
         }
         _partsScale = s;
+        invokeNativeBackend("setpartsscale",
+                            { MotionBackendValue::Number(s) });
     }
     // sub_681F30: player+1200 = a2
     void Player::setBustScale(double s) {
@@ -2515,6 +2498,8 @@ namespace motion {
                          _bustScale, s);
         }
         _bustScale = s;
+        invokeNativeBackend("setbustscale",
+                            { MotionBackendValue::Number(s) });
     }
     // player+1176, consumed by sub_678D50 while interpolating the authored
     // point-shape anchor against the camera origin.
@@ -2570,12 +2555,19 @@ namespace motion {
             : 1.0;
         _windState.scaledAmplitude = direction * (absAmplitude / ratio);
         _windState.counter = 0;
+        invokeNativeBackend(
+            "startwind", { MotionBackendValue::Number(minAngle),
+                            MotionBackendValue::Number(maxAngle),
+                            MotionBackendValue::Number(amplitude),
+                            MotionBackendValue::Number(freqX),
+                            MotionBackendValue::Number(freqY) });
         _emoteDirty = true;
     }
 
     // Aligned to sub_681A38: delete wind simulator and clear player+1128.
     void Player::stopWind() {
         _windState = {};
+        invokeNativeBackend("stopwind");
         _emoteDirty = true;
     }
 
@@ -2601,6 +2593,12 @@ namespace motion {
         target->y = y;
         target->transition = transition;
         target->ease = ease;
+        invokeNativeBackend(
+            "setouterforce", { MotionBackendValue::String(key),
+                                MotionBackendValue::Number(x),
+                                MotionBackendValue::Number(y),
+                                MotionBackendValue::Number(transition),
+                                MotionBackendValue::Number(ease) });
         _emoteDirty = true;
     }
 

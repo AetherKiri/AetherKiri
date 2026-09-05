@@ -10,6 +10,7 @@ source_app="$1"
 output_dir="$2"
 bundle_id="${AETHER_APP_BUNDLE_ID:-com.liuyu.aether.aether}"
 team_id="${AETHER_APPLE_TEAM_ID:-3JL7FE9XQT}"
+target_arch="${AETHERKIRI_MACOS_ARCH:-x86_64}"
 marketing_version="${AETHER_APPLE_VERSION:?AETHER_APPLE_VERSION is required}"
 build_number="${AETHER_BUILD_NUMBER:?AETHER_BUILD_NUMBER is required}"
 application_certificate_base64="${IOS_DISTRIBUTION_CERTIFICATE_BASE64:?IOS_DISTRIBUTION_CERTIFICATE_BASE64 is required}"
@@ -17,6 +18,11 @@ application_certificate_password="${IOS_DISTRIBUTION_CERTIFICATE_PASSWORD:?IOS_D
 installer_certificate_base64="${MACOS_INSTALLER_CERTIFICATE_BASE64:?MACOS_INSTALLER_CERTIFICATE_BASE64 is required}"
 installer_certificate_password="${MACOS_INSTALLER_CERTIFICATE_PASSWORD:?MACOS_INSTALLER_CERTIFICATE_PASSWORD is required}"
 profile_base64="${MACOS_PROVISIONING_PROFILE_BASE64:?MACOS_PROVISIONING_PROFILE_BASE64 is required}"
+
+if [[ "$target_arch" != "arm64" && "$target_arch" != "x86_64" ]]; then
+    echo "Unsupported macOS App Store architecture: $target_arch" >&2
+    exit 1
+fi
 
 if [[ ! -d "$source_app" ]]; then
     echo "macOS app bundle not found: $source_app" >&2
@@ -142,16 +148,33 @@ fi
 ditto "$source_app" "$app_store_app"
 cp "$profile_path" "$app_store_app/Contents/embedded.provisionprofile"
 
+# The Apple release declares only encryption that is exempt from export
+# documentation. Set that policy on the exact bundle that is signed and placed
+# in the installer, even if an older Godot export omitted it.
+/usr/libexec/PlistBuddy \
+    -c 'Set :ITSAppUsesNonExemptEncryption false' \
+    "$app_store_app/Contents/Info.plist" 2>/dev/null ||
+    /usr/libexec/PlistBuddy \
+        -c 'Add :ITSAppUsesNonExemptEncryption bool false' \
+        "$app_store_app/Contents/Info.plist"
+uses_non_exempt_encryption="$(
+    plutil -extract ITSAppUsesNonExemptEncryption raw \
+        "$app_store_app/Contents/Info.plist"
+)"
+if [[ "$uses_non_exempt_encryption" != "false" ]]; then
+    echo "The macOS App Store bundle declares non-exempt encryption." >&2
+    exit 1
+fi
+
 # Godot currently exports only LSMinimumSystemVersionByArchitecture. App Store
-# Connect also requires the scalar LSMinimumSystemVersion key, even when the
-# application is intentionally arm64-only. Keep both values aligned with the
-# exported arm64 deployment target before sealing the bundle.
+# Connect also requires the scalar LSMinimumSystemVersion key. Keep it aligned
+# with the selected runtime architecture before sealing the bundle.
 minimum_system_version="$(
-    plutil -extract LSMinimumSystemVersionByArchitecture.arm64 raw \
+    plutil -extract "LSMinimumSystemVersionByArchitecture.$target_arch" raw \
         "$app_store_app/Contents/Info.plist"
 )"
 if [[ -z "$minimum_system_version" ]]; then
-    echo "The macOS application is missing its arm64 deployment target." >&2
+    echo "The macOS application is missing its $target_arch deployment target." >&2
     exit 1
 fi
 /usr/libexec/PlistBuddy \
@@ -165,7 +188,7 @@ scalar_system_version="$(
         "$app_store_app/Contents/Info.plist"
 )"
 if [[ "$scalar_system_version" != "$minimum_system_version" ]]; then
-    echo "The macOS scalar deployment target does not match the arm64 target." >&2
+    echo "The macOS scalar deployment target does not match the $target_arch target." >&2
     exit 1
 fi
 
@@ -188,8 +211,8 @@ plutil -create xml1 "$entitlements_path"
 while IFS= read -r -d '' runtime_binary; do
     if file -b "$runtime_binary" | grep -q 'Mach-O'; then
         runtime_architectures="$(lipo -archs "$runtime_binary")"
-        if [[ " $runtime_architectures " != *" arm64 "* ]]; then
-            echo "Mac App Store runtime is missing arm64: $runtime_binary ($runtime_architectures)" >&2
+        if [[ " $runtime_architectures " != *" $target_arch "* ]]; then
+            echo "Mac App Store runtime is missing $target_arch: $runtime_binary ($runtime_architectures)" >&2
             exit 1
         fi
         codesign --force \

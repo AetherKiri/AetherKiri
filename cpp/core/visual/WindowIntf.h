@@ -193,6 +193,15 @@ public:
     }
     [[nodiscard]] iTVPDrawDevice *GetDrawDevice() const { return DrawDevice; }
     virtual void ResetDrawDevice() = 0;
+
+    // OpenGL-era titles access Window.canvas directly. The host-specific
+    // compatibility plug-in may provide this object; normal renderers leave
+    // it void.
+    tTJSVariant CanvasObject;
+    void SetCanvasObject(const tTJSVariant &value);
+    [[nodiscard]] const tTJSVariant &GetCanvasObject() const {
+        return CanvasObject;
+    }
     iTJSDispatch2 *GetWindowDispatch() override {
         if(Owner)
             Owner->AddRef();
@@ -232,6 +241,13 @@ public:
     virtual void OnTouchMove(tjs_real x, tjs_real y, tjs_real cx, tjs_real cy,
                              tjs_uint32 id);
 
+    void OnPointerDown(tjs_int type, tjs_real x, tjs_real y, tjs_real cx,
+                       tjs_real cy, tjs_uint32 flags, tjs_uint32 id);
+    void OnPointerMove(tjs_int type, tjs_real x, tjs_real y, tjs_real cx,
+                       tjs_real cy, tjs_uint32 flags, tjs_uint32 id);
+    void OnPointerUp(tjs_int type, tjs_real x, tjs_real y, tjs_real cx,
+                     tjs_real cy, tjs_uint32 flags, tjs_uint32 id);
+
     void OnTouchScaling(tjs_real startdist, tjs_real curdist, tjs_real cx,
                         tjs_real cy, tjs_int flag);
     void OnTouchRotate(tjs_real startangle, tjs_real curangle, tjs_real dist,
@@ -242,6 +258,10 @@ public:
 
     void OnDisplayRotate(tjs_int orientation, tjs_int rotate, tjs_int bpp,
                          tjs_int hresolution, tjs_int vresolution);
+
+    // Deliver the legacy Canvas onDraw callback. Modern hosts drive this
+    // from their frame loop instead of starting a second platform timer.
+    void OnDraw();
 
     void ClearInputEvents();
 
@@ -294,11 +314,18 @@ public:
     //----- vsync
 protected:
     bool WaitVSync;
+    // Legacy KiriKiri/OpenGL titles use this property to request periodic
+    // onDraw delivery from a Window.  The Godot host drives the actual update
+    // cadence, but retaining the value keeps the original script contract
+    // available to those titles.
+    tjs_uint32 DrawCycle;
     virtual void UpdateVSyncThread() = 0;
 
 public:
     void SetWaitVSync(bool enable);
     [[nodiscard]] bool GetWaitVSync() const;
+    void SetDrawCycle(tjs_uint32 cycle);
+    [[nodiscard]] tjs_uint32 GetDrawCycle() const;
 };
 
 // Optional installer used by private/additive draw-device implementations.
@@ -318,7 +345,9 @@ bool TVPInstallPendingDrawDevice(tTJSNI_BaseWindow *window);
 class tTJSNI_Window;
 extern tTJSNI_Window *TVPGetWindowListAt(tjs_int idx);
 extern tjs_int TVPGetWindowCount();
+extern void TVPDeliverWindowCanvasDrawEvents();
 extern tTJSNI_Window *TVPMainWindow; //  = nullptr; // main window
+extern void TVPResetWindowRegistryForHostSession();
 
 //---------------------------------------------------------------------------
 
@@ -410,7 +439,12 @@ public:
         tTVPBaseInputEvent(win, Tag), X(x), Y(y), Buttons(buttons),
         Flags(flags) {};
     void Deliver() const override {
-        ((tTJSNI_BaseWindow *)GetSource())->OnMouseDown(X, Y, Buttons, Flags);
+        auto *window = (tTJSNI_BaseWindow *)GetSource();
+        window->OnMouseDown(X, Y, Buttons, Flags);
+        window->OnPointerDown(
+            static_cast<tjs_int>(Buttons) +
+                static_cast<tjs_int>(tTVPPointerType::ptMouseLeft),
+            X, Y, 1.0, 1.0, Flags, 0);
     }
 };
 //---------------------------------------------------------------------------
@@ -427,7 +461,12 @@ public:
         tTVPBaseInputEvent(win, Tag), X(x), Y(y), Buttons(buttons),
         Flags(flags) {};
     void Deliver() const override {
-        ((tTJSNI_BaseWindow *)GetSource())->OnMouseUp(X, Y, Buttons, Flags);
+        auto *window = (tTJSNI_BaseWindow *)GetSource();
+        window->OnMouseUp(X, Y, Buttons, Flags);
+        window->OnPointerUp(
+            static_cast<tjs_int>(Buttons) +
+                static_cast<tjs_int>(tTVPPointerType::ptMouseLeft),
+            X, Y, 1.0, 1.0, Flags, 0);
     }
 };
 //---------------------------------------------------------------------------
@@ -442,7 +481,10 @@ public:
                               tjs_uint32 flags) :
         tTVPBaseInputEvent(win, Tag), X(x), Y(y), Flags(flags) {};
     void Deliver() const override {
-        ((tTJSNI_BaseWindow *)GetSource())->OnMouseMove(X, Y, Flags);
+        auto *window = (tTJSNI_BaseWindow *)GetSource();
+        window->OnMouseMove(X, Y, Flags);
+        window->OnPointerMove(static_cast<tjs_int>(tTVPPointerType::ptMouse),
+                              X, Y, 1.0, 1.0, Flags, 0);
     }
 };
 //---------------------------------------------------------------------------
@@ -600,7 +642,10 @@ public:
                               tjs_real cx, tjs_real cy, tjs_uint32 id) :
         tTVPBaseInputEvent(win, Tag), X(x), Y(y), CX(cx), CY(cy), ID(id) {};
     void Deliver() const override {
-        ((tTJSNI_BaseWindow *)GetSource())->OnTouchDown(X, Y, CX, CY, ID);
+        auto *window = (tTJSNI_BaseWindow *)GetSource();
+        window->OnTouchDown(X, Y, CX, CY, ID);
+        window->OnPointerDown(static_cast<tjs_int>(tTVPPointerType::ptTouch),
+                              X, Y, CX, CY, 0, ID);
     }
 };
 //---------------------------------------------------------------------------
@@ -617,7 +662,10 @@ public:
                             tjs_real cx, tjs_real cy, tjs_uint32 id) :
         tTVPBaseInputEvent(win, Tag), X(x), Y(y), CX(cx), CY(cy), ID(id) {};
     void Deliver() const override {
-        ((tTJSNI_BaseWindow *)GetSource())->OnTouchUp(X, Y, CX, CY, ID);
+        auto *window = (tTJSNI_BaseWindow *)GetSource();
+        window->OnTouchUp(X, Y, CX, CY, ID);
+        window->OnPointerUp(static_cast<tjs_int>(tTVPPointerType::ptTouch), X,
+                            Y, CX, CY, 0, ID);
     }
 };
 //---------------------------------------------------------------------------
@@ -634,7 +682,10 @@ public:
                               tjs_real cx, tjs_real cy, tjs_uint32 id) :
         tTVPBaseInputEvent(win, Tag), X(x), Y(y), CX(cx), CY(cy), ID(id) {};
     void Deliver() const override {
-        ((tTJSNI_BaseWindow *)GetSource())->OnTouchMove(X, Y, CX, CY, ID);
+        auto *window = (tTJSNI_BaseWindow *)GetSource();
+        window->OnTouchMove(X, Y, CX, CY, ID);
+        window->OnPointerMove(static_cast<tjs_int>(tTVPPointerType::ptTouch),
+                              X, Y, CX, CY, 0, ID);
     }
 };
 //---------------------------------------------------------------------------

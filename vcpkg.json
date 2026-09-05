@@ -9,6 +9,7 @@
       "platform": "linux | windows | osx"
     },
     "boost-iostreams",
+    "bzip2",
     {
       "name": "boost-locale",
       "default-features": false
@@ -19,6 +20,7 @@
     },
     "boost-phoenix",
     "boost-spirit",
+    "curl",
     {
       "name": "breakpad",
       "default-features": false,
@@ -48,6 +50,18 @@
       "platform": "!windows & !emscripten"
     },
     "libjpeg-turbo",
+    "lua",
+    {
+      "name": "llama-cpp",
+      "platform": "!emscripten"
+    },
+    {
+      "name": "ggml",
+      "features": [
+        "metal"
+      ],
+      "platform": "osx"
+    },
     {
       "name": "libogg",
       "platform": "android"
@@ -87,10 +101,28 @@
       "name": "sdl2",
       "default-features": false
     },
+    {
+      "name": "sdl2-image",
+      "features": [
+        "libjpeg-turbo",
+        "libwebp"
+      ]
+    },
+    "sdl2-mixer",
+    {
+      "name": "sdl2-ttf",
+      "features": [
+        "harfbuzz"
+      ]
+    },
     "spdlog",
     "highway",
     "uchardet",
     "unrar",
+    {
+      "name": "vulkan-headers",
+      "platform": "osx"
+    },
     {
       "name": "vcpkg-cmake",
       "host": true
@@ -101,6 +133,10 @@
     {
       "name": "opencv4",
       "version": "4.7.0#6"
+    },
+    {
+      "name": "lua",
+      "version": "5.4.8"
     }
   ]
 }

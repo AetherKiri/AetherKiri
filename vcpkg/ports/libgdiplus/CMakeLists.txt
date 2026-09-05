@@ -83,6 +83,10 @@ endif()
 find_package(TIFF)
 if(TIFF_FOUND)
     set(HAVE_LIBTIFF ON)
+    # Keep the TIFF::TIFF target reference in the link interface. The
+    # installed libgdiplus-config.cmake calls find_dependency(TIFF) before
+    # loading the exported targets, so consumers get TIFF::TIFF together
+    # with its full transitive dependency chain (lzma, zstd, webp, ...).
     list(APPEND GDIPLUS_LIBS ${TIFF_LIBRARIES})
     target_include_directories(${PROJECT_NAME} PUBLIC ${TIFF_INCLUDE_DIRS})
 else()
@@ -224,12 +228,6 @@ target_include_directories(${PROJECT_NAME}
 
 configure_file(config.h.in config.h)
 
-install(TARGETS ${PROJECT_NAME}
-    LIBRARY DESTINATION lib
-    ARCHIVE DESTINATION lib
-    RUNTIME DESTINATION bin
-)
-
 install(DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/src/"
     DESTINATION "include/libgdiplus"
     FILES_MATCHING PATTERN "*.h" PATTERN "*.inc"
@@ -237,14 +235,26 @@ install(DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/src/"
 
 install(
     TARGETS libgdiplus
-    EXPORT libgdiplus-config
+    EXPORT libgdiplus-targets
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
     RUNTIME DESTINATION bin
 )
 
 install(
-    EXPORT libgdiplus-config
+    EXPORT libgdiplus-targets
+    FILE libgdiplus-targets.cmake
     DESTINATION share/libgdiplus
     NAMESPACE libgdiplus::
+)
+
+include(CMakePackageConfigHelpers)
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/libgdiplus-config.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/libgdiplus-config.cmake"
+    INSTALL_DESTINATION share/libgdiplus
+)
+install(
+    FILES "${CMAKE_CURRENT_BINARY_DIR}/libgdiplus-config.cmake"
+    DESTINATION share/libgdiplus
 )

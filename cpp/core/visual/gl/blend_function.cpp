@@ -69,7 +69,20 @@ template <typename functor>
 static inline void copy_func_c(tjs_uint32 *__restrict dest,
                                const tjs_uint32 *__restrict src, tjs_int len) {
     functor func;
-    for(int i = 0; i < len; i++) {
+    // Keep the hot pixel loop independent from the functor dispatch.  The
+    // destination-alpha blend is used for every software-composited row and
+    // is otherwise difficult for the compiler to unroll through the generic
+    // loop at -O2 (the functor contains table lookups and packed arithmetic).
+    // Four independent iterations expose enough ILP on both x86_64 and ARM64
+    // while preserving the exact per-pixel evaluation order.
+    int i = 0;
+    for(; i + 3 < len; i += 4) {
+        dest[i + 0] = func(dest[i + 0], src[i + 0]);
+        dest[i + 1] = func(dest[i + 1], src[i + 1]);
+        dest[i + 2] = func(dest[i + 2], src[i + 2]);
+        dest[i + 3] = func(dest[i + 3], src[i + 3]);
+    }
+    for(; i < len; ++i) {
         dest[i] = func(dest[i], src[i]);
     }
 }

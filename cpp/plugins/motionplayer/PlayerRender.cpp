@@ -6,6 +6,7 @@
 #include "ConfigManager/IndividualConfigManager.h"
 #include "TickCount.h"
 #include "ThreadIntf.h"
+#include "godot/GodotGpuBridge.h"
 #include "godot/GodotRenderManager.h"
 #include <algorithm>
 #include <cctype>
@@ -16,10 +17,13 @@
 #include <limits>
 #include <mutex>
 #include <set>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 
 using namespace motion::internal;
+
+extern "C" void AetherKiriMotionPlayerCoreResetForGameSession();
 
 namespace {
 
@@ -39,10 +43,6 @@ namespace {
         int canvasHeight,
         tjs_int &messageTop);
     bool motionPresentationLayerHasVisibleSamples(tTJSNI_BaseLayer *layer);
-    bool centeredPresentationFrameHasResolvedScale(
-        tTJSNI_BaseLayer *layer,
-        const std::string &motionPath,
-        const char *reason);
 
     bool motionRenderProfileEnabled() {
         static const bool enabled = [] {
@@ -56,6 +56,114 @@ namespace {
         return static_cast<std::uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()).count());
+    }
+
+    std::uint64_t motionRasterThrottleIntervalUs() {
+        static const std::uint64_t intervalUs = [] {
+            // A 30 Hz publish cap keeps the authored transition clock and
+            // input processing at the host tick rate while preventing an
+            // expensive non-emote full-canvas raster from running twice
+            // before the previous surface can be presented.  Set the value
+            // to 0 for strict legacy every-tick rendering.
+            const char *value =
+                std::getenv("AETHERKIRI_MOTION_RASTER_THROTTLE_MS");
+            if(!value || !*value) return std::uint64_t{33333};
+            char *end = nullptr;
+            const double milliseconds = std::strtod(value, &end);
+            if(end == value || !std::isfinite(milliseconds) ||
+               milliseconds <= 0.0) {
+                return std::uint64_t{0};
+            }
+            const double clamped = std::min(milliseconds, 1000.0);
+            return static_cast<std::uint64_t>(clamped * 1000.0);
+        }();
+        return intervalUs;
+    }
+
+    struct BgraReadbackStats {
+        int minimumX = 0;
+        int minimumY = 0;
+        int maximumX = 0;
+        int maximumY = 0;
+        bool anyVisible = false;
+        bool allOpaque = true;
+    };
+
+    BgraReadbackStats convertBgraReadbackToRgba(
+        const std::uint8_t *source, std::size_t sourceStride,
+        std::uint8_t *destination, std::size_t destinationStride,
+        int width, int height) {
+        BgraReadbackStats result;
+        if(!source || !destination || width <= 0 || height <= 0) {
+            result.allOpaque = false;
+            return result;
+        }
+
+        unsigned workerCount = 1;
+        const std::size_t pixelCount =
+            static_cast<std::size_t>(width) * height;
+        if(pixelCount >= 256u * 1024u && height >= 128) {
+            const unsigned hardware = std::thread::hardware_concurrency();
+            workerCount = std::min<unsigned>(
+                4u, hardware == 0 ? 2u : hardware);
+            workerCount = std::min<unsigned>(
+                workerCount, static_cast<unsigned>(height / 64));
+            workerCount = std::max(1u, workerCount);
+        }
+
+        std::vector<BgraReadbackStats> partial(workerCount);
+        const auto convertRows = [&](unsigned worker) {
+            const int beginY = static_cast<int>(
+                static_cast<std::int64_t>(height) * worker / workerCount);
+            const int endY = static_cast<int>(
+                static_cast<std::int64_t>(height) * (worker + 1u) /
+                workerCount);
+            BgraReadbackStats &stats = partial[worker];
+            stats.minimumX = width;
+            stats.minimumY = height;
+            for(int y = beginY; y < endY; ++y) {
+                const auto *src = source + sourceStride * y;
+                auto *dst = destination + destinationStride * y;
+                for(int x = 0; x < width; ++x) {
+                    const std::uint8_t blue = src[x * 4 + 0];
+                    const std::uint8_t green = src[x * 4 + 1];
+                    const std::uint8_t red = src[x * 4 + 2];
+                    const std::uint8_t alpha = src[x * 4 + 3];
+                    dst[x * 4 + 0] = red;
+                    dst[x * 4 + 1] = green;
+                    dst[x * 4 + 2] = blue;
+                    dst[x * 4 + 3] = alpha;
+                    stats.allOpaque = stats.allOpaque && alpha == 255;
+                    if(alpha == 0) continue;
+                    stats.anyVisible = true;
+                    stats.minimumX = std::min(stats.minimumX, x);
+                    stats.minimumY = std::min(stats.minimumY, y);
+                    stats.maximumX = std::max(stats.maximumX, x + 1);
+                    stats.maximumY = std::max(stats.maximumY, y + 1);
+                }
+            }
+        };
+
+        std::vector<std::thread> workers;
+        workers.reserve(workerCount > 0 ? workerCount - 1u : 0u);
+        for(unsigned worker = 1; worker < workerCount; ++worker) {
+            workers.emplace_back(convertRows, worker);
+        }
+        convertRows(0);
+        for(auto &worker : workers) worker.join();
+
+        result.minimumX = width;
+        result.minimumY = height;
+        for(const auto &stats : partial) {
+            result.allOpaque = result.allOpaque && stats.allOpaque;
+            if(!stats.anyVisible) continue;
+            result.anyVisible = true;
+            result.minimumX = std::min(result.minimumX, stats.minimumX);
+            result.minimumY = std::min(result.minimumY, stats.minimumY);
+            result.maximumX = std::max(result.maximumX, stats.maximumX);
+            result.maximumY = std::max(result.maximumY, stats.maximumY);
+        }
+        return result;
     }
 
     struct SharedMotionSourceBitmapEntry {
@@ -76,6 +184,31 @@ namespace {
         return cache;
     }
 
+    void clearSharedMotionSourceBitmapCache() {
+        auto &cache = sharedMotionSourceBitmapCache();
+        std::lock_guard<std::mutex> lock(cache.mutex);
+        cache.entries.clear();
+        cache.bytes = 0;
+        cache.useCounter = 0;
+    }
+
+    class MotionPlayerCompactEventCallback final
+        : public tTVPCompactEventCallbackIntf {
+    public:
+        void OnCompact(tjs_int level) override {
+            if(level < TVP_COMPACT_LEVEL_MINIMIZE) {
+                return;
+            }
+            // Drop only process-level warm-cache ownership. Active players
+            // retain their own shared_ptrs until the current frame finishes.
+            clearSharedMotionSourceBitmapCache();
+            motion::ResourceManager::trimStaticStateForMemoryPressure();
+        }
+    };
+
+    MotionPlayerCompactEventCallback g_motionPlayerCompactEventCallback;
+    std::once_flag g_motionPlayerCompactEventHookOnce;
+
     void appendMotionSourceFingerprint(
         std::uint64_t &first,
         std::uint64_t &second,
@@ -94,20 +227,23 @@ namespace {
         const std::string &compressName,
         int width,
         int height,
-        const PSB::PSBResource &resource,
-        std::unordered_map<
-            const PSB::PSBResource *,
-            std::pair<std::uint64_t, std::uint64_t>> &fingerprintCache) {
-        auto fingerprintIt = fingerprintCache.find(&resource);
-        if(fingerprintIt == fingerprintCache.end()) {
-            std::uint64_t first = 1469598103934665603ull;
-            std::uint64_t second = 0x517cc1b727220a95ull;
-            appendMotionSourceFingerprint(first, second, resource.data);
-            fingerprintIt = fingerprintCache.emplace(
-                &resource, std::make_pair(first, second)).first;
+        const PSB::PSBResource &resource) {
+        std::pair<std::uint64_t, std::uint64_t> fingerprint;
+        {
+            std::lock_guard lock(snapshot.sourceFingerprintMutex);
+            auto fingerprintIt =
+                snapshot.sourceFingerprints.find(&resource);
+            if(fingerprintIt == snapshot.sourceFingerprints.end()) {
+                std::uint64_t first = 1469598103934665603ull;
+                std::uint64_t second = 0x517cc1b727220a95ull;
+                appendMotionSourceFingerprint(first, second, resource.data);
+                fingerprintIt = snapshot.sourceFingerprints.emplace(
+                    &resource, std::make_pair(first, second)).first;
+            }
+            fingerprint = fingerprintIt->second;
         }
-        auto first = fingerprintIt->second.first;
-        auto second = fingerprintIt->second.second;
+        auto first = fingerprint.first;
+        auto second = fingerprint.second;
 
         std::size_t paletteBytes = 0;
         if(resourcePath.size() > 6 &&
@@ -163,7 +299,12 @@ namespace {
             cache.bytes += bitmapBytes;
         }
 
-        constexpr std::size_t kSharedBitmapCacheLimit = 256u * 1024u * 1024u;
+        // Keep the process-wide source cache below the size of a typical
+        // full-screen render history. Per-player caches still retain the
+        // active motion, while old source bitmaps are allowed to cold-load
+        // again instead of accumulating alongside GPU layer textures.
+        constexpr std::size_t kSharedBitmapCacheLimit =
+            256u * 1024u * 1024u;
         while(cache.bytes > kSharedBitmapCacheLimit &&
               cache.entries.size() > 1) {
             auto oldest = cache.entries.begin();
@@ -245,8 +386,10 @@ namespace {
     }
 
     std::size_t renderCommandReuseSignature(
-        const std::vector<motion::detail::PlayerRuntime::RenderCommand> &commands) {
+        const std::vector<motion::detail::PlayerRuntime::RenderCommand> &commands,
+        int maskMode) {
         std::size_t seed = commands.size();
+        renderReuseHashCombine(seed, std::hash<int>{}(maskMode));
         for(const auto &command : commands) {
             renderReuseHashCombine(seed, std::hash<int>{}(command.nodeIndex));
             renderReuseHashCombine(
@@ -412,15 +555,26 @@ namespace {
         tjs_int canvasWidth,
         tjs_int canvasHeight,
         std::size_t commandSignature) {
+        (void)frame;
+        // `commandSignature` already contains every pixel-affecting value
+        // emitted by buildRenderCommands: source identity, opacity/tint,
+        // clip, and the evaluated world/local geometry.  The timeline frame
+        // number itself is metadata only. Requiring it here misses the common
+        // case where several adjacent ticks hold the same pose and makes the
+        // second page replay the full AlphaBlend_d composition unnecessarily.
         return entry.motion == motionPath &&
             entry.canvasWidth == canvasWidth &&
             entry.canvasHeight == canvasHeight &&
-            std::fabs(entry.frame - frame) < 0.0001 &&
             entry.commandSignature == commandSignature;
     }
 
     constexpr std::uint64_t kGlobalPresentationReuseTtlUs = 100000;
     constexpr std::uint64_t kGlobalPresentationCopyReuseTtlUs = 100000;
+    // D3DEmote control, physics, and authored timelines continue at the host
+    // tick rate. Only the expensive full-canvas raster publish is capped at
+    // 20 Hz per player; the last completed GPU layer stays resident between
+    // publishes so the window compositor and input can remain responsive.
+    constexpr std::uint64_t kD3DEmoteRasterPublishIntervalUs = 50000;
 
     iTJSDispatch2 *globalPresentationSourceLayerObject(
         GlobalPresentationRenderCacheEntry &entry) {
@@ -814,13 +968,18 @@ namespace {
         if(!isYuzuTitlePresentationMotion(motionPath)) {
             return false;
         }
+        const auto label = renderDebugLowercase(nodeLabel);
         const auto source = renderDebugLowercase(sourceKey);
-        if(source != "src/title/white" &&
-           source.find("/title/white") == std::string::npos &&
-           source.find("/white") == std::string::npos) {
-            return false;
-        }
-        return true;
+        // Only the full-canvas solid-white transition layer is a utility
+        // surface.  Authored resources such as "White Gradation|right" and
+        // "White Gradation|bottom" are ordinary translucent presentation
+        // layers; classifying every path containing "/white" as a utility
+        // drops those edge gradients and exposes the transparent render
+        // target as a black border.
+        return label == "white" &&
+            (source == "src/title/white" ||
+             source.find("/title/white") != std::string::npos ||
+             source == "src/normal/white");
     }
 
     bool isYuzuTitleStencilUtilityLayer(const std::string &motionPath,
@@ -831,22 +990,6 @@ namespace {
         const auto source = renderDebugLowercase(sourceKey);
         return source.rfind("src/#mask/", 0) == 0 ||
             source.find("/#mask/") != std::string::npos;
-    }
-
-    bool isYuzuSdStencilUtilityLayer(const std::string &motionPath,
-                                     const std::string &nodeLabel,
-                                     const std::string &sourceKey) {
-        if(!isYuzuSdPresentationMotionPath(motionPath)) {
-            return false;
-        }
-        const auto label = renderDebugLowercase(nodeLabel);
-        const auto source = renderDebugLowercase(sourceKey);
-        if(label != "mask") {
-            return false;
-        }
-        const auto slash = source.find_last_of("/\\");
-        return (slash == std::string::npos ? source : source.substr(slash + 1)) ==
-            "mask";
     }
 
     bool isYuzuTitleNormalPresentationSource(const std::string &sourceKey) {
@@ -1333,7 +1476,7 @@ namespace {
         return true;
     }
 
-    bool hasDuplicatedNumberedTitleScale(
+    bool hasDuplicatedNestedCompositeScale(
         const motion::detail::MotionSnapshot &snapshot,
         const motion::detail::PlayerRuntime::PreparedRenderItem &entry) {
         float sourceWidth = 0.0f;
@@ -1364,14 +1507,11 @@ namespace {
     }
 
     bool isCenteredGameMotion(const std::string &motionPath) {
-        const auto motion = renderDebugLowercase(motionPath);
-        const auto slash = motion.find_last_of("/\\");
-        const std::string name =
-            slash == std::string::npos ? motion : motion.substr(slash + 1);
-        if(name.rfind("sd", 0) != 0 || name.size() < 4) {
-            return false;
-        }
-        return std::isdigit(static_cast<unsigned char>(name[2]));
+        (void)motionPath;
+        // Motion placement belongs to the authored AffineLayer/SLA owner.
+        // Keep the old centered-presentation machinery disabled instead of
+        // selecting it from a storage filename.
+        return false;
     }
 
     double readMotionResolutionValue(const tTJSVariant &value) {
@@ -1411,7 +1551,8 @@ namespace {
     void translatePreparedRenderItem(
         motion::detail::PlayerRuntime::PreparedRenderItem &entry,
         float dx,
-        float dy) {
+        float dy,
+        bool transformInheritedViewport = true) {
         auto translatePointArray = [dx, dy](auto &points) {
             for(size_t i = 0; i + 1 < points.size(); i += 2) {
                 points[i] += dx;
@@ -1426,7 +1567,8 @@ namespace {
             entry.paintBox[2] += dx;
             entry.paintBox[3] += dy;
         }
-        if(entry.hasViewport && validRenderPaintBox(entry.viewport)) {
+        if(transformInheritedViewport && entry.hasViewport &&
+           validRenderPaintBox(entry.viewport)) {
             entry.viewport[0] += dx;
             entry.viewport[1] += dy;
             entry.viewport[2] += dx;
@@ -1438,7 +1580,8 @@ namespace {
         motion::detail::PlayerRuntime::PreparedRenderItem &entry,
         float originX,
         float originY,
-        float scale) {
+        float scale,
+        bool transformInheritedViewport = true) {
         auto scalePointArray = [originX, originY, scale](auto &points) {
             for(size_t i = 0; i + 1 < points.size(); i += 2) {
                 points[i] = originX + (points[i] - originX) * scale;
@@ -1453,7 +1596,8 @@ namespace {
             entry.paintBox[2] = originX + (entry.paintBox[2] - originX) * scale;
             entry.paintBox[3] = originY + (entry.paintBox[3] - originY) * scale;
         }
-        if(entry.hasViewport && validRenderPaintBox(entry.viewport)) {
+        if(transformInheritedViewport && entry.hasViewport &&
+           validRenderPaintBox(entry.viewport)) {
             entry.viewport[0] = originX + (entry.viewport[0] - originX) * scale;
             entry.viewport[1] = originY + (entry.viewport[1] - originY) * scale;
             entry.viewport[2] = originX + (entry.viewport[2] - originX) * scale;
@@ -1570,20 +1714,8 @@ namespace {
 
         const float width = bounds[2] - bounds[0];
         const float height = bounds[3] - bounds[1];
-        const bool yuzuSdMotion =
-            isYuzuSdPresentationMotionPath(motionPath);
-        int layoutCanvasWidth = canvasWidth;
-        int layoutCanvasHeight = canvasHeight;
-        int visibleCanvasWidth = 0;
-        int visibleCanvasHeight = 0;
-        if(yuzuSdMotion &&
-           queryMainWindowCanvasSize(visibleCanvasWidth, visibleCanvasHeight) &&
-           visibleCanvasWidth > 0 && visibleCanvasHeight > 0) {
-            layoutCanvasWidth = std::min(canvasWidth, visibleCanvasWidth);
-            layoutCanvasHeight = std::min(canvasHeight, visibleCanvasHeight);
-        }
-        const float canvasW = static_cast<float>(layoutCanvasWidth);
-        const float canvasH = static_cast<float>(layoutCanvasHeight);
+        const float canvasW = static_cast<float>(canvasWidth);
+        const float canvasH = static_cast<float>(canvasHeight);
         const float currentCenterX = (bounds[0] + bounds[2]) * 0.5f;
         const float currentCenterY = (bounds[1] + bounds[3]) * 0.5f;
         const float originToleranceX = std::max(16.0f, canvasW * 0.02f);
@@ -1674,9 +1806,8 @@ namespace {
         double messageSafeScale = motionScale;
         tjs_int messagePadding = 0;
         tjs_int messageSafeBottom = 0;
-        const bool storyYuzuSdLayer = yuzuSdMotion;
         const bool constrainedForMessageUi =
-            !storyYuzuSdLayer && computeCenteredMotionMessageSafeScale(
+            computeCenteredMotionMessageSafeScale(
                 presentationLayer, width, height, canvasWidth, canvasHeight,
                 motionScale, messageSafeScale, &messagePadding,
                 &messageSafeBottom);
@@ -1728,7 +1859,7 @@ namespace {
                     "motion centered game presentation: motion={} bounds=[{:.1f},{:.1f},{:.1f},{:.1f}] scaledBounds=[{:.1f},{:.1f},{:.1f},{:.1f}] canvas={}x{} resolution={:.2f} baseScale={:.4f} scale={:.4f} topLeft={} centered={} animatedStage={} constrained={} safeBottom={} padding={} contentCenter={:.1f},{:.1f} translate={:.1f},{:.1f}",
                 motionPath, bounds[0], bounds[1], bounds[2], bounds[3],
                 scaledBounds[0], scaledBounds[1], scaledBounds[2],
-                scaledBounds[3], layoutCanvasWidth, layoutCanvasHeight,
+                scaledBounds[3], canvasWidth, canvasHeight,
                 configuredResolution, baseMotionScale, motionScale,
                 topLeftOrigin ? 1 : 0, centeredOrigin ? 1 : 0,
                 plausibleAnimatedStage ? 1 : 0,
@@ -1742,7 +1873,8 @@ namespace {
         motion::detail::PlayerRuntime &runtime,
         const std::string &motionPath,
         tjs_int canvasWidth,
-        tjs_int canvasHeight) {
+        tjs_int canvasHeight,
+        double frameTick) {
         if(!isYuzuPresentationMotion(motionPath) ||
            canvasWidth <= 0 || canvasHeight <= 0 ||
            runtime.preparedRenderItems.empty()) {
@@ -1757,6 +1889,48 @@ namespace {
             isYuzuStartupLogoMotion(motionPath);
 
         if(isTitleMotion) {
+            const auto loweredMotionPath = renderDebugLowercase(motionPath);
+            const auto filenameOffset = loweredMotionPath.find_last_of("/\\");
+            const auto motionFilename =
+                filenameOffset == std::string::npos
+                    ? loweredMotionPath
+                    : loweredMotionPath.substr(filenameOffset + 1);
+            const bool isUnevaluatedBaseTitleFrame =
+                frameTick <= 0.0001 &&
+                (motionFilename == "title_bg.mtn" ||
+                 motionFilename == "title_bg.psb");
+            if(isUnevaluatedBaseTitleFrame) {
+                // KAG creates and draws a Motion player immediately after
+                // play("title"), before the first progress callback.  At that
+                // point the nested char_move tree still contains its default
+                // persistent layers at full opacity, so the completed title
+                // card flashes once before the authored character entrance
+                // animation is evaluated.  Keep only the full-canvas white
+                // transition utility for this unevaluated frame.  Publishing
+                // even bg1/bg2 here makes the title background appear before
+                // the animation and then disappear behind its white flash.
+                // The first progressed frame publishes the authored scene.
+                int suppressed = 0;
+                for(auto &entry : runtime.preparedRenderItems) {
+                    if(!entry.drawFlag || entry.skipFlag0 || entry.skipFlag1 ||
+                       entry.opacity <= 0) {
+                        continue;
+                    }
+                    if(!isYuzuTitleWhiteUtilityLayer(
+                           motionPath, entry.nodeLabel, entry.sourceKey)) {
+                        entry.skipFlag0 = true;
+                        ++suppressed;
+                    }
+                }
+                if(suppressed > 0 && LOGGER &&
+                   shouldDebugTitleRender(motionPath) &&
+                   markRenderDebugLogged(
+                       "yuzu-title-unevaluated-frame:" + motionPath)) {
+                    LOGGER->info(
+                        "motion title unevaluated composition suppressed: motion={} suppressed={}",
+                        motionPath, suppressed);
+                }
+            }
             const bool hasSyntheticIntroLayer = std::any_of(
                 runtime.preparedRenderItems.begin(),
                 runtime.preparedRenderItems.end(),
@@ -2114,13 +2288,13 @@ namespace {
             }
         }
 
-        // Some numbered Yuzu title cards author their character under two
-        // nested 150% groups. Collapse that duplicated 225% transform only
-        // when the prepared quad is actually 2.25x its PSB source. Matching
-        // by title filename alone also catches 1:1 cards and shrinks them to
-        // 4/9 of their intended size.
-        if(runtime.activeMotion &&
-           isYuzuNumberedTitleCharacterMotion(motionPath)) {
+        // A flattened child under an off-screen composite can retain the
+        // composite's transform in addition to its authored nested 150%
+        // groups. Collapse that duplicated 225% transform only when the
+        // prepared quad is actually 2.25x its PSB source. The provenance
+        // marker comes from the generic type-12 composite path, so this does
+        // not depend on a game's filename or layer naming convention.
+        if(runtime.activeMotion) {
             const float canvasCenterX =
                 static_cast<float>(canvasWidth) * 0.5f;
             const float canvasCenterY =
@@ -2128,8 +2302,9 @@ namespace {
             for(auto &entry : runtime.preparedRenderItems) {
                 if(!entry.drawFlag || entry.skipFlag0 || entry.skipFlag1 ||
                    entry.opacity <= 0 ||
-                   !hasDuplicatedNumberedTitleScale(
-                       *runtime.activeMotion, entry)) {
+                   !entry.viewportInheritedFromComposite ||
+                   !hasDuplicatedNestedCompositeScale(
+                        *runtime.activeMotion, entry)) {
                     continue;
                 }
                 auto bounds = boundsFromRenderCorners(entry.corners);
@@ -2148,10 +2323,12 @@ namespace {
                 const float designCenterY = canvasCenterY +
                     (currentCenterY - canvasCenterY) / 1.5f;
                 scalePreparedRenderItem(entry, currentCenterX,
-                                        currentCenterY, 4.0f / 9.0f);
+                                        currentCenterY, 4.0f / 9.0f,
+                                        !entry.viewportInheritedFromComposite);
                 translatePreparedRenderItem(entry,
                                             designCenterX - currentCenterX,
-                                            designCenterY - currentCenterY);
+                                            designCenterY - currentCenterY,
+                                            !entry.viewportInheritedFromComposite);
             }
         }
 
@@ -2915,6 +3092,61 @@ namespace {
         }
     }
 
+    // Provider-owned offscreen layer. It deliberately skips KAG Window and
+    // LayerManager construction while retaining Kirikiri's mature bitmap,
+    // affine, blend, mesh and stencil implementations.
+    class HeadlessLayerDispatch final : public tTJSDispatch {
+    public:
+        HeadlessLayerDispatch() : layer_(std::make_unique<tTJSNI_BaseLayer>()) {}
+
+        ~HeadlessLayerDispatch() override {
+            if(layer_) {
+                layer_->Invalidate();
+            }
+        }
+
+        tjs_error PropGet(tjs_uint32, const tjs_char *membername,
+                          tjs_uint32 *, tTJSVariant *result,
+                          iTJSDispatch2 *) override {
+            if(!membername || !result) {
+                return TJS_E_INVALIDPARAM;
+            }
+            if(!TJS_strcmp(membername, TJS_W("layerTreeOwnerInterface"))) {
+                *result = static_cast<tjs_int64>(
+                    reinterpret_cast<tjs_intptr_t>(this));
+                return TJS_S_OK;
+            }
+            if(!TJS_strcmp(membername, TJS_W("primaryLayer"))) {
+                *result = tTJSVariant(this, this);
+                return TJS_S_OK;
+            }
+            return TJS_E_MEMBERNOTFOUND;
+        }
+
+        tjs_error NativeInstanceSupport(tjs_uint32 flag, tjs_int32 classid,
+                                        iTJSNativeInstance **pointer) override {
+            if(flag != TJS_NIS_GETINSTANCE || pointer == nullptr ||
+               classid != tTJSNC_Layer::ClassID) {
+                return TJS_E_FAIL;
+            }
+            *pointer = layer_.get();
+            return TJS_S_OK;
+        }
+
+    private:
+        std::unique_ptr<tTJSNI_BaseLayer> layer_;
+    };
+
+    iTJSDispatch2 *createHeadlessLayerObject() {
+        // engine_api can instantiate Artemis without booting the Kirikiri
+        // window subsystem. A BaseLayer still uses the routed TVPGL software
+        // functions in its constructor, so initialize that routing table
+        // before allocating the first off-screen layer.
+        static std::once_flag tvpglInit;
+        std::call_once(tvpglInit, [] { TVPInitTVPGL(); });
+        return new HeadlessLayerDispatch();
+    }
+
     iTJSDispatch2 *resolveLayerTreeOwnerObject(iTJSDispatch2 *object) {
         if(!object) {
             return nullptr;
@@ -3054,12 +3286,12 @@ namespace {
         iTJSDispatch2 *parentLayerObject) {
         if(layerTreeOwnerVariant.Type() != tvtObject ||
            !layerTreeOwnerVariant.AsObjectNoAddRef()) {
-            return nullptr;
+            return createHeadlessLayerObject();
         }
 
         iTJSDispatch2 *global = TVPGetScriptDispatch();
         if(!global) {
-            return nullptr;
+            return createHeadlessLayerObject();
         }
 
             tTJSVariant layerClassVar;
@@ -3083,13 +3315,13 @@ namespace {
         }
 
         global->Release();
-        return created;
+        return created ? created : createHeadlessLayerObject();
     }
 
     iTJSDispatch2 *createLayerObject(iTJSDispatch2 *layerTreeOwnerObject,
                                      iTJSDispatch2 *parentLayerObject) {
         if(!layerTreeOwnerObject) {
-            return nullptr;
+            return createHeadlessLayerObject();
         }
         tTJSVariant ownerVar(layerTreeOwnerObject, layerTreeOwnerObject);
         return createLayerObjectWithOwnerVariant(ownerVar, parentLayerObject);
@@ -3158,9 +3390,7 @@ namespace {
         tTVPLayerType layerType,
         bool visible,
         bool absoluteOrderMode = false) {
-        if(!parentLayerObject ||
-           layerTreeOwnerVariant.Type() != tvtObject ||
-           !layerTreeOwnerVariant.AsObjectNoAddRef()) {
+        if(!parentLayerObject) {
             return nullptr;
         }
 
@@ -3352,45 +3582,6 @@ namespace {
         }
     }
 
-    void configureYuzuSdEventRenderChildLayer(
-        tTJSNI_BaseLayer *renderLayer,
-        tTJSNI_BaseLayer *eventLayer,
-        int canvasWidth,
-        int canvasHeight) {
-        if(!renderLayer || !eventLayer || canvasWidth <= 0 ||
-           canvasHeight <= 0) {
-            return;
-        }
-
-        renderLayer->SetName(TJS_W("AetherKiriYuzuSdMotionSurface"));
-        renderLayer->SetVisible(true);
-        renderLayer->SetEnabled(false);
-        renderLayer->SetHitType(htMask);
-        renderLayer->SetHitThreshold(256);
-        renderLayer->SetPosition(0, 0);
-        renderLayer->SetSize(canvasWidth, canvasHeight);
-        renderLayer->SetClip(0, 0, canvasWidth, canvasHeight);
-        renderLayer->SetOrderIndex(
-            std::max<tjs_int>(0, static_cast<tjs_int>(eventLayer->GetCount()) - 1));
-    }
-
-    iTJSDispatch2 *findYuzuSdEventRenderChildLayerObject(
-        tTJSNI_BaseLayer *eventLayer) {
-        if(!eventLayer) {
-            return nullptr;
-        }
-        const auto count = eventLayer->GetCount();
-        for(tjs_uint i = 0; i < count; ++i) {
-            auto *child = eventLayer->GetChildren(static_cast<tjs_int>(i));
-            if(child && child->GetOwnerNoAddRef() &&
-               child->GetName().AsStdString() ==
-                   "AetherKiriYuzuSdMotionSurface") {
-                return child->GetOwnerNoAddRef();
-            }
-        }
-        return nullptr;
-    }
-
     iTJSDispatch2 *findCgViewRenderChildLayerObject(
         tTJSNI_BaseLayer *renderParentLayer) {
         if(!renderParentLayer) {
@@ -3407,26 +3598,6 @@ namespace {
             }
         }
         return nullptr;
-    }
-
-    void detachYuzuSdEventRenderSurfaceChildren(
-        tTJSNI_BaseLayer *renderLayer) {
-        if(!renderLayer) {
-            return;
-        }
-        std::vector<tTJSNI_BaseLayer *> children;
-        const auto count = renderLayer->GetCount();
-        children.reserve(count);
-        for(tjs_uint i = 0; i < count; ++i) {
-            if(auto *child =
-                   renderLayer->GetChildren(static_cast<tjs_int>(i))) {
-                children.push_back(child);
-            }
-        }
-        for(auto *child : children) {
-            child->SetVisible(false);
-            child->SetParent(nullptr);
-        }
     }
 
     int scoreMotionPresentationChild(tTJSNI_BaseLayer *parent,
@@ -4259,17 +4430,6 @@ namespace {
         return name == "ev" || name == "sd";
     }
 
-    bool isYuzuSdPreviewMotionPath(const std::string &motionPath) {
-        auto motion = renderDebugLowercase(motionPath);
-        const auto slash = motion.find_last_of("/\\");
-        const std::string name =
-            slash == std::string::npos ? motion : motion.substr(slash + 1);
-        return name.rfind("sd", 0) == 0 && name.size() > 2 &&
-            std::isdigit(static_cast<unsigned char>(name[2])) &&
-            (name.find(".psb") != std::string::npos ||
-             name.find(".mtn") != std::string::npos);
-    }
-
     bool centeredGameMotionHoldCaptureLayer(
         tTJSNI_BaseLayer *layer,
         const std::string &motionPath) {
@@ -4280,183 +4440,12 @@ namespace {
         return centeredGameMotionStablePresentationLayer(layer);
     }
 
-    enum class YuzuSdPresentationLayerFamily {
-        None,
-        Sd,
-        Event,
-    };
-
-    YuzuSdPresentationLayerFamily yuzuSdPresentationLayerFamilyName(
-        const std::string &name) {
-        if(name == "sd" || name == "trans_sd") {
-            return YuzuSdPresentationLayerFamily::Sd;
-        }
-        if(name == "ev" || name == "trans_ev") {
-            return YuzuSdPresentationLayerFamily::Event;
-        }
-        return YuzuSdPresentationLayerFamily::None;
-    }
-
-    YuzuSdPresentationLayerFamily yuzuSdPresentationLayerFamily(
-        tTJSNI_BaseLayer *layer) {
-        if(!layer || !layer->GetOwnerNoAddRef()) {
-            return YuzuSdPresentationLayerFamily::None;
-        }
-        const auto name =
-            renderDebugLowercase(motion::detail::narrow(layer->GetName()));
-        return yuzuSdPresentationLayerFamilyName(name);
-    }
-
-    bool copyPresentationFramePixelsPreservingLayerState(
-        tTJSNI_BaseLayer *sourceLayer,
-        tTJSNI_BaseLayer *targetLayer,
-        int canvasWidth,
-        int canvasHeight) {
-        if(!sourceLayer || !targetLayer || sourceLayer == targetLayer ||
-           !motion::internal::presentationLayerTypeCanReceivePixels(
-               sourceLayer->GetType()) ||
-           !motion::internal::presentationLayerTypeCanReceivePixels(
-               targetLayer->GetType())) {
-            return false;
-        }
-
-        try {
-            if(!sourceLayer->GetHasImage()) {
-                return false;
-            }
-            auto *sourceImage = sourceLayer->GetMainImage();
-            if(!sourceImage || sourceImage->GetWidth() <= 0 ||
-               sourceImage->GetHeight() <= 0) {
-                return false;
-            }
-
-            const auto sourceWidth =
-                static_cast<tjs_int>(sourceImage->GetWidth());
-            const auto sourceHeight =
-                static_cast<tjs_int>(sourceImage->GetHeight());
-            const auto targetWidth = std::max<tjs_int>(
-                std::max<tjs_int>(sourceWidth, canvasWidth),
-                std::max<tjs_int>(targetLayer->GetImageWidth(), 0));
-            const auto targetHeight = std::max<tjs_int>(
-                std::max<tjs_int>(sourceHeight, canvasHeight),
-                std::max<tjs_int>(targetLayer->GetImageHeight(), 0));
-            if(targetWidth <= 0 || targetHeight <= 0) {
-                return false;
-            }
-
-            if(!targetLayer->GetHasImage()) {
-                targetLayer->SetHasImage(true);
-            }
-            if(targetLayer->GetImageWidth() < targetWidth ||
-               targetLayer->GetImageHeight() < targetHeight) {
-                targetLayer->SetImageSize(
-                    static_cast<tjs_uint>(targetWidth),
-                    static_cast<tjs_uint>(targetHeight));
-            }
-            if(targetLayer->GetImageLeft() != sourceLayer->GetImageLeft() ||
-               targetLayer->GetImageTop() != sourceLayer->GetImageTop()) {
-                targetLayer->SetImagePosition(sourceLayer->GetImageLeft(),
-                                              sourceLayer->GetImageTop());
-            }
-            if(targetLayer->GetClipWidth() < canvasWidth ||
-               targetLayer->GetClipHeight() < canvasHeight) {
-                targetLayer->SetClip(0, 0, canvasWidth, canvasHeight);
-            }
-
-            auto *targetImage = targetLayer->GetMainImage();
-            if(!targetImage) {
-                return false;
-            }
-            targetImage->Fill(tTVPRect(0, 0, targetWidth, targetHeight),
-                              0x00000000);
-            targetImage->CopyRect(0, 0, sourceImage,
-                                  tTVPRect(0, 0,
-                                           sourceWidth, sourceHeight));
-            targetLayer->Update(false);
-            return true;
-        } catch(...) {
-            return false;
-        }
-    }
-
-    int syncYuzuSdPreviewPresentationLayers(
-        tTJSNI_BaseLayer *sourceLayer,
-        const std::string &motionPath,
-        int canvasWidth,
-        int canvasHeight,
-        const char *reason) {
-        if(!sourceLayer || !isYuzuSdPreviewMotionPath(motionPath) ||
-           canvasWidth <= 0 || canvasHeight <= 0 ||
-           !motionPresentationLayerHasVisibleSamples(sourceLayer)) {
-            return 0;
-        }
-        if(layerBelongsToCgViewPresentation(sourceLayer)) {
-            return 0;
-        }
-        const auto sourceFamily =
-            yuzuSdPresentationLayerFamily(sourceLayer);
-        if(sourceFamily == YuzuSdPresentationLayerFamily::None) {
-            return 0;
-        }
-        if(!centeredPresentationFrameHasResolvedScale(
-               sourceLayer, motionPath, reason)) {
-            return 0;
-        }
-
-        auto *root = sourceLayer;
-        while(root && root->GetParent()) {
-            root = root->GetParent();
-        }
-        if(!root) {
-            return 0;
-        }
-
-        std::vector<tTJSNI_BaseLayer *> targets;
-        std::unordered_set<tTJSNI_BaseLayer *> seen;
-        auto visit = [&](auto &&self, tTJSNI_BaseLayer *layer) -> void {
-            if(!layer) {
-                return;
-            }
-            if(layer != sourceLayer &&
-               motion::internal::presentationLayerTypeCanReceivePixels(
-                   layer->GetType()) &&
-               yuzuSdPresentationLayerFamily(layer) == sourceFamily &&
-               seen.insert(layer).second) {
-                targets.push_back(layer);
-            }
-            const auto childCount = layer->GetCount();
-            for(tjs_uint i = 0; i < childCount; ++i) {
-                self(self, layer->GetChildren(static_cast<tjs_int>(i)));
-            }
-        };
-        visit(visit, root);
-
-        int copied = 0;
-        for(auto *target : targets) {
-            if(copyPresentationFramePixelsPreservingLayerState(
-                   sourceLayer, target, canvasWidth, canvasHeight)) {
-                ++copied;
-            }
-        }
-
-        if(copied > 0 && LOGGER) {
-            const char *debug = std::getenv("AETHERKIRI_MOTION_DEBUG");
-            if(debug && *debug && std::strcmp(debug, "0") != 0) {
-                LOGGER->info(
-                    "motion sd preview sync layers: reason={} motion={} source=[{}] targets={} copied={} frame=[{}]",
-                    reason ? reason : "<null>", motionPath,
-                    describeLayerForDebug(sourceLayer), targets.size(), copied,
-                    sampleBitmapStats(sourceLayer->GetMainImage()));
-            }
-        }
-        return copied;
-    }
-
     struct CenteredPresentationHoldEntry {
         tTJSVariant layer;
         tTJSVariant parentLayer;
         tTJSVariant overlayParentLayer;
         tTJSVariant overlayLayer;
+        tTJSVariant replacementLayer;
         std::shared_ptr<tTVPBaseBitmap> bitmap;
         std::string motion;
         std::string layerName;
@@ -4495,6 +4484,8 @@ namespace {
         bool hasContentBounds = false;
         int pendingExpandedBoundsFrames = 0;
         int overlayFramesRemaining = 0;
+        bool retireAfterOverlay = false;
+        tjs_uint64 retireAfterTick = 0;
         tjs_uint64 capturedTick = 0;
         tjs_uint64 holdUntilTick = 0;
     };
@@ -4516,76 +4507,6 @@ namespace {
     centeredPresentationMessageUiOverlayCache() {
         static CenteredPresentationMessageUiOverlayCache cache;
         return cache;
-    }
-
-    bool centeredPresentationFrameHasResolvedScale(
-        tTJSNI_BaseLayer *layer,
-        const std::string &motionPath,
-        const char *reason) {
-        if(!layer || motionPath.empty()) {
-            return true;
-        }
-        const auto family = yuzuSdPresentationLayerFamily(layer);
-        if(family == YuzuSdPresentationLayerFamily::None) {
-            return true;
-        }
-        const auto layerName =
-            renderDebugLowercase(motion::detail::narrow(layer->GetName()));
-        CenteredPresentationHoldEntry *previousStable = nullptr;
-        for(auto &cached : centeredPresentationHoldCache()) {
-            if(cached.first == layer) {
-                continue;
-            }
-            auto &candidate = cached.second;
-            if(candidate.motion != motionPath || !candidate.bitmap ||
-               !candidate.hasContentBounds ||
-               yuzuSdPresentationLayerFamilyName(candidate.layerName) !=
-                   family) {
-                continue;
-            }
-            if(!previousStable ||
-               candidate.capturedTick > previousStable->capturedTick) {
-                previousStable = &candidate;
-            }
-        }
-        if(!previousStable) {
-            return true;
-        }
-
-        // A stable layer is normally the only cached member of its family.
-        // Scan alpha bounds only during a front/back replacement overlap so
-        // looping SD animation frames keep their steady-state render cost.
-        auto *image = layer->GetMainImage();
-        tTVPRect currentBounds;
-        if(!image || !bitmapVisibleBounds(image, currentBounds)) {
-            return true;
-        }
-
-        const auto previousWidth = previousStable->contentBounds.get_width();
-        const auto previousHeight = previousStable->contentBounds.get_height();
-        const auto currentWidth = currentBounds.get_width();
-        const auto currentHeight = currentBounds.get_height();
-        if(previousWidth <= 0 || previousHeight <= 0 ||
-           currentWidth <= previousWidth * 6 / 5 ||
-           currentHeight <= previousHeight * 6 / 5) {
-            return true;
-        }
-
-        previousStable->holdUntilTick = std::max(
-            previousStable->holdUntilTick,
-            TVPGetTickCount() + kCenteredPresentationHoldDurationMs);
-        if(LOGGER && std::getenv("AETHERKIRI_MOTION_LAYER_DEBUG")) {
-            LOGGER->info(
-                "motion centered frame rejected unresolved scale: reason={} motion={} layer={} previous=[{},{},{},{}] current=[{},{},{},{}]",
-                reason ? reason : "<null>", motionPath, layerName,
-                previousStable->contentBounds.left,
-                previousStable->contentBounds.top,
-                previousStable->contentBounds.right,
-                previousStable->contentBounds.bottom,
-                currentBounds.left, currentBounds.top,
-                currentBounds.right, currentBounds.bottom);
-        }
-        return false;
     }
 
     bool refreshCenteredPresentationHoldEntryFromVisibleLayer(
@@ -4689,8 +4610,17 @@ namespace {
         }
 
         auto &cache = centeredPresentationHoldCache();
-        const auto layerName =
+        auto layerName =
             renderDebugLowercase(motion::detail::narrow(layer->GetName()));
+        // KAG may allocate a separate transition layer rather than renaming
+        // the object that presented the completed frame. Resolve only the
+        // explicit transition names to their stable presentation family;
+        // ordinary hidden `ev`/`sd` page buffers must not borrow history.
+        if(layerName == "trans_ev") {
+            layerName = "ev";
+        } else if(layerName == "trans_sd") {
+            layerName = "sd";
+        }
         CenteredPresentationHoldEntry *best = nullptr;
         for(auto &entry : cache) {
             auto &candidate = entry.second;
@@ -4723,8 +4653,13 @@ namespace {
         };
 
         auto &cache = centeredPresentationHoldCache();
-        const auto layerName =
+        auto layerName =
             renderDebugLowercase(motion::detail::narrow(layer->GetName()));
+        if(layerName == "trans_ev") {
+            layerName = "ev";
+        } else if(layerName == "trans_sd") {
+            layerName = "sd";
+        }
         CenteredPresentationHoldEntry *best = nullptr;
         for(auto &entry : cache) {
             auto &candidate = entry.second;
@@ -4737,6 +4672,27 @@ namespace {
             }
         }
         return best;
+    }
+
+    CenteredPresentationHoldEntry *findExactLiveCenteredPresentationHoldEntry(
+        tTJSNI_BaseLayer *layer) {
+        if(!layer) {
+            return nullptr;
+        }
+        auto &cache = centeredPresentationHoldCache();
+        auto found = cache.find(layer);
+        if(found == cache.end()) {
+            return nullptr;
+        }
+        auto &entry = found->second;
+        const auto now = TVPGetTickCount();
+        if(entry.holdUntilTick < now) {
+            refreshCenteredPresentationHoldEntryFromVisibleLayer(entry, now);
+        }
+        return entry.bitmap && entry.width > 0 && entry.height > 0 &&
+                       entry.holdUntilTick >= now
+                   ? &entry
+                   : nullptr;
     }
 
     bool hasCenteredPresentationHoldHistoryForLayer(
@@ -4989,15 +4945,6 @@ namespace {
         tTVPRect currentBounds;
         const bool hasCurrentBounds =
             bitmapVisibleBounds(image, currentBounds);
-        // During a Yuzu front/back page exchange, the replacement `ev` layer
-        // is briefly populated at its native size before MotionPlayer applies
-        // the motion's logical resolution.  Keep the prior stable transition
-        // frame until the replacement has reached its resolved geometry.
-        if(!centeredPresentationFrameHasResolvedScale(
-               layer, motionPath, "capture")) {
-            return nullptr;
-        }
-
         auto &entry = cache[layer];
         if(!entry.bitmap || entry.width != width || entry.height != height) {
             entry.bitmap = std::make_shared<tTVPBaseBitmap>(
@@ -5291,7 +5238,13 @@ namespace {
                 return fail("missing-entry");
             }
 
-            auto *owner = resolveMainWindowOwnerObject();
+            // Layer construction must use the owner of the selected layer
+            // tree. The main-window object is not necessarily that owner
+            // while KAG is exchanging front/back pages; passing it to the
+            // Layer constructor makes the first bridge frame throw
+            // "Cannot Retrieve Layer Tree Owner Interface" and the retry on
+            // the following frame succeeds too late.
+            iTJSDispatch2 *owner = nullptr;
             auto *parentObject = entry.overlayParentLayer.Type() == tvtObject
                 ? entry.overlayParentLayer.AsObjectNoAddRef()
                 : nullptr;
@@ -5413,9 +5366,18 @@ namespace {
                 return fail("no-visible-overlay-parent");
             }
 
-            auto *overlayObject = ensureReusableLayerObject(
+            auto ownerVariant =
+                resolveLayerTreeOwnerVariantFromLayer(parentLayer);
+            if(ownerVariant.Type() != tvtObject && referenceLayer) {
+                ownerVariant =
+                    resolveLayerTreeOwnerVariantFromLayer(referenceLayer);
+            }
+            if(ownerVariant.Type() != tvtObject && owner) {
+                ownerVariant = tTJSVariant(owner, owner);
+            }
+            auto *overlayObject = ensureReusableLayerObjectWithOwnerVariant(
                 entry.overlayLayer,
-                owner,
+                ownerVariant,
                 parentObject,
                 static_cast<tTVPLayerType>(ltAlpha),
                 true,
@@ -5477,6 +5439,8 @@ namespace {
             entry.overlayFramesRemaining =
                 std::max(entry.overlayFramesRemaining,
                          kCenteredPresentationHoldOverlayFrames);
+            entry.retireAfterOverlay = false;
+            entry.retireAfterTick = 0;
             overlayLayer->SetVisible(true);
             placeCenteredPresentationBelowMessageUi(overlayLayer,
                                                     "hold-overlay");
@@ -5517,6 +5481,30 @@ namespace {
         auto *overlay =
             resolveNativeLayer(entry.overlayLayer.AsObjectNoAddRef());
         return overlay && overlay->GetVisible();
+    }
+
+    bool deferCenteredPresentationHoldEntryRetirement(
+        CenteredPresentationHoldEntry &entry,
+        tTJSNI_BaseLayer *replacementLayer = nullptr) {
+        if(!centeredPresentationHoldOverlayIsActive(entry)) {
+            return false;
+        }
+
+        if(replacementLayer && replacementLayer->GetOwnerNoAddRef()) {
+            auto *replacementObject = replacementLayer->GetOwnerNoAddRef();
+            entry.replacementLayer =
+                tTJSVariant(replacementObject, replacementObject);
+        }
+
+        // assignImages publishes the incoming surface before its page is
+        // guaranteed to participate in the host composition. Keep the
+        // outgoing bridge for one complete host frame, then retire the old
+        // cache entry. Without this hand-off frame, the presentation can show
+        // the background between two otherwise valid SD frames.
+        entry.overlayFramesRemaining = 0;
+        entry.retireAfterOverlay = true;
+        entry.retireAfterTick = TVPGetTickCount() + 50;
+        return true;
     }
 
     iTJSDispatch2 *findCenteredPresentationHoldRenderTarget(
@@ -6039,8 +6027,11 @@ namespace {
         entry.layer.Clear();
         entry.parentLayer.Clear();
         entry.overlayParentLayer.Clear();
+        entry.replacementLayer.Clear();
         entry.bitmap.reset();
         entry.overlayFramesRemaining = 0;
+        entry.retireAfterOverlay = false;
+        entry.retireAfterTick = 0;
         entry.holdUntilTick = 0;
     }
 
@@ -6641,8 +6632,6 @@ namespace {
             captureCenteredPresentationHoldFrame(layerObject, layer, motionPath);
             syncCenteredPresentationHoldMotionFrame(
                 layer, motionPath, canvasWidth, canvasHeight);
-            syncYuzuSdPreviewPresentationLayers(
-                layer, motionPath, canvasWidth, canvasHeight, "full-frame");
             showCenteredPresentationMessageUiOverlay(
                 layer, canvasWidth, canvasHeight, "full-frame");
             layer->Update(false);
@@ -6706,8 +6695,13 @@ namespace {
             }
             // assignImages has already installed the replacement pixels. A
             // hold surface is only a temporary bridge while no replacement is
-            // available; copying it back here would overwrite a newly loaded
-            // still CG with the preceding animation's final frame.
+            // available. Keep an active bridge for one host frame because the
+            // incoming page can join composition one frame after assignImages;
+            // an immediate hide exposes the background between the two SDs.
+            if(deferCenteredPresentationHoldEntryRetirement(
+                   item.second, layer)) {
+                continue;
+            }
             hideCenteredPresentationHoldOverlay(item.second);
             if(item.second.layer.Type() == tvtObject) {
                 hideCenteredPresentationMessageUiOverlay(
@@ -6736,46 +6730,6 @@ namespace {
         entry->layer =
             tTJSVariant(layerObject, layerObject);
         hideCenteredPresentationHoldOverlay(*entry);
-
-        const auto currentFamily =
-            yuzuSdPresentationLayerFamily(layer);
-        if(currentFamily != YuzuSdPresentationLayerFamily::None &&
-           isYuzuSdPreviewMotionPath(motionPath)) {
-            auto &cache = centeredPresentationHoldCache();
-            std::vector<tTJSNI_BaseLayer *> staleKeys;
-            staleKeys.reserve(cache.size());
-            for(auto &cached : cache) {
-                const auto &previous = cached.second;
-                if(&previous == entry ||
-                   previous.cgViewPresentation != entry->cgViewPresentation ||
-                   yuzuSdPresentationLayerFamilyName(previous.layerName) !=
-                       currentFamily) {
-                    continue;
-                }
-                staleKeys.push_back(cached.first);
-            }
-            for(auto *staleKey : staleKeys) {
-                auto stale = cache.find(staleKey);
-                if(stale == cache.end()) {
-                    continue;
-                }
-                if(LOGGER &&
-                   std::getenv("AETHERKIRI_MOTION_LAYER_DEBUG")) {
-                    LOGGER->info(
-                        "motion centered hold released replaced SD layer: motion={} oldMotion={} family={} oldLayer={} newLayer={}",
-                        motionPath,
-                        stale->second.motion,
-                        currentFamily == YuzuSdPresentationLayerFamily::Sd
-                            ? "sd"
-                            : "event",
-                        stale->second.layerName,
-                        entry->layerName);
-                }
-                releaseCenteredPresentationHoldEntry(
-                    stale->first, stale->second);
-                cache.erase(stale);
-            }
-        }
     }
 
     bool restoreCenteredPresentationHoldFrame(
@@ -6798,82 +6752,6 @@ namespace {
 
         return copyCenteredPresentationHoldEntryToLayer(
             layer, *entry, canvasWidth, canvasHeight, false, false, true);
-    }
-
-    void postProcessCenteredGameMotionSeparateLayerPresentation(
-        iTJSDispatch2 *presentationLayerObject,
-        iTJSDispatch2 *renderTargetObject,
-        const std::string &motionPath,
-        int canvasWidth,
-        int canvasHeight) {
-        if(!isCenteredGameMotion(motionPath) || canvasWidth <= 0 ||
-           canvasHeight <= 0) {
-            return;
-        }
-
-        auto *renderLayer = resolveNativeLayer(renderTargetObject);
-        auto *presentationLayer = resolveNativeLayer(presentationLayerObject);
-        if(renderLayer) {
-            renderLayer->SetHitType(htMask);
-            renderLayer->SetHitThreshold(256);
-            if(motionPresentationLayerHasVisibleSamples(renderLayer)) {
-                const bool renderIsCgViewSdPreview =
-                    layerBelongsToCgViewPresentation(renderLayer) &&
-                    isYuzuSdPreviewMotionPath(motionPath);
-                if(renderIsCgViewSdPreview) {
-                    captureCenteredPresentationHoldFrame(
-                        renderTargetObject, renderLayer, motionPath);
-                    syncCenteredPresentationHoldMotionFrame(
-                        renderLayer, motionPath, canvasWidth, canvasHeight);
-                } else if(!layerBelongsToCgViewPresentation(renderLayer)) {
-                    syncYuzuSdPreviewPresentationLayers(
-                        renderLayer, motionPath, canvasWidth, canvasHeight,
-                        "sla-private-post-render");
-                }
-            }
-        }
-
-        if(!presentationLayer) {
-            return;
-        }
-
-        configureCenteredGameMotionPresentationHitPassthrough(presentationLayer);
-        if(!layerBelongsToCgViewPresentation(presentationLayer)) {
-            placeCenteredPresentationBelowMessageUi(presentationLayer,
-                                                    "sla-post-render");
-        }
-
-        const bool presentationIsCgViewAffine =
-            layerIsCgViewAffineSurface(presentationLayer);
-        const bool presentationCanReceivePixels =
-            motion::internal::presentationLayerTypeCanReceivePixels(
-                presentationLayer->GetType());
-        bool presentationVisible =
-            presentationCanReceivePixels &&
-            motionPresentationLayerHasVisibleSamples(presentationLayer);
-        if(!presentationVisible && renderLayer &&
-           motionPresentationLayerHasVisibleSamples(renderLayer) &&
-           !presentationIsCgViewAffine && presentationCanReceivePixels) {
-            copyPresentationFramePixelsPreservingLayerState(
-                renderLayer, presentationLayer, canvasWidth, canvasHeight);
-            presentationVisible =
-                motionPresentationLayerHasVisibleSamples(presentationLayer);
-        }
-
-        if(presentationVisible && !presentationIsCgViewAffine) {
-            captureCenteredPresentationHoldFrame(
-                presentationLayerObject, presentationLayer, motionPath);
-            syncCenteredPresentationHoldMotionFrame(
-                presentationLayer, motionPath, canvasWidth, canvasHeight);
-            syncYuzuSdPreviewPresentationLayers(
-                presentationLayer, motionPath, canvasWidth, canvasHeight,
-                "sla-presentation-post-render");
-            showCenteredPresentationMessageUiOverlay(
-                presentationLayer, canvasWidth, canvasHeight,
-                "sla-post-render");
-        } else {
-            hideCenteredPresentationMessageUiOverlay(presentationLayer);
-        }
     }
 
     iTJSDispatch2 *ensureYuzuTitlePresentationRenderLayer(
@@ -7195,14 +7073,6 @@ namespace {
         return out.left < out.right && out.top < out.bottom;
     }
 
-    bool isAccurateSlaRenderEnabled() {
-        auto *config = IndividualConfigManager::GetInstance();
-        if(!config) {
-            return false;
-        }
-        return config->GetValue<bool>("ogl_accurate_render", false);
-    }
-
     tTVPRect localRectFromCommand(
         const motion::detail::PlayerRuntime::RenderCommand &command) {
         return tTVPRect(0, 0,
@@ -7395,7 +7265,49 @@ namespace {
         return true;
     }
 
+    void resetMotionStateForHostSession() {
+        {
+            auto &cache = sharedMotionSourceBitmapCache();
+            std::lock_guard<std::mutex> lock(cache.mutex);
+            cache.entries.clear();
+            cache.bytes = 0;
+            cache.useCounter = 0;
+        }
+
+        // These caches retain TJS variants and use native Layer addresses as
+        // keys. They must not outlive the TJS world that created them: a later
+        // title can reuse an address and inherit an unrelated presentation
+        // frame, visibility decision, or hit-test layer.
+        globalPresentationRenderCache().clear();
+        yuzuTitlePresentationHoldCache().clear();
+
+        auto &holdCache = centeredPresentationHoldCache();
+        for(auto &cached : holdCache) {
+            releaseCenteredPresentationHoldEntry(cached.first,
+                                                  cached.second);
+        }
+        holdCache.clear();
+
+        auto &messageCache = centeredPresentationMessageUiOverlayCache();
+        for(auto &cached : messageCache) {
+            detachGeneratedCenteredPresentationLayer(
+                cached.second, "AetherKiriCenteredPresentationMessageUi");
+        }
+        messageCache.clear();
+    }
+
 } // namespace
+
+extern "C" void AetherKiriMotionEnsureCompactEventHook() {
+    std::call_once(g_motionPlayerCompactEventHookOnce, [] {
+        TVPAddCompactEventHook(&g_motionPlayerCompactEventCallback);
+    });
+}
+
+extern "C" void AetherKiriMotionResetForGameSession() {
+    AetherKiriMotionPlayerCoreResetForGameSession();
+    resetMotionStateForHostSession();
+}
 
 extern "C" bool AetherKiriMotionRestoreCenteredPresentationLayer(
     tTJSNI_BaseLayer *layer) {
@@ -7413,39 +7325,165 @@ extern "C" bool AetherKiriMotionRestoreCenteredPresentationLayer(
         }
         return result;
     };
-    if(!centeredGameMotionStablePresentationLayer(layer)) {
+    const bool stablePresentationLayer =
+        centeredGameMotionStablePresentationLayer(layer);
+    auto *exactEntry = findExactLiveCenteredPresentationHoldEntry(layer);
+    auto *transitionEntry =
+        !stablePresentationLayer &&
+                centeredGameMotionPresentationLayerShouldPassHit(layer)
+            ? findLiveCenteredPresentationHoldEntry(layer)
+            : nullptr;
+    if(!stablePresentationLayer && !exactEntry && !transitionEntry) {
         return logReturn("not-centered-stable", false);
     }
-    if(!layer->GetVisible() || layer->GetOpacity() == 0 ||
-       !layer->GetParentVisible()) {
-        auto *entry = findLiveCenteredPresentationHoldEntry(layer);
-        if(!entry) {
-            return logReturn("no-live-entry", false);
-        }
-        const bool shown = copyCenteredPresentationHoldEntryToOverlay(
-            *entry, layer);
-        return logReturn(shown ? "overlay-shown" : "overlay-copy-failed",
-                         shown);
-    }
-    if(layer->GetVisible() && layer->GetOpacity() != 0 &&
-       motionPresentationLayerHasVisibleSamples(layer)) {
-        return logReturn("already-visible", false);
-    }
 
+    // assignImages also reaches this hook for non-motion GPU layers.  Check
+    // for a restorable frame before sampling pixels: GetPoint() otherwise
+    // forces a synchronous full-texture readback just to discover that the
+    // motion hold cache has no matching entry.
     auto *entry = findLiveCenteredPresentationHoldEntry(layer);
     if(!entry) {
         return logReturn("no-live-entry", false);
     }
+    if(!layer->GetVisible() || layer->GetOpacity() == 0 ||
+       !layer->GetParentVisible()) {
+        if(layer->GetVisible() && layer->GetOpacity() != 0 &&
+           !layer->GetParentVisible() && !exactEntry) {
+            auto *familyEntry =
+                findLiveCenteredPresentationHoldEntry(layer);
+            if(familyEntry &&
+               centeredPresentationHoldOverlayIsActive(*familyEntry)) {
+                // KAG prepares the incoming page while its parent is still
+                // hidden. Seed that already allocated surface from the
+                // outgoing frame so the page is never first published as
+                // transparent; the following assignImages/render replaces
+                // these pixels normally.
+                const int canvasWidth = std::max<tjs_int>(
+                    std::max<tjs_int>(layer->GetImageWidth(),
+                                      layer->GetWidth()),
+                    familyEntry->width);
+                const int canvasHeight = std::max<tjs_int>(
+                    std::max<tjs_int>(layer->GetImageHeight(),
+                                      layer->GetHeight()),
+                    familyEntry->height);
+                const bool seeded =
+                    copyCenteredPresentationHoldEntryToLayer(
+                        layer, *familyEntry, canvasWidth, canvasHeight,
+                        false, false, true);
+                return logReturn(
+                    seeded ? "incoming-page-seeded"
+                           : "incoming-page-seed-failed",
+                    seeded);
+            }
+        }
+        // Only a layer that has itself presented a completed frame may keep
+        // an overlay while it is hidden. KAG preallocates many invisible
+        // `ev`/`sd` peers; borrowing history by name for all of them creates
+        // duplicate full-canvas overlays and can exhaust GPU memory.
+        auto *overlayEntry = exactEntry;
+        if(!overlayEntry) {
+            return logReturn("no-live-entry", false);
+        }
+        const bool shown = copyCenteredPresentationHoldEntryToOverlay(
+            *overlayEntry, layer);
+        return logReturn(shown ? "overlay-shown" : "overlay-copy-failed",
+                         shown);
+    }
+    const bool hasVisibleSamples =
+        layer->GetVisible() && layer->GetOpacity() != 0 &&
+        motionPresentationLayerHasVisibleSamples(layer);
+    if(transitionEntry && !stablePresentationLayer) {
+        // The transition surface contains the right pixels, but KAG can move
+        // its owning page behind the incoming page one host frame before that
+        // page becomes visible. Bridge that composition gap with one overlay
+        // sourced from the most recent completed frame. Stable replacement
+        // assignImages dismisses it immediately.
+        auto *bridgeEntry = exactEntry ? exactEntry : transitionEntry;
+        const bool shown = copyCenteredPresentationHoldEntryToOverlay(
+            *bridgeEntry, layer);
+        if(shown) {
+            return logReturn("transition-overlay-shown", true);
+        }
+    }
+    if(hasVisibleSamples) {
+        return logReturn("already-visible", false);
+    }
 
+    // KAG either renames the outgoing front-page layer or allocates a
+    // dedicated `trans_ev`/`trans_sd` object before the replacement page
+    // becomes parent-visible. assignImages can publish one transparent
+    // transition surface in that interval. Prefer the exact object's cache;
+    // only the explicit transition names may fall back to the most recent
+    // completed frame in the same presentation family.
+    auto *restoreEntry = exactEntry ? exactEntry
+        : transitionEntry ? transitionEntry : entry;
+    if(!restoreEntry) {
+        return logReturn("no-live-entry", false);
+    }
     const int canvasWidth = std::max<tjs_int>(
         std::max<tjs_int>(layer->GetImageWidth(), layer->GetWidth()),
-        entry->width);
+        restoreEntry->width);
     const int canvasHeight = std::max<tjs_int>(
         std::max<tjs_int>(layer->GetImageHeight(), layer->GetHeight()),
-        entry->height);
+        restoreEntry->height);
     const bool restored = copyCenteredPresentationHoldEntryToLayer(
-        layer, *entry, canvasWidth, canvasHeight, false, false, true);
+        layer, *restoreEntry, canvasWidth, canvasHeight, false, false, true);
     return logReturn(restored ? "restored" : "copy-failed", restored);
+}
+
+extern "C" void AetherKiriMotionCaptureCenteredPresentationLayer(
+    tTJSNI_BaseLayer *layer) {
+    if(!centeredGameMotionStablePresentationLayer(layer) ||
+       !layer->GetVisible() || layer->GetOpacity() <= 0 ||
+       !layer->GetParentVisible() ||
+       !motionPresentationLayerHasVisibleSamples(layer)) {
+        return;
+    }
+
+    // D3DAffineSourceMotion presents its completed work texture with
+    // Layer.assignImages(), bypassing Player::renderToLayer where centered
+    // SD hold frames are normally recorded. Seed the same generic hold cache
+    // at that presentation boundary. Existing entries are refreshed at most
+    // four times per second, so a steady animated SD does not download and
+    // copy a 1920x1080 texture every frame; a newly swapped front/back layer
+    // is captured immediately before its parent can be hidden.
+    const auto now = TVPGetTickCount();
+    auto &cache = centeredPresentationHoldCache();
+    auto found = cache.find(layer);
+    if(found != cache.end() && found->second.bitmap) {
+        refreshCenteredPresentationHoldEntryFromVisibleLayer(
+            found->second, now);
+    } else {
+        auto *entry = captureCenteredPresentationHoldLayerSamples(layer, "");
+        if(!entry) {
+            return;
+        }
+        if(auto *owner = layer->GetOwnerNoAddRef()) {
+            entry->layer = tTJSVariant(owner, owner);
+        }
+    }
+
+    const auto layerName = renderDebugLowercase(
+        motion::detail::narrow(layer->GetName()));
+    std::vector<tTJSNI_BaseLayer *> replaced;
+    replaced.reserve(cache.size());
+    for(const auto &item : cache) {
+        if(item.first != layer && item.second.layerName == layerName) {
+            replaced.push_back(item.first);
+        }
+    }
+    for(auto *oldLayer : replaced) {
+        auto old = cache.find(oldLayer);
+        if(old == cache.end()) {
+            continue;
+        }
+        if(deferCenteredPresentationHoldEntryRetirement(
+               old->second, layer)) {
+            continue;
+        }
+        releaseCenteredPresentationHoldEntry(old->first, old->second);
+        cache.erase(old);
+    }
 }
 
 extern "C" bool
@@ -7525,16 +7563,13 @@ extern "C" bool AetherKiriMotionShowCenteredPresentationHoldOverlay(
         }
         return result;
     };
-    if(!centeredGameMotionStablePresentationLayer(layer)) {
-        return logReturn("not-centered-stable", false);
-    }
-
-    auto *entry = findLiveCenteredPresentationHoldEntry(layer);
-    if(!entry && motionPresentationLayerHasVisibleSamples(layer)) {
-        entry = captureCenteredPresentationHoldLayerSamples(layer, "");
-    }
+    // SetVisible(false) is also called for KAG's preallocated, never-presented
+    // page layers. Show a bridge only for the exact layer whose completed
+    // frame was cached; its script-visible name may already have changed from
+    // `ev` to `trans_ev` during the page exchange.
+    auto *entry = findExactLiveCenteredPresentationHoldEntry(layer);
     if(!entry) {
-        return logReturn("no-live-entry", false);
+        return logReturn("no-exact-live-entry", false);
     }
 
     const bool shown = copyCenteredPresentationHoldEntryToOverlay(*entry, layer);
@@ -7548,6 +7583,7 @@ extern "C" void AetherKiriMotionTickCenteredPresentationHoldOverlays() {
     }
 
     const auto now = TVPGetTickCount();
+    std::vector<tTJSNI_BaseLayer *> retiredEntries;
     for(auto &item : cache) {
         auto &entry = item.second;
         refreshCenteredPresentationHoldEntryFromVisibleLayer(entry, now);
@@ -7580,27 +7616,88 @@ extern "C" void AetherKiriMotionTickCenteredPresentationHoldOverlays() {
             if(entry.holdUntilTick != 0 && entry.holdUntilTick < now) {
                 entry.holdUntilTick = 0;
             }
+            if(entry.retireAfterOverlay) {
+                retiredEntries.push_back(item.first);
+            }
             continue;
         }
 
         auto *overlay =
             resolveNativeLayer(entry.overlayLayer.AsObjectNoAddRef());
-        if(!overlay || !overlay->GetVisible()) {
+        if(overlay && overlay->GetVisible() && !overlay->GetParentVisible()) {
+            // The outgoing KAG page can be hidden after the transition hook
+            // creates its bridge. Rebuild/reparent that same bridge under the
+            // currently visible structural peer before the host composes the
+            // next frame; otherwise the bridge inherits the hidden ancestor
+            // and one frame of bare background becomes visible.
+            auto *referenceLayer = entry.replacementLayer.Type() == tvtObject
+                ? resolveNativeLayer(
+                      entry.replacementLayer.AsObjectNoAddRef())
+                : nullptr;
+            if(!referenceLayer) {
+                // Even after the authored transition layer is detached, the
+                // generated bridge still retains the outgoing page ancestry.
+                // Use it to discover the newly visible structural sibling.
+                referenceLayer = overlay;
+            }
+            const bool retiring = entry.retireAfterOverlay;
+            const auto retirementTick = entry.retireAfterTick;
+            if(referenceLayer &&
+               copyCenteredPresentationHoldEntryToOverlay(
+                   entry, referenceLayer)) {
+                overlay = resolveNativeLayer(
+                    entry.overlayLayer.AsObjectNoAddRef());
+                if(retiring) {
+                    entry.retireAfterOverlay = true;
+                    entry.retireAfterTick = retirementTick;
+                    entry.overlayFramesRemaining = 0;
+                }
+            }
+        }
+        if(!overlay || !overlay->GetVisible() ||
+           !overlay->GetParentVisible()) {
             entry.overlayFramesRemaining = 0;
+            if(entry.retireAfterOverlay) {
+                retiredEntries.push_back(item.first);
+            }
             continue;
         }
         placeCenteredPresentationBelowMessageUi(overlay, "hold-overlay-tick");
+        if(entry.retireAfterOverlay) {
+            if(entry.retireAfterTick != 0 && now >= entry.retireAfterTick) {
+                hideCenteredPresentationHoldOverlay(entry);
+                retiredEntries.push_back(item.first);
+            }
+            continue;
+        }
         if(entry.overlayFramesRemaining > 0) {
             --entry.overlayFramesRemaining;
             if(entry.overlayFramesRemaining == 0) {
                 hideCenteredPresentationHoldOverlay(entry);
+                if(entry.retireAfterOverlay) {
+                    retiredEntries.push_back(item.first);
+                }
                 continue;
             }
         }
         if(entry.holdUntilTick != 0 && entry.holdUntilTick < now) {
             hideCenteredPresentationHoldOverlay(entry);
             entry.holdUntilTick = 0;
+            if(entry.retireAfterOverlay) {
+                retiredEntries.push_back(item.first);
+            }
         }
+    }
+
+    for(auto *retiredLayer : retiredEntries) {
+        auto retired = cache.find(retiredLayer);
+        if(retired == cache.end() || !retired->second.retireAfterOverlay ||
+           centeredPresentationHoldOverlayIsActive(retired->second)) {
+            continue;
+        }
+        releaseCenteredPresentationHoldEntry(
+            retired->first, retired->second);
+        cache.erase(retired);
     }
 }
 
@@ -7880,13 +7977,6 @@ namespace motion {
                         motionPath, entry.nodeIndex, entry.nodeLabel,
                         entry.sourceKey);
                 }
-                continue;
-            }
-            // Yuzu SD motions carry a white bitmap named `mask` as stencil
-            // input for a nested set. Drawing it as a normal colour layer
-            // washes the authored table/background out to white.
-            if(isYuzuSdStencilUtilityLayer(motionPath, entry.nodeLabel,
-                                           entry.sourceKey)) {
                 continue;
             }
             if(isYuzuStartupLogoWhiteWashLayer(motionPath, entry.nodeLabel,
@@ -8555,17 +8645,29 @@ namespace motion {
         // distinction instead of treating every colour child as a mask.
         for(auto &command : _runtime->renderCommands) {
             for(const int maskNodeIndex : command.stencilMaskNodeIndices) {
-                if(const auto it = commandIndexByNode.find(maskNodeIndex);
-                   it != commandIndexByNode.end() &&
-                   it->second < _runtime->renderCommands.size() &&
-                   _runtime->renderCommands[it->second].nodeIndex !=
-                       command.nodeIndex) {
+                // Node indices are local to each nested Motion Player. The
+                // flattened E-mote command list contains many duplicate
+                // values (both eyes commonly use node 4/5), so a global
+                // node-index lookup can bind the group to an unrelated mask
+                // from an outer player. Resolve the authored mask inside the
+                // group's render scope, matching the scoped item walk used by
+                // native sub_6C7440.
+                const size_t maskCommandIndex = findCommandIndex(
+                    command.renderScopeId, maskNodeIndex, maskNodeIndex);
+                if(maskCommandIndex < _runtime->renderCommands.size() &&
+                   maskCommandIndex != static_cast<size_t>(
+                       &command - _runtime->renderCommands.data())) {
                     command.stencilMaskCommandIndices.push_back(
-                        static_cast<int>(it->second));
-                    if(command.stencilMaskNodeIndices.size() > 1) {
-                        _runtime->renderCommands[it->second]
-                            .stencilMaskReferenced = true;
-                    }
+                        static_cast<int>(maskCommandIndex));
+                    // Native sub_6C7440 materializes every referenced mask
+                    // into item+304 before the composite consumes it. A
+                    // single mask is not a direct-render special case: E-mote
+                    // eyes commonly author exactly one animated `shirome`
+                    // aperture. Letting that input render directly leaves no
+                    // bitmap for the group and exposes the full circular iris
+                    // throughout the half-closed frames.
+                    _runtime->renderCommands[maskCommandIndex]
+                        .stencilMaskReferenced = true;
                 }
             }
         }
@@ -8646,6 +8748,102 @@ namespace motion {
             }
             return false;
         }
+        TVPGodotGpuBatchScope gpuBatch(
+            _runtime->isEmoteMode && _runtime->renderCommands.size() > 1);
+
+        // The same evaluated command list can be submitted through
+        // renderToLayer, SeparateLayerAdaptor, and D3DAdaptor during a KAG
+        // page exchange.  Those routes converge here after their target has
+        // been prepared, so this is the earliest common point where a
+        // completed frame can be shared without replaying the full
+        // AlphaBlend_d/Copy sequence.  Keep the source texture alive through
+        // the short reuse window; the normal copy-on-write path detaches a
+        // target before its next clear.
+        const auto frameSignature =
+            renderCommandReuseSignature(_runtime->renderCommands, _maskMode);
+        const int frameCanvasWidth = renderLayer->GetWidth() > 0
+            ? static_cast<int>(renderLayer->GetWidth())
+            : static_cast<int>(renderLayer->GetImageWidth());
+        const int frameCanvasHeight = renderLayer->GetHeight() > 0
+            ? static_cast<int>(renderLayer->GetHeight())
+            : static_cast<int>(renderLayer->GetImageHeight());
+        const bool frameCacheEnabled =
+            frameCanvasWidth > 0 && frameCanvasHeight > 0 &&
+            !_runtime->renderCommands.empty();
+        if(frameCacheEnabled && motionRenderProfileEnabled() && LOGGER &&
+           std::getenv("AETHERKIRI_MOTION_FRAME_CACHE_TRACE")) {
+            LOGGER->info(
+                "motion execute frame cache probe: motion={} frame={:.2f} target={} canvas={}x{} signature={:016x} enabled={}",
+                motionPath, _clampedEvalTime,
+                static_cast<const void *>(renderLayerObject),
+                frameCanvasWidth, frameCanvasHeight, frameSignature,
+                frameCacheEnabled ? 1 : 0);
+        }
+        if(frameCacheEnabled) {
+            auto &entry = _runtime->emoteRenderFrameCache;
+            const auto nowUs = motionRenderProfileNowUs();
+            const bool entryFresh =
+                entry.storedUs != 0 && nowUs >= entry.storedUs &&
+                nowUs - entry.storedUs <= kGlobalPresentationReuseTtlUs;
+            if(entryFresh && entry.bitmap &&
+               entry.motion == motionPath &&
+               entry.canvasWidth == frameCanvasWidth &&
+               entry.canvasHeight == frameCanvasHeight &&
+               entry.commandSignature == frameSignature &&
+               entry.bitmap->GetWidth() ==
+                   static_cast<tjs_uint>(frameCanvasWidth) &&
+               entry.bitmap->GetHeight() ==
+                   static_cast<tjs_uint>(frameCanvasHeight)) {
+                renderLayer->AssignMainImageWithUpdate(entry.bitmap.get());
+                renderLayer->SetSize(frameCanvasWidth, frameCanvasHeight);
+                renderLayer->SetClip(0, 0, frameCanvasWidth,
+                                     frameCanvasHeight);
+                ++_runtime->emoteRenderFrameReuseSkips;
+                if(motionRenderProfileEnabled() && LOGGER) {
+                    LOGGER->info(
+                        "motion frame render reuse: motion={} frame={:.2f} target={} canvas={}x{} signature={:016x} skips={} age_us={}",
+                        motionPath, _clampedEvalTime,
+                        static_cast<const void *>(renderLayerObject),
+                        frameCanvasWidth, frameCanvasHeight, frameSignature,
+                        _runtime->emoteRenderFrameReuseSkips,
+                        nowUs - entry.storedUs);
+                }
+                return gpuBatch.finish();
+            }
+
+            auto &globalCache = globalPresentationRenderCache();
+            auto sourceIt = findGlobalPresentationRenderSource(
+                globalCache, renderLayerObject, motionPath,
+                _clampedEvalTime, frameCanvasWidth, frameCanvasHeight,
+                frameSignature, nowUs);
+            if(sourceIt != globalCache.end() &&
+               copyGlobalPresentationRender(
+                   renderLayerObject, false, frameCanvasWidth,
+                   frameCanvasHeight, sourceIt->second)) {
+                if(!skipUpdate) {
+                    renderLayer->Update(false);
+                }
+                ++_runtime->emoteRenderFrameReuseSkips;
+                if(motionRenderProfileEnabled() && LOGGER) {
+                    LOGGER->info(
+                        "motion global frame render reuse: motion={} frame={:.2f} target={} source={} canvas={}x{} signature={:016x} skips={} age_us={}",
+                        motionPath, _clampedEvalTime,
+                        static_cast<const void *>(renderLayerObject),
+                        static_cast<const void *>(sourceIt->first),
+                        frameCanvasWidth, frameCanvasHeight, frameSignature,
+                        _runtime->emoteRenderFrameReuseSkips,
+                        nowUs >= sourceIt->second.storedUs
+                            ? nowUs - sourceIt->second.storedUs
+                            : 0);
+                }
+                globalCache[renderLayerObject] =
+                    makeGlobalPresentationRenderCacheEntry(
+                        renderLayerObject, motionPath, _clampedEvalTime,
+                        frameCanvasWidth, frameCanvasHeight, frameSignature,
+                        nowUs);
+                return gpuBatch.finish();
+            }
+        }
 
         struct RenderProfileStats {
             int baseHits = 0;
@@ -8656,6 +8854,7 @@ namespace motion {
             int preparedMisses = 0;
             int storageLoads = 0;
             int psbLoads = 0;
+            int sourceColdLoads = 0;
             int tintBuilds = 0;
             int tintEvictions = 0;
             int directOutputs = 0;
@@ -8670,12 +8869,14 @@ namespace motion {
             std::uint64_t psbMetadataUs = 0;
             std::uint64_t psbDecodeUs = 0;
             std::uint64_t psbConvertUs = 0;
+            std::uint64_t sourceColdLoadUs = 0;
         };
         RenderProfileStats profileStats;
         const bool profileEnabled = motionRenderProfileEnabled();
         const auto profileStartUs =
             profileEnabled ? motionRenderProfileNowUs() : 0;
         auto &baseSourceCache = _runtime->motionSourceBitmapCache;
+        auto &baseSourceRects = _runtime->motionSourceBitmapRects;
         auto &preparedSourceCache = _runtime->motionPreparedBitmapCache;
         auto &materializedKeysBySource =
             _runtime->motionPreparedMaterializedKeysBySource;
@@ -8788,6 +8989,9 @@ namespace motion {
             std::string sourceOrigin("unresolved");
             int width = 0;
             int height = 0;
+            int decodedWidth = 0;
+            int decodedHeight = 0;
+            std::array<int, 4> decodedSourceRect{};
             double originX = 0.0;
             double originY = 0.0;
             std::string resourcePath;
@@ -8795,25 +8999,30 @@ namespace motion {
             std::string sharedBitmapKey;
             std::vector<std::uint8_t> decodedPixels;
             bool decodedPixelsAreBgra = false;
+            bool sourceColdLoad = false;
             const auto metadataStartUs =
                 profileEnabled ? motionRenderProfileNowUs() : 0;
             const auto *resourceMetadata = findPSBResourceBySourceName(
                 *sourceMotion, command.sourceKey, width, height,
                 decodedPixels, originX, originY, nullptr, false,
-                &resourcePath, &compressName);
+                &resourcePath, &compressName,
+                &decodedWidth, &decodedHeight, &decodedSourceRect);
             if(resourceMetadata && width > 0 && height > 0 &&
                !resourceMetadata->data.empty()) {
+                const int bitmapWidth = decodedWidth > 0
+                    ? decodedWidth : width;
+                const int bitmapHeight = decodedHeight > 0
+                    ? decodedHeight : height;
                 sharedBitmapKey = makeSharedMotionSourceBitmapKey(
                     *sourceMotion, resourcePath, compressName,
-                    width, height,
-                    *resourceMetadata,
-                    _runtime->motionSourceResourceFingerprintCache);
+                    bitmapWidth, bitmapHeight, *resourceMetadata);
                 srcBmp = findSharedMotionSourceBitmap(sharedBitmapKey);
                 if(profileEnabled) {
                     if(srcBmp) {
                         ++profileStats.sharedBitmapHits;
                     } else {
                         ++profileStats.sharedBitmapMisses;
+                        sourceColdLoad = true;
                     }
                 }
             }
@@ -8852,6 +9061,7 @@ namespace motion {
                     TVPLoadGraphic(bmp.get(), loadPath, TVP_clNone, 0, 0,
                                    glmNormal, nullptr, nullptr);
                     if(bmp->GetWidth() > 0 && bmp->GetHeight() > 0) {
+                        sourceColdLoad = true;
                         // LimeLight's numbered title motions address a
                         // 677x288 local logo, while the archive resolves the
                         // same key to a transparent 1920x1080 design-canvas
@@ -8910,26 +9120,33 @@ namespace motion {
                     resource = findPSBResourceBySourceName(
                         *sourceMotion, command.sourceKey,
                         width, height, decodedPixels, originX, originY,
-                        &decodedPixelsAreBgra, true);
+                        &decodedPixelsAreBgra, true,
+                        nullptr, nullptr,
+                        &decodedWidth, &decodedHeight, &decodedSourceRect);
                     if(profileEnabled) {
                         profileStats.psbDecodeUs +=
                             motionRenderProfileNowUs() - decodeStartUs;
                     }
                 }
                 if(resource && width > 0 && height > 0 && !resource->data.empty()) {
+                    sourceColdLoad = true;
                     const bool sourcePixelsAreBgra = motionSourcePixelsAreBGRA(
                         decodedPixelsAreBgra);
                     if(!srcBmp) {
+                        const int bitmapWidth = decodedWidth > 0
+                            ? decodedWidth : width;
+                        const int bitmapHeight = decodedHeight > 0
+                            ? decodedHeight : height;
                         const auto convertStartUs =
                             profileEnabled ? motionRenderProfileNowUs() : 0;
                         const auto &pixelData = decodedPixels.empty()
                             ? resource->data : decodedPixels;
                         auto bmp = std::make_shared<tTVPBaseBitmap>(
-                            static_cast<tjs_uint>(width),
-                            static_cast<tjs_uint>(height), 32);
+                            static_cast<tjs_uint>(bitmapWidth),
+                            static_cast<tjs_uint>(bitmapHeight), 32);
                         const auto totalPixels =
-                            static_cast<std::size_t>(width) *
-                            static_cast<std::size_t>(height);
+                            static_cast<std::size_t>(bitmapWidth) *
+                            static_cast<std::size_t>(bitmapHeight);
                         const auto validPixels = std::min(
                             pixelData.size() / 4u, totalPixels);
                         // A decoded PSB icon normally covers the complete
@@ -8937,19 +9154,20 @@ namespace motion {
                         // it immediately; retain the clear for truncated
                         // resources where the untouched tail must be alpha 0.
                         if(validPixels < totalPixels) {
-                            bmp->Fill(tTVPRect(0, 0, width, height),
+                            bmp->Fill(tTVPRect(0, 0,
+                                              bitmapWidth, bitmapHeight),
                                       0x00000000);
                         }
                         const auto *src = pixelData.data();
-                        for(int y = 0; y < height; ++y) {
+                        for(int y = 0; y < bitmapHeight; ++y) {
                             const auto rowOffset =
                                 static_cast<std::size_t>(y) *
-                                static_cast<std::size_t>(width);
+                                static_cast<std::size_t>(bitmapWidth);
                             if(rowOffset >= validPixels) {
                                 break;
                             }
                             const auto rowPixels = std::min(
-                                static_cast<std::size_t>(width),
+                                static_cast<std::size_t>(bitmapWidth),
                                 validPixels - rowOffset);
                             auto *row = static_cast<std::uint8_t *>(
                                 bmp->GetScanLineForWrite(
@@ -8976,8 +9194,11 @@ namespace motion {
                         }
                     }
                     sourceOrigin = fmt::format(
-                        "psb:{}:{}x{}:origin=({:.3f},{:.3f}):bgra={}:shared={}",
-                        command.sourceKey, width, height, originX, originY,
+                        "psb:{}:{}x{}:decoded={}x{}:origin=({:.3f},{:.3f}):bgra={}:shared={}",
+                        command.sourceKey, width, height,
+                        decodedWidth > 0 ? decodedWidth : width,
+                        decodedHeight > 0 ? decodedHeight : height,
+                        originX, originY,
                         sourcePixelsAreBgra ? 1 : 0,
                         decodedPixels.empty() ? 1 : 0);
                     if(LOGGER &&
@@ -9003,6 +9224,41 @@ namespace motion {
                 srcBmp ? srcBmp->GetWidth() : 0,
                 srcBmp ? srcBmp->GetHeight() : 0);
 
+            if(profileEnabled && LOGGER && sourceColdLoad && srcBmp) {
+                const auto coldLoadUs =
+                    motionRenderProfileNowUs() - resolveStartUs;
+                const double tickFrameMs = _frameLastTime > 0.0
+                    ? _frameLastTime * (1000.0 / 60.0)
+                    : 0.0;
+                const double tickFps = tickFrameMs > 0.0
+                    ? 1000.0 / tickFrameMs
+                    : 0.0;
+                ++profileStats.sourceColdLoads;
+                profileStats.sourceColdLoadUs += coldLoadUs;
+                LOGGER->info(
+                    "motion source cold load: motion={} frame={:.2f} source={} origin={} size={}x{} load_ms={:.2f} tick_frame_ms={:.2f} tick_fps={:.2f} shared_cache={}{}",
+                    motionPath, _clampedEvalTime, command.sourceKey,
+                    sourceOrigin, srcBmp->GetWidth(), srcBmp->GetHeight(),
+                    static_cast<double>(coldLoadUs) / 1000.0,
+                    tickFrameMs, tickFps,
+                    sharedBitmapKey.empty() ? "none" : "miss",
+                    sharedBitmapKey.empty() ? "" : " (cold source cache)");
+            }
+
+            if(srcBmp) {
+                const int bitmapWidth = static_cast<int>(srcBmp->GetWidth());
+                const int bitmapHeight = static_cast<int>(srcBmp->GetHeight());
+                const bool validDecodedRect =
+                    decodedSourceRect[0] >= 0 &&
+                    decodedSourceRect[1] >= 0 &&
+                    decodedSourceRect[2] > decodedSourceRect[0] &&
+                    decodedSourceRect[3] > decodedSourceRect[1] &&
+                    decodedSourceRect[2] <= bitmapWidth &&
+                    decodedSourceRect[3] <= bitmapHeight;
+                baseSourceRects[sourceIdentity] = validDecodedRect
+                    ? decodedSourceRect
+                    : std::array<int, 4>{0, 0, bitmapWidth, bitmapHeight};
+            }
             baseSourceCache.emplace(sourceIdentity, srcBmp);
             if(profileEnabled) {
                 profileStats.baseResolveUs +=
@@ -9049,7 +9305,13 @@ namespace motion {
                 return nullptr;
             }
 
-            const bool sourceIsAlphaOnlyMask = bitmapLooksAlphaOnlyMask(*srcBmp);
+            auto &sourceTraits =
+                _runtime->motionSourceBitmapTraits[sourceIdentity];
+            if(!sourceTraits.alphaOnlyKnown) {
+                sourceTraits.alphaOnly = bitmapLooksAlphaOnlyMask(*srcBmp);
+                sourceTraits.alphaOnlyKnown = true;
+            }
+            const bool sourceIsAlphaOnlyMask = sourceTraits.alphaOnly;
             const bool colorsCarryTint =
                 !packedColorsAreDefault(command.packedColors[0],
                                         command.packedColors[1],
@@ -9066,12 +9328,19 @@ namespace motion {
                 isYuzuLogoTextMaskSource(motionPath, command.sourceKey);
             const bool yuzuLogoCompositeSource =
                 isYuzuLogoCompositeSource(motionPath, command.sourceKey);
+            if(yuzuLogoTextSource && !sourceTraits.whiteMaskKnown) {
+                sourceTraits.whiteMask = bitmapLooksWhiteMask(*srcBmp);
+                sourceTraits.whiteMaskKnown = true;
+            }
+            if(yuzuLogoTextSource && !sourceTraits.hasWhitePixelsKnown) {
+                sourceTraits.hasWhitePixels =
+                    bitmapHasWhiteMaskPixels(*srcBmp);
+                sourceTraits.hasWhitePixelsKnown = true;
+            }
             const bool tintDefaultLogoTextMask =
-                yuzuLogoTextSource &&
-                bitmapLooksWhiteMask(*srcBmp);
+                yuzuLogoTextSource && sourceTraits.whiteMask;
             const bool tintDefaultLogoWhitePixels =
-                yuzuLogoTextSource &&
-                bitmapHasWhiteMaskPixels(*srcBmp);
+                yuzuLogoTextSource && sourceTraits.hasWhitePixels;
             const bool tintOnlyWhitePixels =
                 tintDefaultLogoWhitePixels && !sourceIsAlphaOnlyMask;
             const bool tintDefaultNeutralMask =
@@ -9151,14 +9420,42 @@ namespace motion {
             }
             return tinted;
         };
+        const auto sourceRectForCommand =
+            [&](const detail::PlayerRuntime::RenderCommand &command,
+                const std::shared_ptr<tTVPBaseBitmap> &bitmap) {
+                if(!bitmap) {
+                    return tTVPRect{};
+                }
+                const auto identity = commandSourceIdentity(command);
+                if(const auto it = baseSourceRects.find(identity);
+                   it != baseSourceRects.end()) {
+                    const auto &rect = it->second;
+                    if(rect[0] >= 0 && rect[1] >= 0 &&
+                       rect[2] > rect[0] && rect[3] > rect[1] &&
+                       rect[2] <= static_cast<int>(bitmap->GetWidth()) &&
+                       rect[3] <= static_cast<int>(bitmap->GetHeight())) {
+                        return tTVPRect(rect[0], rect[1],
+                                       rect[2], rect[3]);
+                    }
+                }
+                return tTVPRect(
+                    0, 0,
+                    static_cast<tjs_int>(bitmap->GetWidth()),
+                    static_cast<tjs_int>(bitmap->GetHeight()));
+            };
 
         const int playerStencilType = _maskMode;
         auto ensureCommandLayer =
             [&](tTJSVariant &slot) -> iTJSDispatch2 * {
+            // Per-command layers are private render targets, not visible
+            // children of the Kirikiri layer tree.  Parenting them to the
+            // primary layer lets that parent retain every transient layer
+            // after renderCommands is rebuilt, and in turn retains each
+            // full-size GPU texture indefinitely.
             return ensureReusableLayerObject(
                 slot,
-                scratchOwner,
-                scratchParent,
+                nullptr,
+                nullptr,
                 static_cast<tTVPLayerType>(ltAlpha),
                 false);
         };
@@ -9214,12 +9511,15 @@ namespace motion {
                 }
                 auto localMeshPoints =
                     buildMeshPoints(command.localMeshPoints, 0.0f, 0.0f);
-                if(command.meshType == 1) {
-                    targetLayer->BezierPatchCopy(
-                        localMeshPoints.data(), command.meshDivX,
-                        command.meshDivY, srcBmp.get(), sourceRect, stLinear,
-                        command.clearEnabled);
-                } else if(command.meshType == 2) {
+                // MMotionRenderManager::EvalBezierPatch produces the final
+                // (divX + 1) x (divY + 1) vertex grid before RenderMesh is
+                // called.  localMeshPoints is that evaluated grid, not the
+                // original sixteen Bezier control points, so both authored
+                // patches and inherited point meshes must use MeshCopy here.
+                // Treating the grid as a new Bezier patch consumes only its
+                // first sixteen vertices and can move the whole image outside
+                // the target (notably E-mote character atlases).
+                if(command.meshType == 1 || command.meshType == 2) {
                     targetLayer->MeshCopy(localMeshPoints.data(),
                                           command.meshDivX, command.meshDivY,
                                           srcBmp.get(), sourceRect, stLinear,
@@ -9309,10 +9609,8 @@ namespace motion {
                 if(!maskLayerObject || !maskLayer) {
                     return nullptr;
                 }
-                const tTVPRect sourceRect(
-                    0, 0,
-                    static_cast<tjs_int>(maskBitmap->GetWidth()),
-                    static_cast<tjs_int>(maskBitmap->GetHeight()));
+                const tTVPRect sourceRect =
+                    sourceRectForCommand(maskCommand, maskBitmap);
                 if(!renderCommandSourceToLayer(
                        maskCommand, maskLayerObject, maskLayer,
                        maskBitmap, sourceRect,
@@ -9790,16 +10088,16 @@ namespace motion {
                 return false;
             }
 
-            const tTVPRect sourceRect(
-                0, 0,
-                hasSourceBitmap ? static_cast<tjs_int>(srcBmp->GetWidth()) : 0,
-                hasSourceBitmap ? static_cast<tjs_int>(srcBmp->GetHeight()) : 0);
+            const tTVPRect sourceRect = hasSourceBitmap
+                ? sourceRectForCommand(command, srcBmp)
+                : tTVPRect{};
             if(hasSourceBitmap && logoTraceEnabled) {
                 detail::logoChainTraceCheck(
                     motionPath, "execute.srcRect", "0x6C7440",
                     _clampedEvalTime,
-                    fmt::format("full texture rect exp=[0,0,{},{}]",
-                                srcBmp->GetWidth(), srcBmp->GetHeight()),
+                    fmt::format("logical source rect exp=[{},{},{},{}]",
+                                sourceRect.left, sourceRect.top,
+                                sourceRect.right, sourceRect.bottom),
                     fmt::format("nodeIndex={} act=[{},{},{},{}]",
                                 command.nodeIndex, sourceRect.left,
                                 sourceRect.top, sourceRect.right,
@@ -10652,9 +10950,8 @@ namespace motion {
                    srcBmp->GetHeight() <= 0) {
                     continue;
                 }
-                const tTVPRect sourceRect(
-                    0, 0, static_cast<tjs_int>(srcBmp->GetWidth()),
-                    static_cast<tjs_int>(srcBmp->GetHeight()));
+                const tTVPRect sourceRect =
+                    sourceRectForCommand(command, srcBmp);
                 std::string branch("direct.operateAffine");
                 const bool directCopyWithoutOpacity =
                     ((command.blendMode & 0x0F) == 0) && opa >= 255 &&
@@ -10723,14 +11020,14 @@ namespace motion {
                                             -0.5f, -0.5f);
                         if(command.meshType == 1) {
                             if(directCopyWithoutOpacity) {
-                                branch = "direct.bezierPatchCopy";
-                                renderLayer->BezierPatchCopy(
+                                branch = "direct.evaluatedBezierMeshCopy";
+                                renderLayer->MeshCopy(
                                     worldMeshPoints.data(), command.meshDivX,
                                     command.meshDivY, srcBmp.get(), sourceRect,
                                     stLinear, command.clearEnabled);
                             } else {
-                                branch = "direct.operateBezierPatch";
-                                renderLayer->OperateBezierPatch(
+                                branch = "direct.operateEvaluatedBezierMesh";
+                                renderLayer->OperateMesh(
                                     worldMeshPoints.data(), command.meshDivX,
                                     command.meshDivY, srcBmp.get(), sourceRect,
                                     blendMode, opa, stLinear,
@@ -10895,6 +11192,84 @@ namespace motion {
                 }
                 cache.erase(oldest);
             }
+            // Entry count alone is not a useful memory bound: a composite
+            // command can own a full-canvas GPU layer, while a small icon
+            // command is only a few KiB. Bound retained work surfaces by
+            // their estimated pixel footprint during this periodic pass.
+            const auto layerBytes = [](const tTJSVariant &value) {
+                if(value.Type() != tvtObject) {
+                    return std::size_t{0};
+                }
+                auto *layer = resolveNativeLayer(value.AsObjectNoAddRef());
+                if(!layer || !layer->GetMainImage()) {
+                    return std::size_t{0};
+                }
+                return static_cast<std::size_t>(layer->GetImageWidth()) *
+                    static_cast<std::size_t>(layer->GetImageHeight()) * 4u;
+            };
+            const auto entryBytes = [&](const auto &entry) {
+                // Slots may alias while a composed output is promoted. A
+                // conservative sum intentionally errs toward eviction.
+                return layerBytes(entry.leafLayer) +
+                    layerBytes(entry.composedLayer) +
+                    layerBytes(entry.maskLayer) +
+                    layerBytes(entry.unionMaskLayer);
+            };
+            constexpr std::size_t kCommandOutputCacheLimitBytes =
+                96u * 1024u * 1024u;
+            auto totalBytes = [&]() {
+                std::size_t result = 0;
+                for(const auto &entry : cache) {
+                    result += entryBytes(entry.second);
+                }
+                return result;
+            };
+            while(cache.size() > 1u &&
+                  totalBytes() > kCommandOutputCacheLimitBytes) {
+                auto oldest = cache.begin();
+                for(auto it = std::next(cache.begin());
+                    it != cache.end(); ++it) {
+                    if(it->second.lastUseGeneration <
+                       oldest->second.lastUseGeneration) {
+                        oldest = it;
+                    }
+                }
+                cache.erase(oldest);
+            }
+        }
+
+        if(frameCacheEnabled) {
+            auto *renderedImage = renderLayer->GetMainImage();
+            if(renderedImage &&
+               renderedImage->GetWidth() >=
+                   static_cast<tjs_uint>(frameCanvasWidth) &&
+               renderedImage->GetHeight() >=
+                   static_cast<tjs_uint>(frameCanvasHeight)) {
+                auto &entry = _runtime->emoteRenderFrameCache;
+                if(!entry.bitmap ||
+                   entry.bitmap->GetWidth() !=
+                       static_cast<tjs_uint>(frameCanvasWidth) ||
+                   entry.bitmap->GetHeight() !=
+                       static_cast<tjs_uint>(frameCanvasHeight)) {
+                    entry.bitmap = std::make_shared<tTVPBaseBitmap>(
+                        static_cast<tjs_uint>(frameCanvasWidth),
+                        static_cast<tjs_uint>(frameCanvasHeight), 32);
+                }
+                entry.bitmap->CopyRect(
+                    0, 0, renderedImage,
+                    tTVPRect(0, 0, frameCanvasWidth, frameCanvasHeight));
+                entry.motion = motionPath;
+                entry.frame = _clampedEvalTime;
+                entry.canvasWidth = frameCanvasWidth;
+                entry.canvasHeight = frameCanvasHeight;
+                entry.commandSignature = frameSignature;
+                entry.storedUs = motionRenderProfileNowUs();
+                globalPresentationRenderCache()[renderLayerObject] =
+                    makeGlobalPresentationRenderCacheEntry(
+                        renderLayerObject, motionPath, _clampedEvalTime,
+                        frameCanvasWidth, frameCanvasHeight, frameSignature,
+                        entry.storedUs);
+            }
         }
         if(profileEnabled && LOGGER) {
             size_t materializedPreparedEntries = 0;
@@ -10902,12 +11277,13 @@ namespace motion {
                 materializedPreparedEntries += entry.second.size();
             }
             LOGGER->info(
-                "motion render profile: motion={} frame={:.2f} target={} native={} commands={} signature={:016x} outputs=direct:{} buffered:{} cache=command:{}/{} base:{}/{} shared:{}/{} prepared:{}/{} entries=command:{} prepared:{} materialized:{} evictions:{} loads=storage:{} psb:{} tintBuilds={} us=total:{} base:{} prepared:{} tint:{} alloc:{} apply:{} psbMeta:{} psbDecode:{} psbConvert:{}",
+                "motion render profile: motion={} frame={:.2f} target={} native={} commands={} signature={:016x} outputs=direct:{} buffered:{} cache=command:{}/{} base:{}/{} shared:{}/{} prepared:{}/{} entries=command:{} prepared:{} materialized:{} evictions:{} loads=storage:{} psb:{} cold:{} tintBuilds={} us=total:{} base:{} prepared:{} tint:{} alloc:{} apply:{} psbMeta:{} psbDecode:{} psbConvert:{} coldLoad:{}",
                 motionPath, _clampedEvalTime,
                 static_cast<const void *>(renderLayerObject),
                 static_cast<const void *>(renderLayer),
                 _runtime->renderCommands.size(),
-                renderCommandReuseSignature(_runtime->renderCommands),
+                renderCommandReuseSignature(_runtime->renderCommands,
+                                            _maskMode),
                 profileStats.directOutputs, profileStats.bufferedOutputs,
                 profileStats.commandOutputCacheHits,
                 profileStats.commandLeafCacheHits,
@@ -10919,14 +11295,15 @@ namespace motion {
                 preparedSourceCache.size(), materializedPreparedEntries,
                 profileStats.tintEvictions,
                 profileStats.storageLoads, profileStats.psbLoads,
-                profileStats.tintBuilds,
+                profileStats.sourceColdLoads, profileStats.tintBuilds,
                 motionRenderProfileNowUs() - profileStartUs,
                 profileStats.baseResolveUs, profileStats.preparedResolveUs,
                 profileStats.tintBuildUs, profileStats.tintAllocateUs,
                 profileStats.tintApplyUs, profileStats.psbMetadataUs,
-                profileStats.psbDecodeUs, profileStats.psbConvertUs);
+                profileStats.psbDecodeUs, profileStats.psbConvertUs,
+                profileStats.sourceColdLoadUs);
         }
-        return true;
+        return gpuBatch.finish();
     }
 
     iTJSDispatch2 *Player::resolveSeparateLayerRenderTarget(
@@ -10940,24 +11317,27 @@ namespace motion {
             return nullptr;
         }
 
-        iTJSDispatch2 *targetLayerObject = nullptr;
-        if(auto *resolved = tryResolveLayerDispatch(sla->getTargetLayer())) {
-            targetLayerObject = resolved;
+        // krkrsdl3 constructs the adaptor's private Layer with the constructor
+        // owner as its parent and never reparents it through a mutable target
+        // property.  Keep that invariant here: targetLayer exists only for
+        // compatibility with scripts that probe/set it.
+        iTJSDispatch2 *ownerLayerObject = nullptr;
+        if(auto *resolved = tryResolveLayerDispatch(sla->getOwnerVariant())) {
+            ownerLayerObject = resolved;
         }
-        if(!targetLayerObject) {
-            targetLayerObject = fallbackOwner;
+        if(!ownerLayerObject) {
+            ownerLayerObject = fallbackOwner;
         }
-        if(!targetLayerObject) {
+        if(!ownerLayerObject) {
             return nullptr;
         }
 
-        sla->setTargetLayer(tTJSVariant(targetLayerObject, targetLayerObject));
-        if(!queryLayerCanvasSize(targetLayerObject, canvasWidth, canvasHeight)) {
+        if(!queryLayerCanvasSize(ownerLayerObject, canvasWidth, canvasHeight)) {
             return nullptr;
         }
 
         iTJSDispatch2 *renderTarget = nullptr;
-        tTJSNI_BaseLayer *targetNativeLayer = resolveNativeLayer(targetLayerObject);
+        tTJSNI_BaseLayer *targetNativeLayer = resolveNativeLayer(ownerLayerObject);
         if(!targetNativeLayer && fallbackOwner) {
             targetNativeLayer = resolveNativeLayer(fallbackOwner);
         }
@@ -10968,7 +11348,7 @@ namespace motion {
             renderTarget = ensureReusableLayerObjectWithOwnerVariant(
                 sla->privateRenderTargetSlot(),
                 treeOwnerVariant,
-                targetLayerObject,
+                ownerLayerObject,
                 static_cast<tTVPLayerType>(ltAlpha),
                 true,
                 sla->getAbsolute());
@@ -10976,8 +11356,8 @@ namespace motion {
         if(!renderTarget) {
             renderTarget = ensureReusableLayerObject(
                 sla->privateRenderTargetSlot(),
-                resolveLayerTreeOwnerObject(targetLayerObject),
-                targetLayerObject,
+                resolveLayerTreeOwnerObject(ownerLayerObject),
+                ownerLayerObject,
                 static_cast<tTVPLayerType>(ltAlpha),
                 true,
                 sla->getAbsolute());
@@ -10988,7 +11368,25 @@ namespace motion {
 
         sla->setPrivateRenderTarget(tTJSVariant(renderTarget, renderTarget));
         if(auto *renderLayer = resolveNativeLayer(renderTarget)) {
+            // Match krkrsdl3's SeparateLayerAdaptor: the adaptor surface is
+            // a child of the authored owner, but it is always a fresh local
+            // canvas.  Reused Layer objects retain position/imagePosition and
+            // clip state unless they are explicitly reset; leaving that state
+            // intact is the source of the one-frame corner/offset glitches.
+            renderLayer->SetPosition(0, 0);
+            renderLayer->SetImagePosition(0, 0);
             renderLayer->SetSize(canvasWidth, canvasHeight);
+            renderLayer->SetClip(0, 0, canvasWidth, canvasHeight);
+            renderLayer->SetHasImage(true);
+            if(renderLayer->GetImageWidth() < canvasWidth ||
+               renderLayer->GetImageHeight() < canvasHeight) {
+                renderLayer->SetImageSize(
+                    static_cast<tjs_uint>(canvasWidth),
+                    static_cast<tjs_uint>(canvasHeight));
+            }
+            renderLayer->SetType(static_cast<tTVPLayerType>(ltAlpha));
+            renderLayer->SetHitType(htProvince);
+            renderLayer->SetHitThreshold(256);
             renderLayer->SetVisible(true);
         }
         return renderTarget;
@@ -11030,6 +11428,7 @@ namespace motion {
         if(s_inRenderToD3D) return false;
         s_inRenderToD3D = true;
         struct Guard { ~Guard() { s_inRenderToD3D = false; } } guard;
+        adaptor->setRenderedLayer(nullptr);
 
         ensureMotionLoaded();
         if(!_runtime->activeMotion) return false;
@@ -11041,13 +11440,205 @@ namespace motion {
         // that behavior and retain its completed surface in the layer tree.
         const bool retainD3DPresentation =
             adaptor->shouldRetainUncapturedPresentation();
-        if(!retainD3DPresentation &&
+        const bool nativePresentationPending =
+            _nativeBackend && !_nativeBackendPresentationReady;
+        if(nativePresentationPending &&
+           adaptor->preparePresentationHoldIfTargetHasImage() &&
+           !_nativeBackendPresentationHoldLogged && LOGGER) {
+            _nativeBackendPresentationHoldLogged = true;
+            LOGGER->info(
+                "native motion presentation hold: source={} reason=awaiting-first-presentation route=target-layer",
+                _nativeBackendSourcePath);
+        }
+        if(nativePresentationPending && !retainD3DPresentation &&
+           !adaptor->getPresentationHold()) {
+            // The first synchronous draw can happen while KAG is still
+            // building the destination page, before its crossfade starts. The
+            // adaptor will inspect the eventual capture target and retain an
+            // existing stable image if one is present; a blank target is still
+            // allowed to receive the first frame normally.
+            adaptor->deferNativePresentationOnce();
+        }
+        if(!retainD3DPresentation && !nativePresentationPending &&
            _runtime->d3dPresentationLayer.Type() == tvtObject) {
             if(auto *presentation = resolveNativeLayer(
                    _runtime->d3dPresentationLayer.AsObjectNoAddRef())) {
                 presentation->SetVisible(false);
             }
             adaptor->setRetainedPresentationLayer(nullptr);
+        }
+        if(nativePresentationPending) {
+            // loadFromSnapshot() has already replaced the backend, but the
+            // new SDK player has not received its first progress/variable
+            // pass yet. Reuse the last completed presentation layer so the
+            // SDK's default pose cannot flash during a cold expression load.
+            if(_runtime->d3dPresentationLayer.Type() == tvtObject) {
+                iTJSDispatch2 *presentationObject =
+                    _runtime->d3dPresentationLayer.AsObjectNoAddRef();
+                if(auto *presentation = resolveNativeLayer(presentationObject);
+                   presentation && presentation->GetHasImage()) {
+                    presentation->SetVisible(true);
+                    adaptor->setRetainedPresentationLayer(presentationObject);
+                    adaptor->setRenderedLayer(presentationObject);
+                    if(!_nativeBackendPresentationHoldLogged && LOGGER) {
+                        _nativeBackendPresentationHoldLogged = true;
+                        LOGGER->info(
+                            "native motion presentation hold: source={} reason=awaiting-first-progress route=retained-layer",
+                            _nativeBackendSourcePath);
+                    }
+                    _nativeBackendPresentationReady = true;
+                    return true;
+                }
+            }
+            if(_runtime->lastD3DRenderLayer <
+               _runtime->d3dRenderLayers.size()) {
+                tTJSVariant &lastLayerSlot = _runtime->d3dRenderLayers[
+                    _runtime->lastD3DRenderLayer];
+                iTJSDispatch2 *lastLayerObject =
+                    lastLayerSlot.Type() == tvtObject
+                        ? lastLayerSlot.AsObjectNoAddRef()
+                        : nullptr;
+                if(auto *lastLayer = resolveNativeLayer(lastLayerObject);
+                   lastLayer && lastLayer->GetHasImage()) {
+                    adaptor->setRenderedLayer(lastLayerObject);
+                    if(!_nativeBackendPresentationHoldLogged && LOGGER) {
+                        _nativeBackendPresentationHoldLogged = true;
+                        LOGGER->info(
+                            "native motion presentation hold: source={} reason=awaiting-first-progress route=last-d3d-layer",
+                            _nativeBackendSourcePath);
+                    }
+                    _nativeBackendPresentationReady = true;
+                    return true;
+                }
+            }
+        }
+        const auto rasterNowUs = motionRenderProfileNowUs();
+        if(!_nativeBackend && !retainD3DPresentation &&
+           _runtime->isEmoteMode &&
+           _runtime->lastD3DRasterPublishUs != 0 &&
+           rasterNowUs >= _runtime->lastD3DRasterPublishUs &&
+           rasterNowUs - _runtime->lastD3DRasterPublishUs <
+               kD3DEmoteRasterPublishIntervalUs &&
+           _runtime->lastD3DRenderLayer <
+               _runtime->d3dRenderLayers.size()) {
+            auto &lastLayerSlot = _runtime->d3dRenderLayers[
+                _runtime->lastD3DRenderLayer];
+            iTJSDispatch2 *lastLayerObject =
+                lastLayerSlot.Type() == tvtObject
+                    ? lastLayerSlot.AsObjectNoAddRef()
+                    : nullptr;
+            auto *lastLayer = resolveNativeLayer(lastLayerObject);
+            if(lastLayer &&
+               lastLayer->GetImageWidth() == adaptor->getWidth() &&
+               lastLayer->GetImageHeight() == adaptor->getHeight()) {
+                adaptor->setRenderedLayer(lastLayerObject);
+                if(motionRenderProfileEnabled() && LOGGER) {
+                    LOGGER->info(
+                        "motion d3d raster reuse: motion={} layer={} age_us={} interval_us={}",
+                        motionPath, _runtime->lastD3DRenderLayer,
+                        rasterNowUs - _runtime->lastD3DRasterPublishUs,
+                        kD3DEmoteRasterPublishIntervalUs);
+                }
+                return true;
+            }
+        }
+
+        // Kiri's D3DEmote scripts present through D3DAdaptor rather than the
+        // ordinary Layer draw path. Once a native player owns model
+        // evaluation, routing this branch through the legacy PSB renderer
+        // displays an unchanging compatibility snapshot: the native clock moves
+        // but the pixels copied by captureCanvas do not. Publish the native
+        // frame into the adaptor's retained GPU layer so both ordinary
+        // captureCanvas and uncaptured affine presentations consume the same
+        // animated source.
+        if(_nativeBackend) {
+            iTJSDispatch2 *windowObject = adaptor->getWindowObject();
+            iTJSDispatch2 *primaryLayerObject =
+                resolvePrimaryLayerObject(windowObject);
+            if(!primaryLayerObject) {
+                return false;
+            }
+
+            if(retainD3DPresentation) {
+                iTJSDispatch2 *presentationParentObject =
+                    primaryLayerObject;
+                if(auto *primary = resolveNativeLayer(primaryLayerObject)) {
+                    for(tjs_uint index = 0; index < primary->GetCount();
+                        ++index) {
+                        auto *candidate = primary->GetChildren(
+                            static_cast<tjs_int>(index));
+                        if(candidate && candidate->GetOwnerNoAddRef() &&
+                           candidate->GetName() == TJS_W("表-背景")) {
+                            presentationParentObject =
+                                candidate->GetOwnerNoAddRef();
+                            break;
+                        }
+                    }
+                }
+                const bool presentationCreated =
+                    _runtime->d3dPresentationLayer.Type() != tvtObject;
+                iTJSDispatch2 *presentationLayerObject =
+                    ensureReusableLayerObject(
+                        _runtime->d3dPresentationLayer, windowObject,
+                        presentationParentObject,
+                        static_cast<tTVPLayerType>(ltAlpha), true);
+                auto *presentationLayer =
+                    resolveNativeLayer(presentationLayerObject);
+                if(!presentationLayerObject || !presentationLayer ||
+                   !renderNativeBackendToLayer(
+                       presentationLayerObject, adaptor->getWidth(),
+                       adaptor->getHeight(), true)) {
+                    return false;
+                }
+                presentationLayer->SetName(
+                    TJS_W("AetherKiriD3DPlayerSurface"));
+                presentationLayer->SetEnabled(false);
+                presentationLayer->SetHitType(htMask);
+                presentationLayer->SetHitThreshold(256);
+                if(presentationCreated) {
+                    presentationLayer->BringToBack();
+                }
+                const int previewLeft =
+                    std::min(128, adaptor->getWidth());
+                const int previewRight = std::min(
+                    168, adaptor->getWidth() - previewLeft);
+                const int previewWidth = std::max(
+                    1, adaptor->getWidth() - previewLeft - previewRight);
+                presentationLayer->SetPosition(previewLeft, 0);
+                presentationLayer->SetSize(previewWidth,
+                                           adaptor->getHeight());
+                presentationLayer->SetImagePosition(-previewLeft, 0);
+                presentationLayer->SetVisible(true);
+                adaptor->setRetainedPresentationLayer(
+                    presentationLayerObject);
+                adaptor->setRenderedLayer(presentationLayerObject);
+                _nativeBackendPresentationReady = true;
+                return true;
+            }
+
+            const std::size_t renderLayerIndex =
+                _runtime->nextD3DRenderLayer;
+            _runtime->nextD3DRenderLayer =
+                (_runtime->nextD3DRenderLayer + 1u) %
+                _runtime->d3dRenderLayers.size();
+            auto &renderLayerSlot =
+                _runtime->d3dRenderLayers[renderLayerIndex];
+            iTJSDispatch2 *renderLayerObject = ensureReusableLayerObject(
+                renderLayerSlot, windowObject, primaryLayerObject,
+                static_cast<tTVPLayerType>(ltAlpha), false);
+            if(!renderLayerObject ||
+               !renderNativeBackendToLayer(
+                   renderLayerObject, adaptor->getWidth(),
+                   adaptor->getHeight(), true)) {
+                adaptor->setRenderedLayer(nullptr);
+                return false;
+            }
+            adaptor->setRenderedLayer(renderLayerObject);
+            _runtime->lastD3DRenderLayer = renderLayerIndex;
+            _runtime->lastD3DRasterPublishUs =
+                motionRenderProfileNowUs();
+            _nativeBackendPresentationReady = true;
+            return true;
         }
         detail::logoChainTraceLogf(
             motionPath, "draw.d3d", "0x6D5B90", _clampedEvalTime,
@@ -11072,7 +11663,7 @@ namespace motion {
         applyPreparedRenderItemTranslateOffsets();
         adjustPreparedRenderItemsForYuzuPresentation(
             *_runtime, motionPath, adaptor->getWidth(),
-            adaptor->getHeight());
+            adaptor->getHeight(), _clampedEvalTime);
         adjustPreparedRenderItemsForCenteredGameMotion(
             *_runtime, motionPath, adaptor->getWidth(),
             adaptor->getHeight(),
@@ -11086,6 +11677,15 @@ namespace motion {
             return false;
         }
 
+        buildRenderCommands(adaptor->getWidth(), adaptor->getHeight());
+        const bool canReuseD3DEmoteRender =
+            motion::internal::d3dEmoteFrameReuseRouteEligible(
+                _runtime->isEmoteMode, retainD3DPresentation,
+                _runtime->renderCommands.size());
+        const auto d3dCommandSignature = canReuseD3DEmoteRender
+            ? renderCommandReuseSignature(_runtime->renderCommands,
+                                          _maskMode)
+            : 0;
         const std::size_t renderLayerIndex =
             retainD3DPresentation ? 0u
                                   : _runtime->nextD3DRenderLayer;
@@ -11171,12 +11771,76 @@ namespace motion {
         if(!renderLayerObject) {
             return false;
         }
+        if(canReuseD3DEmoteRender) {
+            const auto &entry = _runtime->d3dEmoteRenderFrameCache;
+            const bool exactCacheMatch =
+                motion::internal::d3dEmoteFrameCacheMatches(
+                    entry, motionPath, _clampedEvalTime,
+                    adaptor->getWidth(), adaptor->getHeight(),
+                    d3dCommandSignature);
+            auto *cachedLayer = exactCacheMatch
+                ? resolveNativeLayer(renderLayerObject)
+                : nullptr;
+            if(cachedLayer) {
+                if(!cachedLayer->GetHasImage()) {
+                    cachedLayer->SetHasImage(true);
+                }
+                if(cachedLayer->GetImageWidth() < adaptor->getWidth() ||
+                   cachedLayer->GetImageHeight() < adaptor->getHeight()) {
+                    cachedLayer->SetImageSize(
+                        static_cast<tjs_uint>(adaptor->getWidth()),
+                        static_cast<tjs_uint>(adaptor->getHeight()));
+                }
+                if(cachedLayer->GetWidth() != adaptor->getWidth() ||
+                   cachedLayer->GetHeight() != adaptor->getHeight()) {
+                    cachedLayer->SetSize(adaptor->getWidth(),
+                                         adaptor->getHeight());
+                }
+                cachedLayer->SetClip(0, 0, adaptor->getWidth(),
+                                     adaptor->getHeight());
+                // d3dRenderLayers are private scratch surfaces. Keep them
+                // hidden while captureCanvas aliases their texture into the
+                // authored character layer.
+                if(cachedLayer->GetVisible()) {
+                    cachedLayer->SetVisible(false);
+                }
+                auto *cachedImage = cachedLayer->GetMainImage();
+                if(cachedImage &&
+                   cachedImage->GetWidth() == adaptor->getWidth() &&
+                   cachedImage->GetHeight() == adaptor->getHeight()) {
+                    cachedImage->CopyRect(
+                        0, 0, entry.bitmap.get(),
+                        tTVPRect(0, 0, adaptor->getWidth(),
+                                 adaptor->getHeight()));
+                    adaptor->setRenderedLayer(renderLayerObject);
+                    ++_runtime->d3dEmoteRenderFrameReuseSkips;
+                    if(motionRenderProfileEnabled() && LOGGER) {
+                        LOGGER->info(
+                            "motion emote render reuse: motion={} frame={:.2f} target={} canvas={}x{} commands={} signature={:016x} cached_signature={:016x} skips={} reason={} age_us={} route=d3d",
+                            motionPath, _clampedEvalTime,
+                            static_cast<const void *>(renderLayerObject),
+                            adaptor->getWidth(), adaptor->getHeight(),
+                            _runtime->renderCommands.size(),
+                            d3dCommandSignature,
+                            entry.commandSignature,
+                            _runtime->d3dEmoteRenderFrameReuseSkips,
+                            "exact",
+                            motionRenderProfileNowUs() >= entry.storedUs
+                                ? motionRenderProfileNowUs() - entry.storedUs
+                                : 0);
+                    }
+                    return true;
+                }
+            }
+        }
+        TVPGodotGpuBatchScope d3dGpuBatch(
+            _runtime->isEmoteMode &&
+            _runtime->renderCommands.size() > 1);
         if(!prepareLayerForRender(renderLayerObject, adaptor->getWidth(),
                                   adaptor->getHeight(), 0x00000000)) {
             return false;
         }
 
-        buildRenderCommands(adaptor->getWidth(), adaptor->getHeight());
         if(!executeLayerRenderCommands(renderLayerObject, true)) {
             adaptor->setRenderedLayer(nullptr);
             return false;
@@ -11244,6 +11908,569 @@ namespace motion {
         } else {
             adaptor->setRenderedLayer(renderLayerObject);
         }
+        if(!d3dGpuBatch.finish()) {
+            adaptor->setRenderedLayer(nullptr);
+            return false;
+        }
+        if(canReuseD3DEmoteRender) {
+            auto *executedImage = layer->GetMainImage();
+            if(executedImage &&
+               executedImage->GetWidth() == layerW &&
+               executedImage->GetHeight() == layerH) {
+                auto &entry = _runtime->d3dEmoteRenderFrameCache;
+                if(!entry.bitmap ||
+                   entry.bitmap->GetWidth() != layerW ||
+                   entry.bitmap->GetHeight() != layerH) {
+                    entry.bitmap = std::make_shared<tTVPBaseBitmap>(
+                        static_cast<tjs_uint>(layerW),
+                        static_cast<tjs_uint>(layerH), 32);
+                }
+                // Full CopyRect retains the same ordered GPU texture by
+                // reference. An enclosing batch may still own its completion;
+                // no CPU readback or extra synchronization is required here.
+                entry.bitmap->CopyRect(
+                    0, 0, executedImage,
+                    tTVPRect(0, 0, layerW, layerH));
+                entry.motion = motionPath;
+                entry.frame = _clampedEvalTime;
+                entry.canvasWidth = layerW;
+                entry.canvasHeight = layerH;
+                entry.commandSignature = d3dCommandSignature;
+                entry.storedUs = motionRenderProfileNowUs();
+            }
+        }
+        if(!retainD3DPresentation && _runtime->isEmoteMode) {
+            _runtime->lastD3DRenderLayer = renderLayerIndex;
+            _runtime->lastD3DRasterPublishUs = motionRenderProfileNowUs();
+        }
+        return true;
+    }
+
+    bool Player::renderToRgba(std::uint8_t *pixels, int width, int height,
+                              int pitch,
+                              std::array<int, 4> *visibleBounds,
+                              bool *alphaBoundsKnown,
+                              bool *alphaOpaque) {
+        return renderToRgbaRegion(
+            pixels, width, height, 0, 0, width, height, pitch,
+            visibleBounds, alphaBoundsKnown, alphaOpaque);
+    }
+
+    bool Player::renderToRgbaRegion(
+        std::uint8_t *pixels, int stageWidth, int stageHeight,
+        int regionLeft, int regionTop, int regionWidth, int regionHeight,
+        int pitch, std::array<int, 4> *visibleBounds,
+        bool *alphaBoundsKnown, bool *alphaOpaque) {
+        if(!pixels || pitch < regionWidth * 4 ||
+           !beginRenderToRgbaRegion(
+               stageWidth, stageHeight, regionLeft, regionTop,
+               regionWidth, regionHeight)) {
+            return false;
+        }
+        return finishRenderToRgbaRegion(
+            pixels, pitch, visibleBounds, alphaBoundsKnown, alphaOpaque);
+    }
+
+    bool Player::beginRenderToRgbaRegion(
+        int stageWidth, int stageHeight,
+        int regionLeft, int regionTop, int regionWidth, int regionHeight) {
+        if(stageWidth <= 0 || stageHeight <= 0 ||
+           regionLeft < 0 || regionTop < 0 || regionWidth <= 0 ||
+           regionHeight <= 0 || regionLeft + regionWidth > stageWidth ||
+           regionTop + regionHeight > stageHeight ||
+           _runtime->headlessRgbaRenderPending) {
+            return false;
+        }
+        const bool fullStage =
+            regionLeft == 0 && regionTop == 0 &&
+            regionWidth == stageWidth && regionHeight == stageHeight;
+        if(fullStage) {
+            for(size_t index = 0;
+                index < _runtime->headlessRgbaReadbackRequests.size();
+                ++index) {
+                if(_runtime->headlessRgbaReadbackRequests[index] != 0 &&
+                   _runtime->headlessRgbaReadbackFullStage[index]) {
+                    return false;
+                }
+            }
+        }
+        int renderSlot = 0;
+        if(!fullStage) {
+            bool used[2] = {false, false};
+            for(size_t index = 0;
+                index < _runtime->headlessRgbaReadbackRequests.size();
+                ++index) {
+                if(_runtime->headlessRgbaReadbackRequests[index] != 0 &&
+                   !_runtime->headlessRgbaReadbackFullStage[index]) {
+                    const int slot =
+                        _runtime->headlessRgbaReadbackSlots[index];
+                    if(slot >= 0 && slot < 2) used[slot] = true;
+                }
+            }
+            renderSlot = !used[0] ? 0 : (!used[1] ? 1 : -1);
+            if(renderSlot < 0) return false;
+        }
+        auto &renderLayerSlot = fullStage
+            ? _runtime->headlessRgbaRenderLayer
+            : (renderSlot == 0
+                   ? _runtime->headlessRgbaRegionRenderLayer
+                   : _runtime->headlessRgbaRegionRenderLayer2);
+        iTJSDispatch2 *target = ensureReusableLayerObject(
+            renderLayerSlot,
+            nullptr,
+            nullptr,
+            static_cast<tTVPLayerType>(ltAlpha),
+            false);
+        if(!target) {
+            return false;
+        }
+
+        auto *layer = resolveNativeLayer(target);
+        if(!layer) {
+            return false;
+        }
+        if(!prepareLayerForRender(target, regionWidth, regionHeight,
+                                  0x00000000)) {
+            return false;
+        }
+
+        // MMotionDevice::ChangeFrameBufferSize calls
+        // MOGLBase::CalcDefault2DCamera before drawing.  The native camera is
+        // an orthographic projection over [-width/2,+width/2] and
+        // [-height/2,+height/2], so E-mote model coordinates are centred in
+        // the framebuffer.  The KiriKiri software-layer path consumes pixel
+        // coordinates directly and therefore needs the equivalent viewport
+        // translation here.  Keep it out of the model/root transform: coord
+        // and scale are evaluated by MMotionPlayer before this camera step.
+        const auto previousDrawAffine = _runtime->drawAffineMatrix;
+        if(_runtime->isEmoteMode) {
+            _runtime->drawAffineMatrix[4] =
+                previousDrawAffine[4] + static_cast<double>(stageWidth) * 0.5 -
+                static_cast<double>(regionLeft);
+            _runtime->drawAffineMatrix[5] =
+                previousDrawAffine[5] + static_cast<double>(stageHeight) * 0.5 -
+                static_cast<double>(regionTop);
+            _runtime->preparedRenderItemsValid = false;
+        }
+        struct DrawAffineRestore {
+            detail::PlayerRuntime *runtime;
+            std::array<double, 6> matrix;
+            ~DrawAffineRestore() {
+                if(!runtime) return;
+                runtime->drawAffineMatrix = matrix;
+                runtime->preparedRenderItemsValid = false;
+            }
+        } restoreDrawAffine{_runtime.get(), previousDrawAffine};
+
+        if(!renderToLayer(target, false)) {
+            return false;
+        }
+        _runtime->headlessRgbaRenderPending = true;
+        _runtime->headlessRgbaPendingFullStage = fullStage;
+        _runtime->headlessRgbaPendingSlot = renderSlot;
+        _runtime->headlessRgbaPendingWidth = regionWidth;
+        _runtime->headlessRgbaPendingHeight = regionHeight;
+        return true;
+    }
+
+    bool Player::finishRenderToRgbaRegion(
+        std::uint8_t *pixels, int pitch,
+        std::array<int, 4> *visibleBounds,
+        bool *alphaBoundsKnown, bool *alphaOpaque) {
+        if(!_runtime->headlessRgbaRenderPending || !pixels) {
+            return false;
+        }
+        const bool fullStage = _runtime->headlessRgbaPendingFullStage;
+        const int regionWidth = _runtime->headlessRgbaPendingWidth;
+        const int regionHeight = _runtime->headlessRgbaPendingHeight;
+        _runtime->headlessRgbaRenderPending = false;
+        if(regionWidth <= 0 || regionHeight <= 0 ||
+           pitch < regionWidth * 4) {
+            return false;
+        }
+        if(visibleBounds) {
+            *visibleBounds = {0, 0, 0, 0};
+        }
+        if(alphaBoundsKnown) {
+            *alphaBoundsKnown = false;
+        }
+        if(alphaOpaque) {
+            *alphaOpaque = false;
+        }
+        auto &renderLayerSlot = fullStage
+            ? _runtime->headlessRgbaRenderLayer
+            : (_runtime->headlessRgbaPendingSlot == 0
+                   ? _runtime->headlessRgbaRegionRenderLayer
+                   : _runtime->headlessRgbaRegionRenderLayer2);
+        auto *layer = resolveNativeLayer(renderLayerSlot.AsObjectNoAddRef());
+        if(!layer) {
+            return false;
+        }
+        const auto *source = reinterpret_cast<const std::uint8_t *>(
+            layer->GetMainImagePixelBuffer());
+        const tjs_int sourcePitch = layer->GetMainImagePixelBufferPitch();
+        if(!source || sourcePitch <= 0) {
+            return false;
+        }
+
+        // Kirikiri's 32-bit bitmap memory is BGRA; engine provider frames use
+        // RGBA. Preserve alpha exactly while swapping the color endpoints.
+        // Native Artemis keeps this stage-sized texture on the GPU. Its CPU
+        // replacement also needs the visible rectangle, so derive it during
+        // the unavoidable format copy instead of scanning the 1920x1080 frame
+        // a second time in ArtemisRuntime.
+        const auto stats = convertBgraReadbackToRgba(
+            source, static_cast<size_t>(sourcePitch), pixels,
+            static_cast<size_t>(pitch), regionWidth, regionHeight);
+        if(visibleBounds && stats.anyVisible) {
+            *visibleBounds = {stats.minimumX, stats.minimumY,
+                              stats.maximumX, stats.maximumY};
+        }
+        if(alphaBoundsKnown) {
+            *alphaBoundsKnown = true;
+        }
+        if(alphaOpaque) {
+            *alphaOpaque = stats.allOpaque;
+        }
+        return true;
+    }
+
+    bool Player::requestRenderToRgbaReadback() {
+        if(!_runtime->headlessRgbaRenderPending ||
+           std::all_of(_runtime->headlessRgbaReadbackRequests.begin(),
+                       _runtime->headlessRgbaReadbackRequests.end(),
+                       [](uint64_t request) { return request != 0; })) {
+            return false;
+        }
+        const bool fullStage = _runtime->headlessRgbaPendingFullStage;
+        const int renderSlot = _runtime->headlessRgbaPendingSlot;
+        auto &renderLayerSlot = fullStage
+            ? _runtime->headlessRgbaRenderLayer
+            : (renderSlot == 0
+                   ? _runtime->headlessRgbaRegionRenderLayer
+                   : _runtime->headlessRgbaRegionRenderLayer2);
+        auto *layer = resolveNativeLayer(renderLayerSlot.AsObjectNoAddRef());
+        auto *image = layer ? layer->GetMainImage() : nullptr;
+        auto *texture = image
+            ? dynamic_cast<GodotTexture2D *>(image->GetTexture())
+            : nullptr;
+        if(!texture) return false;
+        const uint64_t request = texture->BeginGpuReadback();
+        if(request == 0) return false;
+        const auto free = std::find(
+            _runtime->headlessRgbaReadbackRequests.begin(),
+            _runtime->headlessRgbaReadbackRequests.end(), 0u);
+        if(free == _runtime->headlessRgbaReadbackRequests.end()) {
+            texture->DiscardGpuReadback(request);
+            return false;
+        }
+        const size_t index = static_cast<size_t>(std::distance(
+            _runtime->headlessRgbaReadbackRequests.begin(), free));
+        _runtime->headlessRgbaRenderPending = false;
+        _runtime->headlessRgbaReadbackRequests[index] = request;
+        _runtime->headlessRgbaReadbackSequences[index] =
+            _runtime->headlessRgbaNextReadbackSequence++;
+        _runtime->headlessRgbaReadbackFullStage[index] = fullStage;
+        _runtime->headlessRgbaReadbackSlots[index] = renderSlot;
+        _runtime->headlessRgbaReadbackWidths[index] =
+            _runtime->headlessRgbaPendingWidth;
+        _runtime->headlessRgbaReadbackHeights[index] =
+            _runtime->headlessRgbaPendingHeight;
+        return true;
+    }
+
+    bool Player::pollRenderToRgbaReadback(
+        std::uint8_t *pixels, int pitch, bool *ready,
+        std::array<int, 4> *visibleBounds,
+        bool *alphaBoundsKnown, bool *alphaOpaque) {
+        if(ready) *ready = false;
+        size_t requestIndex = _runtime->headlessRgbaReadbackRequests.size();
+        uint64_t oldestSequence = std::numeric_limits<uint64_t>::max();
+        for(size_t index = 0;
+            index < _runtime->headlessRgbaReadbackRequests.size(); ++index) {
+            if(_runtime->headlessRgbaReadbackRequests[index] != 0 &&
+               _runtime->headlessRgbaReadbackSequences[index] <
+                   oldestSequence) {
+                oldestSequence =
+                    _runtime->headlessRgbaReadbackSequences[index];
+                requestIndex = index;
+            }
+        }
+        if(requestIndex == _runtime->headlessRgbaReadbackRequests.size()) {
+            return false;
+        }
+        const uint64_t request =
+            _runtime->headlessRgbaReadbackRequests[requestIndex];
+        const int regionWidth =
+            _runtime->headlessRgbaReadbackWidths[requestIndex];
+        const int regionHeight =
+            _runtime->headlessRgbaReadbackHeights[requestIndex];
+        if(request == 0 || !pixels || regionWidth <= 0 || regionHeight <= 0 ||
+           pitch < regionWidth * 4) {
+            return false;
+        }
+        auto &renderLayerSlot =
+            _runtime->headlessRgbaReadbackFullStage[requestIndex]
+                ? _runtime->headlessRgbaRenderLayer
+                : (_runtime->headlessRgbaReadbackSlots[requestIndex] == 0
+                       ? _runtime->headlessRgbaRegionRenderLayer
+                       : _runtime->headlessRgbaRegionRenderLayer2);
+        auto *layer = resolveNativeLayer(renderLayerSlot.AsObjectNoAddRef());
+        auto *image = layer ? layer->GetMainImage() : nullptr;
+        auto *texture = image
+            ? dynamic_cast<GodotTexture2D *>(image->GetTexture())
+            : nullptr;
+        if(!texture) return false;
+        bool completed = false;
+        const bool success = texture->PollGpuReadback(
+            request, pixels, static_cast<size_t>(pitch) * regionHeight,
+            static_cast<uint32_t>(pitch), &completed);
+        if(!completed) return success;
+        _runtime->headlessRgbaReadbackRequests[requestIndex] = 0;
+        _runtime->headlessRgbaReadbackSequences[requestIndex] = 0;
+        if(ready) *ready = true;
+        if(!success) return false;
+
+        if(visibleBounds) *visibleBounds = {0, 0, 0, 0};
+        if(alphaBoundsKnown) *alphaBoundsKnown = true;
+        const auto stats = convertBgraReadbackToRgba(
+            pixels, static_cast<size_t>(pitch), pixels,
+            static_cast<size_t>(pitch), regionWidth, regionHeight);
+        if(visibleBounds && stats.anyVisible) {
+            *visibleBounds = {stats.minimumX, stats.minimumY,
+                              stats.maximumX, stats.maximumY};
+        }
+        if(alphaOpaque) *alphaOpaque = stats.allOpaque;
+        return true;
+    }
+
+    void Player::discardRenderToRgbaReadback() {
+        if(!_runtime) return;
+        const auto *bridge = TVPGodotGpuBridgeGet();
+        for(size_t index = 0;
+            index < _runtime->headlessRgbaReadbackRequests.size(); ++index) {
+            uint64_t &request =
+                _runtime->headlessRgbaReadbackRequests[index];
+            if(request != 0 && bridge && bridge->discard_read_rgba) {
+                bridge->discard_read_rgba(request);
+            }
+            request = 0;
+            _runtime->headlessRgbaReadbackSequences[index] = 0;
+        }
+        _runtime->headlessRgbaRenderPending = false;
+    }
+
+    bool Player::renderNativeBackendToLayer(iTJSDispatch2 *layerObject,
+                                            int canvasWidth,
+                                            int canvasHeight,
+                                            bool skipUpdate) {
+        if(!_nativeBackend || !layerObject || canvasWidth <= 0 ||
+           canvasHeight <= 0) {
+            return false;
+        }
+
+        std::string error;
+        if(_nativeBackend->supportsGpuOutput()) {
+            MotionBackendGpuFrame gpuFrame;
+            if(_nativeBackend->renderGpu(
+                   static_cast<std::uint32_t>(canvasWidth),
+                   static_cast<std::uint32_t>(canvasHeight), &gpuFrame,
+                   &error) && gpuFrame.valid()) {
+                const std::uint32_t logicalWidth = gpuFrame.canvasWidth != 0
+                    ? gpuFrame.canvasWidth
+                    : static_cast<std::uint32_t>(canvasWidth);
+                const std::uint32_t logicalHeight = gpuFrame.canvasHeight != 0
+                    ? gpuFrame.canvasHeight
+                    : static_cast<std::uint32_t>(canvasHeight);
+                const std::uint32_t textureWidth = gpuFrame.textureWidth != 0
+                    ? gpuFrame.textureWidth : gpuFrame.frameWidth;
+                const std::uint32_t textureHeight = gpuFrame.textureHeight != 0
+                    ? gpuFrame.textureHeight : gpuFrame.frameHeight;
+                const bool validFrame =
+                    logicalWidth == static_cast<std::uint32_t>(canvasWidth) &&
+                    logicalHeight == static_cast<std::uint32_t>(canvasHeight) &&
+                    gpuFrame.frameLeft <= logicalWidth &&
+                    gpuFrame.frameTop <= logicalHeight &&
+                    gpuFrame.frameWidth <= logicalWidth - gpuFrame.frameLeft &&
+                    gpuFrame.frameHeight <= logicalHeight - gpuFrame.frameTop &&
+                    textureWidth != 0 && textureHeight != 0;
+                if(validFrame && LOGGER &&
+                   std::getenv("AETHERKIRI_EMOTE_GPU_TRACE")) {
+                    static std::uint32_t tracedFrames = 0;
+                    if(tracedFrames < 12) {
+                        ++tracedFrames;
+                        std::size_t visibleSamples = 0;
+                        bool readSucceeded = false;
+                        const auto *gpuBridge = TVPGodotGpuBridgeGet();
+                        constexpr std::size_t kMaximumTraceBytes =
+                            64u * 1024u * 1024u;
+                        const bool traceSizeValid = textureHeight <=
+                            kMaximumTraceBytes / 4u / textureWidth;
+                        const std::size_t traceBytes = traceSizeValid
+                            ? static_cast<std::size_t>(textureWidth) *
+                                textureHeight * 4u
+                            : 0u;
+                        std::vector<std::uint8_t> tracedRgba(traceBytes);
+                        if(gpuBridge && gpuBridge->read_rgba &&
+                           !tracedRgba.empty()) {
+                            readSucceeded = gpuBridge->read_rgba(
+                                gpuFrame.texture, tracedRgba.data(),
+                                tracedRgba.size(), textureWidth * 4u);
+                            if(readSucceeded) {
+                                for(std::size_t offset = 3;
+                                    offset < tracedRgba.size(); offset += 4) {
+                                    if(tracedRgba[offset] != 0) {
+                                        ++visibleSamples;
+                                    }
+                                }
+                            }
+                        }
+                        LOGGER->info(
+                            "[EMOTE_GPU] source={} canvas={}x{} frame=({},{} {}x{}) texture={}x{} premul={} flipped={} read={} visible={}",
+                            gpuFrame.texture, logicalWidth, logicalHeight,
+                            gpuFrame.frameLeft, gpuFrame.frameTop,
+                            gpuFrame.frameWidth, gpuFrame.frameHeight,
+                            textureWidth, textureHeight,
+                            gpuFrame.alphaPremultiplied ? 1 : 0,
+                            gpuFrame.flippedY ? 1 : 0,
+                            readSucceeded ? 1 : 0, visibleSamples);
+                    }
+                }
+                if(validFrame && prepareLayerForRender(
+                       layerObject, canvasWidth, canvasHeight, 0x00000000)) {
+                    auto *layer = resolveNativeLayer(layerObject);
+                    auto *bitmap = layer ? layer->GetMainImage() : nullptr;
+                    // D3DEmote renders into a reusable full-stage work layer
+                    // and then transfers that image to the character layer
+                    // with assignImages.  The transfer shares the texture.
+                    // Detach the work bitmap before clearing it, just like
+                    // TVPGodotUploadRgbaInPlace does for the CPU fallback;
+                    // otherwise the next character/frame clears the texture
+                    // that the preceding character is still presenting.
+                    if(bitmap) bitmap->IndependNoCopy();
+                    auto *texture = bitmap
+                        ? dynamic_cast<GodotTexture2D *>(bitmap->GetTexture())
+                        : nullptr;
+                    const tTVPRect fullRect(0, 0, canvasWidth, canvasHeight);
+                    if(texture && texture->EnsureGpuHandle() &&
+                       texture->ClearGpu(0x00000000u, fullRect)) {
+                        const double left = gpuFrame.frameLeft;
+                        const double top = gpuFrame.frameTop;
+                        const double right = left + gpuFrame.frameWidth;
+                        const double bottom = top + gpuFrame.frameHeight;
+                        double sourceTop = 0.0;
+                        double sourceBottom = textureHeight;
+                        if(gpuFrame.flippedY) {
+                            std::swap(sourceTop, sourceBottom);
+                        }
+                        const tTVPPointD destination[6] = {
+                            {left, top}, {right, top}, {left, bottom},
+                            {right, top}, {left, bottom}, {right, bottom},
+                        };
+                        const tTVPPointD source[6] = {
+                            {0.0, sourceTop},
+                            {static_cast<double>(textureWidth), sourceTop},
+                            {0.0, sourceBottom},
+                            {static_cast<double>(textureWidth), sourceTop},
+                            {0.0, sourceBottom},
+                            {static_cast<double>(textureWidth), sourceBottom},
+                        };
+                        std::uint32_t blendMode =
+                            TVP_GODOT_GPU_TRIANGLE_TVP_BLEND |
+                            // The native frame is copied into a transparent
+                            // intermediate Kiri layer. AlphaBlend preserves
+                            // the destination alpha (HDA), which leaves every
+                            // copied pixel transparent; AlphaBlend_d updates
+                            // both colour and alpha and is equivalent to the
+                            // CPU upload over this freshly cleared target.
+                            TVP_GODOT_GPU_BLEND_ALPHA_D;
+                        if(gpuFrame.alphaPremultiplied) {
+                            blendMode |=
+                                TVP_GODOT_GPU_TRIANGLE_SOURCE_PREMULTIPLIED;
+                        }
+                        if(texture->DrawExternalTrianglesGpuFrom(
+                               gpuFrame.texture, 2, fullRect, destination,
+                               source, 255, blendMode)) {
+                            _runtime->nativeBackendGpuFrameLifetime =
+                                std::move(gpuFrame.lifetime);
+                            ++_runtime->nativeBackendGpuFrameCount;
+                            if(!skipUpdate) layer->Update(false);
+                            _runtime->lastCanvas =
+                                tTJSVariant(layerObject, layerObject);
+                            _emoteDirty = false;
+                            return true;
+                        }
+                    }
+                }
+                error = validFrame
+                    ? "could not compose shared Kiri E-mote texture"
+                    : "invalid shared Kiri E-mote frame metadata";
+            }
+            if(LOGGER && !error.empty()) {
+                LOGGER->warn(
+                    "native E-mote GPU render failed; using CPU fallback: {}",
+                    error);
+            }
+            error.clear();
+        }
+
+        MotionBackendFrame frame;
+        if(!_nativeBackend->render(
+               static_cast<std::uint32_t>(canvasWidth),
+               static_cast<std::uint32_t>(canvasHeight), &frame, &error)) {
+            if(LOGGER) {
+                LOGGER->warn("native E-mote render failed: {}", error);
+            }
+            return false;
+        }
+        const auto &rgba = frame.sharedRgba ? *frame.sharedRgba : frame.rgba;
+        const auto expectedBytes = static_cast<std::size_t>(canvasWidth) *
+            static_cast<std::size_t>(canvasHeight) * 4u;
+        if(frame.width != static_cast<std::uint32_t>(canvasWidth) ||
+           frame.height != static_cast<std::uint32_t>(canvasHeight) ||
+           rgba.size() < expectedBytes) {
+            if(LOGGER) {
+                LOGGER->warn(
+                    "native E-mote frame mismatch: got={}x{} bytes={} expected={}x{} bytes={}",
+                    frame.width, frame.height, rgba.size(), canvasWidth,
+                    canvasHeight, expectedBytes);
+            }
+            return false;
+        }
+        if(!prepareLayerForRender(layerObject, canvasWidth, canvasHeight,
+                                  0x00000000)) {
+            return false;
+        }
+        auto *layer = resolveNativeLayer(layerObject);
+        auto *bitmap = layer ? layer->GetMainImage() : nullptr;
+        if(!bitmap || bitmap->GetWidth() != canvasWidth ||
+           bitmap->GetHeight() != canvasHeight) {
+            return false;
+        }
+
+        const std::size_t rowBytes = static_cast<std::size_t>(canvasWidth) * 4u;
+        if(!TVPGodotUploadRgbaInPlace(
+               bitmap, rgba.data(), static_cast<std::uint32_t>(rowBytes))) {
+            // Non-Godot render managers retain the compatible CPU path.
+            for(int y = 0; y < canvasHeight; ++y) {
+                const auto *source = rgba.data() +
+                    static_cast<std::size_t>(y) * rowBytes;
+                auto *destination = static_cast<std::uint8_t *>(
+                    bitmap->GetScanLineForWrite(static_cast<tjs_uint>(y)));
+                for(int x = 0; x < canvasWidth; ++x) {
+                    const std::size_t offset = static_cast<std::size_t>(x) * 4u;
+                    destination[offset] = source[offset + 2u];
+                    destination[offset + 1u] = source[offset + 1u];
+                    destination[offset + 2u] = source[offset];
+                    destination[offset + 3u] = source[offset + 3u];
+                }
+            }
+        }
+        if(!skipUpdate) {
+            layer->Update(false);
+        }
+        _runtime->lastCanvas = tTJSVariant(layerObject, layerObject);
+        _emoteDirty = false;
         return true;
     }
 
@@ -11257,10 +12484,6 @@ namespace motion {
             return false;
         }
         const auto motionPath = _runtime->activeMotion->path;
-        if(_runtime->yuzuSdPresentationRetired &&
-           isYuzuSdPresentationMotionPath(motionPath)) {
-            return true;
-        }
 
         iTJSDispatch2 *resolvedLayerObject = layerObject;
         tTJSVariant wrapper(layerObject, layerObject);
@@ -11272,18 +12495,15 @@ namespace motion {
         int canvasHeight = 0;
         const bool queriedCanvas =
             queryLayerCanvasSize(resolvedLayerObject, canvasWidth, canvasHeight);
-        if(!queriedCanvas && _runtime->activeMotion) {
+        if(!queriedCanvas) {
             canvasWidth = static_cast<int>(_runtime->activeMotion->width);
             canvasHeight = static_cast<int>(_runtime->activeMotion->height);
         }
-        // AffineSourceMotion has no intrinsic bitmap size: its TJS
-        // setSizeToImageSize() implementation is deliberately a no-op.  The
-        // temporary AffineLayer consequently remains at KiriKiri's 32x32
-        // placeholder size even though E-mote supplies coordinates in the
-        // main-window space.  Native motionplayer renders that dynamic source
-        // against the draw-device canvas.  Do the same when the affine
-        // translation clearly lies outside the placeholder; otherwise every
-        // character item is clipped before its PSB bitmap is resolved.
+
+        // AffineSourceMotion's authored layer can remain at KiriKiri's 32x32
+        // placeholder size even though its coordinates use the window canvas.
+        // Resolve that structural mismatch from geometry, not from a game or
+        // motion filename.
         int mainCanvasWidth = 0;
         int mainCanvasHeight = 0;
         const bool hasMainCanvas =
@@ -11304,124 +12524,39 @@ namespace motion {
         if(canvasWidth <= 0 || canvasHeight <= 0) {
             return false;
         }
+
         detail::logoChainTraceLogf(
-            motionPath, "draw.layer", "0x6C7440/0x6CE7D8", _clampedEvalTime,
+            motionPath, "draw.layer", "0x6C7440/0x6CE7D8",
+            _clampedEvalTime,
             "targetLayerCanvas={}x{} skipUpdate={} needsInternalAssignImages={}",
             canvasWidth, canvasHeight, skipUpdate ? 1 : 0,
             _needsInternalAssignImages ? 1 : 0);
 
-        iTJSDispatch2 *finalLayerObject = resolvedLayerObject;
-        tTJSNI_BaseLayer *finalNativeLayer = resolveNativeLayer(finalLayerObject);
-        const bool yuzuTitlePresentation =
-            isYuzuTitlePresentationMotion(motionPath);
-        const bool yuzuLogoPresentation =
-            isYuzuLogoPresentationMotion(motionPath);
-        const bool centeredGamePresentation =
-            !yuzuTitlePresentation && !yuzuLogoPresentation &&
-            isCenteredGameMotion(motionPath);
-        if(yuzuTitlePresentation) {
-            int visibleCanvasWidth = 0;
-            int visibleCanvasHeight = 0;
-            if(_runtime->activeMotion &&
-               _runtime->activeMotion->width > 0 &&
-               _runtime->activeMotion->height > 0) {
-                canvasWidth = static_cast<int>(_runtime->activeMotion->width);
-                canvasHeight = static_cast<int>(_runtime->activeMotion->height);
-            } else if(queryMainWindowCanvasSize(visibleCanvasWidth,
-                                                visibleCanvasHeight)) {
-                canvasWidth = visibleCanvasWidth;
-                canvasHeight = visibleCanvasHeight;
+        auto *resolvedNativeLayer = resolveNativeLayer(resolvedLayerObject);
+        if(_nativeBackend && !_nativeBackendPresentationReady) {
+            // Preserve the already-authored layer until the first native
+            // progress pass has produced a replacement frame.
+            if(resolvedNativeLayer && resolvedNativeLayer->GetHasImage()) {
+                _runtime->lastCanvas =
+                    tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+                _nativeBackendPresentationReady = true;
+                return true;
             }
         }
-        const bool allowTransientPresentationLayer =
-            yuzuLogoPresentation && !yuzuTitlePresentation;
-        tTJSNI_BaseLayer *presentationChild = nullptr;
-        if(yuzuTitlePresentation) {
-            presentationChild = findMotionPresentationChild(
-                finalNativeLayer, canvasWidth, canvasHeight, true);
-            if(!presentationChild) {
-                presentationChild = findYuzuTitlePresentationLayer(
-                    finalNativeLayer, canvasWidth, canvasHeight);
+        if(_nativeBackend) {
+            if(renderNativeBackendToLayer(resolvedLayerObject, canvasWidth,
+                                          canvasHeight, skipUpdate)) {
+                _runtime->lastCanvas =
+                    tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+                _nativeBackendPresentationReady = true;
+                return true;
             }
-        } else if(yuzuLogoPresentation) {
-            presentationChild = findStartupLogoPresentationLayer(
-                finalNativeLayer, canvasWidth, canvasHeight);
-            if(!presentationChild) {
-                presentationChild = findMotionPresentationChild(
-                    finalNativeLayer, canvasWidth, canvasHeight,
-                    allowTransientPresentationLayer);
-            }
-        } else {
-            presentationChild = findCgViewMotionPresentationChild(
-                finalNativeLayer, canvasWidth, canvasHeight);
-            if(!presentationChild) {
-                presentationChild = findGenericMotionPresentationChild(
-                    finalNativeLayer, canvasWidth, canvasHeight);
-            }
+            _nativeBackend.reset();
+            _nativeBackendSourcePath.clear();
+            _nativeBackendPresentationReady = true;
+            _nativeBackendPresentationHoldLogged = false;
         }
-        if(presentationChild) {
-            if(auto *presentationObject = presentationChild->GetOwnerNoAddRef()) {
-                finalLayerObject = presentationObject;
-                finalNativeLayer = presentationChild;
-                detail::logoChainTraceLogf(
-                    motionPath, "draw.layer.presentationTarget",
-                    "KAGWorldPlugin/Yuzu layer adaptor", _clampedEvalTime,
-                    "source=[{}] target=[{}] canvas={}x{} transientAllowed={}",
-                    describeLayerForDebug(resolveNativeLayer(resolvedLayerObject)),
-                    describeLayerForDebug(finalNativeLayer),
-                    canvasWidth, canvasHeight,
-                    allowTransientPresentationLayer ? 1 : 0);
-                if(LOGGER && shouldDebugTitleRender(motionPath) &&
-                   markRenderDebugLogged(
-                       "presentation-target:" + motionPath + ":" +
-                       _runtime->lastExplicitTimelineLabel)) {
-                    LOGGER->info(
-                        "motion presentation target: motion={} label={} source=[{}] target=[{}] canvas={}x{} transientAllowed={}",
-                        motionPath, _runtime->lastExplicitTimelineLabel,
-                        describeLayerForDebug(resolveNativeLayer(resolvedLayerObject)),
-                        describeLayerForDebug(finalNativeLayer),
-                        canvasWidth, canvasHeight,
-                        allowTransientPresentationLayer ? 1 : 0);
-                }
-            }
-        }
-        if(!presentationChild && centeredGamePresentation) {
-            if(auto *holdTargetObject = findCenteredPresentationHoldRenderTarget(
-                   motionPath, finalNativeLayer)) {
-                if(auto *holdTargetLayer = resolveNativeLayer(holdTargetObject)) {
-                    finalLayerObject = holdTargetObject;
-                    finalNativeLayer = holdTargetLayer;
-                    detail::logoChainTraceLogf(
-                        motionPath, "draw.layer.centeredHoldTarget",
-                        "AetherKiri centered motion adaptor", _clampedEvalTime,
-                        "source=[{}] target=[{}] canvas={}x{}",
-                        describeLayerForDebug(resolveNativeLayer(resolvedLayerObject)),
-                        describeLayerForDebug(finalNativeLayer),
-                        canvasWidth, canvasHeight);
-                    if(LOGGER && shouldDebugTitleRender(motionPath)) {
-                        static std::unordered_map<std::string, int>
-                            holdTargetLogCountByMotion;
-                        auto &logCount = holdTargetLogCountByMotion[motionPath];
-                        if(logCount < 8) {
-                            ++logCount;
-                            LOGGER->info(
-                                "motion centered hold render target: motion={} source=[{}] target=[{}] count={}",
-                                motionPath,
-                                describeLayerForDebug(
-                                    resolveNativeLayer(resolvedLayerObject)),
-                                describeLayerForDebug(finalNativeLayer),
-                                logCount);
-                        }
-                    }
-                }
-            }
-        }
-        if(centeredGamePresentation) {
-            configureCenteredGameMotionPresentationHitPassthrough(
-                finalNativeLayer);
-            placeCenteredPresentationBelowMessageUi(
-                finalNativeLayer, "target-select");
-        }
+
         ensureNodeTreeBuilt();
         const bool parentStateChanged = applyMotionParentRootStateForRender();
         if((parentStateChanged || _layersDirty || _emoteDirty) &&
@@ -11438,786 +12573,263 @@ namespace motion {
             if(hasMotionChildNode) {
                 updateLayers();
                 prepareRenderItems();
-                if(LOGGER && shouldDebugTitleRender(motionPath) &&
-                   markRenderDebugLogged("presentation-prerender-update:" +
-                                         motionPath)) {
-                    LOGGER->info(
-                        "motion presentation prerender update: motion={} preparedItems={}",
-                        motionPath, _runtime->preparedRenderItems.size());
-                }
             }
         }
         applyPreparedRenderItemTranslateOffsets();
-        const bool cgViewScriptedPresentation =
-            layerBelongsToCgViewPresentation(finalNativeLayer);
-        if(cgViewScriptedPresentation) {
-            if(LOGGER && shouldDebugTitleRender(motionPath) &&
-               markRenderDebugLogged("yuzu-presentation-skip-cg-view:" +
-                                     motionPath)) {
-                LOGGER->info(
-                    "motion yuzu presentation adjustment skipped: motion={} reason=cg_view_scripted_affine target=[{}]",
-                    motionPath, describeLayerForDebug(finalNativeLayer));
-            }
-        } else {
-            adjustPreparedRenderItemsForYuzuPresentation(
-                *_runtime, motionPath, canvasWidth, canvasHeight);
-        }
-        adjustPreparedRenderItemsForCenteredGameMotion(
-            *_runtime, motionPath, canvasWidth, canvasHeight,
-            resolveCenteredGameMotionResolution(_resolution, _tags, _metadata,
-                                                motionPath),
-            finalNativeLayer);
-        if(yuzuTitlePresentation &&
-           !prepareMotionPresentationLayerForRender(
-               finalNativeLayer, canvasWidth, canvasHeight)) {
-            return false;
-        }
-        if(yuzuTitlePresentation) {
-            logYuzuTitlePreparedSummary(*_runtime, motionPath, _frameTickCount);
-        }
-        const bool yuzuTitleHasRenderableFrame =
-            yuzuTitlePresentation &&
-            hasYuzuTitleRenderablePresentationFrame(*_runtime);
-        const bool yuzuTitleHasStableFrame =
-            yuzuTitlePresentation &&
-            hasYuzuTitleStablePresentationFrame(*_runtime);
-        const bool yuzuTitleHasOpaqueCanvasBaseFrame =
-            yuzuTitlePresentation &&
-            hasYuzuTitleOpaqueCanvasBaseFrame(
-                *_runtime, canvasWidth, canvasHeight);
-        const bool yuzuTitleHasOpaqueFinalOverlayFrame =
-            yuzuTitlePresentation &&
-            hasYuzuTitleOpaqueFinalOverlayFrame(*_runtime);
-        if(yuzuTitlePresentation && !yuzuTitleHasRenderableFrame) {
-            const bool residentHeldFrame =
-                _runtime->yuzuTitleFinalFrameRendered &&
-                yuzuTitlePresentationHoldFrameIsResident(
-                    finalNativeLayer, motionPath);
-            const bool restoredHeldFrame =
-                !residentHeldFrame &&
-                restoreYuzuTitlePresentationHoldFrame(
-                    finalNativeLayer, motionPath, canvasWidth, canvasHeight);
-            if(LOGGER && shouldDebugTitleRender(motionPath) &&
-               markRenderDebugLogged("presentation-skip-empty:" + motionPath)) {
-                LOGGER->info(
-                    "motion presentation skip empty title frame: motion={} resident={} restored={} target=[{}]",
-                    motionPath, residentHeldFrame ? 1 : 0,
-                    restoredHeldFrame ? 1 : 0,
-                    describeLayerForDebug(finalNativeLayer));
-            }
-            _runtime->clearPresentationRenderReuse();
-            invalidateGlobalPresentationRenderTarget(finalLayerObject);
-            _runtime->lastCanvas =
-                tTJSVariant(resolvedLayerObject, resolvedLayerObject);
-            return true;
-        }
-        if(yuzuTitlePresentation &&
-           _runtime->yuzuTitleFinalFrameRendered &&
-           !yuzuTitleHasOpaqueCanvasBaseFrame) {
-            const bool residentHeldFrame =
-                yuzuTitlePresentationHoldFrameIsResident(
-                    finalNativeLayer, motionPath);
-            const bool restoredHeldFrame =
-                !residentHeldFrame &&
-                restoreYuzuTitlePresentationHoldFrame(
-                    finalNativeLayer, motionPath, canvasWidth, canvasHeight);
-            if(LOGGER && shouldDebugTitleRender(motionPath) &&
-               markRenderDebugLogged("presentation-skip-tail:" + motionPath)) {
-                LOGGER->info(
-                    "motion presentation skip title tail frame: motion={} resident={} restored={} target=[{}]",
-                    motionPath, residentHeldFrame ? 1 : 0,
-                    restoredHeldFrame ? 1 : 0,
-                    describeLayerForDebug(finalNativeLayer));
-            }
-            _runtime->clearPresentationRenderReuse();
-            invalidateGlobalPresentationRenderTarget(finalLayerObject);
-            _runtime->lastCanvas =
-                tTJSVariant(resolvedLayerObject, resolvedLayerObject);
-            return true;
-        }
 
-        iTJSDispatch2 *renderLayerObject = finalLayerObject;
-        const bool useCgViewAffineRenderChild =
-            layerIsCgViewAffineSurface(finalNativeLayer) &&
-            !yuzuTitlePresentation && !yuzuLogoPresentation;
-        bool useYuzuSdEventRenderChild =
-            centeredGamePresentation &&
-            isYuzuSdPreviewMotionPath(motionPath) &&
-            centeredGameMotionPresentationLayerShouldPassHit(finalNativeLayer) &&
-            !finalNativeLayer->GetHasImage();
-        if(useYuzuSdEventRenderChild) {
-            auto *treeOwner = resolveLayerTreeOwnerObject(finalLayerObject);
-            if(!treeOwner) {
-                treeOwner = resolveLayerTreeOwnerObject(resolvedLayerObject);
-            }
-            tTJSVariant treeOwnerVariant =
-                resolveLayerTreeOwnerVariantFromLayer(finalNativeLayer);
-            if(treeOwnerVariant.Type() != tvtObject && treeOwner) {
-                treeOwnerVariant = tTJSVariant(treeOwner, treeOwner);
-            }
-            if(auto *existingSurface =
-                   findYuzuSdEventRenderChildLayerObject(finalNativeLayer)) {
-                auto *currentSurface =
-                    _runtime->internalRenderLayer.Type() == tvtObject
-                        ? _runtime->internalRenderLayer.AsObjectNoAddRef()
-                        : nullptr;
-                if(existingSurface != currentSurface) {
-                    auto *existingNative = resolveNativeLayer(existingSurface);
-                    detachYuzuSdEventRenderSurfaceChildren(existingNative);
-                    _runtime->internalRenderLayer =
-                        tTJSVariant(existingSurface, existingSurface);
-                    _runtime->clearPresentationRenderReuse();
-                    invalidateGlobalPresentationRenderTarget(existingSurface);
-                }
-            }
-            renderLayerObject = ensureReusableLayerObjectWithOwnerVariant(
-                _runtime->internalRenderLayer,
-                treeOwnerVariant,
-                finalLayerObject,
-                static_cast<tTVPLayerType>(ltAlpha),
-                true,
-                false);
-            if(!renderLayerObject) {
-                renderLayerObject = ensureReusableLayerObject(
-                    _runtime->internalRenderLayer,
-                    treeOwner,
-                    finalLayerObject,
-                    static_cast<tTVPLayerType>(ltAlpha),
-                    true,
-                    false);
-            }
-            auto *renderLayer = resolveNativeLayer(renderLayerObject);
-            if(renderLayer) {
-                configureYuzuSdEventRenderChildLayer(renderLayer,
-                                                      finalNativeLayer,
-                                                      canvasWidth,
-                                                      canvasHeight);
-                finalLayerObject = renderLayerObject;
-                finalNativeLayer = renderLayer;
-                if(LOGGER && shouldDebugTitleRender(motionPath)) {
-                    LOGGER->info(
-                        "motion yuzu sd event render surface: motion={} label={} parent=[{}] render=[{}]",
-                        motionPath, _runtime->lastExplicitTimelineLabel,
-                        describeLayerForDebug(renderLayer->GetParent()),
-                        describeLayerForDebug(renderLayer));
-                }
-            } else {
-                useYuzuSdEventRenderChild = false;
-                renderLayerObject = finalLayerObject;
-            }
-        } else if(useCgViewAffineRenderChild) {
-            iTJSDispatch2 *renderParentObject =
-                resolveCgViewAffineRenderParentObject(finalNativeLayer);
-            if(!renderParentObject) {
-                renderParentObject = finalLayerObject;
-            }
-            auto *treeOwner = resolveLayerTreeOwnerObject(finalLayerObject);
-            if(!treeOwner) {
-                treeOwner = resolveLayerTreeOwnerObject(resolvedLayerObject);
-            }
-            if(!treeOwner && renderParentObject) {
-                treeOwner = resolveLayerTreeOwnerObject(renderParentObject);
-            }
-            tTJSVariant treeOwnerVariant =
-                resolveLayerTreeOwnerVariantFromLayer(finalNativeLayer);
-            if(treeOwnerVariant.Type() != tvtObject && treeOwner) {
-                treeOwnerVariant = tTJSVariant(treeOwner, treeOwner);
-            }
-            if(auto *existingSurface = findCgViewRenderChildLayerObject(
-                   resolveNativeLayer(renderParentObject))) {
-                auto *currentSurface =
-                    _runtime->internalRenderLayer.Type() == tvtObject
-                        ? _runtime->internalRenderLayer.AsObjectNoAddRef()
-                        : nullptr;
-                if(existingSurface != currentSurface) {
-                    auto *existingNative = resolveNativeLayer(existingSurface);
-                    detachYuzuSdEventRenderSurfaceChildren(existingNative);
-                    _runtime->internalRenderLayer =
-                        tTJSVariant(existingSurface, existingSurface);
-                    _runtime->clearPresentationRenderReuse();
-                    invalidateGlobalPresentationRenderTarget(existingSurface);
-                }
-            }
-            renderLayerObject = ensureReusableLayerObjectWithOwnerVariant(
-                _runtime->internalRenderLayer,
-                treeOwnerVariant,
-                renderParentObject,
-                static_cast<tTVPLayerType>(ltAlpha),
-                true,
-                false);
-            if(auto *renderLayer = resolveNativeLayer(renderLayerObject)) {
-                configureCgViewAffineRenderChildLayer(
-                    renderLayer, finalNativeLayer,
-                    resolveNativeLayer(renderParentObject));
-                if(LOGGER && shouldDebugTitleRender(motionPath) &&
-                   markRenderDebugLogged("cg-view-motion-surface:" + motionPath)) {
-                    LOGGER->info(
-                        "motion cg view render surface: motion={} affine=[{}] parent=[{}] render=[{}]",
-                        motionPath, describeLayerForDebug(finalNativeLayer),
-                        describeLayerForDebug(resolveNativeLayer(renderParentObject)),
-                        describeLayerForDebug(renderLayer));
-                }
-            }
-        }
-
-        const bool usingPresentationTarget =
-            finalLayerObject && finalLayerObject != resolvedLayerObject;
-        const bool bypassInternalAssignImages =
-            (yuzuTitlePresentation || useYuzuSdEventRenderChild) &&
-            _needsInternalAssignImages && !skipUpdate;
-
-        if(!useYuzuSdEventRenderChild && !useCgViewAffineRenderChild &&
-           _needsInternalAssignImages && !skipUpdate &&
-           !bypassInternalAssignImages) {
-            auto *treeOwner = resolveLayerTreeOwnerObject(finalLayerObject);
-            if(!treeOwner) {
-                treeOwner = resolveLayerTreeOwnerObject(resolvedLayerObject);
-            }
+        // Match krkrsdl3: draw to the layer supplied by the caller. The only
+        // intermediate is the generic AffineSourceMotion work layer required
+        // by assignImages(); no filename-, title-, SD-, or layer-name routing
+        // participates in target selection.
+        iTJSDispatch2 *renderLayerObject = resolvedLayerObject;
+        if(_needsInternalAssignImages && !skipUpdate) {
             renderLayerObject = ensureReusableLayerObject(
                 _runtime->internalRenderLayer,
-                treeOwner,
-                finalLayerObject,
+                resolveLayerTreeOwnerObject(resolvedLayerObject),
+                resolvedLayerObject,
                 static_cast<tTVPLayerType>(ltAlpha),
                 false);
         }
-        if(bypassInternalAssignImages && LOGGER &&
-           shouldDebugTitleRender(motionPath) &&
-           markRenderDebugLogged("presentation-direct-target:" + motionPath +
-                                 ":" +
-                                 _runtime->lastExplicitTimelineLabel)) {
-            LOGGER->info(
-                "motion presentation direct target: motion={} target=[{}]",
-                motionPath, describeLayerForDebug(finalNativeLayer));
+        if(!renderLayerObject) {
+            return false;
         }
+
+        // AffineSourceMotion's non-emote path is a CPU full-canvas raster.
+        // Its timer can run at 60 Hz even when the previous raster already
+        // consumed the whole frame budget. Reuse the last completed surface
+        // for a short, configurable interval; progress/evaluation still runs
+        // every tick, so the motion clock and input remain responsive while
+        // presentation is bounded at 30 Hz by default.
+        const std::uint64_t rasterThrottleUs =
+            motionRasterThrottleIntervalUs();
+        const std::uint64_t rasterNowUs = motionRenderProfileNowUs();
+        const bool sameRasterTarget =
+            _runtime->lastMotionRasterTarget.Type() == tvtObject &&
+            _runtime->lastMotionRasterTarget.AsObjectNoAddRef() ==
+                resolvedLayerObject &&
+            _runtime->lastMotionRasterMotion == motionPath &&
+            _runtime->lastMotionRasterWidth == canvasWidth &&
+            _runtime->lastMotionRasterHeight == canvasHeight &&
+            _runtime->lastMotionRasterPublishUs != 0 &&
+            rasterNowUs >= _runtime->lastMotionRasterPublishUs &&
+            rasterNowUs - _runtime->lastMotionRasterPublishUs <
+                rasterThrottleUs;
+        auto *cachedRasterLayer = resolveNativeLayer(renderLayerObject);
+        if(!_runtime->isEmoteMode && !skipUpdate && rasterThrottleUs != 0 &&
+           sameRasterTarget && cachedRasterLayer &&
+           cachedRasterLayer->GetHasImage()) {
+            _runtime->lastCanvas =
+                tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+            return true;
+        }
+
+        if(renderLayerObject != resolvedLayerObject) {
+            if(!prepareLayerForRender(renderLayerObject, canvasWidth,
+                                      canvasHeight, 0x00000000)) {
+                return false;
+            }
+        } else if(resolvedNativeLayer) {
+            if(_runtime->isEmoteMode) {
+                if(!prepareLayerForRender(
+                       resolvedLayerObject, canvasWidth, canvasHeight,
+                       resolvedNativeLayer->GetNeutralColor())) {
+                    return false;
+                }
+            } else if(resolvedNativeLayer->GetWidth() != canvasWidth ||
+                      resolvedNativeLayer->GetHeight() != canvasHeight) {
+                resolvedNativeLayer->SetSize(canvasWidth, canvasHeight);
+            }
+        } else {
+            return false;
+        }
+
         buildRenderCommands(canvasWidth, canvasHeight);
-        const bool clearGenericPresentationLayer =
-            usingPresentationTarget && renderLayerObject == finalLayerObject &&
-            !yuzuTitlePresentation && !yuzuLogoPresentation;
-        const bool compositeOverPreviousCenteredFrame =
-            clearGenericPresentationLayer &&
-            centeredGameMotionFrameNeedsPreviousComposite(
-                *_runtime, motionPath, finalNativeLayer);
-        if(clearGenericPresentationLayer && _runtime->renderCommands.empty()) {
-            if(centeredGamePresentation &&
-               restoreCenteredPresentationHoldFrame(
-                   finalNativeLayer, motionPath, canvasWidth, canvasHeight,
-                   true)) {
-                _runtime->lastCanvas =
-                    tTJSVariant(resolvedLayerObject, resolvedLayerObject);
-                return true;
-            }
-            if(LOGGER && shouldDebugTitleRender(motionPath) &&
-               markRenderDebugLogged("presentation-skip-empty-generic:" +
-                                     motionPath)) {
-                std::ostringstream preparedSummary;
-                const size_t itemLimit =
-                    std::min<size_t>(_runtime->preparedRenderItems.size(), 16);
-                for(size_t i = 0; i < itemLimit; ++i) {
-                    const auto &item = _runtime->preparedRenderItems[i];
-                    if(i != 0) {
-                        preparedSummary << ";";
-                    }
-                    preparedSummary << i << ":node=" << item.nodeIndex
-                                    << ":label=" << item.nodeLabel
-                                    << ":src="
-                                    << (item.sourceKey.empty()
-                                            ? std::string("<none>")
-                                            : item.sourceKey)
-                                    << ":draw=" << (item.drawFlag ? 1 : 0)
-                                    << ":skip=" << (item.skipFlag0 ? 1 : 0)
-                                    << "/" << (item.skipFlag1 ? 1 : 0)
-                                    << ":own=" << (item.hasOwnSource ? 1 : 0)
-                                    << ":group=" << (item.groupOnly ? 1 : 0)
-                                    << ":opa=" << item.opacity
-                                    << ":parent="
-                                    << item.visibleAncestorIndex
-                                    << ":paint=[" << item.paintBox[0] << ","
-                                    << item.paintBox[1] << ","
-                                    << item.paintBox[2] << ","
-                                    << item.paintBox[3] << "]";
-                }
-                LOGGER->info(
-                    "motion presentation skip empty generic frame: motion={} target=[{}] preparedItems={} prepared=[{}]",
-                    motionPath, describeLayerForDebug(finalNativeLayer),
-                    _runtime->preparedRenderItems.size(),
-                    preparedSummary.str());
-            }
-            _runtime->lastCanvas =
-                tTJSVariant(resolvedLayerObject, resolvedLayerObject);
-            return true;
-        }
-        if(clearGenericPresentationLayer &&
-           !compositeOverPreviousCenteredFrame &&
-           shouldPreservePreviousGenericPresentationFrame(
-               *_runtime, finalNativeLayer, canvasWidth, canvasHeight)) {
-            _runtime->lastCanvas =
-                tTJSVariant(resolvedLayerObject, resolvedLayerObject);
-            return true;
-        }
-        if(compositeOverPreviousCenteredFrame && LOGGER &&
-           shouldDebugTitleRender(motionPath) &&
-           markRenderDebugLogged("presentation-delta-composite:" +
-                                 motionPath)) {
+
+        // A KAG page exchange can ask the same motion to draw the exact same
+        // evaluated frame into both the outgoing and incoming page.  The
+        // command list is target-independent, so running all direct
+        // AlphaBlend_d/Copy operations twice only duplicates the expensive
+        // full-canvas composition.  Keep one short-lived, texture-sharing
+        // frame result and publish it to the second target without replaying
+        // the command list.  It applies to renderToLayer's ordinary and
+        // internal work-layer paths; SLA/D3D callers have their own
+        // presentation lifetimes.
+        const bool canReuseRenderedFrame =
+            !_runtime->renderCommands.empty();
+        const auto frameSignature = canReuseRenderedFrame
+            ? renderCommandReuseSignature(_runtime->renderCommands, _maskMode)
+            : 0u;
+        if(canReuseRenderedFrame && motionRenderProfileEnabled() && LOGGER &&
+           std::getenv("AETHERKIRI_MOTION_FRAME_CACHE_TRACE")) {
             LOGGER->info(
-                "motion presentation delta composite: motion={} target=[{}] commands={}",
-                motionPath, describeLayerForDebug(finalNativeLayer),
-                _runtime->renderCommands.size());
+                "motion frame cache probe: motion={} frame={:.2f} target={} renderLayer={} needsInternal={} canvas={}x{} signature={:016x}",
+                motionPath, _clampedEvalTime,
+                static_cast<const void *>(resolvedLayerObject),
+                static_cast<const void *>(renderLayerObject),
+                _needsInternalAssignImages ? 1 : 0,
+                canvasWidth, canvasHeight, frameSignature);
         }
-        const auto presentationCommandSignature =
-            renderCommandReuseSignature(_runtime->renderCommands);
-        const bool canReuseEmoteRender =
-            _runtime->isEmoteMode &&
-            renderLayerObject == finalLayerObject &&
-            renderLayerObject != nullptr &&
-            !usingPresentationTarget &&
-            !centeredGamePresentation &&
-            !yuzuTitlePresentation &&
-            !yuzuLogoPresentation &&
-            !_runtime->renderCommands.empty();
-        if(canReuseEmoteRender) {
-            const auto &entry = _runtime->emoteRenderFrameCache;
-            const bool cacheIdentityMatches =
-                entry.bitmap &&
-                entry.motion == motionPath &&
-                entry.canvasWidth == canvasWidth &&
-                entry.canvasHeight == canvasHeight &&
-                std::fabs(entry.frame - _clampedEvalTime) < 0.0001 &&
-                entry.bitmap->GetWidth() == canvasWidth &&
-                entry.bitmap->GetHeight() == canvasHeight;
-            const bool exactCacheMatch =
-                cacheIdentityMatches &&
-                entry.commandSignature == presentationCommandSignature;
-            auto *renderLayer = exactCacheMatch
-                ? resolveNativeLayer(renderLayerObject)
-                : nullptr;
-            auto *renderImage =
-                renderLayer ? renderLayer->GetMainImage() : nullptr;
-            if(renderImage &&
-               renderImage->GetWidth() == canvasWidth &&
-               renderImage->GetHeight() == canvasHeight) {
-                renderImage->CopyRect(
-                    0, 0, entry.bitmap.get(),
-                    tTVPRect(0, 0, canvasWidth, canvasHeight));
-                ++_runtime->emoteRenderFrameReuseSkips;
-                // A full CopyRect aliases the cached Godot texture.  The TJS
-                // D3DEmote path immediately assignImages() it to the actual
-                // character layer; forcing Update() on the invisible shared
-                // work layer dirties the whole window even when that
-                // character already references this exact cached texture.
-                if(motionRenderProfileEnabled() && LOGGER) {
-                    LOGGER->info(
-                        "motion emote render reuse: motion={} frame={:.2f} target={} canvas={}x{} commands={} signature={:016x} cached_signature={:016x} skips={} reason={} age_us={}",
-                        motionPath, _clampedEvalTime,
-                        static_cast<const void *>(renderLayerObject),
-                        canvasWidth, canvasHeight,
-                        _runtime->renderCommands.size(),
-                        presentationCommandSignature,
-                        entry.commandSignature,
-                        _runtime->emoteRenderFrameReuseSkips,
-                        "exact",
-                        motionRenderProfileNowUs() >= entry.storedUs
-                            ? motionRenderProfileNowUs() - entry.storedUs
-                            : 0);
-                }
-                _runtime->lastCanvas =
-                    tTJSVariant(resolvedLayerObject, resolvedLayerObject);
-                return true;
-            }
-        }
-        const bool canReuseYuzuPresentation =
-            (yuzuTitlePresentation || yuzuLogoPresentation);
-        const bool canReusePresentationRender =
-            canReuseYuzuPresentation &&
-            renderLayerObject == finalLayerObject && renderLayerObject != nullptr &&
-            !_runtime->renderCommands.empty();
-        const auto presentationReuseNowUs =
-            canReusePresentationRender ? motionRenderProfileNowUs() : 0;
-        if(canReusePresentationRender) {
-            auto cacheIt =
-                _runtime->presentationRenderCache.find(renderLayerObject);
-            if(cacheIt != _runtime->presentationRenderCache.end()) {
-                const auto &entry = cacheIt->second;
-                if(presentationRenderEntryMatches(
-                       entry, motionPath, _clampedEvalTime, canvasWidth,
-                       canvasHeight, presentationCommandSignature)) {
-                    ++_runtime->presentationRenderReuseSkips;
-                    if(motionRenderProfileEnabled() && LOGGER) {
-                        LOGGER->info(
-                            "motion render reuse: motion={} frame={:.2f} target={} canvas={}x{} commands={} skips={} scope=runtime",
-                            motionPath, _clampedEvalTime,
-                            static_cast<const void *>(renderLayerObject),
-                            canvasWidth, canvasHeight,
-                            _runtime->renderCommands.size(),
-                            _runtime->presentationRenderReuseSkips);
+        if(canReuseRenderedFrame) {
+            auto &entry = _runtime->emoteRenderFrameCache;
+            const auto nowUs = motionRenderProfileNowUs();
+            const bool entryFresh =
+                entry.storedUs != 0 && nowUs >= entry.storedUs &&
+                nowUs - entry.storedUs <= kGlobalPresentationReuseTtlUs;
+            if(entryFresh && entry.bitmap &&
+               entry.motion == motionPath &&
+               entry.canvasWidth == canvasWidth &&
+               entry.canvasHeight == canvasHeight &&
+               entry.commandSignature == frameSignature &&
+               entry.bitmap->GetWidth() ==
+                   static_cast<tjs_uint>(canvasWidth) &&
+               entry.bitmap->GetHeight() ==
+                   static_cast<tjs_uint>(canvasHeight)) {
+                auto *cachedLayer = resolveNativeLayer(renderLayerObject);
+                if(cachedLayer) {
+                    cachedLayer->AssignMainImageWithUpdate(entry.bitmap.get());
+                    cachedLayer->SetSize(canvasWidth, canvasHeight);
+                    cachedLayer->SetClip(0, 0, canvasWidth, canvasHeight);
+                    if(_needsInternalAssignImages && !skipUpdate) {
+                        if(!updateLayerAfterDraw(resolvedLayerObject)) {
+                            return false;
+                        }
+                    } else if(!skipUpdate) {
+                        cachedLayer->Update(false);
                     }
                     _runtime->lastCanvas =
                         tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+                    ++_runtime->emoteRenderFrameReuseSkips;
+                    if(motionRenderProfileEnabled() && LOGGER) {
+                        LOGGER->info(
+                            "motion frame render reuse: motion={} frame={:.2f} target={} canvas={}x{} signature={:016x} skips={} age_us={}",
+                            motionPath, _clampedEvalTime,
+                            static_cast<const void *>(renderLayerObject),
+                            canvasWidth, canvasHeight, frameSignature,
+                            _runtime->emoteRenderFrameReuseSkips,
+                            nowUs - entry.storedUs);
+                    }
                     return true;
                 }
             }
+
+            // Page cloning can create a second Player object, so the
+            // per-player cache above cannot see the first page's completed
+            // surface.  Share the same short-lived result process-wide by
+            // command signature.  The helper validates the source Layer
+            // before use and falls back to a normal render when the source
+            // page has already been released.
             auto &globalCache = globalPresentationRenderCache();
-            auto globalIt = globalCache.find(renderLayerObject);
-	            if(globalIt != globalCache.end() &&
-	               presentationReuseNowUs >= globalIt->second.storedUs &&
-	               presentationReuseNowUs - globalIt->second.storedUs <=
-	                   kGlobalPresentationReuseTtlUs &&
-	               presentationRenderEntryMatches(
-	                   globalIt->second, motionPath, _clampedEvalTime, canvasWidth,
-	                   canvasHeight, presentationCommandSignature)) {
-                ++_runtime->presentationRenderReuseSkips;
-                _runtime->presentationRenderCache[renderLayerObject] = {
-                    motionPath,
-                    _clampedEvalTime,
-                    canvasWidth,
-                    canvasHeight,
-                    presentationCommandSignature,
-                };
-                if(motionRenderProfileEnabled() && LOGGER) {
-                    LOGGER->info(
-                        "motion render reuse: motion={} frame={:.2f} target={} canvas={}x{} commands={} skips={} scope=global age_us={}",
-                        motionPath, _clampedEvalTime,
-                        static_cast<const void *>(renderLayerObject), canvasWidth,
-                        canvasHeight, _runtime->renderCommands.size(),
-                        _runtime->presentationRenderReuseSkips,
-                        presentationReuseNowUs - globalIt->second.storedUs);
-                }
-	                _runtime->lastCanvas =
-	                    tTJSVariant(resolvedLayerObject, resolvedLayerObject);
-	                return true;
-	            }
-	            auto sourceIt = findGlobalPresentationRenderSource(
-	                globalCache, renderLayerObject, motionPath, _clampedEvalTime,
-	                canvasWidth, canvasHeight, presentationCommandSignature,
-	                presentationReuseNowUs);
-	            if(sourceIt != globalCache.end() &&
-	               copyGlobalPresentationRender(
-	                   renderLayerObject, usingPresentationTarget, canvasWidth,
-	                   canvasHeight, sourceIt->second)) {
-	                ++_runtime->presentationRenderReuseSkips;
-	                _runtime->presentationRenderCache[renderLayerObject] = {
-	                    motionPath,
-	                    _clampedEvalTime,
-	                    canvasWidth,
-	                    canvasHeight,
-	                    presentationCommandSignature,
-	                };
-	                globalCache[renderLayerObject] =
-	                    makeGlobalPresentationRenderCacheEntry(
-	                        renderLayerObject, motionPath, _clampedEvalTime,
-	                        canvasWidth, canvasHeight,
-	                        presentationCommandSignature, presentationReuseNowUs);
-	                if(motionRenderProfileEnabled() && LOGGER) {
-	                    LOGGER->info(
-	                        "motion render reuse: motion={} frame={:.2f} target={} source={} canvas={}x{} commands={} skips={} scope=global-copy age_us={}",
-	                        motionPath, _clampedEvalTime,
-	                        static_cast<const void *>(renderLayerObject),
-	                        static_cast<const void *>(sourceIt->first),
-	                        canvasWidth, canvasHeight,
-	                        _runtime->renderCommands.size(),
-	                        _runtime->presentationRenderReuseSkips,
-	                        presentationReuseNowUs - sourceIt->second.storedUs);
-	                }
-	                _runtime->lastCanvas =
-	                    tTJSVariant(resolvedLayerObject, resolvedLayerObject);
-	                return true;
-	            }
-	        }
-
-        if(renderLayerObject != finalLayerObject) {
-            if(!prepareLayerForRender(renderLayerObject, canvasWidth, canvasHeight,
-                                      0x00000000)) {
-                _runtime->invalidatePresentationRenderTarget(renderLayerObject);
-                invalidateGlobalPresentationRenderTarget(renderLayerObject);
-                return false;
-            }
-        } else if(auto *targetLayer = resolveNativeLayer(finalLayerObject)) {
-                // AffineSourceMotion's D3D branch clears each character target
-                // but renders every character through one shared
-                // _motionWorkLayer before assignImages(). Clear the actual
-                // E-mote render target as well, otherwise a later affine
-                // scale/position change leaves the previous character frame
-                // in that shared work surface.
-                if(_runtime->isEmoteMode) {
-                    if(!prepareLayerForRender(
-                           finalLayerObject, canvasWidth, canvasHeight,
-                           targetLayer->GetNeutralColor())) {
-                        _runtime->invalidatePresentationRenderTarget(
-                            renderLayerObject);
-                        invalidateGlobalPresentationRenderTarget(
-                            renderLayerObject);
+            auto sourceIt = findGlobalPresentationRenderSource(
+                globalCache, renderLayerObject, motionPath,
+                _clampedEvalTime, canvasWidth, canvasHeight, frameSignature,
+                nowUs);
+            if(sourceIt != globalCache.end() &&
+               copyGlobalPresentationRender(
+                   renderLayerObject, false, canvasWidth, canvasHeight,
+                   sourceIt->second)) {
+                auto *cachedLayer = resolveNativeLayer(renderLayerObject);
+                if(cachedLayer && _needsInternalAssignImages && !skipUpdate) {
+                    if(!updateLayerAfterDraw(resolvedLayerObject)) {
                         return false;
                     }
-                } else if(usingPresentationTarget) {
-                    if(!prepareMotionPresentationLayerForRender(
-                           targetLayer, canvasWidth, canvasHeight)) {
-                        _runtime->invalidatePresentationRenderTarget(renderLayerObject);
-                        invalidateGlobalPresentationRenderTarget(renderLayerObject);
-                        return false;
-                    }
-                    if(centeredGamePresentation) {
-                        placeCenteredPresentationBelowMessageUi(
-                            targetLayer, "prepare-target");
-                    }
-                    if(clearGenericPresentationLayer &&
-                       !compositeOverPreviousCenteredFrame) {
-                        clearMotionPresentationLayer(targetLayer, canvasWidth,
-                                                     canvasHeight);
-                    }
-            } else {
-                if(targetLayer->GetWidth() != canvasWidth ||
-                   targetLayer->GetHeight() != canvasHeight) {
-                    targetLayer->SetSize(canvasWidth, canvasHeight);
+                } else if(cachedLayer && !skipUpdate) {
+                    cachedLayer->Update(false);
                 }
-                // Auto-progress can retain either the dedicated CG child or
-                // KAG's ev/sd transition surface as its next target. Both
-                // direct routes bypass the generic presentation clear above,
-                // so moving SD layers otherwise accumulate every previous
-                // position as ghost images.
-                const auto directYuzuSdLayerName =
-                    isYuzuSdPresentationMotionPath(motionPath)
-                        ? yuzuSdPresentationTargetLayerName(finalLayerObject)
-                        : std::string{};
-                const bool directYuzuSdTransitionTarget =
-                    _autoProgressRendering &&
-                    (directYuzuSdLayerName == "ev" ||
-                     directYuzuSdLayerName == "trans_ev" ||
-                     directYuzuSdLayerName == "sd" ||
-                     directYuzuSdLayerName == "trans_sd");
-                if(targetLayer->GetName().AsStdString() ==
-                       "AetherKiriCgViewMotionSurface" ||
-                   directYuzuSdTransitionTarget) {
-                    clearMotionPresentationLayer(targetLayer, canvasWidth,
-                                                 canvasHeight);
-                }
-            }
-        } else {
-            _runtime->invalidatePresentationRenderTarget(renderLayerObject);
-            invalidateGlobalPresentationRenderTarget(renderLayerObject);
-            return false;
-        }
-
-        // Title motions frequently provide a full composite once, followed by
-        // delta-only flash/logo frames. Rebuild each delta frame over the last
-        // stable composite so transient full-screen effects cannot accumulate.
-        if(yuzuTitlePresentation && !yuzuTitleHasOpaqueCanvasBaseFrame &&
-           findYuzuTitlePresentationHoldFrame(finalNativeLayer, motionPath)) {
-            restoreYuzuTitlePresentationHoldFrame(
-                finalNativeLayer, motionPath, canvasWidth, canvasHeight);
-        }
-
-        if(!executeLayerRenderCommands(renderLayerObject, true)) {
-            if(centeredGamePresentation &&
-               restoreCenteredPresentationHoldFrame(
-                   finalNativeLayer, motionPath, canvasWidth, canvasHeight,
-                   true)) {
                 _runtime->lastCanvas =
                     tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+                ++_runtime->emoteRenderFrameReuseSkips;
+                if(motionRenderProfileEnabled() && LOGGER) {
+                    LOGGER->info(
+                        "motion global frame render reuse: motion={} frame={:.2f} target={} source={} canvas={}x{} signature={:016x} skips={} age_us={}",
+                        motionPath, _clampedEvalTime,
+                        static_cast<const void *>(renderLayerObject),
+                        static_cast<const void *>(sourceIt->first),
+                        canvasWidth, canvasHeight, frameSignature,
+                        _runtime->emoteRenderFrameReuseSkips,
+                        nowUs >= sourceIt->second.storedUs
+                            ? nowUs - sourceIt->second.storedUs
+                            : 0);
+                }
+                globalCache[renderLayerObject] =
+                    makeGlobalPresentationRenderCacheEntry(
+                        renderLayerObject, motionPath, _clampedEvalTime,
+                        canvasWidth, canvasHeight, frameSignature, nowUs);
                 return true;
             }
-            _runtime->invalidatePresentationRenderTarget(renderLayerObject);
-            invalidateGlobalPresentationRenderTarget(renderLayerObject);
+        }
+        if(!executeLayerRenderCommands(renderLayerObject, true)) {
             return false;
         }
-        bool capturedYuzuTitleFrame = false;
-        if(yuzuTitlePresentation && renderLayerObject) {
-            const bool hadHeldFrame =
-                findYuzuTitlePresentationHoldFrame(
-                    finalNativeLayer, motionPath) != nullptr;
-            const bool shouldCaptureTitleFrame =
-                motion::internal::
-                    shouldCaptureYuzuTitlePresentationHoldFrame(
-                        hadHeldFrame,
-                        _runtime->yuzuTitleFinalFrameRendered,
-                        yuzuTitleHasOpaqueCanvasBaseFrame,
-                        yuzuTitleHasStableFrame,
-                        yuzuTitleHasOpaqueFinalOverlayFrame);
-            if(shouldCaptureTitleFrame) {
-                capturedYuzuTitleFrame =
-                    captureYuzuTitlePresentationHoldFrame(
-                        renderLayerObject,
-                        resolveNativeLayer(renderLayerObject),
-                        motionPath);
-            }
-            if(capturedYuzuTitleFrame &&
-               (yuzuTitleHasStableFrame ||
-                yuzuTitleHasOpaqueFinalOverlayFrame)) {
-                _runtime->yuzuTitleFinalFrameRendered = true;
-            }
-        }
-        if(centeredGamePresentation) {
-            auto *executedLayer = resolveNativeLayer(renderLayerObject);
-            const bool executedCgViewSdPreview =
-                executedLayer &&
-                layerBelongsToCgViewPresentation(executedLayer) &&
-                isYuzuSdPreviewMotionPath(motionPath);
-            if(executedCgViewSdPreview &&
-               motionPresentationLayerHasVisibleSamples(executedLayer)) {
-                captureCenteredPresentationHoldFrame(
-                    renderLayerObject, executedLayer, motionPath);
-                syncCenteredPresentationHoldMotionFrame(
-                    executedLayer, motionPath, canvasWidth, canvasHeight);
-            } else {
-                syncYuzuSdPreviewPresentationLayers(
-                    executedLayer, motionPath, canvasWidth,
-                    canvasHeight, "execute");
-            }
-        }
-        if(canReuseEmoteRender) {
-            // The E-mote work layer itself is not the visible character layer,
-            // so assignImages() can replace the visible GPU texture after the
-            // normal dirty region has already been calculated. Pair every real
-            // cache refresh with one complete window composite. Cached frames
-            // keep the local dirty-region path and remain inexpensive.
-            TVPRequestFullGpuCompletion();
-            auto *executedLayer = resolveNativeLayer(renderLayerObject);
-            auto *executedImage =
-                executedLayer ? executedLayer->GetMainImage() : nullptr;
-            if(executedImage &&
-               executedImage->GetWidth() == canvasWidth &&
-               executedImage->GetHeight() == canvasHeight) {
+
+        if(canReuseRenderedFrame) {
+            auto *renderedLayer = resolveNativeLayer(renderLayerObject);
+            auto *renderedImage = renderedLayer
+                ? renderedLayer->GetMainImage()
+                : nullptr;
+            if(renderedImage &&
+               renderedImage->GetWidth() ==
+                   static_cast<tjs_uint>(canvasWidth) &&
+               renderedImage->GetHeight() ==
+                   static_cast<tjs_uint>(canvasHeight)) {
                 auto &entry = _runtime->emoteRenderFrameCache;
                 if(!entry.bitmap ||
-                   entry.bitmap->GetWidth() != canvasWidth ||
-                   entry.bitmap->GetHeight() != canvasHeight) {
+                   entry.bitmap->GetWidth() !=
+                       static_cast<tjs_uint>(canvasWidth) ||
+                   entry.bitmap->GetHeight() !=
+                       static_cast<tjs_uint>(canvasHeight)) {
                     entry.bitmap = std::make_shared<tTVPBaseBitmap>(
                         static_cast<tjs_uint>(canvasWidth),
                         static_cast<tjs_uint>(canvasHeight), 32);
                 }
+                // Full-size CopyRect aliases the texture on the Godot
+                // backend.  The next prepareLayerForRender() call detaches
+                // its copy-on-write target before clearing it, so this cache
+                // remains immutable while another page is rendered.
                 entry.bitmap->CopyRect(
-                    0, 0, executedImage,
+                    0, 0, renderedImage,
                     tTVPRect(0, 0, canvasWidth, canvasHeight));
                 entry.motion = motionPath;
                 entry.frame = _clampedEvalTime;
                 entry.canvasWidth = canvasWidth;
                 entry.canvasHeight = canvasHeight;
-                entry.commandSignature = presentationCommandSignature;
+                entry.commandSignature = frameSignature;
                 entry.storedUs = motionRenderProfileNowUs();
             }
-        }
-        if(canReusePresentationRender) {
-            _runtime->presentationRenderCache[renderLayerObject] = {
-                motionPath,
-                _clampedEvalTime,
-                canvasWidth,
-                canvasHeight,
-                presentationCommandSignature,
-            };
-	            globalPresentationRenderCache()[renderLayerObject] =
-	                makeGlobalPresentationRenderCacheEntry(
-	                    renderLayerObject, motionPath, _clampedEvalTime,
-	                    canvasWidth, canvasHeight, presentationCommandSignature,
-	                    presentationReuseNowUs ? presentationReuseNowUs
-	                                           : motionRenderProfileNowUs());
-	        } else {
-            _runtime->invalidatePresentationRenderTarget(renderLayerObject);
-            invalidateGlobalPresentationRenderTarget(renderLayerObject);
-        }
-        auto *renderLayer = resolveNativeLayer(renderLayerObject);
-        if(LOGGER && shouldDebugTitleRender(motionPath) &&
-           markRenderDebugLogged("render-target-check:" + motionPath)) {
-            LOGGER->info(
-                "motion render target check: motion={} object={} native={}",
-                motionPath,
-                static_cast<const void *>(renderLayerObject),
-                static_cast<const void *>(renderLayer));
-        }
-        if(renderLayer && LOGGER && shouldDebugTitleRender(motionPath)) {
-            static std::unordered_map<std::string, int> treeLogCountByMotion;
-            const auto treeLogKey =
-                motionPath + "|" + _runtime->lastExplicitTimelineLabel;
-            auto &treeLogCount = treeLogCountByMotion[treeLogKey];
-            if(treeLogCount < 2) {
-                ++treeLogCount;
-                try {
-                    std::ostringstream out;
-                    out << "motion render target tree: motion=" << motionPath
-                        << " renderLayer="
-                        << static_cast<const void *>(renderLayer)
-                        << " layer=" << describeLayerForDebug(renderLayer)
-                        << " ancestry="
-                        << describeLayerAncestryForDebug(renderLayer);
-                    describeLayerTreeForDebug(out, renderLayer);
-                    LOGGER->info("{}", out.str());
-                } catch(const std::exception &e) {
-                    LOGGER->warn("motion render target tree failed: motion={} error={}",
-                                 motionPath, e.what());
-                } catch(...) {
-                    LOGGER->warn("motion render target tree failed: motion={} error=<unknown>",
-                                 motionPath);
-                }
+
+            if(renderedLayer && renderedImage) {
+                const auto storedUs = motionRenderProfileNowUs();
+                globalPresentationRenderCache()[renderLayerObject] =
+                    makeGlobalPresentationRenderCacheEntry(
+                        renderLayerObject, motionPath, _clampedEvalTime,
+                        canvasWidth, canvasHeight, frameSignature, storedUs);
             }
         }
 
         if(!skipUpdate) {
-            if(renderLayerObject != finalLayerObject) {
-                if(useCgViewAffineRenderChild) {
-                    if(auto *layer = resolveNativeLayer(renderLayerObject)) {
-                        layer->SetVisible(true);
-                        layer->Update(false);
-                    }
-                } else {
-                    updateLayerAfterDraw(finalLayerObject);
+            if(renderLayerObject != resolvedLayerObject) {
+                if(!updateLayerAfterDraw(resolvedLayerObject)) {
+                    return false;
                 }
-            } else if(auto *layer = resolveNativeLayer(finalLayerObject)) {
-	                layer->Update(false);
-	                detail::logoChainTraceLogf(
-	                    motionPath, "post.layer", "0x6CE7D8", _clampedEvalTime,
-	                    "targetLayer.Update(false) size={}x{}",
-                    layer->GetWidth(), layer->GetHeight());
+            } else {
+                resolvedNativeLayer->Update(false);
+                detail::logoChainTraceLogf(
+                    motionPath, "post.layer", "0x6CE7D8",
+                    _clampedEvalTime,
+                    "targetLayer.Update(false) size={}x{}",
+                    resolvedNativeLayer->GetWidth(),
+                    resolvedNativeLayer->GetHeight());
             }
-            if(centeredGamePresentation) {
-                finalNativeLayer = resolveNativeLayer(finalLayerObject);
-                configureCenteredGameMotionPresentationHitPassthrough(
-                    finalNativeLayer);
-                placeCenteredPresentationBelowMessageUi(
-                    finalNativeLayer, "post-render");
-                if(layerBelongsToCgViewPresentation(finalNativeLayer)) {
-                    hideCenteredPresentationMessageUiOverlay(finalNativeLayer);
-                } else {
-                    bool centeredPresentationVisible = false;
-                    if(motionPresentationLayerHasVisibleSamples(finalNativeLayer)) {
-                        captureCenteredPresentationHoldFrame(
-                            finalLayerObject, finalNativeLayer, motionPath);
-                        centeredPresentationVisible = true;
-                    } else {
-                        centeredPresentationVisible =
-                            restoreCenteredPresentationHoldFrame(
-                                finalNativeLayer, motionPath, canvasWidth,
-                                canvasHeight, true);
-                    }
-                    if(centeredPresentationVisible) {
-                        syncYuzuSdPreviewPresentationLayers(
-                            finalNativeLayer, motionPath, canvasWidth,
-                            canvasHeight, "post-render");
-                        showCenteredPresentationMessageUiOverlay(
-                            finalNativeLayer, canvasWidth, canvasHeight,
-                            "post-render");
-                    } else {
-                        hideCenteredPresentationMessageUiOverlay(finalNativeLayer);
-                    }
-                }
-            }
-        }
-        if(bypassInternalAssignImages) {
-            _needsInternalAssignImages = false;
-        }
-        if(yuzuTitlePresentation && !_presentationHoldRendering &&
-           finalLayerObject) {
-            // Keep a short tail for the last animation frame; a multi-second
-            // hold can leave title_bg above later scene layers during startup.
-            enablePresentationHold(finalLayerObject, 250);
         }
 
-        iTJSDispatch2 *lastCanvasObject =
-            (useCgViewAffineRenderChild || useYuzuSdEventRenderChild) &&
-                    renderLayerObject
-                ? renderLayerObject
-                : resolvedLayerObject;
         _runtime->lastCanvas =
-            tTJSVariant(lastCanvasObject, lastCanvasObject);
-        if((useCgViewAffineRenderChild || useYuzuSdEventRenderChild) &&
-           lastCanvasObject) {
-            _targetLayer = tTJSVariant(lastCanvasObject, lastCanvasObject);
+            tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+        if(!_runtime->isEmoteMode && !skipUpdate) {
+            _runtime->lastMotionRasterTarget =
+                tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+            _runtime->lastMotionRasterMotion = motionPath;
+            _runtime->lastMotionRasterWidth = canvasWidth;
+            _runtime->lastMotionRasterHeight = canvasHeight;
+            _runtime->lastMotionRasterPublishUs = motionRenderProfileNowUs();
         }
         detail::logoChainTraceSummary(
             motionPath, "renderToLayer", _clampedEvalTime,
@@ -12258,28 +12870,48 @@ namespace motion {
                 "fail=resolveSeparateLayerRenderTarget");
             return false;
         }
-        iTJSDispatch2 *presentationTarget =
-            tryResolveLayerDispatch(sla->getTargetLayer());
-        if(!presentationTarget) {
-            presentationTarget = ownerLayer;
-        }
         detail::logoChainTraceLogf(
             motionPath, "draw.sla", "0x6D5658", _clampedEvalTime,
-            "ownerLayer={} targetCanvas={}x{} accurate={} route={}",
+            "ownerLayer={} targetCanvas={}x{} route=private-child",
             static_cast<const void *>(ownerLayer),
-            canvasWidth, canvasHeight,
-            isAccurateSlaRenderEnabled() ? 1 : 0,
-            isAccurateSlaRenderEnabled()
-                ? "0x6C9CA8 -> 0x6CE938"
-                : "Player_RenderMotionFrame -> Layer_UpdateRect");
+            canvasWidth, canvasHeight);
         detail::logoChainTraceLogf(
             motionPath, "sla.resolveTarget", "0x6D5948",
             _clampedEvalTime,
-            "targetLayer={} privateTarget={} absolute={} canvas={}x{}",
-            static_cast<const void *>(tryResolveLayerDispatch(sla->getTargetLayer())),
+            "ownerLayer={} privateTarget={} absolute={} canvas={}x{}",
+            static_cast<const void *>(ownerLayer),
             static_cast<const void *>(renderTarget),
             sla->getAbsolute() ? 1 : 0,
             canvasWidth, canvasHeight);
+
+        // Kiri's E-mote implementation normally presents through
+        // SeparateLayerAdaptor. When the native backend owns evaluation, the
+        // legacy PSB command tree is only a compatibility snapshot and does
+        // not contain the native backend's changing blink/breath/hair/body
+        // state. Render the native frame into the SLA private target on every
+        // draw, then keep the adaptor's normal update/presentation steps
+        // below so authored layer placement and clipping remain unchanged.
+        if(_nativeBackend) {
+            if(!renderNativeBackendToLayer(renderTarget, canvasWidth,
+                                            canvasHeight, true)) {
+                detail::logoChainTraceSummary(
+                    motionPath, "renderToSeparateLayerAdaptor",
+                    _clampedEvalTime, "fail=nativeBackendRender");
+                return false;
+            }
+
+            if(auto *renderLayer = resolveNativeLayer(renderTarget)) {
+                renderLayer->Update(false);
+            }
+
+            // draw(SLA) rendered the adaptor's private child, so expose that
+            // exact surface as the last canvas just like krkrsdl3 does.
+            _runtime->lastCanvas = tTJSVariant(renderTarget, renderTarget);
+            detail::logoChainTraceSummary(
+                motionPath, "renderToSeparateLayerAdaptor",
+                _clampedEvalTime, "nativeBackend=1");
+            return true;
+        }
 
         ensureNodeTreeBuilt();
         const bool parentStateChanged = applyMotionParentRootStateForRender();
@@ -12289,66 +12921,15 @@ namespace motion {
         }
         prepareRenderItems();
         applyPreparedRenderItemTranslateOffsets();
-        auto *renderNativeLayer = resolveNativeLayer(renderTarget);
-        auto *ownerNativeLayer = resolveNativeLayer(ownerLayer);
-        auto *presentationNativeLayer = resolveNativeLayer(presentationTarget);
-        const bool cgViewScriptedPresentation =
-            layerBelongsToCgViewPresentation(renderNativeLayer) ||
-            layerBelongsToCgViewPresentation(ownerNativeLayer) ||
-            layerBelongsToCgViewPresentation(presentationNativeLayer);
-        if(cgViewScriptedPresentation) {
-            if(LOGGER && shouldDebugTitleRender(motionPath) &&
-               markRenderDebugLogged("sla-yuzu-presentation-skip-cg-view:" +
-                                     motionPath)) {
-                LOGGER->info(
-                    "motion yuzu presentation adjustment skipped: motion={} reason=sla_cg_view_scripted_affine render=[{}] owner=[{}] target=[{}]",
-                    motionPath, describeLayerForDebug(renderNativeLayer),
-                    describeLayerForDebug(ownerNativeLayer),
-                    describeLayerForDebug(presentationNativeLayer));
-            }
-        } else {
-            adjustPreparedRenderItemsForYuzuPresentation(
-                *_runtime, motionPath, canvasWidth, canvasHeight);
-        }
-        if(cgViewScriptedPresentation) {
-            if(LOGGER && shouldDebugTitleRender(motionPath) &&
-               markRenderDebugLogged("sla-center-skip-cg-view:" + motionPath)) {
-                LOGGER->info(
-                    "motion centered game presentation skipped: motion={} reason=sla_cg_view_scripted_affine render=[{}] owner=[{}] target=[{}]",
-                    motionPath, describeLayerForDebug(renderNativeLayer),
-                    describeLayerForDebug(ownerNativeLayer),
-                    describeLayerForDebug(presentationNativeLayer));
-            }
-        } else {
-            adjustPreparedRenderItemsForCenteredGameMotion(
-                *_runtime, motionPath, canvasWidth, canvasHeight,
-                resolveCenteredGameMotionResolution(_resolution, _tags, _metadata,
-                                                    motionPath),
-                renderNativeLayer ? renderNativeLayer : ownerNativeLayer);
-        }
 
         if(!renderMotionFrameToTarget(renderTarget, canvasWidth, canvasHeight,
-                                      isAccurateSlaRenderEnabled()
-                                          ? "0x6C9CA8"
-                                          : "0x6DE738")) {
+                                      "0x6DE738")) {
             detail::logoChainTraceSummary(
                 motionPath, "renderToSeparateLayerAdaptor", _clampedEvalTime,
                 "fail=renderMotionFrameToTarget");
             return false;
         }
-        if(isAccurateSlaRenderEnabled()) {
-            detail::logoChainTraceLogf(
-                motionPath, "sla.accurate.begin", "0x6C9CA8",
-                _clampedEvalTime,
-                "target={} canvas={}x{}",
-                static_cast<const void *>(renderTarget),
-                canvasWidth, canvasHeight);
-            updateAccurateSLAAfterDraw(renderTarget);
-            detail::logoChainTraceLogf(
-                motionPath, "sla.accurate.end", "0x6CE938",
-                _clampedEvalTime,
-                "target={}", static_cast<const void *>(renderTarget));
-        } else if(auto *renderLayer = resolveNativeLayer(renderTarget)) {
+        if(auto *renderLayer = resolveNativeLayer(renderTarget)) {
             renderLayer->Update(false);
             detail::logoChainTraceLogf(
                 motionPath, "sla.updateRect", "0x800F4C", _clampedEvalTime,
@@ -12363,101 +12944,10 @@ namespace motion {
                 "Player_RenderMotionFrame finished but SLA target lacked a native layer");
         }
 
-        postProcessCenteredGameMotionSeparateLayerPresentation(
-            presentationTarget, renderTarget, motionPath, canvasWidth,
-            canvasHeight);
-        if(auto *renderLayer = resolveNativeLayer(renderTarget);
-           renderLayer && layerBelongsToCgViewPresentation(renderLayer) &&
-           isYuzuSdPreviewMotionPath(motionPath)) {
-            captureYuzuSdPreviewFrame(renderTarget, motionPath);
-        }
-
         _runtime->lastCanvas = tTJSVariant(renderTarget, renderTarget);
         detail::logoChainTraceSummary(
             motionPath, "renderToSeparateLayerAdaptor", _clampedEvalTime,
-            isAccurateSlaRenderEnabled() ? "accurate=1" : "accurate=0");
-        return true;
-    }
-
-    void Player::captureYuzuSdPreviewFrame(
-        iTJSDispatch2 *renderTargetObject,
-        const std::string &motionPath) {
-        if(!renderTargetObject || !_runtime || !_runtime->activeMotion ||
-           motionPath.empty()) {
-            return;
-        }
-        auto *layer = resolveNativeLayer(renderTargetObject);
-        auto *image = layer ? layer->GetMainImage() : nullptr;
-        if(!image || image->GetWidth() <= 0 || image->GetHeight() <= 0 ||
-           !motionPresentationLayerHasVisibleSamples(layer)) {
-            return;
-        }
-
-        const tjs_int width = static_cast<tjs_int>(image->GetWidth());
-        const tjs_int height = static_cast<tjs_int>(image->GetHeight());
-        if(!_yuzuSdPreviewFrame ||
-           _yuzuSdPreviewFrame->GetWidth() != width ||
-           _yuzuSdPreviewFrame->GetHeight() != height) {
-            _yuzuSdPreviewFrame = std::make_shared<tTVPBaseBitmap>(
-                static_cast<tjs_uint>(width),
-                static_cast<tjs_uint>(height), 32);
-        }
-        _yuzuSdPreviewFrame->CopyRect(
-            0, 0, image, tTVPRect(0, 0, width, height));
-        _yuzuSdPreviewFrameMotion = motionPath;
-        _yuzuSdPreviewFrameLabel = _runtime->lastExplicitTimelineLabel;
-    }
-
-    bool Player::restoreFrozenYuzuSdPreviewFrame(
-        iTJSDispatch2 *targetObject) {
-        if(!_runtime || !_runtime->activeMotion || !_yuzuSdPreviewFrame ||
-           _yuzuSdPreviewFrameMotion != _runtime->activeMotion->path ||
-           _yuzuSdPreviewFrameLabel != _runtime->lastExplicitTimelineLabel) {
-            return false;
-        }
-
-        iTJSDispatch2 *renderTarget = targetObject;
-        if(targetObject) {
-            if(auto *sla =
-                   ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(
-                       targetObject, false)) {
-                auto *ownerLayer = sla->getOwner();
-                if(!ownerLayer) {
-                    ownerLayer = tryResolveSeparateAdaptorOwner(
-                        tTJSVariant(targetObject, targetObject));
-                }
-                int canvasWidth = 0;
-                int canvasHeight = 0;
-                renderTarget = resolveSeparateLayerRenderTarget(
-                    sla, ownerLayer, canvasWidth, canvasHeight);
-            }
-        }
-        if(!renderTarget && _runtime->lastCanvas.Type() == tvtObject) {
-            renderTarget = _runtime->lastCanvas.AsObjectNoAddRef();
-        }
-
-        auto *layer = resolveNativeLayer(renderTarget);
-        if(!layer) {
-            return false;
-        }
-        const int width = static_cast<int>(_yuzuSdPreviewFrame->GetWidth());
-        const int height = static_cast<int>(_yuzuSdPreviewFrame->GetHeight());
-        if(!prepareMotionPresentationLayerForRender(layer, width, height)) {
-            return false;
-        }
-        auto *image = layer->GetMainImage();
-        if(!image) {
-            return false;
-        }
-        image->Fill(
-            tTVPRect(0, 0, image->GetWidth(), image->GetHeight()),
-            0x00000000);
-        image->CopyRect(
-            0, 0, _yuzuSdPreviewFrame.get(),
-            tTVPRect(0, 0, width, height));
-        layer->SetVisible(true);
-        layer->Update(false);
-        _runtime->lastCanvas = tTJSVariant(renderTarget, renderTarget);
+            "privateChild=1");
         return true;
     }
 
@@ -12505,32 +12995,6 @@ namespace motion {
                 "sub_6CE7D8 threw while assigning internal render layer");
             return false;
         }
-    }
-
-    bool Player::updateAccurateSLAAfterDraw(iTJSDispatch2 *targetLayerObject) {
-        if(!targetLayerObject) {
-            return false;
-        }
-        const auto motionPath =
-            _runtime && _runtime->activeMotion ? _runtime->activeMotion->path
-                                               : std::string{};
-
-        if(auto *layer = resolveNativeLayer(targetLayerObject)) {
-            layer->Update(false);
-            detail::logoChainTraceLogf(
-                motionPath, "post.sla.accurate", "0x6C9CA8/0x6CE938",
-                _clampedEvalTime,
-                "route=renderTarget.Update(false) size={}x{}",
-                layer->GetWidth(), layer->GetHeight());
-            return true;
-        }
-        detail::logoChainTraceCheck(
-            motionPath, "post.sla.accurate", "0x6C9CA8/0x6CE938",
-            _clampedEvalTime,
-            "accurate SLA should update the resolved render target",
-            "no post-update target", false,
-            "accurate SLA render finished without a target update");
-        return false;
     }
 
     tTJSVariant Player::findSource(ttstr name) {
@@ -13384,6 +13848,7 @@ namespace motion {
     }
 
     void Player::passTimelinesLike_0x67A100() {
+        invokeNativeBackend("pass");
         if(!_runtime || !_runtime->activeMotion) {
             return;
         }
@@ -13504,7 +13969,13 @@ namespace motion {
         if(!_speed) {
             return;
         }
-        _layersDirty = true;
+        // Toggle the command-list token on every accepted progress call,
+        // including progress(0).  KAG uses that token solely as a dirty
+        // signal before scheduling onPaint; the evaluated frame itself stays
+        // in the retained node tree below.
+        _commandListPulse = !_commandListPulse;
+        const bool hasNativeBackend = _nativeBackend != nullptr;
+        _layersDirty = !hasNativeBackend;
         if(!_completedEndedTimelineRenderHoldLabel.empty()) {
             const auto stateIt = _runtime->timelines.find(
                 _completedEndedTimelineRenderHoldLabel);
@@ -13513,16 +13984,10 @@ namespace motion {
                stateIt->second.currentTime + 0.0001 <
                    stateIt->second.totalFrames) {
                 _completedEndedTimelineRenderHoldLabel.clear();
-                _yuzuSdChildContinuationFrames = 0.0;
             }
         }
         const auto *activeClipBeforeProgress = selectActiveClip();
         const double actualDelta = dt;
-        if(!_completedEndedTimelineRenderHoldLabel.empty() &&
-           _yuzuSdChildContinuationFrames > 0.0) {
-            _yuzuSdChildContinuationFrames = std::max(
-                0.0, _yuzuSdChildContinuationFrames - actualDelta);
-        }
         _frameLastTime = actualDelta;
         _frameLoopTime += actualDelta;
         _loopTime += actualDelta;
@@ -13532,7 +13997,7 @@ namespace motion {
 
         ensureEmoteControlStateInitialized();
         const auto *extension = motionPlayerExtension();
-        if(extension && extension->hasActivePhysics &&
+        if(!hasNativeBackend && extension && extension->hasActivePhysics &&
            extension->hasActivePhysics(*this)) {
             ensureNodeTreeBuilt();
         }
@@ -13566,14 +14031,46 @@ namespace motion {
             stepControllerBucket(_type6ControllerAnimators, controllerDt);
             stepControllerBucket(_type8ControllerAnimators, controllerDt);
             stepControllerBucket(_type7ControllerAnimators, controllerDt);
+            stepControllerBucket(_variableAnimators, controllerDt);
             refreshFixedControllerEvalOutputsLike_0x67D01C();
             remainingControllerStep -= controllerDt;
         }
 
-        stepAutoBlinkControllersLike_0x660FBC(actualDelta);
+        // The native backend owns blink and physics for a native player. Kiri's
+        // retained root/control timeline still has to run, however: it drives
+        // authored pose and visibility variables which are not public native
+        // timelines.  Running the compatibility blink/physics solvers as well
+        // would apply those effects twice.
+        if(!hasNativeBackend) {
+            stepAutoBlinkControllersLike_0x660FBC(actualDelta);
+        }
 
         applyEvalResultPostProcessLike_0x67CC9C();
-        stepEmotePhysicsLike_0x678B28(actualDelta);
+        if(hasNativeBackend) {
+            std::vector<MotionBackendValue> variables;
+            variables.reserve(_evalResultValues.size() * 2u);
+            for(const auto &[label, value] : _evalResultValues) {
+                if(label.empty() || !std::isfinite(value)) {
+                    continue;
+                }
+                variables.push_back(MotionBackendValue::String(label));
+                variables.push_back(MotionBackendValue::Number(value));
+            }
+            if(!variables.empty()) {
+                invokeNativeBackend("setvariables", variables);
+            }
+            invokeNativeBackend(
+                "progress", { MotionBackendValue::Number(actualDelta) });
+            // The first native frame after a cold source switch must not be
+            // exposed until this progress pass has applied the restored and
+            // authored variables to the new SDK player.  loadFromSnapshot()
+            // leaves the previous presentation visible while this gate is
+            // false, so the next render publishes the intended pose directly.
+            _layersDirty = false;
+            _emoteDirty = true;
+        } else {
+            stepEmotePhysicsLike_0x678B28(actualDelta);
+        }
 
         // Camera velocity/friction moved to updateLayers pre-loop (0x6BB360..0x6BB42C)
 

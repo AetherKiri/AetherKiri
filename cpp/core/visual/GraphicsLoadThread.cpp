@@ -142,6 +142,7 @@ void tTVPAsyncImageLoader::HandleLoadedImage() {
         if(cmd != nullptr) {
             cmd->bmp_->SetLoading(false);
             if(cmd->result_.length() > 0) {
+                cmd->bmp_->OnAsyncImageLoaded(false);
                 // error
                 tTJSVariant param[4];
                 param[0] = tTJSVariant((iTJSDispatch2 *)nullptr,
@@ -178,6 +179,7 @@ void tTVPAsyncImageLoader::HandleLoadedImage() {
                 }
                 cmd->dest_->bmp->Release();
                 cmd->dest_->bmp = nullptr;
+                cmd->bmp_->OnAsyncImageLoaded(true);
 
                 tTJSVariant param[4];
                 param[0] = tTJSVariant(metainfo, metainfo);
@@ -214,6 +216,7 @@ void tTVPAsyncImageLoader::LoadRequest(iTJSDispatch2 *owner, tTJSNI_Bitmap *bmp,
         if(bmp) {
             bmp->CopyFrom(&dest);
             bmp->SetLoading(false);
+            bmp->OnAsyncImageLoaded(true);
         }
         if(!owner)
             return;

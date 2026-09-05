@@ -2,7 +2,9 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <utility>
+#include <vector>
 
 #include <spdlog/spdlog.h>
 
@@ -49,8 +51,12 @@ namespace PSB {
          * @param filePath
          */
         bool loadPSBFile(const ttstr &filePath);
-        bool loadPSBData(const void *data, size_t size,
-                         const ttstr &sourceName);
+        // `loadResources=false` is useful for metadata-only consumers (for
+        // example gallery indexes) that need the object tree but not the
+        // potentially hundreds of megabytes of embedded image chunks.  Keep
+        // the default unchanged for normal PSB decoding.
+        bool loadPSBData(const void *data, size_t size, const ttstr &sourceName,
+                         bool loadResources = true);
         /**
          * Load a string based on index, lift stream Position
          */
@@ -80,6 +86,15 @@ namespace PSB {
             return _root;
         }
 
+        [[nodiscard]] const tTJSVariant &getCompatRoot() const {
+            return _compatRoot;
+        }
+
+        [[nodiscard]] bool hasCompatRoot() const {
+            return _compatRoot.Type() == tvtObject &&
+                _compatRoot.AsObjectNoAddRef() != nullptr;
+        }
+
         [[nodiscard]] PSBSpec getPlatform() const {
             auto spec = (*getObjects())["spec"];
             std::string specStr = !spec ? "" : spec->toString();
@@ -104,11 +119,19 @@ namespace PSB {
 
         PSBType getType() const { return _type; }
 
+        // Exact object image handed to the parser after container
+        // decompression and the title-provided pre-parse transform. Native
+        // E-mote backends consume the same bytes without reopening archives.
+        [[nodiscard]] const std::shared_ptr<const std::vector<std::uint8_t>> &
+        getObjectImage() const { return _objectImage; }
+
     private:
         int _seed = 0;
         PreParseCallback _preParseCallback;
         PSBHeader _header{};
         std::shared_ptr<IPSBValue> _root{};
+        tTJSVariant _compatRoot{};
+        std::shared_ptr<const std::vector<std::uint8_t>> _objectImage;
         PSBType _type{ PSBType::PSB };
 
         PSBType inferType() {
