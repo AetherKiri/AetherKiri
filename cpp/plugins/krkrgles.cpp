@@ -7,6 +7,7 @@
 #include "EventIntf.h"
 #include "WindowIntf.h"
 #include "ScriptAliasUtils.h"
+#include "GlesCaptureUtils.h"
 #include "motionplayer/Player.h"
 #include <spdlog/spdlog.h>
 #include <algorithm>
@@ -147,11 +148,11 @@ static bool InstallDrawDeviceScriptAliases() {
                 installed = aetherkiri::plugins::EnsureGlobalObjectMember(
                                 target, TJS_W("gpuDrawDevice"), gpuDevice) ||
                             installed;
-                installed = aetherkiri::plugins::EnsureGlobalObjectMember(
-                                target, TJS_W("OGLDrawDevice"), gpuDevice) ||
+                installed = ForceMirrorGlobalToMember(
+                                target, TJS_W("OGLDrawDevice")) ||
                             installed;
-                installed = aetherkiri::plugins::EnsureGlobalObjectMember(
-                                target, TJS_W("GLESAdaptor"), gpuDevice) ||
+                installed = ForceMirrorGlobalToMember(
+                                target, TJS_W("GLESAdaptor")) ||
                             installed;
             }
         }
@@ -1890,19 +1891,13 @@ static void InvokeLoadIfPresent(tTJSVariant &obj, tjs_int n, tTJSVariant **p,
 // ---------------------------------------------------------------------------
 // Capture-callback invoker (capture → callback → render → copyLayer)
 // ---------------------------------------------------------------------------
+static int CaptureCallbackIndex(tjs_int n, tTJSVariant **p) {
+    return aetherkiri::plugins::gles::CaptureCallbackIndex(n, p);
+}
+
 static tjs_error InvokeCaptureCallback(const char *tag, tjs_int w, tjs_int h,
                                        tjs_int n, tTJSVariant **p) {
-    if (n <= 1 || !p || !p[1] || p[1]->Type() != tvtObject) return TJS_S_OK;
-    tTJSVariantClosure cb = p[1]->AsObjectClosureNoAddRef();
-    if (!cb.Object) return TJS_S_OK;
-    tTJSVariant target;
-    if (n > 0 && p[0]) target = *p[0];
-    tTJSVariant wv(w), hv(h), uv, fv;
-    if (n > 2 && p[2]) uv = *p[2];
-    if (n > 3 && p[3]) fv = *p[3];
-    tTJSVariant *args[] = { &target, &wv, &hv, &uv, &fv };
-    tjs_int argc = (n > 3) ? 5 : 4;
-    return cb.FuncCall(0, nullptr, nullptr, nullptr, argc, args, nullptr);
+    return aetherkiri::plugins::gles::InvokeCaptureCallback(w, h, n, p);
 }
 
 // ---------------------------------------------------------------------------
@@ -2103,8 +2098,12 @@ public:
     static tjs_error captureCb(tTJSVariant *r, tjs_int n, tTJSVariant **p, GLESModule *s) {
         tjs_int w = NormalizeExtent(s ? s->screenWidth_ : 0, 1920);
         tjs_int h = NormalizeExtent(s ? s->screenHeight_ : 0, 1080);
-        InvokeCaptureCallback("GLESModule.capture", w, h, n, p);
-        if (r) *r = (n > 0 && p) ? *p[0] : tTJSVariant(true);
+        const tjs_error er = InvokeCaptureCallback("GLESModule.capture", w, h, n, p);
+        if (TJS_FAILED(er)) return er;
+        const int callbackIndex = CaptureCallbackIndex(n, p);
+        const int targetIndex = callbackIndex == 0 ? 1 : 0;
+        if (r) *r = (targetIndex >= 0 && targetIndex < n && p && p[targetIndex])
+                       ? *p[targetIndex] : tTJSVariant(true);
         return TJS_S_OK;
     }
 
@@ -2225,32 +2224,6 @@ extern "C" tjs_error TVPKrkrGLESCreateModuleObject(tTJSVariant *result,
 }
 
 // ---------------------------------------------------------------------------
-// DrawDevice getModule callback
-// ---------------------------------------------------------------------------
-static tjs_error DrawDeviceGetModuleCb(tTJSVariant *r, tjs_int n, tTJSVariant **p,
-                                       iTJSDispatch2 *objthis) {
-    static std::unordered_map<uintptr_t, std::unordered_map<ModuleName, tTJSVariant>> s_mod;
-    const ModuleName mn = NormalizeModuleName(n, p);
-    const uintptr_t key = reinterpret_cast<uintptr_t>(objthis);
-    if (key) {
-        auto dit = s_mod.find(key);
-        if (dit != s_mod.end()) {
-            auto mit = dit->second.find(mn);
-            if (mit != dit->second.end() && mit->second.Type() == tvtObject &&
-                mit->second.AsObjectNoAddRef())
-            { if (r) *r = mit->second; return TJS_S_OK; }
-        }
-    }
-    tTJSVariant created;
-    tjs_error er = CreateModuleObject(&created);
-    if (TJS_FAILED(er)) { if (r) r->Clear(); return er; }
-    if (key && created.Type() == tvtObject && created.AsObjectNoAddRef())
-        s_mod[key][mn] = created;
-    if (r) *r = created;
-    return TJS_S_OK;
-}
-
-// ---------------------------------------------------------------------------
 // GLESAdaptor — per-window adaptor that proxies to the module
 // ---------------------------------------------------------------------------
 class GLESAdaptor {
@@ -2328,8 +2301,12 @@ public:
     static tjs_error captureCb(tTJSVariant *r, tjs_int n, tTJSVariant **p, GLESAdaptor *s) {
         tjs_int w = NormalizeExtent(s ? s->screenWidth_ : 0, 1920);
         tjs_int h = NormalizeExtent(s ? s->screenHeight_ : 0, 1080);
-        InvokeCaptureCallback("GLESAdaptor.capture", w, h, n, p);
-        if (r) *r = (n > 0 && p) ? *p[0] : tTJSVariant(true);
+        const tjs_error er = InvokeCaptureCallback("GLESAdaptor.capture", w, h, n, p);
+        if (TJS_FAILED(er)) return er;
+        const int callbackIndex = CaptureCallbackIndex(n, p);
+        const int targetIndex = callbackIndex == 0 ? 1 : 0;
+        if (r) *r = (targetIndex >= 0 && targetIndex < n && p && p[targetIndex])
+                       ? *p[targetIndex] : tTJSVariant(true);
         return TJS_S_OK;
     }
 
@@ -2657,10 +2634,7 @@ NCB_REGISTER_CLASS(OGLDrawDevice) {
     NCB_METHOD_RAW_CALLBACK(finalize, &OGLDrawDevice::finalizeCb, 0);
 }
 
-NCB_ATTACH_FUNCTION_WITHTAG(getModule, WindowPassThroughDrawDevice,
-                            Window.PassThroughDrawDevice, DrawDeviceGetModuleCb);
-NCB_ATTACH_FUNCTION_WITHTAG(getModule, WindowBasicDrawDevice,
-                            Window.BasicDrawDevice, DrawDeviceGetModuleCb);
+// Keep the built-in draw devices' getModule lifecycle and module cache.
 
 extern "C" void TVPRegisterKrkrGLESPluginAnchor() {
     ncbAutoRegister::RegisterInternalPluginEntry(
