@@ -1041,6 +1041,9 @@ void tTVPLayerManager::DetachPrimary() {
         NotifyPart(Primary);
         Primary = nullptr;
     }
+    // Preserve the active-gesture marker: an ensuing release must not target
+    // a replacement primary tree, but must not retain the detached tree either.
+    LeftPointerDownOwner.Clear();
 }
 //---------------------------------------------------------------------------
 bool tTVPLayerManager::GetPrimaryLayerSize(tjs_int &w, tjs_int &h) const {
@@ -1446,6 +1449,12 @@ bool tTVPLayerManager::IsTitleMenuControlPoint(tjs_int x, tjs_int y) {
     return left_title_controls || right_title_controls || far_right_switcher;
 }
 
+bool tTVPLayerManager::IsLeftPointerGestureTarget(tTJSNI_BaseLayer *layer) const {
+    return !LeftPointerGestureActive ||
+        (layer && LeftPointerDownOwner.Type() == tvtObject &&
+         layer->GetOwnerNoAddRef() == LeftPointerDownOwner.AsObjectNoAddRef());
+}
+
 void tTVPLayerManager::PrimaryClick(tjs_int x, tjs_int y) {
     if(SuppressCurrentTitleMenuPointerGesture) {
         if(TVPInputTraceEnabled()) {
@@ -1459,6 +1468,14 @@ void tTVPLayerManager::PrimaryClick(tjs_int x, tjs_int y) {
     tTJSNI_BaseLayer *l = GetClickableLayerAt(x, y);
     TVPTraceLayerHit("click", x, y, l);
     TVPTraceLayersAt(this, "click-stack", x, y);
+    if(!IsLeftPointerGestureTarget(l)) {
+        if(TVPInputTraceEnabled()) {
+            spdlog::info(
+                "LayerManager suppress cross-layer gesture click primary=({}, {})",
+                x, y);
+        }
+        return;
+    }
     if(l /*&& CaptureOwner == l*/) {
         if(TVPIsCgPreviewPresentationLayer(l)) {
             if(TVPInputTraceEnabled()) {
@@ -1487,10 +1504,9 @@ void tTVPLayerManager::PrimaryClick(tjs_int x, tjs_int y) {
             // captured layer's onMouseUp handler.  PrimaryClick is delivered
             // before PrimaryMouseUp on the Godot host, so evaluating the
             // bound expression here as well toggles state twice (open, then
-            // immediately closed).  Only synthesize the click when the
-            // button appeared after mouse-down and therefore does not own the
-            // capture; that case has no matching button mouse-up to dispatch
-            // its expression.
+            // immediately closed). Only synthesize for click-only dispatch or
+            // the original button when it explicitly released capture. A
+            // button revealed by this gesture must not receive its release.
             if(CaptureOwner == l) {
                 if(TVPInputTraceEnabled()) {
                     spdlog::info(
@@ -1527,7 +1543,7 @@ void tTVPLayerManager::PrimaryClick(tjs_int x, tjs_int y) {
 void tTVPLayerManager::PrimaryDoubleClick(tjs_int x, tjs_int y) {
     tTJSNI_BaseLayer *l = GetClickableLayerAt(x, y);
     TVPTraceLayersAt(this, "double-click-stack", x, y);
-    if(l /*&& CaptureOwner == l*/) {
+    if(l && IsLeftPointerGestureTarget(l)) {
         l->FromPrimaryCoordinates(x, y);
         l->FireDoubleClick(x, y);
     }
@@ -1535,6 +1551,10 @@ void tTVPLayerManager::PrimaryDoubleClick(tjs_int x, tjs_int y) {
 //---------------------------------------------------------------------------
 void tTVPLayerManager::PrimaryMouseDown(tjs_int x, tjs_int y,
                                         tTVPMouseButton mb, tjs_uint32 flags) {
+    if(mb == mbLeft) {
+        LeftPointerGestureActive = true;
+        LeftPointerDownOwner.Clear();
+    }
     if(mb == mbLeft && !IsTitleMenuControlPoint(x, y)) {
         tTJSNI_BaseLayer *title_hit = GetClickableLayerAt(x, y);
         if(IsTitleMenuInputState(title_hit) &&
@@ -1559,6 +1579,9 @@ void tTVPLayerManager::PrimaryMouseDown(tjs_int x, tjs_int y,
     TVPTraceLayerHit("down", x, y, l);
     TVPTraceLayersAt(this, "down-stack", x, y);
     SuppressCurrentTitleMenuPointerGesture = false;
+    if(mb == mbLeft && l) {
+        LeftPointerDownOwner = tTJSVariant(l->GetOwnerNoAddRef());
+    }
     if(l) {
         l->FromPrimaryCoordinates(x, y);
         ReleaseCaptureCalled = false;
@@ -1584,6 +1607,8 @@ void tTVPLayerManager::PrimaryMouseDown(tjs_int x, tjs_int y,
 void tTVPLayerManager::PrimaryMouseUp(tjs_int x, tjs_int y, tTVPMouseButton mb,
                                       tjs_uint32 flags) {
     if(mb == mbLeft && SuppressCurrentTitleMenuPointerGesture) {
+        LeftPointerGestureActive = false;
+        LeftPointerDownOwner.Clear();
         if(TVPInputTraceEnabled()) {
             spdlog::info(
                 "LayerManager suppress title repeat mouseup primary=({}, {})",
@@ -1599,6 +1624,29 @@ void tTVPLayerManager::PrimaryMouseUp(tjs_int x, tjs_int y, tTVPMouseButton mb,
         l = GetClickableLayerAt(x, y);
     TVPTraceLayerHit("up", x, y, l);
     TVPTraceLayersAt(this, "up-stack", x, y);
+
+    const bool matching_gesture =
+        mb != mbLeft || IsLeftPointerGestureTarget(l);
+    tTJSVariant pointer_down_owner;
+    if(mb == mbLeft) {
+        // Hold the owner through dispatch, but finish bookkeeping before a
+        // script handler can start another gesture or detach the layer tree.
+        pointer_down_owner = LeftPointerDownOwner;
+        LeftPointerDownOwner.Clear();
+        LeftPointerGestureActive = false;
+    }
+    if(!matching_gesture) {
+        if(TVPInputTraceEnabled()) {
+            spdlog::info(
+                "LayerManager suppress cross-layer gesture mouseup primary=({}, {})",
+                x, y);
+        }
+        if(!TVPIsAnyMouseButtonPressedInShiftStateFlags(flags)) {
+            ReleaseCapture();
+            PrimaryMouseMove(x, y, flags);
+        }
+        return;
+    }
 
     const int orig_x = x;
     const int orig_y = y;
