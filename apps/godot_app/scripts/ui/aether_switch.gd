@@ -46,21 +46,41 @@ func setup(design_tokens, motion_system, initial_value: bool) -> void:
     _sync(initial_value, false)
 
 func _sync(enabled: bool, animate: bool) -> void:
-    var off_track := Color(0.28, 0.29, 0.32, 1.0) if tokens.mode == "dark" else Color(0.72, 0.73, 0.75, 1.0)
-    var track: Color = tokens.accent if enabled else off_track
-    var hover_track: Color = track.lightened(0.055)
-    var pressed_track: Color = track.darkened(0.055)
-    add_theme_stylebox_override("normal", _track_box(track))
-    add_theme_stylebox_override("hover", _track_box(hover_track))
-    add_theme_stylebox_override("pressed", _track_box(pressed_track))
-    add_theme_stylebox_override("hover_pressed", _track_box(hover_track))
-    add_theme_stylebox_override("disabled", _track_box(Color(track.r, track.g, track.b, 0.38)))
+    var dark: bool = tokens.mode == "dark" or tokens.mode == "warm_dark"
+    # Rounded pill track in the app's surface language: a quiet neutral fill
+    # with hairline when off, accent fill with a soft glow when on.
+    var off_fill := Color(
+        tokens.text_primary.r,
+        tokens.text_primary.g,
+        tokens.text_primary.b,
+        0.10 if dark else 0.14
+    )
+    var track_fill: Color = tokens.accent if enabled else off_fill
+    var track_border: Color = tokens.accent.lightened(0.25) if enabled else tokens.separator
+    var style: StyleBoxFlat = tokens.panel(track_fill, 16, track_border, 1)
+    if enabled:
+        style.shadow_color = Color(tokens.accent.r, tokens.accent.g, tokens.accent.b, 0.30)
+        style.shadow_size = 6
+    else:
+        style.shadow_color = Color(tokens.shadow.r, tokens.shadow.g, tokens.shadow.b, 0.10)
+        style.shadow_size = 2
+    style.shadow_offset = Vector2(0, 2)
+    add_theme_stylebox_override("normal", style)
+    add_theme_stylebox_override("hover", _track_variant_box(style, 0.04))
+    add_theme_stylebox_override("pressed", _track_variant_box(style, -0.05))
+    add_theme_stylebox_override("hover_pressed", _track_variant_box(style, 0.04))
+    add_theme_stylebox_override("disabled", _track_variant_box(style, -0.38))
     var target := Vector2(TRACK_SIZE.x - TRACK_INSET - KNOB_SIZE.x, TRACK_INSET) if enabled else Vector2(TRACK_INSET, TRACK_INSET)
     if not animate or motion.reduced_motion:
         knob.position = target
         return
     motion.spring_property(knob, "position", target, 0.30, 1.0)
     _stretch_knob()
+
+func _track_variant_box(base: StyleBoxFlat, lighten: float) -> StyleBoxFlat:
+    var style: StyleBoxFlat = base.duplicate()
+    style.bg_color = base.bg_color.lightened(lighten)
+    return style
 
 func _stretch_knob() -> void:
     if motion.reduced_motion:
@@ -90,10 +110,9 @@ func _press_out() -> void:
 func _animate_knob_scale(target: Vector2, response: float) -> void:
     motion.spring_property(knob, "scale", target, response, 1.0)
 
-func _track_box(fill: Color) -> StyleBoxFlat:
-    var border := Color(1, 1, 1, 0.13) if tokens.mode == "dark" else Color(1, 1, 1, 0.48)
-    var style: StyleBoxFlat = tokens.panel(fill, 16, border, 1)
-    style.shadow_color = Color(tokens.shadow.r, tokens.shadow.g, tokens.shadow.b, 0.16 if tokens.mode == "dark" else 0.06)
-    style.shadow_size = 3 if tokens.mode == "dark" else 2
-    style.shadow_offset = Vector2(0, 1)
+func _track_box(_fill: Color) -> StyleBoxFlat:
+    # Retained for compatibility; the rounded pill built in _sync is the
+    # canonical track style now.
+    var style: StyleBoxFlat = tokens.panel(tokens.accent, 16, tokens.separator, 1)
+    style.shadow_offset = Vector2(0, 2)
     return style
