@@ -3082,8 +3082,10 @@ func _nav_pill_goal(pill: Control, buttons: Array, compact: bool) -> Variant:
         target_size = button_rect.size + Vector2(6.0, 6.0)
         target_pos = button_rect.position - parent_rect.position - Vector2(3.0, 3.0)
     else:
-        target_size = Vector2(maxf(44.0, parent.size.x - 12.0), button_rect.size.y)
-        target_pos = Vector2(6.0, button_rect.position.y - parent_rect.position.y)
+        # Wrap the whole row content: the pill extends past the button rect on
+        # every side so the icon and label sit fully inside the highlight.
+        target_size = button_rect.size + Vector2(12.0, 6.0)
+        target_pos = button_rect.position - parent_rect.position - Vector2(6.0, 3.0)
     return {"pos": target_pos, "size": target_size}
 
 func _follow_nav_pills() -> void:
@@ -3157,8 +3159,9 @@ func _slide_pill_to_button(pill: Control, axis: int, target_button: Button) -> v
         target_size = button_rect.size + Vector2(6.0, 6.0)
         target_pos = button_rect.position - parent_rect.position - Vector2(3.0, 3.0)
     else:
-        target_size = Vector2(maxf(44.0, host.size.x - 12.0), button_rect.size.y)
-        target_pos = Vector2(6.0, button_rect.position.y - parent_rect.position.y)
+        # Same wrap-around geometry as _nav_pill_goal's expanded branch.
+        target_size = button_rect.size + Vector2(12.0, 6.0)
+        target_pos = button_rect.position - parent_rect.position - Vector2(6.0, 3.0)
     if ui_motion.reduced_motion:
         pill.position = target_pos
         pill.size = target_size
@@ -5270,16 +5273,17 @@ func _rebuild_settings_view() -> void:
 func _cascade_settings_rows(groups: Array) -> void:
     if not is_instance_valid(settings_view) or not settings_view.visible:
         return
-    var section_delay := 0.08
+    var section_delay := 0.06
     for rows in groups:
         if rows == null or not is_instance_valid(rows):
             continue
         var row_delay := section_delay
         for row in rows.get_children():
             if row is Control and is_instance_valid(row) and not row.is_queued_for_deletion():
-                ui_motion.reveal(row, row_delay)
-                row_delay += 0.028
-        section_delay += 0.045
+                # Livelier reveal: fade + scale spring pop per row.
+                ui_motion.spring_reveal(row, row_delay)
+                row_delay += 0.024
+        section_delay += 0.04
 
 func _application_version_text() -> String:
     return str(ProjectSettings.get_setting("application/config/version", "development"))
@@ -7846,18 +7850,18 @@ func _animate_shell_route(outgoing: Control, incoming: Control, lift: bool = tru
 func _cascade_home_cards() -> void:
     if not is_instance_valid(home_view) or not home_view.visible:
         return
-    # Slow recursive stagger level 1: header elements
+    # Fast cascade level 1: header elements
     if is_instance_valid(home_header_box):
         var header_index := 0
         for child in home_header_box.get_children():
             if child is Control and is_instance_valid(child) and not child.is_queued_for_deletion():
-                ui_motion.reveal(child, 0.06 + 0.07 * float(header_index))
+                ui_motion.reveal(child, 0.04 + 0.05 * float(header_index))
                 header_index += 1
-    # Level 2: cards fan in one after another with spring reveal
+    # Level 2: cards fan in quickly with spring reveal
     if home_library_mode == "video" and video_list != null and is_instance_valid(video_list):
-        ui_motion.cascade_children(video_list, 0.06, 0.26)
+        ui_motion.cascade_children(video_list, 0.035, 0.14)
     elif game_list != null and is_instance_valid(game_list):
-        ui_motion.cascade_children(game_list, 0.06, 0.26)
+        ui_motion.cascade_children(game_list, 0.035, 0.14)
 
 func _show_home() -> void:
     _show_library("game")

@@ -130,8 +130,9 @@ func navigation_button(button: Button, selected: bool = false) -> Button:
     return button
 
 func ghost_nav_button(button: Button, selected: bool = false) -> Button:
-    # Phone header / collapsed rail nav: fully transparent, the sliding jelly
-    # pill indicator is the only selection visual — no boxes, no borders.
+    # Sliding rail nav: fully transparent rows, the jelly pill indicator is the
+    # only selection visual — no boxes, no borders. Content margins keep the
+    # icon and label inset so the pill fully wraps them on every side.
     _prepare_button(button, 15)
     var foreground: Color = tokens.accent if selected else tokens.text_secondary
     button.add_theme_color_override("font_color", foreground)
@@ -143,7 +144,10 @@ func ghost_nav_button(button: Button, selected: bool = false) -> Button:
     button.add_theme_color_override("icon_pressed_color", tokens.accent)
     button.add_theme_color_override("icon_focus_color", foreground)
     for state in ["normal", "hover", "pressed", "hover_pressed", "focus", "disabled"]:
-        button.add_theme_stylebox_override(state, tokens.panel(Color.TRANSPARENT, 14))
+        var row: StyleBoxFlat = tokens.panel(Color.TRANSPARENT, 14)
+        row.content_margin_left = 12
+        row.content_margin_right = 12
+        button.add_theme_stylebox_override(state, row)
     return button
 
 func disclosure_button(button: Button) -> Button:

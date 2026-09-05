@@ -407,6 +407,38 @@ func reveal(control: Control, delay: float = 0.0) -> void:
         tween.tween_property(control, "scale", REST_SCALE, duration).set_delay(delay).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
     tween.chain().tween_callback(func(): _finish_tween_key(reveal_key))
 
+func spring_reveal(control: Control, delay: float = 0.0) -> void:
+    # Livelier cascade step: fade-in paired with an under-damped scale spring
+    # so each row pops past rest and wobbles back into place.
+    if control == null or not is_instance_valid(control):
+        return
+    _stop_tweens(control)
+    active_springs.erase(_motion_key(control, "scale"))
+    _update_pivot(control)
+    control.modulate.a = 0.0
+    control.scale = REST_SCALE if reduced_motion else Vector2(0.93, 0.93)
+    var reveal_key := _tween_key(control, "reveal")
+    var tween := control.create_tween()
+    active_tweens[reveal_key] = tween
+    var duration := 0.10 if reduced_motion else 0.16
+    tween.tween_property(control, "modulate:a", 1.0, duration).set_delay(delay).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+    tween.tween_callback(func(): _finish_tween_key(reveal_key))
+    if reduced_motion:
+        control.scale = REST_SCALE
+        return
+    var control_ref: WeakRef = weakref(control)
+    var tree := control.get_tree() if control.is_inside_tree() else null
+    if tree == null:
+        spring_property(control, "scale", REST_SCALE, 0.34, 0.58)
+        return
+    tree.create_timer(delay).timeout.connect(
+        func():
+            var current_control: Variant = control_ref.get_ref()
+            if current_control != null and is_instance_valid(current_control):
+                spring_property(current_control, "scale", REST_SCALE, 0.34, 0.58),
+        CONNECT_ONE_SHOT
+    )
+
 func cascade_children(parent: Node, step: float = 0.045, base_delay: float = 0.0, max_items: int = 14) -> void:
     if parent == null or not is_instance_valid(parent):
         return
