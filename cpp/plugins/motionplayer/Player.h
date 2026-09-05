@@ -717,6 +717,11 @@ namespace motion {
         bool _autoProgressHasLastTick = false;
         bool _autoProgressRegistered = false;
         bool _autoProgressRendering = false;
+        // A selector hover clears the retained target before repainting it.
+        // Do not let the normal raster throttle drop that repaint, or the
+        // cleared target can be presented as a one-frame black/transparent
+        // flash while the pointer moves between buttons.
+        bool _forceMotionRasterRender = false;
         tTJSVariant _presentationHoldLayer;
         tjs_uint64 _presentationHoldUntilTick = 0;
         tjs_uint64 _presentationHoldLastTick = 0;

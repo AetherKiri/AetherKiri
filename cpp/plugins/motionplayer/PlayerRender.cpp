@@ -8748,8 +8748,17 @@ namespace motion {
             }
             return false;
         }
-        TVPGodotGpuBatchScope gpuBatch(
-            _runtime->isEmoteMode && _runtime->renderCommands.size() > 1);
+        // A selector hover can call renderToLayer directly from the input
+        // event, before Window::UpdateContent has opened its outer batch.  If
+        // this scope is restricted to E-mote, every PSB button draw is
+        // submitted as a separate Godot GPU transaction; on the title page
+        // that turns a harmless 15-command repaint into a visible stall and
+        // can expose the cleared intermediate surface for one frame.  The
+        // bridge preserves ordering and handles nested scopes, so batch every
+        // multi-command motion render here (it is a no-op on non-Godot
+        // backends).  This keeps the clear + all compositing operations
+        // atomic from the host presenter's point of view.
+        TVPGodotGpuBatchScope gpuBatch(_runtime->renderCommands.size() > 1);
 
         // The same evaluated command list can be submitted through
         // renderToLayer, SeparateLayerAdaptor, and D3DAdaptor during a KAG
@@ -12615,7 +12624,8 @@ namespace motion {
             rasterNowUs - _runtime->lastMotionRasterPublishUs <
                 rasterThrottleUs;
         auto *cachedRasterLayer = resolveNativeLayer(renderLayerObject);
-        if(!_runtime->isEmoteMode && !skipUpdate && rasterThrottleUs != 0 &&
+        if(!_forceMotionRasterRender && !_runtime->isEmoteMode && !skipUpdate &&
+           rasterThrottleUs != 0 &&
            sameRasterTarget && cachedRasterLayer &&
            cachedRasterLayer->GetHasImage()) {
             _runtime->lastCanvas =
