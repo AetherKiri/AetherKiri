@@ -1217,6 +1217,16 @@ bool TextRenderBase::render(tTJSString text, int autoIndent, int diff, int all,
         if (!m_options.ignoreDelay) synchronizeTiming(value);
         break;
       }
+      case 'n': {
+        // KAGEX/krkrz-compatible logical line break: %n[lines];.
+        int lines = 0;
+        read_integer(text, i, lines);
+        if (lines == 0) lines = 1;
+        flush();
+        performLinebreak();
+        for (int line = 0; line < lines; ++line) performLinebreak();
+        break;
+      }
       case 'r': m_state = m_default; m_fontDirty = true; break;
       case '0': case '1': case '2': case '3': case '4':
       case '5': case '6': case '7': case '8': case '9': {
