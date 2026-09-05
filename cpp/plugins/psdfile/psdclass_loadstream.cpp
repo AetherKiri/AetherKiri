@@ -28,11 +28,11 @@ public:
         }
 
         const size_t available = total_size_ - offset;
-        const size_t requested = std::min(length, available);
+        const size_t requested = (std::min)(length, available);
         const size_t max_read =
-            static_cast<size_t>(std::numeric_limits<tjs_uint>::max());
+            static_cast<size_t>((std::numeric_limits<tjs_uint>::max)());
         const tjs_uint read_size =
-            static_cast<tjs_uint>(std::min(requested, max_read));
+            static_cast<tjs_uint>((std::min)(requested, max_read));
 
         // Seek and Read form one operation. Parser sub-readers share this
         // source and may be consumed from different layer decode jobs.
@@ -60,7 +60,7 @@ bool PSD::loadStream(const ttstr &filename) {
 
     const tjs_uint64 stream_size = stream->GetSize();
     if(stream_size == 0 ||
-       stream_size > static_cast<tjs_uint64>(std::numeric_limits<int>::max())) {
+       stream_size > static_cast<tjs_uint64>((std::numeric_limits<int>::max)())) {
         delete stream;
         return false;
     }

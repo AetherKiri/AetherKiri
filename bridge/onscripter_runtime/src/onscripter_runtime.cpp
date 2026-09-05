@@ -72,6 +72,15 @@ union ONScripterGlobalStorage {
 
 ONScripterGlobalStorage ons;
 
+#if defined(_MSC_VER)
+// MSVC mangles global variable names together with their type. The built-in
+// layer effects declare `extern ONScripter ons` (class type) while this
+// storage is declared through the ONScripterGlobalStorage union, so alias
+// the class-typed symbol onto the union-typed definition for the linker.
+#pragma comment(linker, \
+    "/alternatename:?ons@@3VONScripter@@A=?ons@@3TONScripterGlobalStorage@@A")
+#endif
+
 namespace {
 
 std::mutex g_present_surface_mutex;
@@ -484,7 +493,7 @@ std::string EnsureTrailingSeparator(const std::string &path) {
     if (last == '/' || last == '\\') {
         return path;
     }
-    return path + fs::path::preferred_separator;
+    return path + static_cast<char>(fs::path::preferred_separator);
 }
 
 std::string StableGameDirectoryName(const fs::path &root) {

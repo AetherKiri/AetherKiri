@@ -2140,6 +2140,7 @@ uint additive_alpha_to_alpha(uint c) {
     uint alpha = (c >> 24) & 0xffu;
     if (alpha == 0u) return c & 0xff000000u;
     uint r = min((c & 0xffu) * 255u / alpha, 255u);
+)GLSL" R"GLSL(
     uint g = min(((c >> 8) & 0xffu) * 255u / alpha, 255u);
     uint b = min(((c >> 16) & 0xffu) * 255u / alpha, 255u);
     return (c & 0xff000000u) | r | (g << 8) | (b << 16);
@@ -3357,6 +3358,7 @@ uint opacity_on_opacity(uint dest_alpha, uint src_alpha) {
     return min((255u * 255u * src_alpha) / denom, 255u);
 }
 
+)GLSL" R"GLSL(
 uint negative_mul_alpha(uint dest_alpha, uint src_alpha) {
     return 255u - (((255u - dest_alpha) * (255u - src_alpha)) / 255u);
 }
@@ -4005,6 +4007,7 @@ void main() {
             if (mask_val <= 0.00001) {
                 continue;
             }
+)GLSL" R"GLSL(
             vec4 src = load_minified(
                 src_limit, src_pos_f, source_dx, source_dy,
                 preserve_detail);

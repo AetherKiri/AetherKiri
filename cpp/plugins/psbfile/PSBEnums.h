@@ -90,7 +90,7 @@ namespace PSB {
      */
     enum class PSBSpec : unsigned char {
         // Do not have spec
-        None = std::numeric_limits<unsigned char>::min(),
+        None = (std::numeric_limits<unsigned char>::min)(),
         // Unity and other
         Common,
         // Kirikiri
@@ -118,7 +118,7 @@ namespace PSB {
         // N Wii (Revolution)
         Revo,
 
-        Other = std::numeric_limits<unsigned char>::max(),
+        Other = (std::numeric_limits<unsigned char>::max)(),
     };
 
     enum class PSBImageFormat {

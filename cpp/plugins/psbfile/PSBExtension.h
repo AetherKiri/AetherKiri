@@ -87,10 +87,10 @@ namespace PSB::Extension {
 
         // 判断点是否在矩形内
         [[nodiscard]] bool Contains(float x, float y) const {
-            float effectiveLeft = std::min(X, X + Width);
-            float effectiveRight = std::max(X, X + Width);
-            float effectiveTop = std::min(Y, Y + Height);
-            float effectiveBottom = std::max(Y, Y + Height);
+            float effectiveLeft = (std::min)(X, X + Width);
+            float effectiveRight = (std::max)(X, X + Width);
+            float effectiveTop = (std::min)(Y, Y + Height);
+            float effectiveBottom = (std::max)(Y, Y + Height);
 
             return (x >= effectiveLeft) && (x < effectiveRight) &&
                 (y >= effectiveTop) && (y < effectiveBottom);

@@ -133,7 +133,7 @@ else()
     )
 endif()
 
-target_include_directories(${PROJECT_NAME} PUBLIC ${KRKR2PLUGIN_PATH} ${KRKR2PLUGIN_PATH}/simplebinder})
+target_include_directories(${PROJECT_NAME} PUBLIC ${KRKR2PLUGIN_PATH} ${KRKR2PLUGIN_PATH}/simplebinder)
 target_link_libraries(${PROJECT_NAME} PUBLIC krkr2core)
 
 add_subdirectory(psdfile)

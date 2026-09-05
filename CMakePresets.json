@@ -13,6 +13,7 @@
       "cacheVariables": {
         "WINDOWS": true,
         "VCPKG_TARGET_TRIPLET": "x64-windows-static-md",
+        "BUILD_TOOLS": false,
         "CMAKE_EXPORT_COMPILE_COMMANDS": true
       },
       "condition": {

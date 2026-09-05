@@ -91,10 +91,13 @@ if(TARGET aetherinternal_artemis_lua)
     set(AETHERKIRI_ARTEMIS_LUA_PREFIX_HEADER
         "${CMAKE_CURRENT_SOURCE_DIR}/src/artemis_lua_symbol_prefix.h")
     if(MSVC)
+        # No quotes around the path: recent MSVC versions mishandle the
+        # escaped quotes Ninja emits for embedded quotes ("No such file"),
+        # and this project already requires space-free build paths.
         target_compile_options(aetherinternal_artemis_lua PRIVATE
-            /FI"${AETHERKIRI_ARTEMIS_LUA_PREFIX_HEADER}")
+            /FI${AETHERKIRI_ARTEMIS_LUA_PREFIX_HEADER})
         target_compile_options(engine_api PRIVATE
-            /FI"${AETHERKIRI_ARTEMIS_LUA_PREFIX_HEADER}")
+            /FI${AETHERKIRI_ARTEMIS_LUA_PREFIX_HEADER})
     else()
         target_compile_options(aetherinternal_artemis_lua PRIVATE
             -include "${AETHERKIRI_ARTEMIS_LUA_PREFIX_HEADER}")

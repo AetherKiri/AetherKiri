@@ -122,10 +122,10 @@ namespace libgdiplus {
             }
 
             // 正常计算并集
-            float minX = min(a.X, b.X);
-            float minY = min(a.Y, b.Y);
-            float maxX = max(a.GetRight(), b.GetRight());
-            float maxY = max(a.GetBottom(), b.GetBottom());
+            float minX = (min)(a.X, b.X);
+            float minY = (min)(a.Y, b.Y);
+            float maxX = (max)(a.GetRight(), b.GetRight());
+            float maxY = (max)(a.GetBottom(), b.GetBottom());
 
             float width = maxX - minX;
             float height = maxY - minY;

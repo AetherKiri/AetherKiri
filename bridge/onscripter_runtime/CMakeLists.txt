@@ -106,8 +106,11 @@ target_include_directories(aether_onscripter_runtime
 )
 
 if(MSVC)
+    # No quotes around the path: recent MSVC versions mishandle the escaped
+    # quotes Ninja emits for embedded quotes ("No such file"), and this
+    # project already requires space-free build paths.
     target_compile_options(aether_onscripter_runtime PRIVATE
-        /FI"${CMAKE_CURRENT_SOURCE_DIR}/src/onscripter_host_shim.h"
+        /FI${CMAKE_CURRENT_SOURCE_DIR}/src/onscripter_host_shim.h
         /W0)
 else()
     target_compile_options(aether_onscripter_runtime PRIVATE
@@ -116,6 +119,15 @@ else()
         -Wno-invalid-source-encoding
         -Wno-unused-result)
 endif()
+
+# gbk2utf16.cpp and sjis2utf16.cpp embed their conversion tables inside
+# legacy GBK/Shift-JIS string literals. Clang and GCC accept the raw bytes
+# as-is, so keep the same behavior on MSVC by disabling the /utf-8 source
+# validation for these two translation units instead of transcoding the
+# tables and changing their byte content.
+set_source_files_properties("${ONSCRIPTER_YURI_SOURCE_DIR}/gbk2utf16.cpp"
+                            "${ONSCRIPTER_YURI_SOURCE_DIR}/sjis2utf16.cpp"
+    PROPERTIES COMPILE_OPTIONS "/validate-charset-")
 
 target_link_libraries(aether_onscripter_runtime
     # This is a static implementation library. CMake still forwards PRIVATE

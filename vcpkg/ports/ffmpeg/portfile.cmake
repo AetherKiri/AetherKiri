@@ -4,6 +4,8 @@ vcpkg_from_github(
     REF "n${VERSION}"
     SHA512 c72f4062aecc16d8b2b1e8678d5efe3af4cfaa0cc7c0997052248f9e499e60c2463acf07877cf3b78b246ce3e8078cb043e8d97e90a6b50d06af32ff7369a788
     HEAD_REF master
+    PATCHES
+        0001-configure-detect-msvc-in-any-console-locale.patch
 )
 
 if(SOURCE_PATH MATCHES " ")
@@ -16,7 +18,7 @@ if (VCPKG_TARGET_ARCHITECTURE STREQUAL "x86" OR VCPKG_TARGET_ARCHITECTURE STREQU
     vcpkg_add_to_path("${NASM_EXE_PATH}")
 endif()
 
-set(OPTIONS "--enable-pic --disable-doc --enable-debug=3 --enable-runtime-cpudetect --disable-autodetect --enable-iconv")
+set(OPTIONS "--enable-pic --disable-doc --enable-runtime-cpudetect --disable-autodetect --enable-iconv")
 
 if(VCPKG_TARGET_IS_MINGW)
     if(VCPKG_TARGET_ARCHITECTURE STREQUAL "x86")
@@ -57,6 +59,11 @@ if(VCPKG_DETECTED_MSVC)
     string(REGEX REPLACE "(^| )-RTC1( |$)" " " VCPKG_COMBINED_C_FLAGS_DEBUG "${VCPKG_COMBINED_C_FLAGS_DEBUG}")
     string(REGEX REPLACE "(^| )-Od( |$)" " " VCPKG_COMBINED_C_FLAGS_DEBUG "${VCPKG_COMBINED_C_FLAGS_DEBUG}")
     string(REGEX REPLACE "(^| )-Ob0( |$)" " " VCPKG_COMBINED_C_FLAGS_DEBUG "${VCPKG_COMBINED_C_FLAGS_DEBUG}")
+else()
+    # --enable-debug=3 injects "-g3", which gcc/clang accept but MSVC rejects
+    # (unknown option), breaking every configure probe. MSVC debug info comes
+    # from the -Z7 flag that ffmpeg's msvc_flags filter already applies.
+    string(APPEND OPTIONS " --enable-debug=3")
 endif()
 
 string(APPEND VCPKG_COMBINED_C_FLAGS_DEBUG " -I \"${CURRENT_INSTALLED_DIR}/include\"")
@@ -197,13 +204,23 @@ list(APPEND FFMPEG_PKGCONFIG_MODULES libswresample)
 set(OPTIONS "${OPTIONS} --enable-swscale")
 set(ENABLE_SWSCALE ON)
 list(APPEND FFMPEG_PKGCONFIG_MODULES libswscale)
-set(OPTIONS_CROSS "--enable-cross-compile")
-
 set(OPTIONS "${OPTIONS} --disable-ffmpeg --enable-small --disable-ffplay --disable-ffprobe --disable-avdevice --disable-programs")
+# The gfxcapture filter ships a prebuilt WinRT object compiled with /MT;
+# linking it into /MD consumers trips LNK2038. Nothing in the product uses
+# a screen-capture filter, so disable it (matches upstream vcpkg).
+string(APPEND OPTIONS " --disable-filter=gfxcapture")
 
-# ffmpeg needs --cross-prefix option to use appropriate tools for cross-compiling.
-if(VCPKG_DETECTED_CMAKE_C_COMPILER MATCHES "([^\/]*-)gcc$")
-    string(APPEND OPTIONS_CROSS " --cross-prefix=${CMAKE_MATCH_1}")
+# Only enable cross-compilation mode when actually cross-compiling. On a
+# native MSVC host, ffmpeg's host compiler probes would otherwise invoke
+# cl.exe with gcc-style "-o" flags, which modern MSVC versions reject.
+if(VCPKG_CROSSCOMPILING)
+    set(OPTIONS_CROSS "--enable-cross-compile")
+    # ffmpeg needs --cross-prefix option to use appropriate tools for cross-compiling.
+    if(VCPKG_DETECTED_CMAKE_C_COMPILER MATCHES "([^\/]*-)gcc$")
+        string(APPEND OPTIONS_CROSS " --cross-prefix=${CMAKE_MATCH_1}")
+    endif()
+else()
+    set(OPTIONS_CROSS "")
 endif()
 
 if(VCPKG_TARGET_ARCHITECTURE STREQUAL "x64")

@@ -151,6 +151,9 @@ set(KRKR2PLUGIN_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cpp/plugins)
 
 if(MSVC)
     add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/EHsc>" "/MP" "/utf-8")
+    # The codebase relies on std::min/std::max and its own helpers; the
+    # legacy min/max macros from <windows.h> break those call sites.
+    add_compile_definitions(NOMINMAX)
     add_link_options(
         "/ignore:4099"
         "$<$<CONFIG:Debug>:/INCREMENTAL>"

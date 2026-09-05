@@ -10,6 +10,15 @@
 #include "tjsDictionary.h"
 #include "ScriptMgnIntf.h"
 
+// MSVC builds define WIN32 globally, which makes JXRMeta.h skip its legacy
+// specstrings include, and MSVC's modern sal.h never defines the *_win
+// annotations. Provide the minimal set the JXR headers reference.
+#ifndef __in_win
+#define __in_win
+#endif
+#ifndef __out_win
+#define __out_win
+#endif
 #include <jxrlib/JXRGlue.h>
 
 static tjs_uint32 GetStride(const tjs_uint32 width, const tjs_uint32 bitCount) {

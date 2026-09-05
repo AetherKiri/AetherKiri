@@ -79,3 +79,13 @@ if(APPLE)
         target_link_libraries(${PROJECT_NAME} PRIVATE ${LIBB2_LIBRARY})
     endif()
 endif()
+
+if(WIN32)
+    # The static libarchive package on Windows requires liblzma for the xz
+    # filter and 7z/zip readers, but FindLibArchive does not propagate that
+    # dependency either.
+    find_library(LIBLZMA_LIBRARY NAMES lzma liblzma)
+    if(LIBLZMA_LIBRARY)
+        target_link_libraries(${PROJECT_NAME} PRIVATE ${LIBLZMA_LIBRARY})
+    endif()
+endif()

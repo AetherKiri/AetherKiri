@@ -1,0 +1,132 @@
+name: Windows Build
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    paths-ignore:
+      - 'doc/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+env:
+  GODOT_RELEASE: 4.7-stable
+
+jobs:
+  windows:
+    name: Build Windows Native and Smoke Test
+    runs-on: windows-latest
+    timeout-minutes: 340
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Initialize public runtime packages
+        shell: pwsh
+        run: |
+          git submodule update --init --depth 1 packages/OnscripterYuri
+          git -c submodule.packages/psdfile.url=https://github.com/AetherKiri/psdfile.git submodule update --init --recursive --depth 1 packages/psdfile
+
+      - name: Bootstrap vcpkg
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path .devtools | Out-Null
+          if (-not (Test-Path .devtools/vcpkg/.git)) {
+            git clone https://github.com/microsoft/vcpkg.git .devtools/vcpkg
+          }
+          & .devtools/vcpkg/bootstrap-vcpkg.bat -disableMetrics
+          "VCPKG_ROOT=$PWD\.devtools\vcpkg" >> $env:GITHUB_ENV
+
+      - name: Restore vcpkg downloads cache
+        uses: actions/cache@v5
+        with:
+          path: .devtools/vcpkg/downloads
+          key: windows-vcpkg-downloads-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg/ports/**') }}
+          restore-keys: |
+            windows-vcpkg-downloads-
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v5
+        with:
+          path: vcpkg-bincache
+          key: windows-vcpkg-bincache-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg/ports/**') }}
+          restore-keys: |
+            windows-vcpkg-bincache-
+
+      - name: Configure Windows Release
+        shell: pwsh
+        env:
+          VCPKG_BINARY_SOURCES: files,${{ github.workspace }}\vcpkg-bincache,readwrite
+        run: cmake --preset "Windows Release Config"
+
+      - name: Build Windows Release
+        shell: pwsh
+        run: cmake --build --preset "Windows Release Build" --parallel
+
+      - name: Build Windows Debug
+        shell: pwsh
+        run: cmake --build --preset "Windows Debug Build" --parallel
+
+      - name: Verify GDExtension binaries
+        shell: pwsh
+        run: |
+          foreach ($kind in @("debug", "release")) {
+            $bin = "apps/godot_app/bin/windows/$kind"
+            if (-not (Test-Path "$bin/aether_kiri_godot.dll")) {
+              throw "missing $bin/aether_kiri_godot.dll"
+            }
+            if (-not (Test-Path "$bin/engine_api.dll")) {
+              throw "missing $bin/engine_api.dll"
+            }
+          }
+          Get-ChildItem apps/godot_app/bin/windows | Select-Object Name, Length
+
+      - name: Install Godot export tools
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path .godot | Out-Null
+          $zip = "$env:RUNNER_TEMP\godot-win64.zip"
+          curl.exe --fail --location --retry 5 --retry-delay 5 `
+            -o $zip `
+            "https://github.com/godotengine/godot-builds/releases/download/$env:GODOT_RELEASE/Godot_v$($env:GODOT_RELEASE)_win64.exe.zip"
+          Expand-Archive -Path $zip -DestinationPath .godot -Force
+          $exe = Get-ChildItem .godot -Filter "*_win64.exe" |
+            Where-Object { $_.Name -notmatch "console" } |
+            Select-Object -First 1
+          if (-not $exe) { throw "Godot Windows binary not found after unzip" }
+          "GODOT_BIN=$($exe.FullName)" >> $env:GITHUB_ENV
+
+      - name: Run Godot headless smoke test
+        shell: pwsh
+        env:
+          AETHERKIRI_SMOKE_GAME: ${{ github.workspace }}/tests/fixtures/onscripter_smoke
+        run: |
+          # The Godot editor binary is a debug build, so it loads the debug
+          # GDExtension from bin/windows/debug.
+          $log = & $env:GODOT_BIN --headless --path apps/godot_app --script res://scripts/smoke_test.gd 2>&1
+          $log | ForEach-Object { Write-Host $_ }
+          $text = $log -join "`n"
+          if ($text -notmatch "smoke ok") {
+            throw "Godot smoke test did not report 'smoke ok'"
+          }
+          # Known Windows issue: the process exits 0xC0000005 during engine
+          # teardown even after a successful smoke run. Only a missing/failed
+          # smoke run fails this step.
+
+      - name: Upload GDExtension binaries
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-gdextension
+          path: apps/godot_app/bin/windows
+          retention-days: 7
