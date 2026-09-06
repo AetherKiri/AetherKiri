@@ -199,10 +199,21 @@ namespace {
             if(level < TVP_COMPACT_LEVEL_MINIMIZE) {
                 return;
             }
-            // Drop only process-level warm-cache ownership. Active players
-            // retain their own shared_ptrs until the current frame finishes.
-            clearSharedMotionSourceBitmapCache();
-            motion::ResourceManager::trimStaticStateForMemoryPressure();
+            // A MINIMIZE compaction is a reclaim hint, not a host-session
+            // boundary. Dropping the process-level Motion caches here makes
+            // the next scene transition synchronously reparse its PSB and
+            // decode every source again on the script thread. That is exactly
+            // the multi-hundred-millisecond hitch seen when a new
+            // MotionResourceManager is created during an EnvObjectWorld
+            // transition. Both caches already have bounded policies (the
+            // source bitmap cache is capped at 256 MiB and the warm module
+            // cache keeps only a small number of modules), so retain them for
+            // ordinary pressure notifications and release them only for the
+            // explicit MAX compaction level.
+            if(level >= TVP_COMPACT_LEVEL_MAX) {
+                clearSharedMotionSourceBitmapCache();
+                motion::ResourceManager::trimStaticStateForMemoryPressure();
+            }
         }
     };
 

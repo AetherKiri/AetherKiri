@@ -1780,12 +1780,13 @@ void TVPAutoMountSiblingXP3Archives() {
     }
 
     if(archiveProject) {
-        // The explicitly selected archive is the executable's resource
-        // overlay. Mount every directory after its siblings so bare-name
-        // lookups (for example scenedata.sdb) resolve to the selected EXE/XP3,
-        // not to an older external patch archive.
+        // Keep a selected patch archive as a priority overlay. A selected
+        // base archive must stay below sibling patch*.xp3 overlays; otherwise
+        // the priority pass would move the base archive after the patches.
+        const bool selectedProjectIsPatch =
+            TVPIsPatchArchiveName(projBaseName.AsStdString());
         TVPMountArchiveAutoPaths(
-            TVPNormalizeStorageName(projDir), true,
+            TVPNormalizeStorageName(projDir), selectedProjectIsPatch,
             TJS_W("selected project"));
     }
 }
