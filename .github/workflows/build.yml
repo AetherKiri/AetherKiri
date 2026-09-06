@@ -139,6 +139,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build pkg-config autoconf autoconf-archive automake libtool gettext bison flex curl unzip zip zstd ccache jq mono-complete
+          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
 
       - name: Restore ccache
         id: restore-ccache
@@ -447,6 +448,7 @@ jobs:
           brew install cmake ninja pkg-config autoconf automake autoconf-archive libtool gettext coreutils bison nasm ccache mono
           echo "$(brew --prefix gettext)/bin" >> $GITHUB_PATH
           echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
 
       - name: Install Godot export tools
         run: |
@@ -726,6 +728,7 @@ jobs:
           brew install cmake ninja pkg-config autoconf automake autoconf-archive libtool gettext coreutils bison nasm ccache mono
           echo "$(brew --prefix gettext)/bin" >> $GITHUB_PATH
           echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - name: Install Godot export tools
         run: |
@@ -982,6 +985,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build pkg-config autoconf autoconf-archive automake libtool gettext bison flex curl unzip zip zstd ccache jq python3 mono-complete
+          rustup target add wasm32-unknown-unknown
 
       - name: Set up Node
         uses: actions/setup-node@v6

@@ -84,6 +84,8 @@ option(BUILD_GODOT_EXTENSION "build Godot GDExtension host library" ON)
 option(BUILD_GPU_BRIDGE "build legacy external GPU bridge renderer" OFF)
 option(AETHERKIRI_ENABLE_ONSCRIPTER
        "enable the bundled OnscripterYuri runtime" ON)
+option(AETHERKIRI_ENABLE_SIGLUS
+       "enable the bundled siglus_rs runtime (requires a Rust toolchain)" ON)
 option(AETHERKIRI_ENABLE_MINORI
        "enable the independent Rust Minori runtime" ON)
 option(AETHERKIRI_ENABLE_CODE_OBFUSCATION
@@ -213,6 +215,11 @@ endif()
 if(AETHERKIRI_ENABLE_ONSCRIPTER AND
    (BUILD_GODOT_EXTENSION OR AETHERKIRI_BUILD_NATIVE_ONSCRIPTER_TESTS))
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/onscripter_runtime)
+endif()
+if(AETHERKIRI_ENABLE_SIGLUS AND BUILD_GODOT_EXTENSION AND
+   NOT (WEB OR EMSCRIPTEN))
+    # Web stays excluded until the wasm host path is designed (phase 5).
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/siglus_runtime)
 endif()
 # The Rust provider has targets for Linux, Apple, Android, and Emscripten.
 # Keep it out of unsupported native targets, but do not make Linux the only

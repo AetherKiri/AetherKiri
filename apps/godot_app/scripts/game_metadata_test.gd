@@ -43,6 +43,13 @@ func _init() -> void:
     var exe_only := GameMetadata.inspect(exe_only_root)
     _expect_equal(String(exe_only.launchFile), "game.exe", "KiriKiri executable fallback")
 
+    for marker in ["Gameexe.ini", "Gameexe.dat", "Scene.pck"]:
+        var siglus_root := fixture_root.path_join("siglus_" + marker.replace(".", "_"))
+        DirAccess.make_dir_recursive_absolute(siglus_root)
+        _write(siglus_root.path_join(marker), "siglus fixture")
+        var siglus := GameMetadata.inspect(siglus_root)
+        _expect_equal(String(siglus.engine), "siglus", "Siglus marker %s" % marker)
+
     _remove_tree(fixture_root)
     if failures == 0:
         print("game_metadata_test: PASS")

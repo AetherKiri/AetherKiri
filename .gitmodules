@@ -11,3 +11,6 @@
 [submodule "packages/tjs2Decompiler"]
 	path = packages/tjs2Decompiler
 	url = git@github.com:AetherKiri/tjs2Decompiler.git
+[submodule "packages/siglus_rs"]
+	path = packages/siglus_rs
+	url = https://github.com/AetherKiri/siglus_rs.git

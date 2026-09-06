@@ -22,7 +22,14 @@ static func inspect(path: String) -> Dictionary:
 
     var candidates: PackedStringArray = []
     var files := _file_names(root)
-    if files.has("nscript.dat") or files.has("0.txt") or _has_prefix(files, "onscript.nt"):
+    if (
+        files.has("0.txt")
+        or files.has("00.txt")
+        or files.has("nscr_sec.dat")
+        or files.has("nscript.___")
+        or files.has("nscript.dat")
+        or _has_prefix(files, "onscript.nt")
+    ):
         result.engine = RUNTIME_ONSCRIPTER
         result.signals.append("onscript-marker")
     elif files.has("system.ini") and _is_artemis_package(
@@ -40,9 +47,13 @@ static func inspect(path: String) -> Dictionary:
         var save_path := _value_after(ini, "SAVEPATH")
         if not save_path.is_empty():
             candidates.append(save_path.replace("\\\\", "/").get_file())
-    elif files.has("gameexe.dat"):
+    elif (
+        files.has("gameexe.ini")
+        or files.has("gameexe.dat")
+        or files.has("scene.pck")
+    ):
         result.engine = RUNTIME_SIGLUS
-        result.signals.append("siglus-gameexe")
+        result.signals.append("siglus-marker")
     else:
         result.signals.append("kirikiri-xp3-or-default")
 

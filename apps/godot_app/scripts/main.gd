@@ -1552,6 +1552,7 @@ const POINTER_MOD_CANCEL := 1 << 30
 const KEY_MOD_CONTROL := 0x04
 const RUNTIME_KIRIKIRI := "kirikiri"
 const RUNTIME_ONSCRIPTER := "onscripter"
+const RUNTIME_SIGLUS := "siglus"
 const RUNTIME_MINORI := "minori"
 const RUNTIME_PLAYER_CLASS := "AetherRuntimePlayer"
 const ONSCRIPTER_SCRIPT_MARKERS := [
@@ -10607,10 +10608,10 @@ func _start_selected_game_after_iap() -> void:
         _deny_runtime_beta_launch()
 
 func _runtime_requires_beta_access(runtime_kind: String) -> bool:
-    # ONS and Artemis are generally available. Minori remains gated by an
-    # active coffee entitlement in iOS and macOS distribution builds.
+    # ONS and Artemis are generally available. Siglus and Minori remain gated
+    # by an active coffee entitlement in iOS and macOS distribution builds.
     # Provider-backed runtimes such as WA2 are checked separately.
-    return runtime_kind == RUNTIME_MINORI
+    return runtime_kind in [RUNTIME_SIGLUS, RUNTIME_MINORI]
 
 func _beta_access_enforcement_enabled(platform_name: String = "") -> bool:
     var effective_platform := platform_name if not platform_name.is_empty() else OS.get_name()
@@ -11180,7 +11181,7 @@ func _create_runtime_player(runtime_kind: String = RUNTIME_KIRIKIRI) -> bool:
 
 func _switch_runtime_player(runtime_kind: String) -> bool:
     var normalized := runtime_kind
-    if normalized != RUNTIME_ONSCRIPTER and normalized != RUNTIME_MINORI:
+    if normalized not in [RUNTIME_ONSCRIPTER, RUNTIME_SIGLUS, RUNTIME_MINORI]:
         normalized = RUNTIME_KIRIKIRI
     if player != null and current_player_runtime_kind == normalized:
         return true
@@ -11209,6 +11210,8 @@ func _switch_runtime_player(runtime_kind: String) -> bool:
     _append_log("Runtime selected: %s" % (
         "OnscripterYuri"
         if normalized == RUNTIME_ONSCRIPTER
+        else "SiglusEngine"
+        if normalized == RUNTIME_SIGLUS
         else "MinoriRust"
         if normalized == RUNTIME_MINORI
         else "KiriKiri"
@@ -11446,7 +11449,11 @@ func _ensure_player_initialized() -> bool:
         return false
 
     var runtime_id := "auto"
-    if current_player_runtime_kind in [RUNTIME_ONSCRIPTER, RUNTIME_MINORI]:
+    if current_player_runtime_kind in [
+        RUNTIME_ONSCRIPTER,
+        RUNTIME_SIGLUS,
+        RUNTIME_MINORI,
+    ]:
         runtime_id = current_player_runtime_kind
     var runtime_result := int(player.set_engine_option("runtime", runtime_id))
     if runtime_result != ENGINE_RESULT_OK:
@@ -11458,9 +11465,14 @@ func _ensure_player_initialized() -> bool:
         player.destroy_engine()
         return false
 
-    _append_log("%s engine initialized." % (
-        "OnscripterYuri" if current_player_runtime_kind == RUNTIME_ONSCRIPTER else "AetherKiri"
-    ))
+    var runtime_name := "AetherKiri"
+    if current_player_runtime_kind == RUNTIME_ONSCRIPTER:
+        runtime_name = "OnscripterYuri"
+    elif current_player_runtime_kind == RUNTIME_SIGLUS:
+        runtime_name = "SiglusEngine"
+    elif current_player_runtime_kind == RUNTIME_MINORI:
+        runtime_name = "MinoriRust"
+    _append_log("%s engine initialized." % runtime_name)
     return true
 
 func _finish_ready_after_first_frame() -> void:

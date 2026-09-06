@@ -79,6 +79,8 @@ CPU 上传只能作为 debug fallback。性能优化应优先落到 Godot Native
 | `bridge/engine_api/include/engine_options.h` | host 与 engine 共享的 option key/value。 |
 | `bridge/engine_api/src/engine_api.cpp` | C ABI 实现，负责创建、打开、tick、render 和输入传递。 |
 | `bridge/onscripter_runtime/src/onscripter_runtime_provider.cpp` | ONScripterYuri 到统一 Runtime Provider ABI 的适配器。 |
+| `bridge/siglus_runtime/src/siglus_runtime_provider.cpp` | SiglusEngine（siglus_rs）到统一 Runtime Provider ABI 的适配器。 |
+| `bridge/siglus_runtime/cmake/PrepareSiglusRsWorkspace.cmake` | 构建期 overlay：把 pristine 的 `packages/siglus_rs` 拷贝进构建树并应用 `bridge/siglus_runtime/overlay/` 补丁，submodule 本体保持只读。 |
 | `cpp/core/environ/EngineLoop.*` | 运行时生命周期、tick loop，以及 host input 到 TVP 事件的转换。 |
 | `cpp/core/visual/LayerManager.*` | 图层命中测试、焦点/capture、鼠标/触摸/键盘派发和兼容输入逻辑。 |
 | `cpp/core/visual/impl/DrawDevice.*` | Window/layer 更新与 render manager 之间的 draw device 桥。 |
@@ -314,7 +316,9 @@ Godot
 API backend；OnsRuntime 和 A Runtime 实现版本化的
 `engine_runtime_provider_v1_t` ABI。后续新增视觉小说引擎必须接入该 ABI，
 不应再增加新的 `Aether*Player` Godot class。dispatcher 负责探测和生命周期
-选择，Player 统一负责 Godot 展示与平台能力。
+选择，Player 统一负责 Godot 展示与平台能力。SiglusEngine 游戏通过同一
+dispatcher 走 `siglus` runtime provider（`bridge/siglus_runtime`），它封装了
+由 `packages/siglus_rs` submodule 构建出的 Rust FFI 宿主。
 
 ## 输入链路
 
