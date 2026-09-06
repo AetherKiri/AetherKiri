@@ -53,3 +53,15 @@ if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_krkr2plugin_tes
 endif()
 
 catch_discover_tests(motionplayer-dll)
+
+# Isolate registration-order tests from the shared plugin world used by the
+# larger suite: these deliberately load and unload the graphics module.
+add_executable(gles-load-order main.cpp gles-load-order.cpp)
+target_link_libraries(gles-load-order PRIVATE Catch2::Catch2 krkr2core
+    ${_KRKR2PLUGIN_LINK_ITEM})
+catch_discover_tests(gles-load-order)
+
+add_executable(layer-pointer-gesture main.cpp layer-pointer-gesture.cpp)
+target_link_libraries(layer-pointer-gesture PRIVATE Catch2::Catch2 krkr2core
+    ${_KRKR2PLUGIN_LINK_ITEM})
+catch_discover_tests(layer-pointer-gesture)
