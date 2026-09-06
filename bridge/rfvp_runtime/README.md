@@ -1,6 +1,6 @@
 # Experimental embedded rfvp provider
 
-This is an opt-in native-desktop provider for FVP HCB games, using the pinned
+This is an opt-in native provider for FVP HCB games, using the pinned
 `packages/rfvp` submodule. It implements `engine_runtime_provider_v1_t`; Godot
 presents CPU-rendered RGBA frames and owns the window and input coordinates.
 It does not launch the Windows executable or the standalone rfvp application.
@@ -9,9 +9,9 @@ It does not launch the Windows executable or the standalone rfvp application.
 
 Initialize `packages/rfvp` and install Rust/Cargo with a target matching the C++
 build. Enable `AETHERKIRI_ENABLE_RFVP=ON` on the normal application CMake preset.
-The default remains OFF. Mobile, Web and universal macOS builds are rejected;
-build a single architecture at a time. Native audio needs the platform audio
-development libraries (including ALSA on Linux).
+The default remains OFF. Android, Web and universal macOS builds are rejected;
+iOS and macOS must build a single architecture at a time. Native audio needs
+the platform audio development libraries (including ALSA on Linux).
 
 For the independent provider tests, without the other application packages:
 
