@@ -43,13 +43,15 @@ int g_last_blend_opacity = 0;
 uint64_t g_next_texture_handle = 1;
 uint64_t g_next_readback_handle = 101;
 uint64_t g_last_discarded_readback = 0;
+bool g_last_create_pixels_were_null = false;
 bool g_readback_ready = false;
 bool g_reject_batch = false;
 bool g_throw_batch_end = false;
 uint64_t g_last_batch_token = 0;
 std::vector<GpuCall> g_gpu_calls;
 
-uint64_t CreateTestTexture(uint32_t, uint32_t, const void *, uint32_t) {
+uint64_t CreateTestTexture(uint32_t, uint32_t, const void *pixels, uint32_t) {
+    g_last_create_pixels_were_null = pixels == nullptr;
     return g_next_texture_handle++;
 }
 
@@ -153,6 +155,7 @@ public:
         g_next_texture_handle = 1;
         g_next_readback_handle = 101;
         g_last_discarded_readback = 0;
+        g_last_create_pixels_were_null = false;
         g_readback_ready = false;
         g_reject_batch = false;
         g_throw_batch_end = false;
@@ -322,6 +325,24 @@ TEST_CASE("Godot textures expose asynchronous GPU readback") {
 
     texture.DiscardGpuReadback(request);
     CHECK(g_last_discarded_readback == request);
+}
+
+TEST_CASE("Godot textures skip zero-filled RGBA staging uploads") {
+    TestGpuBridge bridge;
+
+    GodotTexture2D empty_rgba(nullptr, 0, 8, 8, TVPTextureFormat::RGBA);
+    REQUIRE(empty_rgba.EnsureGpuHandle());
+    CHECK(g_last_create_pixels_were_null);
+
+    const std::array<std::uint8_t, 4> initialized_pixel = {1, 2, 3, 4};
+    GodotTexture2D initialized_rgba(initialized_pixel.data(), 4, 1, 1,
+                                    TVPTextureFormat::RGBA);
+    REQUIRE(initialized_rgba.EnsureGpuHandle());
+    CHECK_FALSE(g_last_create_pixels_were_null);
+
+    GodotTexture2D empty_gray(nullptr, 0, 1, 1, TVPTextureFormat::Gray);
+    REQUIRE(empty_gray.EnsureGpuHandle());
+    CHECK_FALSE(g_last_create_pixels_were_null);
 }
 
 TEST_CASE("Godot nearest scaled alpha uses the software sampler") {
