@@ -1452,7 +1452,13 @@ extern ttstr TVPChopStorageExt(const ttstr &name) {
 //---------------------------------------------------------------------------
 // Auto search path support
 //---------------------------------------------------------------------------
-#define TVP_AUTO_PATH_HASH_SIZE 1024
+// Voice-heavy titles can mount millions of archive entries. With 1024
+// buckets, a first lookup for each new voice name walks a chain containing
+// thousands of entries and shows up as 30-40 ms in getExistVoice(). Keep the
+// existing ordered chained table, but size its bucket array so those lookups
+// remain effectively constant-time. The table nodes already dominate memory
+// at that scale; the larger bucket array adds only a few MiB.
+#define TVP_AUTO_PATH_HASH_SIZE 65536
 std::vector<ttstr> TVPAutoPathList;
 tTJSHashCache<ttstr, ttstr> TVPAutoPathCache(TVP_DEFAULT_AUTOPATH_CACHE_NUM);
 tTJSHashTable<ttstr, ttstr, tTJSHashFunc<ttstr>, TVP_AUTO_PATH_HASH_SIZE>

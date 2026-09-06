@@ -93,6 +93,7 @@ extern "C" engine_result_t aetherkiri_minori_register_runtime_provider();
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <mutex>
 
@@ -1732,6 +1733,45 @@ bool PendingWritesOverlap(const GodotGpuPendingWrite &a,
                           const GodotGpuPendingWrite &b) {
     return a.rid == b.rid && a.left < b.right && b.left < a.right &&
            a.top < b.bottom && b.top < a.bottom;
+}
+
+// A bridge-owned RD texture is a distinct allocation for the lifetime of the
+// queued batch. Imported Apple/Android textures are the exception: their RID
+// can be a view over storage owned by another subsystem, so retain the old
+// conservative ordering whenever one participates in a batch.
+std::unordered_set<int64_t> ExternalGodotGpuRids() {
+    std::unordered_set<int64_t> result;
+    std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+    for (const auto &entry : g_gpu_textures) {
+        const auto &record = entry.second;
+        if (record.apple_pixel_buffer != nullptr ||
+            record.apple_vulkan_external_texture != nullptr ||
+            record.android_external_texture != nullptr) {
+            if (record.rid.is_valid()) result.insert(record.rid.get_id());
+        }
+    }
+    return result;
+}
+
+bool NonLiveGpuHazardTrackingSafe(
+    const std::vector<std::shared_ptr<GodotGpuOp>> &ops) {
+    const char *conservative =
+        std::getenv("AETHERKIRI_GODOT_CONSERVATIVE_BARRIERS");
+    if (conservative != nullptr && conservative[0] != '\0' &&
+        std::strcmp(conservative, "0") != 0) {
+        return false;
+    }
+    const auto external_rids = ExternalGodotGpuRids();
+    if (external_rids.empty()) return true;
+    for (const auto &op : ops) {
+        if (op == nullptr) continue;
+        const RID rids[] = {op->src, op->src2, op->src3, op->dst};
+        for (const RID &rid : rids) {
+            if (rid.is_valid() && external_rids.count(rid.get_id()) != 0)
+                return false;
+        }
+    }
+    return true;
 }
 
 bool BlendOpNeedsBarrierBeforeDispatch(
@@ -6030,6 +6070,9 @@ void ExecuteGodotGpuComputeBatchLegacy(
     uint64_t nonlive_compute_ops = 0;
     uint64_t nonlive_compute_barriers = 0;
     std::vector<GodotGpuPendingWrite> live2d_pending_writes;
+    std::vector<GodotGpuPendingWrite> nonlive_pending_writes;
+    const bool nonlive_hazard_tracking_safe =
+        NonLiveGpuHazardTrackingSafe(ops);
     const bool shadow_enabled = GodotGpuBarrierShadowEnabled();
     std::unique_ptr<GodotGpuBarrierShadowPlanner> nonlive_shadow;
     if (shadow_enabled) {
@@ -6049,6 +6092,10 @@ void ExecuteGodotGpuComputeBatchLegacy(
             // real command list.
             nonlive_shadow->finish();
         }
+        if (live2d_triangle && !nonlive_pending_writes.empty()) {
+            rd->compute_list_add_barrier(compute_list);
+            nonlive_pending_writes.clear();
+        }
         if (live2d_triangle && TriangleOpNeedsBarrierBeforeDispatch(
                                    *ops[i], live2d_pending_writes)) {
             rd->compute_list_add_barrier(compute_list);
@@ -6056,6 +6103,13 @@ void ExecuteGodotGpuComputeBatchLegacy(
         } else if (!live2d_triangle && !live2d_pending_writes.empty()) {
             rd->compute_list_add_barrier(compute_list);
             live2d_pending_writes.clear();
+        }
+        if (!live2d_triangle &&
+            (!nonlive_hazard_tracking_safe ||
+             BlendOpNeedsBarrierBeforeDispatch(*ops[i],
+                                                nonlive_pending_writes))) {
+            rd->compute_list_add_barrier(compute_list);
+            nonlive_pending_writes.clear();
         }
         const bool batchable_triangle = IsBatchableTriangleOp(ops[i]);
         if (batchable_triangle) {
@@ -6085,11 +6139,16 @@ void ExecuteGodotGpuComputeBatchLegacy(
                 live2d_pending_writes.push_back(PendingWriteForRect(
                     ops[i]->dst, ops[i]->dst_pos, ops[i]->size));
             } else {
-                // Keep the more conservative E-mote/TVP behavior: those paths
-                // can expose different RIDs backed by aliased storage.
                 ++nonlive_compute_ops;
-                rd->compute_list_add_barrier(compute_list);
-                ++nonlive_compute_barriers;
+                nonlive_pending_writes.push_back(PendingWriteForRect(
+                    ops[i]->dst, ops[i]->dst_pos, ops[i]->size));
+                if (!nonlive_hazard_tracking_safe) {
+                    // Imported textures may alias storage outside this batch;
+                    // preserve the historical barrier after each operation.
+                    rd->compute_list_add_barrier(compute_list);
+                    nonlive_pending_writes.clear();
+                    ++nonlive_compute_barriers;
+                }
                 if (nonlive_shadow != nullptr) {
                     try {
                         RecordGodotGpuNonLiveShadowAccess(
@@ -6120,6 +6179,9 @@ void ExecuteGodotGpuComputeBatchLegacy(
             nonlive_compute_ops, std::memory_order_relaxed);
     }
     if (!live2d_pending_writes.empty()) {
+        rd->compute_list_add_barrier(compute_list);
+    }
+    if (!nonlive_pending_writes.empty()) {
         rd->compute_list_add_barrier(compute_list);
     }
     rd->compute_list_end();
@@ -7165,19 +7227,37 @@ uint64_t BridgeCreateRgba(uint32_t width, uint32_t height, const void *pixels,
     Ref<RDTextureView> view;
     view.instantiate();
     TypedArray<PackedByteArray> initial_data;
-    initial_data.push_back(PackRgbaBytes(pixels, width, height, stride_bytes));
+    RenderingServer *server = RenderingServer::get_singleton();
+    const bool on_render_thread =
+        server != nullptr && server->is_on_render_thread();
+    const bool use_device_clear = pixels == nullptr && on_render_thread;
+    if (!use_device_clear) {
+        initial_data.push_back(
+            PackRgbaBytes(pixels, width, height, stride_bytes));
+    }
     RID rid = rd->texture_create(MakeRgbaTextureFormat(width, height), view,
                                  initial_data);
+    // RenderingDevice accepts an empty initial-data array, but its contents
+    // are undefined. Fresh KiriKiri render targets require transparent black,
+    // so establish the same state with a device-side clear. This avoids
+    // allocating, zeroing and uploading a width*height*4 staging array for
+    // large PSD/transition scratch textures.
+    if (rid.is_valid() && use_device_clear &&
+        rd->texture_clear(rid, Color(0.0, 0.0, 0.0, 0.0), 0, 1, 0, 1) != OK) {
+        rd->free_rid(rid);
+        rid = RID();
+    }
     const double create_ms = std::chrono::duration<double, std::milli>(
                                  std::chrono::steady_clock::now() -
                                  create_started)
                                  .count();
     LogGodotGpuUpdateProfile(
         "texture_create", width, height,
-        static_cast<size_t>(width) * static_cast<size_t>(height) * 4u,
+        pixels != nullptr
+            ? static_cast<size_t>(width) * static_cast<size_t>(height) * 4u
+            : 0u,
         create_ms, 0.0, 0.0, rid.is_valid(),
-        RenderingServer::get_singleton() != nullptr &&
-            RenderingServer::get_singleton()->is_on_render_thread());
+        on_render_thread);
     if (!rid.is_valid()) return 0;
 
     GodotGpuTextureRecord record;
@@ -7350,6 +7430,71 @@ bool BridgeUpdateRgba(uint64_t texture, const void *pixels,
     const double pack_ms = std::chrono::duration<double, std::milli>(
                                packed_at - bridge_started)
                                .count();
+
+    // Updating a texture that Godot presented recently can make MoltenVK wait
+    // for the old VkImage's fence. PSD slice uploads are full replacements, so
+    // large surfaces can use a fresh RID and retire the old RID in normal GPU
+    // queue order. This preserves the exact uploaded pixels while avoiding a
+    // 20-35 ms texture_update stall on the render thread.
+    constexpr uint64_t kVersionedUploadMinPixels = 256u * 1024u;
+    const uint64_t pixel_count =
+        static_cast<uint64_t>(record.width) * record.height;
+    RenderingServer *server = RenderingServer::get_singleton();
+    const bool on_render_thread =
+        server != nullptr && server->is_on_render_thread();
+    const bool can_version_upload =
+        on_render_thread &&
+        pixel_count >= kVersionedUploadMinPixels &&
+        record.apple_pixel_buffer == nullptr &&
+        record.apple_vulkan_external_texture == nullptr &&
+        record.android_external_texture == nullptr;
+    if (can_version_upload) {
+        RenderingDevice *rd = MainRenderingDevice();
+        Ref<RDTextureView> view;
+        view.instantiate();
+        TypedArray<PackedByteArray> initial_data;
+        initial_data.push_back(data);
+        RID replacement = rd != nullptr
+            ? rd->texture_create(
+                  MakeRgbaTextureFormat(record.width, record.height), view,
+                  initial_data)
+            : RID();
+        if (replacement.is_valid()) {
+            bool replaced = false;
+            {
+                std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+                auto it = g_gpu_textures.find(texture);
+                if (it != g_gpu_textures.end() &&
+                    it->second.rid == record.rid &&
+                    it->second.apple_pixel_buffer == nullptr &&
+                    it->second.apple_vulkan_external_texture == nullptr &&
+                    it->second.android_external_texture == nullptr) {
+                    it->second.rid = replacement;
+                    it->second.requires_alpha_d_clear_version = false;
+                    it->second.texture->set_texture_rd_rid(replacement);
+                    replaced = true;
+                }
+            }
+            if (replaced) {
+                auto release = std::make_shared<GodotGpuOp>();
+                release->type = GodotGpuOp::Type::Release;
+                release->dst = record.rid;
+                const bool result = RunGodotGpuOpAsync(release);
+                const double bridge_ms =
+                    std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - bridge_started)
+                        .count();
+                LogGodotGpuUpdateProfile(
+                    "texture_replace_rgba", record.width, record.height,
+                    static_cast<size_t>(data.size()), bridge_ms, pack_ms, 0.0,
+                    result,
+                    on_render_thread);
+                return result;
+            }
+            rd->free_rid(replacement);
+        }
+    }
+
     auto op = std::make_shared<GodotGpuOp>();
     op->type = GodotGpuOp::Type::Update;
     op->dst = record.rid;
@@ -7363,11 +7508,10 @@ bool BridgeUpdateRgba(uint64_t texture, const void *pixels,
                                  std::chrono::steady_clock::now() -
                                  bridge_started)
                                  .count();
-    RenderingServer *server = RenderingServer::get_singleton();
     LogGodotGpuUpdateProfile(
         "bridge_update_rgba", record.width, record.height,
         static_cast<size_t>(data.size()), bridge_ms, pack_ms, 0.0, result,
-        server != nullptr && server->is_on_render_thread());
+        on_render_thread);
     return result;
 }
 
@@ -7391,18 +7535,30 @@ bool BridgeClearRgba(uint64_t texture, uint32_t argb, const tTVPRect *rect) {
     const bool full_transparent_clear = argb == 0 && rect->left == 0 &&
         rect->top == 0 && rect->right == static_cast<int>(record.width) &&
         rect->bottom == static_cast<int>(record.height);
-    if (full_transparent_clear && record.requires_alpha_d_clear_version) {
+    const bool can_version_clear =
+        RenderingServer::get_singleton() != nullptr &&
+        RenderingServer::get_singleton()->is_on_render_thread() &&
+        full_transparent_clear &&
+        record.requires_alpha_d_clear_version &&
+        record.apple_pixel_buffer == nullptr &&
+        record.apple_vulkan_external_texture == nullptr &&
+        record.android_external_texture == nullptr;
+    if (can_version_clear) {
         RenderingDevice *rd = MainRenderingDevice();
         Ref<RDTextureView> view;
         view.instantiate();
         TypedArray<PackedByteArray> initial_data;
-        initial_data.push_back(PackRgbaBytes(
-            nullptr, record.width, record.height, record.width * 4u));
         RID replacement = rd != nullptr
             ? rd->texture_create(MakeRgbaTextureFormat(record.width,
                                                        record.height),
                                  view, initial_data)
             : RID();
+        if (replacement.is_valid() &&
+            rd->texture_clear(replacement, Color(0.0, 0.0, 0.0, 0.0),
+                              0, 1, 0, 1) != OK) {
+            rd->free_rid(replacement);
+            replacement = RID();
+        }
         if (replacement.is_valid()) {
             bool replaced = false;
             {
@@ -7410,7 +7566,9 @@ bool BridgeClearRgba(uint64_t texture, uint32_t argb, const tTVPRect *rect) {
                 auto it = g_gpu_textures.find(texture);
                 if (it != g_gpu_textures.end() &&
                     it->second.rid == record.rid &&
-                    it->second.requires_alpha_d_clear_version) {
+                    it->second.apple_pixel_buffer == nullptr &&
+                    it->second.apple_vulkan_external_texture == nullptr &&
+                    it->second.android_external_texture == nullptr) {
                     it->second.rid = replacement;
                     it->second.requires_alpha_d_clear_version = false;
                     it->second.texture->set_texture_rd_rid(replacement);
