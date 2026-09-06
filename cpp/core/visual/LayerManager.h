@@ -334,6 +334,10 @@ public:
         DesiredLayerType = type;
     }
     void SetHoldAlpha(bool b);
+    // D2D multi-manager composition uses transparent pixels outside the
+    // manager's actual content.  Clear an already allocated target when the
+    // draw device switches this manager to alpha-preserving output.
+    void ClearDrawBufferForAlpha();
 
 public: // methods from tTVPDrawable
     tTVPBaseTexture *GetDrawTargetBitmap(const tTVPRect &rect,

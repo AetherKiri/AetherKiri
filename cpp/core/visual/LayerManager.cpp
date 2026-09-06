@@ -863,6 +863,16 @@ void tTVPLayerManager::SetHoldAlpha(bool b) {
     static_cast<tTVPDestTexture *>(DrawBuffer)->SetHoldAlpha(b);
 }
 
+void tTVPLayerManager::ClearDrawBufferForAlpha() {
+    if(!DrawBuffer || HoldAlpha)
+        return;
+    tjs_int width = 0;
+    tjs_int height = 0;
+    if(!GetPrimaryLayerSize(width, height) || width <= 0 || height <= 0)
+        return;
+    DrawBuffer->Fill(tTVPRect(0, 0, width, height), 0x00000000u);
+}
+
 tTVPBaseTexture *tTVPLayerManager::EnsureDrawBufferSize(
     tjs_int w, tjs_int h, bool clear_on_resize) {
     if(w <= 0 || h <= 0)
@@ -872,9 +882,10 @@ tTVPBaseTexture *tTVPLayerManager::EnsureDrawBufferSize(
     // only updates part of the primary surface. KiriKiri defines those pixels
     // from the opaque primary layer's neutral color; a hard-coded black clear
     // leaks a black edge through otherwise valid transparent title artwork.
-    const tjs_uint32 clear_color = Primary
-        ? (Primary->GetNeutralColor() & 0x00ffffffu) | 0xff000000u
-        : 0xff000000u;
+    const tjs_uint32 neutral_color =
+        Primary ? (Primary->GetNeutralColor() & 0x00ffffffu) : 0;
+    const tjs_uint32 clear_color = HoldAlpha ? neutral_color | 0xff000000u
+                                             : neutral_color;
 
     const tjs_uint target_w = static_cast<tjs_uint>(w);
     const tjs_uint target_h = static_cast<tjs_uint>(h);
@@ -983,8 +994,20 @@ void tTVPLayerManager::DrawCompleted(const tTVPRect &destrect,
         return;
     }
 
-    DrawBuffer->Blt(destrect.left, destrect.top, bmp, cliprect, type, opacity,
-                    HoldAlpha);
+    // A D2D manager is an alpha-preserving composition surface even when
+    // one of its source layers advertises ltOpaque.  The generic layer-type
+    // overload maps that combination to CopyOpaqueImage, which deliberately
+    // forces alpha to 255; an untouched/transparent opaque layer then becomes
+    // opaque black and covers a lower manager (the RPG map in particular).
+    // Copy the source pixels verbatim for this manager so zero-alpha regions
+    // stay transparent while genuinely opaque pixels remain opaque.
+    if(!HoldAlpha && DesiredLayerType == ltAlpha && type == ltOpaque) {
+        DrawBuffer->Blt(destrect.left, destrect.top, bmp, cliprect, bmCopy,
+                         opacity, false);
+    } else {
+        DrawBuffer->Blt(destrect.left, destrect.top, bmp, cliprect, type,
+                         opacity, HoldAlpha);
+    }
     notify_bitmap_owner();
 #endif
 }
