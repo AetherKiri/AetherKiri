@@ -237,7 +237,7 @@ int VideoPresentLayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
 
     img_convert_ctx = sws_getCachedContext(
         img_convert_ctx, srcWidth, srcHeight, AV_PIX_FMT_YUV420P, width, height,
-        AV_PIX_FMT_RGBA, /*sws_flags*/ SWS_FAST_BILINEAR, nullptr, nullptr,
+        AV_PIX_FMT_RGBA, /*sws_flags*/ SWS_BILINEAR, nullptr, nullptr,
         nullptr);
     int processed = 0;
     if(img_convert_ctx) {

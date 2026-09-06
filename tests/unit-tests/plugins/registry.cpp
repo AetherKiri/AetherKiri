@@ -241,6 +241,7 @@ TEST_CASE("krkrsdl3 plugin inventory is available") {
         TJS_W("shrinkcopy.dll"),
         TJS_W("sqlite3.dll"),
         TJS_W("textrender.dll"),
+        TJS_W("toml.dll"),
         TJS_W("varfile.dll"),
         TJS_W("win32dialog.dll"),
         TJS_W("windowex.dll"),
@@ -255,6 +256,41 @@ TEST_CASE("krkrsdl3 plugin inventory is available") {
         INFO(ttstr(module).AsStdString());
         CHECK(ncbAutoRegister::HasModule(module));
     }
+}
+
+TEST_CASE("TOML plugin parses UTF-16 localization comments") {
+    ensurePluginRegistryRuntime();
+
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    REQUIRE(global != nullptr);
+    iTJSDispatch2 *scriptsClass = TVPCreateNativeClass_Scripts();
+    REQUIRE(scriptsClass != nullptr);
+    tTJSVariant scriptsValue(scriptsClass);
+    scriptsClass->Release();
+    REQUIRE(TJS_SUCCEEDED(global->PropSet(TJS_MEMBERENSURE, TJS_W("Scripts"),
+                                          nullptr, &scriptsValue, global)));
+    global->Release();
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("scriptsex.dll")));
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("toml.dll")));
+    const tTJSVariant scripts = getGlobalProp(TJS_W("Scripts"));
+    const tTJSVariant decode = getProp(scripts, TJS_W("tomlDecode"));
+    REQUIRE(decode.Type() == tvtObject);
+
+    // Angelic Scream's localization files are UTF-16LE TOML and begin with
+    // a comment.  This is the exact input that the external toml.dll parser
+    // rejected, causing the game to fall back to English UI text.
+    tTJSVariant source(TJS_W(
+        "\uFEFF# UI\n"
+        "[texts]\n"
+        "common_back_title = \"戻る\"\n"));
+    tTJSVariant *args[] = {&source};
+    tTJSVariant parsed;
+    REQUIRE(TJS_SUCCEEDED(decode.AsObjectClosureNoAddRef().FuncCall(
+        0, nullptr, nullptr, &parsed, 1, args, nullptr)));
+
+    const tTJSVariant texts = getProp(parsed, TJS_W("texts"));
+    CHECK(ttstr(getProp(texts, TJS_W("common_back_title"))) ==
+          TJS_W("戻る"));
 }
 
 TEST_CASE("GLAlphaMovie exposes texture-atlas frame upload") {
