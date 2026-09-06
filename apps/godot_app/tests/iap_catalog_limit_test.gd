@@ -36,6 +36,7 @@ func _initialize() -> void:
     assert(app.iap_pending_launch.is_empty())
     assert(not app.modal_layer.visible)
     assert(app._runtime_requires_beta_access(app.RUNTIME_ONSCRIPTER))
+    assert(app._runtime_requires_beta_access(app.RUNTIME_MINORI))
     assert(not app._runtime_requires_beta_access(app.RUNTIME_KIRIKIRI))
     assert(app._provider_runtime_requires_beta_access("artemis"))
     assert(app._provider_runtime_requires_beta_access("catsystem2"))
@@ -65,6 +66,7 @@ func _initialize() -> void:
         assert(not String(app._t("iap.coffee.desc")).is_empty())
         assert(not String(app._t("iap.coffee.active_until", ["2030-01-01"])).is_empty())
         assert(not String(app._t("iap.runtime_unavailable")).is_empty())
+        assert(not String(app._t("iap.beta_runtime_unavailable")).is_empty())
 
     settings_action.free()
     app.modal_layer.free()

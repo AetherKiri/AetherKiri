@@ -1,6 +1,7 @@
 #include "tjsCommHead.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -50,6 +51,14 @@ std::thread::id TVPMainThreadID;
 static tTJSCriticalSection _NoMemCallBackCS;
 static void *_reservedMem = malloc(1024 * 1024 * 4); // 4M reserved mem
 static bool _project_startup = false;
+
+static bool TVPProcessMessagesProfileEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_PROCESS_MESSAGES_PROFILE");
+        return value && *value && std::strcmp(value, "0") != 0;
+    }();
+    return enabled;
+}
 
 static void _do_compact() { TVPDeliverCompactEvent(TVP_COMPACT_LEVEL_MAX); }
 
@@ -708,11 +717,16 @@ void tTVPApplication::Run() {
 }
 
 void tTVPApplication::ProcessMessages() {
+    const bool profileEnabled = TVPProcessMessagesProfileEnabled();
+    const auto profileStarted = profileEnabled
+        ? std::chrono::steady_clock::now()
+        : std::chrono::steady_clock::time_point{};
     size_t remaining = 0;
     {
         std::lock_guard<std::mutex> cs(m_msgQueueLock);
         remaining = m_lstUserMsg.size();
     }
+    const size_t queued = remaining;
 #if defined(__ANDROID__)
     TVPAndroidAppLogf("Application::ProcessMessages begin queued=%zu", remaining);
 #endif
@@ -731,6 +745,9 @@ void tTVPApplication::ProcessMessages() {
             m_lstUserMsg.pop_front();
         }
         if(msg) {
+            const auto messageStarted = profileEnabled
+                ? std::chrono::steady_clock::now()
+                : std::chrono::steady_clock::time_point{};
 #if defined(__ANDROID__)
             if(TVPAndroidAppTraceEnabled()) {
                 __android_log_print(ANDROID_LOG_INFO, "krkr2",
@@ -739,6 +756,18 @@ void tTVPApplication::ProcessMessages() {
             }
 #endif
             msg();
+            if(profileEnabled) {
+                const double elapsedMs = std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - messageStarted).count();
+                if(elapsedMs >= 1.0) {
+                    if(const auto logger = spdlog::get("core")) {
+                        logger->info(
+                            "application user message profile: index={} id={} "
+                            "host={} elapsed_ms={:.3f}",
+                            processed, msg_id, msg_host, elapsedMs);
+                    }
+                }
+            }
 #if defined(__ANDROID__)
             if(TVPAndroidAppTraceEnabled()) {
                 __android_log_print(ANDROID_LOG_INFO, "krkr2",
@@ -753,6 +782,18 @@ void tTVPApplication::ProcessMessages() {
     TVPAndroidAppLog("Application::ProcessMessages before ProgressAllTimer");
 #endif
     TVPTimer::ProgressAllTimer();
+    if(profileEnabled) {
+        const double elapsedMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - profileStarted).count();
+        if(elapsedMs >= 5.0 || processed > 0) {
+            if(const auto logger = spdlog::get("core")) {
+                logger->info(
+                    "application process messages profile: queued={} "
+                    "processed={} elapsed_ms={:.3f}",
+                    queued, processed, elapsedMs);
+            }
+        }
+    }
 #if defined(__ANDROID__)
     TVPAndroidAppLog("Application::ProcessMessages after ProgressAllTimer");
 #endif

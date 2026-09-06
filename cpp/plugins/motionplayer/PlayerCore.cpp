@@ -925,6 +925,7 @@ namespace motion {
         _loopTime = 0.0;
         _clampedEvalTime = 0.0;
         _frameTickCount = 0.0;
+        _commandListPulse = false;
         _runtime->activeMotion.reset();
         _runtime->clearMotionBitmapCaches();
         _runtime->timelines.clear();

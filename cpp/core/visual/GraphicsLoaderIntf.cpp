@@ -2689,8 +2689,11 @@ void TVPSetGraphicCacheLimit(tjs_uint64 limit) {
         TVPGraphicCacheEnabled = true;
     }
 
-    if(TVPGraphicCacheLimit > 256 * 1024 * 1024)
-        TVPGraphicCacheLimit = 256 * 1024 * 1024;
+    // TVPGraphicCacheSystemLimit carries the renderer-specific safety cap.
+    // Godot Native may use up to 1GB on desktop to keep decoded GPU uploads
+    // hot; legacy renderers are still limited to their historical 256MB.
+    if(TVPGraphicCacheLimit > TVPGraphicCacheSystemLimit)
+        TVPGraphicCacheLimit = TVPGraphicCacheSystemLimit;
 
     TVPCheckGraphicCacheLimit();
 }

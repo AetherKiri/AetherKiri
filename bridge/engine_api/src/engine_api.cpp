@@ -2687,6 +2687,12 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
   // TVPDrawSceneOnce() only restores GL state and calls SwapBuffer,
   // which is insufficient.
   if (::Application) {
+    // Event delivery can compose many PSD layers before UpdateContent() opens
+    // its narrower draw-device batch. Keep the complete application step in
+    // one ordered Godot GPU batch and drain it before TVPDrawSceneOnce(). This
+    // removes a render-thread submit/fence boundary from each fillRect and
+    // operateTo call without deferring any work across the presented frame.
+    TVPGodotGpuBatchScope gpu_batch;
     ::Application->Run();
     if (auto* loop = EngineLoop::GetInstance(); loop != nullptr) {
       loop->CompleteInputFrame();

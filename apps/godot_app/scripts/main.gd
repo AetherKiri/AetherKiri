@@ -26,6 +26,8 @@ const SETTINGS_FILE := "user://aetherkiri_settings.cfg"
 const IAP_LIST_LIMIT_PRODUCT_ID := "com.aether.list.limit"
 const IAP_COFFEE_PRODUCT_ID := "com.aether.coffee"
 const ANDROID_COFFEE_URL := "https://qr.alipay.com/fkx108053gol728ayzhec90"
+const APP_SERVICE_FILING_NUMBER := "沪ICP备2026042398号-2A"
+const APP_SERVICE_FILING_URL := "https://beian.miit.gov.cn/#/Integrated/index"
 const IAP_POLL_INTERVAL_SEC := 0.12
 const IAP_DETAIL_AUTHORIZATION_TTL_MS := 30000
 const SECRET_UNLOCK_TAP_TARGET := 20
@@ -267,6 +269,8 @@ const UI_TEXT := {
         "settings.version": "版本",
         "settings.author": "作者",
         "settings.email": "邮箱",
+        "settings.app_service_filing": "App服务备案号",
+        "settings.app_service_filing_open_failed": "无法打开备案信息网页，请稍后重试。",
         "iap.list_limit.title": "目录限制解锁",
         "iap.list_limit.desc": "永久解锁视觉小说库和视频库中的全部目录项目",
         "iap.coffee.title": "请作者喝一杯咖啡",
@@ -287,6 +291,7 @@ const UI_TEXT := {
         "secret.unlock.confirm": "确认",
         "secret.unlock.failed": "密码不正确，请重试。",
         "secret.unlock.success": "内购已解锁，内测功能有效期至：%s",
+        "iap.beta_runtime_unavailable": "此视觉小说兼容正在测试中，请等待后续支持",
         "iap.status.purchased": "已购买",
         "iap.status.not_purchased": "未购买",
         "iap.status.loading": "正在读取商品信息…",
@@ -548,6 +553,8 @@ const UI_TEXT := {
         "settings.version": "版本",
         "settings.author": "作者",
         "settings.email": "信箱",
+        "settings.app_service_filing": "App 服務備案號",
+        "settings.app_service_filing_open_failed": "無法開啟備案資訊網頁，請稍後再試。",
         "iap.list_limit.title": "解除目錄限制",
         "iap.list_limit.desc": "永久解鎖視覺小說庫與影片庫中的所有目錄項目",
         "iap.coffee.title": "請作者喝一杯咖啡",
@@ -568,6 +575,7 @@ const UI_TEXT := {
         "secret.unlock.confirm": "確認",
         "secret.unlock.failed": "密碼不正確，請再試一次。",
         "secret.unlock.success": "內購已解鎖，測試功能有效期限至：%s",
+        "iap.beta_runtime_unavailable": "此視覺小說的相容支援仍在測試中，請等待後續支援",
         "iap.status.purchased": "已購買",
         "iap.status.not_purchased": "尚未購買",
         "iap.status.loading": "正在載入商品資訊…",
@@ -827,6 +835,8 @@ const UI_TEXT := {
         "settings.version": "Version",
         "settings.author": "Author",
         "settings.email": "Email",
+        "settings.app_service_filing": "App Service Filing Number",
+        "settings.app_service_filing_open_failed": "Unable to open the filing page. Please try again later.",
         "iap.list_limit.title": "Unlock Library Limit",
         "iap.list_limit.desc": "Permanently unlock every item in the visual novel and video libraries",
         "iap.coffee.title": "Buy the Author a Coffee",
@@ -847,6 +857,7 @@ const UI_TEXT := {
         "secret.unlock.confirm": "Confirm",
         "secret.unlock.failed": "Incorrect passphrase. Please try again.",
         "secret.unlock.success": "Purchases unlocked; beta feature access expires: %s",
+        "iap.beta_runtime_unavailable": "Compatibility for this visual novel is still being tested. Please wait for a future update.",
         "iap.status.purchased": "Purchased",
         "iap.status.not_purchased": "Not purchased",
         "iap.status.loading": "Loading product information…",
@@ -1108,6 +1119,8 @@ const UI_TEXT := {
         "settings.version": "バージョン",
         "settings.author": "作者",
         "settings.email": "メール",
+        "settings.app_service_filing": "アプリサービス届出番号",
+        "settings.app_service_filing_open_failed": "届出情報ページを開けませんでした。後でもう一度お試しください。",
         "iap.list_limit.title": "ライブラリ制限解除",
         "iap.list_limit.desc": "ビジュアルノベルと動画ライブラリのすべての項目を永久に解除します",
         "iap.coffee.title": "作者にコーヒーを一杯贈る",
@@ -1128,6 +1141,7 @@ const UI_TEXT := {
         "secret.unlock.confirm": "確認",
         "secret.unlock.failed": "パスフレーズが正しくありません。もう一度お試しください。",
         "secret.unlock.success": "課金が解錠されました。ベータ機能の有効期限：%s",
+        "iap.beta_runtime_unavailable": "このビジュアルノベルの互換対応はテスト中です。今後の対応をお待ちください。",
         "iap.status.purchased": "購入済み",
         "iap.status.not_purchased": "未購入",
         "iap.status.loading": "商品情報を読み込み中…",
@@ -1387,6 +1401,8 @@ const UI_TEXT := {
         "settings.version": "버전",
         "settings.author": "작성자",
         "settings.email": "이메일",
+        "settings.app_service_filing": "앱 서비스 등록 번호",
+        "settings.app_service_filing_open_failed": "등록 정보 페이지를 열 수 없습니다. 나중에 다시 시도해 주세요.",
         "iap.list_limit.title": "라이브러리 제한 해제",
         "iap.list_limit.desc": "비주얼 노벨 및 동영상 라이브러리의 모든 항목을 영구적으로 해제합니다",
         "iap.coffee.title": "작가에게 커피 한 잔 사주기",
@@ -1407,6 +1423,7 @@ const UI_TEXT := {
         "secret.unlock.confirm": "확인",
         "secret.unlock.failed": "암호가 올바르지 않습니다. 다시 시도해 주세요.",
         "secret.unlock.success": "인앱 구매가 잠금 해제되었습니다. 베타 기능 만료일: %s",
+        "iap.beta_runtime_unavailable": "이 비주얼 노벨의 호환성은 아직 테스트 중입니다. 추후 지원을 기다려 주세요.",
         "iap.status.purchased": "구입 완료",
         "iap.status.not_purchased": "구입하지 않음",
         "iap.status.loading": "상품 정보 불러오는 중…",
@@ -4865,6 +4882,11 @@ func _rebuild_settings_view() -> void:
             _t("settings.ios_statement_open"),
             _show_ios_additional_statement
         ))
+    _add_settings_row(about_group, _settings_link_value_row(
+        _t("settings.app_service_filing"),
+        APP_SERVICE_FILING_NUMBER,
+        _open_app_service_filing
+    ))
     var version_row := _settings_value_row(
         _t("settings.version"),
         _application_version_text()
@@ -6146,6 +6168,39 @@ func _settings_value_row(title: String, value: String) -> Control:
     value_label.add_theme_font_size_override("font_size", 15)
     value_label.add_theme_color_override("font_color", ui_tokens.text_secondary)
     row.add_child(value_label)
+    return margin
+
+func _settings_link_value_row(title: String, value: String, action: Callable) -> Control:
+    var margin := MarginContainer.new()
+    margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    margin.add_theme_constant_override("margin_left", 2)
+    margin.add_theme_constant_override("margin_top", 8)
+    margin.add_theme_constant_override("margin_right", 2)
+    margin.add_theme_constant_override("margin_bottom", 8)
+    var row := HBoxContainer.new()
+    row.custom_minimum_size = Vector2(0, 44)
+    row.add_theme_constant_override("separation", 18)
+    margin.add_child(row)
+    var label := Label.new()
+    label.text = title
+    label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    label.add_theme_font_size_override("font_size", 17)
+    label.add_theme_color_override("font_color", ui_tokens.text_primary)
+    row.add_child(label)
+    var link := LinkButton.new()
+    link.text = value
+    link.underline = LinkButton.UNDERLINE_MODE_ALWAYS
+    link.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+    link.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+    link.add_theme_font_size_override("font_size", 15)
+    var link_color := Color("0969da") if style_mode == STYLE_CLASSIC else Color("58a6ff")
+    link.add_theme_color_override("font_color", link_color)
+    link.add_theme_color_override("font_focus_color", link_color)
+    link.add_theme_color_override("font_hover_color", link_color.lightened(0.12))
+    link.add_theme_color_override("font_pressed_color", link_color.darkened(0.12))
+    link.pressed.connect(action)
+    row.add_child(link)
     return margin
 
 func _settings_action_row(title: String, subtitle: String, action_text: String, action: Callable) -> Control:
@@ -7741,6 +7796,14 @@ func _open_android_coffee() -> void:
         _show_system_alert(
             _t("support.coffee.open_failed"),
             _t("support.coffee.title")
+        )
+
+func _open_app_service_filing() -> void:
+    var result := OS.shell_open(APP_SERVICE_FILING_URL)
+    if result != OK:
+        _show_system_alert(
+            _t("settings.app_service_filing_open_failed"),
+            _t("settings.app_service_filing")
         )
 
 func _iap_supported_platform() -> bool:
@@ -10537,7 +10600,7 @@ func _start_selected_game_after_iap() -> void:
         return
 
     # StoreKit lives on the KiriKiri host. Return to that host before probing
-    # Artemis or authorizing ONScripter after an earlier ONS game exits.
+    # a provider-backed beta runtime after another runtime exits.
     if (
         current_player_runtime_kind != RUNTIME_KIRIKIRI
         and not _switch_runtime_player(RUNTIME_KIRIKIRI)
@@ -10629,15 +10692,26 @@ func _start_selected_game_after_entitlements() -> void:
     active_runtime_kind = _game_runtime_kind(library_path)
     if not _switch_runtime_player(active_runtime_kind):
         return
+    var launch_uses_directory := GameLaunchEntry.runtime_uses_directory(
+        active_runtime_kind
+    )
     var raw_launch_file := String(selected_game.get(GameLaunchEntry.FIELD, "")).strip_edges()
-    if not raw_launch_file.is_empty() and not GameLaunchEntry.is_supported_file(raw_launch_file):
+    if (
+        not launch_uses_directory
+        and not raw_launch_file.is_empty()
+        and not GameLaunchEntry.is_supported_file(raw_launch_file)
+    ):
         _show_system_alert(
             _t("message.launch_file_unsupported"),
             _t("alert.warning_title")
         )
         return
     var relative_launch_file := GameLaunchEntry.configured_relative_path(selected_game)
-    if not raw_launch_file.is_empty() and relative_launch_file.is_empty():
+    if (
+        not launch_uses_directory
+        and not raw_launch_file.is_empty()
+        and relative_launch_file.is_empty()
+    ):
         _show_system_alert(
             _t("message.launch_file_outside_game"),
             _t("alert.warning_title")
@@ -10645,7 +10719,8 @@ func _start_selected_game_after_entitlements() -> void:
         return
     var configured_launch_path := GameLaunchEntry.resolve(selected_game)
     if (
-        not relative_launch_file.is_empty()
+        not launch_uses_directory
+        and not relative_launch_file.is_empty()
         and not FileAccess.file_exists(configured_launch_path)
     ):
         _show_system_alert(
@@ -10653,13 +10728,10 @@ func _start_selected_game_after_entitlements() -> void:
             _t("alert.warning_title")
         )
         return
-    var requires_game_root := (
-        active_runtime_kind in [RUNTIME_ONSCRIPTER, RUNTIME_MINORI]
-        or _selected_game_uses_beta_provider()
-    )
     var launch_path := GameLaunchEntry.resolve_for_runtime(
         selected_game,
-        requires_game_root
+        active_runtime_kind,
+        _selected_game_uses_beta_provider()
     )
     _set_game_runtime_orientation(true)
     var played_game := _mark_game_played(library_path)
@@ -10777,7 +10849,11 @@ func _ready() -> void:
     input_trace_enabled = (
         _runtime_flag("AETHERKIRI_INPUT_TRACE")
         or ios_diagnostics_enabled
-        or not cli_probe_script.is_empty()
+        # A CLI probe should measure the game, not force the very verbose
+        # LayerIntf input tracer on every click.  The tracer walks and logs a
+        # large TJS object graph from onMouseDown/onMouseUp and can itself
+        # create 45-70ms host frames.  Keep it opt-in for targeted input
+        # investigations while probes retain their normal input delivery.
     )
     device_probe_enabled = device_probe_enabled or frame_probe_enabled
     device_probe_enabled = device_probe_enabled or input_trace_enabled
@@ -11877,7 +11953,7 @@ func _probe_open_game(config: Dictionary, target_game_path: String, backend_env:
     if not _switch_runtime_player(runtime_kind):
         _write_probe_marker("probe_open_game runtime_switch_failed kind=%s" % runtime_kind)
         return false
-    if runtime_kind == RUNTIME_ONSCRIPTER:
+    if GameLaunchEntry.runtime_uses_directory(runtime_kind):
         target_game_path = _game_runtime_root(target_game_path)
     selected_backend = ProbeConfig.backend(config, backend_env)
     if not selected_backend in BACKENDS:
@@ -12190,6 +12266,10 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
     var click_every_frames: int = max(1, int(action.get("click_every_frames", 1)))
     var max_clicks: int = max(0, int(action.get("max_clicks", 0)))
     var capture_every: int = max(0, int(action.get("capture_every", 0)))
+    # Optional frame-accurate capture after Godot has advanced its present
+    # boundary.  The regular capture path runs before process_frame and can
+    # miss a transient swap/clear black frame visible in the native window.
+    var capture_after_present_every: int = max(0, int(action.get("capture_after_present_every", 0)))
     var spike_ms: float = max(0.0, float(action.get("spike_ms", 20.0)))
     var sample_interval_ms: int = max(0, int(action.get("sample_interval_ms", 0)))
     var pointer_id: int = int(action.get("pointer_id", TOUCH_POINTER_ID_OFFSET))
@@ -12197,10 +12277,13 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
     var tick_total := 0.0
     var update_total := 0.0
     var frame_total := 0.0
+    var wall_frame_total := 0.0
     var input_max := 0.0
     var tick_max := 0.0
     var update_max := 0.0
     var frame_max := 0.0
+    var wall_frame_max := 0.0
+    var wait_max := 0.0
     var spikes := 0
     var input_events := 0
     var clicks_sent := 0
@@ -12213,10 +12296,13 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
     var sample_tick_total := 0.0
     var sample_update_total := 0.0
     var sample_frame_total := 0.0
+    var sample_wall_frame_total := 0.0
     var sample_input_max := 0.0
     var sample_tick_max := 0.0
     var sample_update_max := 0.0
     var sample_frame_max := 0.0
+    var sample_wall_frame_max := 0.0
+    var sample_wait_max := 0.0
     var sample_spikes := 0
     var sample_index := 0
 
@@ -12293,6 +12379,39 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
             step += 1
         await get_tree().process_frame
         var sample_end_ticks := Time.get_ticks_usec()
+        if capture_after_present_every > 0 and (frame_index % capture_after_present_every) == 0:
+            var presented_image := _probe_capture_image()
+            var presented_path := _default_output_path("aetherkiri-step-%02d-%s_present_f%03d.png" % [
+                step,
+                label,
+                frame_index,
+            ])
+            presented_image.save_png(presented_path)
+            var presented_line := "step %02d label=%s frame=%d present_capture=1 texture_backend=%s renderer=\"%s\" screenshot=%s stats=%s" % [
+                step,
+                label,
+                frame_index,
+                player.get_frame_texture_backend(),
+                player.get_renderer_info(),
+                presented_path,
+                JSON.stringify(_image_stats(presented_image)),
+            ]
+            print(presented_line)
+            _write_probe_marker(presented_line)
+            step += 1
+
+        # The overlay's Frame value is the host/Godot frame delta, which
+        # includes the time spent yielding to the next process_frame. Keep
+        # that wall-clock interval separate from the active engine work above
+        # so click-stream results can be compared with the floating panel.
+        var wall_frame_ms := float(sample_end_ticks - frame_start) / 1000.0
+        var wait_ms := maxf(0.0, wall_frame_ms - frame_ms)
+        wall_frame_total += wall_frame_ms
+        wall_frame_max = maxf(wall_frame_max, wall_frame_ms)
+        wait_max = maxf(wait_max, wait_ms)
+        sample_wall_frame_total += wall_frame_ms
+        sample_wall_frame_max = maxf(sample_wall_frame_max, wall_frame_ms)
+        sample_wait_max = maxf(sample_wait_max, wait_ms)
         var sample_elapsed_ms := float(sample_end_ticks - sample_start_ticks) / 1000.0
         var stream_finished := frame_index + 1 >= frames
         if sample_interval_ms > 0 and (sample_elapsed_ms >= sample_interval_ms or stream_finished):
@@ -12301,7 +12420,7 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
                 0.0,
                 (sample_elapsed_ms - sample_frame_total) / sample_divisor
             )
-            var sample_line := "click_stream_sample label=%s index=%d frames=%d clicks=%d elapsed_ms=%.2f fps=%.2f avg_input_ms=%.2f avg_tick_ms=%.2f avg_update_ms=%.2f avg_active_ms=%.2f avg_wait_ms=%.2f max_input_ms=%.2f max_tick_ms=%.2f max_update_ms=%.2f max_active_ms=%.2f spikes=%d spike_ms=%.2f texture_backend=%s renderer=\"%s\"" % [
+            var sample_line := "click_stream_sample label=%s index=%d frames=%d clicks=%d elapsed_ms=%.2f fps=%.2f avg_input_ms=%.2f avg_tick_ms=%.2f avg_update_ms=%.2f avg_active_ms=%.2f avg_wait_ms=%.2f avg_wall_frame_ms=%.2f max_input_ms=%.2f max_tick_ms=%.2f max_update_ms=%.2f max_active_ms=%.2f max_wall_frame_ms=%.2f max_wait_ms=%.2f spikes=%d spike_ms=%.2f texture_backend=%s renderer=\"%s\"" % [
                 label,
                 sample_index,
                 sample_frames,
@@ -12313,10 +12432,13 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
                 sample_update_total / sample_divisor,
                 sample_frame_total / sample_divisor,
                 sample_wait_ms,
+                sample_wall_frame_total / sample_divisor,
                 sample_input_max,
                 sample_tick_max,
                 sample_update_max,
                 sample_frame_max,
+                sample_wall_frame_max,
+                sample_wait_max,
                 sample_spikes,
                 spike_ms,
                 player.get_frame_texture_backend(),
@@ -12332,15 +12454,18 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
             sample_tick_total = 0.0
             sample_update_total = 0.0
             sample_frame_total = 0.0
+            sample_wall_frame_total = 0.0
             sample_input_max = 0.0
             sample_tick_max = 0.0
             sample_update_max = 0.0
             sample_frame_max = 0.0
+            sample_wall_frame_max = 0.0
+            sample_wait_max = 0.0
             sample_spikes = 0
 
     var divisor := float(max(1, measured_frames))
     var elapsed_sec: float = maxf(0.0001, float(Time.get_ticks_usec() - stream_start_ticks) / 1000000.0)
-    var line := "click_stream label=%s frames=%d measured_frames=%d clicks_per_frame=%d click_every_frames=%d max_clicks=%d clicks_sent=%d input_events=%d fps=%.2f avg_input_ms=%.2f max_input_ms=%.2f avg_tick_ms=%.2f max_tick_ms=%.2f avg_update_ms=%.2f max_update_ms=%.2f avg_frame_ms=%.2f max_frame_ms=%.2f spikes=%d spike_ms=%.2f texture_backend=%s renderer=\"%s\"" % [
+    var line := "click_stream label=%s frames=%d measured_frames=%d clicks_per_frame=%d click_every_frames=%d max_clicks=%d clicks_sent=%d input_events=%d fps=%.2f avg_input_ms=%.2f max_input_ms=%.2f avg_tick_ms=%.2f max_tick_ms=%.2f avg_update_ms=%.2f max_update_ms=%.2f avg_frame_ms=%.2f max_frame_ms=%.2f avg_wall_frame_ms=%.2f max_wall_frame_ms=%.2f max_wait_ms=%.2f spikes=%d spike_ms=%.2f texture_backend=%s renderer=\"%s\"" % [
         label,
         frames,
         measured_frames,
@@ -12358,6 +12483,9 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
         update_max,
         frame_total / divisor,
         frame_max,
+        wall_frame_total / divisor,
+        wall_frame_max,
+        wait_max,
         spikes,
         spike_ms,
         player.get_frame_texture_backend(),
@@ -13606,7 +13734,7 @@ func _on_open_game() -> void:
         render_errors += 1
         return
     active_runtime_kind = detected_runtime
-    if detected_runtime == RUNTIME_ONSCRIPTER:
+    if GameLaunchEntry.runtime_uses_directory(detected_runtime):
         path = _game_runtime_root(path)
         game_path.text = path
     _load_button_position_memory(path)
@@ -15770,6 +15898,9 @@ func _send_game_pointer_event(event_type: int, pointer_id: int, x: float, y: flo
             str(loading_panel != null and loading_panel.visible),
             active_runtime_kind,
         ]
+        # Desktop probes do not have the iOS device marker file, so keep the
+        # individual edge visible on stdout as well as in optional file logs.
+        print(trace_line)
         _write_probe_marker(trace_line)
         if perf_log_file != null:
             perf_log_file.store_line(trace_line)

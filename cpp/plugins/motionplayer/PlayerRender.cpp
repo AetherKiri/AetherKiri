@@ -199,10 +199,21 @@ namespace {
             if(level < TVP_COMPACT_LEVEL_MINIMIZE) {
                 return;
             }
-            // Drop only process-level warm-cache ownership. Active players
-            // retain their own shared_ptrs until the current frame finishes.
-            clearSharedMotionSourceBitmapCache();
-            motion::ResourceManager::trimStaticStateForMemoryPressure();
+            // A MINIMIZE compaction is a reclaim hint, not a host-session
+            // boundary. Dropping the process-level Motion caches here makes
+            // the next scene transition synchronously reparse its PSB and
+            // decode every source again on the script thread. That is exactly
+            // the multi-hundred-millisecond hitch seen when a new
+            // MotionResourceManager is created during an EnvObjectWorld
+            // transition. Both caches already have bounded policies (the
+            // source bitmap cache is capped at 256 MiB and the warm module
+            // cache keeps only a small number of modules), so retain them for
+            // ordinary pressure notifications and release them only for the
+            // explicit MAX compaction level.
+            if(level >= TVP_COMPACT_LEVEL_MAX) {
+                clearSharedMotionSourceBitmapCache();
+                motion::ResourceManager::trimStaticStateForMemoryPressure();
+            }
         }
     };
 
@@ -8748,8 +8759,17 @@ namespace motion {
             }
             return false;
         }
-        TVPGodotGpuBatchScope gpuBatch(
-            _runtime->isEmoteMode && _runtime->renderCommands.size() > 1);
+        // A selector hover can call renderToLayer directly from the input
+        // event, before Window::UpdateContent has opened its outer batch.  If
+        // this scope is restricted to E-mote, every PSB button draw is
+        // submitted as a separate Godot GPU transaction; on the title page
+        // that turns a harmless 15-command repaint into a visible stall and
+        // can expose the cleared intermediate surface for one frame.  The
+        // bridge preserves ordering and handles nested scopes, so batch every
+        // multi-command motion render here (it is a no-op on non-Godot
+        // backends).  This keeps the clear + all compositing operations
+        // atomic from the host presenter's point of view.
+        TVPGodotGpuBatchScope gpuBatch(_runtime->renderCommands.size() > 1);
 
         // The same evaluated command list can be submitted through
         // renderToLayer, SeparateLayerAdaptor, and D3DAdaptor during a KAG
@@ -12617,7 +12637,8 @@ namespace motion {
             rasterNowUs - _runtime->lastMotionRasterPublishUs <
                 rasterThrottleUs;
         auto *cachedRasterLayer = resolveNativeLayer(renderLayerObject);
-        if(!_runtime->isEmoteMode && !skipUpdate && rasterThrottleUs != 0 &&
+        if(!_forceMotionRasterRender && !_runtime->isEmoteMode && !skipUpdate &&
+           rasterThrottleUs != 0 &&
            sameRasterTarget && cachedRasterLayer &&
            cachedRasterLayer->GetHasImage()) {
             _runtime->lastCanvas =
@@ -13971,6 +13992,11 @@ namespace motion {
         if(!_speed) {
             return;
         }
+        // Toggle the command-list token on every accepted progress call,
+        // including progress(0).  KAG uses that token solely as a dirty
+        // signal before scheduling onPaint; the evaluated frame itself stays
+        // in the retained node tree below.
+        _commandListPulse = !_commandListPulse;
         const bool hasNativeBackend = _nativeBackend != nullptr;
         _layersDirty = !hasNativeBackend;
         if(!_completedEndedTimelineRenderHoldLabel.empty()) {

@@ -272,6 +272,12 @@ class tTVPLayerManager : public iTVPLayerManager, public tTVPDrawable {
                                     //!< for this layer manager
 
     tTJSNI_BaseLayer *CaptureOwner;
+    // Capture may be released by a page transition during onMouseDown. Keep
+    // the original gesture target alive until mouse-up so its release cannot
+    // activate a control on the newly revealed page.
+    bool LeftPointerGestureActive = false;
+    tTJSVariant LeftPointerDownOwner;
+    bool IsLeftPointerGestureTarget(tTJSNI_BaseLayer *layer) const;
     tTJSNI_BaseLayer *LastMouseMoveSent;
     std::vector<tTVPTouchCaptureLayer>
         TouchCapture; //!< 同時タッチ数は多くても10点程度なのでvectorで持つ(ほぼ1or2点)
@@ -334,6 +340,10 @@ public:
         DesiredLayerType = type;
     }
     void SetHoldAlpha(bool b);
+    // D2D multi-manager composition uses transparent pixels outside the
+    // manager's actual content.  Clear an already allocated target when the
+    // draw device switches this manager to alpha-preserving output.
+    void ClearDrawBufferForAlpha();
 
 public: // methods from tTVPDrawable
     tTVPBaseTexture *GetDrawTargetBitmap(const tTVPRect &rect,

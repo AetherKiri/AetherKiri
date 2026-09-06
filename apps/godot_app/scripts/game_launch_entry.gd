@@ -2,6 +2,14 @@ extends RefCounted
 
 const FIELD := "launchFile"
 const SUPPORTED_EXTENSIONS := ["exe", "xp3"]
+const DIRECTORY_RUNTIME_KINDS := [
+    "artemis",
+    "catsystem2",
+    "minori",
+    "onscripter",
+    "siglus",
+    "wa2",
+]
 
 
 static func configured_relative_path(game: Dictionary) -> String:
@@ -26,13 +34,20 @@ static func resolve(game: Dictionary) -> String:
     return game_path.path_join(relative_path).simplify_path()
 
 
-static func resolve_for_runtime(game: Dictionary, requires_game_root: bool) -> String:
-    # Runtime providers and ONScripter consume a game directory.  A selected
-    # EXE/XP3 is only a legacy KiriKiri entry point and must not replace the
-    # root passed to a provider probe/open pair.
-    if requires_game_root:
+static func resolve_for_runtime(
+    game: Dictionary, runtime_kind: String, requires_game_root: bool = false
+) -> String:
+    # Runtime providers and directory-based runtimes consume the game root. A
+    # selected EXE/XP3 is only a legacy KiriKiri entry point and must not
+    # replace the root passed to a provider probe/open pair.
+    if requires_game_root or runtime_uses_directory(runtime_kind):
+        # Preserve valid trailing spaces from native file-picker paths.
         return _normalize_path(String(game.get("path", "")))
     return resolve(game)
+
+
+static func runtime_uses_directory(runtime_kind: String) -> bool:
+    return DIRECTORY_RUNTIME_KINDS.has(runtime_kind.to_lower())
 
 
 static func is_supported_file(path: String) -> bool:

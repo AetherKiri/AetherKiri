@@ -539,6 +539,7 @@ GodotTexture2D::GodotTexture2D(const void *pixel, int pitch, unsigned int w,
         MarkTransparentKnown();
     }
     MarkCpuDirty();
+    cpu_pixels_known_zero_ = pixel == nullptr;
 }
 
 GodotTexture2D::~GodotTexture2D() { ReleaseGpuHandle(); }
@@ -596,8 +597,12 @@ void GodotTexture2D::MarkOpaqueKnown() {
 void GodotTexture2D::CreateGpuHandle(const void *pixel, int pitch) {
     const auto *bridge = TVPGodotGpuBridgeGet();
     if (bridge == nullptr || bridge->create_rgba == nullptr) return;
-    const void *src = pixel != nullptr ? pixel :
-        (pixels_.empty() ? nullptr : pixels_.data());
+    const void *src = pixel != nullptr
+        ? pixel
+        : ((format_ == TVPTextureFormat::RGBA && cpu_pixels_known_zero_) ||
+                   pixels_.empty()
+               ? nullptr
+               : pixels_.data());
     uint32_t stride = static_cast<uint32_t>(
         pixel != nullptr && pitch > 0 ? pitch : pitch_);
     std::vector<uint32_t> expanded_gray;
@@ -625,6 +630,7 @@ void GodotTexture2D::CreateGpuHandle(const void *pixel, int pitch) {
     }
     gpu_dirty_ = false;
     cpu_dirty_ = false;
+    cpu_pixels_known_zero_ = false;
     if(format_ == TVPTextureFormat::RGBA && !retain_cpu_shadow_)
         DiscardCpuStorage();
 }
@@ -744,6 +750,7 @@ void GodotTexture2D::EnsureCpuReadable() {
                 }
             }
             gpu_dirty_ = false;
+            cpu_pixels_known_zero_ = false;
         }
         return;
     }
@@ -751,6 +758,7 @@ void GodotTexture2D::EnsureCpuReadable() {
         bridge->read_rgba(gpu_handle_, pixels_.data(), pixels_.size(),
                           static_cast<uint32_t>(pitch_))) {
         gpu_dirty_ = false;
+        cpu_pixels_known_zero_ = false;
     }
 }
 
@@ -859,6 +867,7 @@ void GodotTexture2D::SetSize(unsigned int w, unsigned int h) {
     pixels_.assign(static_cast<size_t>(pitch_) * h, 0);
     MarkTransparentKnown();
     MarkCpuDirty();
+    cpu_pixels_known_zero_ = true;
 }
 
 bool GodotTexture2D::ClearGpu(uint32_t rgba, const tTVPRect &rc) {

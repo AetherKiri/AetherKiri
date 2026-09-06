@@ -23,18 +23,27 @@ func _init() -> void:
     _expect_equal(
         GameLaunchEntry.resolve_for_runtime(
             {"path": root, GameLaunchEntry.FIELD: "开始游戏.exe"},
-            true
+            "artemis"
         ),
         root,
-        "provider runtime keeps directory root"
+        "Artemis directory launch path"
     )
     _expect_equal(
         GameLaunchEntry.resolve_for_runtime(
             {"path": root, GameLaunchEntry.FIELD: "开始游戏.exe"},
-            false
+            "kirikiri"
         ),
         exe_path,
-        "legacy runtime keeps selected launch file"
+        "KiriKiri configured launch path"
+    )
+    _expect_equal(
+        GameLaunchEntry.resolve_for_runtime(
+            {"path": root, GameLaunchEntry.FIELD: "开始游戏.exe"},
+            "kirikiri",
+            true
+        ),
+        root,
+        "provider runtime keeps directory root"
     )
     _expect_equal(
         GameLaunchEntry.relative_path_for_selection(root, archive_path),

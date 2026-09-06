@@ -536,6 +536,15 @@ namespace TJS {
                         }
                     }
                 }
+                if(!isbin) {
+                    stream->SetPosition(0);
+                    isbin = TJSLoadStructuredDataPack(stream, result);
+                    if(TJSArrayStructTraceEnabled()) {
+                        spdlog::info(
+                            "Array.loadStruct data-pack file={} loaded={}",
+                            name.AsStdString(), isbin);
+                    }
+                }
             } catch(...) {
                 delete stream;
                 throw;

@@ -1,5 +1,6 @@
 #include "tjsNs0DataPack.h"
 
+#include "kbadDataPack.h"
 #include "tjsArray.h"
 #include "tjsDictionary.h"
 
@@ -615,7 +616,15 @@ namespace {
 
 bool loadTjsNs0DataPackWithoutOuterIv(tTJSBinaryStream *stream,
                                       tTJSVariant *result) {
-    return TVPLoadTjsNs0DataPack(stream, result);
+    if(TVPLoadTjsNs0DataPack(stream, result))
+        return true;
+
+    // Dictionary.loadStruct has a single structured-loader slot. Keep KBAD
+    // save containers reachable after registering the ns0 decoder; otherwise
+    // they fall through to structured-text parsing and are evaluated as an
+    // invalid `(const)[KBAD...]` expression.
+    stream->SetPosition(0);
+    return TVPLoadKbadDataPack(stream, result);
 }
 
 } // namespace

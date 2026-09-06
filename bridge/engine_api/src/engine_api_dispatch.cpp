@@ -1068,7 +1068,13 @@ engine_result_t engine_set_option(engine_handle_t public_handle,
   if (result != ENGINE_RESULT_OK) return result;
   std::lock_guard<std::recursive_mutex> guard(handle->mutex);
   const std::string key = Normalize(option->key_utf8);
-  if (key == "beta_runtime_allowed" || key == "artemis_beta_allowed") {
+  if (key == "artemis_beta_allowed") {
+    // Kept as a no-op for compatibility with older hosts. The explicit
+    // beta_runtime_allowed option controls provider-gated runtimes.
+    SetThreadError(nullptr);
+    return ENGINE_RESULT_OK;
+  }
+  if (key == "beta_runtime_allowed") {
     const std::string value = Normalize(option->value_utf8);
     handle->beta_runtime_allowed =
         value == "1" || value == "true" || value == "yes" || value == "on";
