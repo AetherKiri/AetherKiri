@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cstring>
 #include <deque>
+#include <exception>
 #include <functional>
 #include <mutex>
 #include <new>
@@ -29,6 +30,7 @@
 #endif
 
 #include "engine_runtime_provider_registry.h"
+#include "engine_startup_thread.h"
 #include "legacy_engine_api.h"
 #include "TextTransform.h"
 #if defined(ENGINE_API_USE_KRKR2_RUNTIME)
@@ -64,6 +66,8 @@ extern "C" void AetherInternalRegisterWa2Runtime(void);
 
 namespace {
 
+using aetherkiri::engine_api::StartupThread;
+
 enum class BackendKind { kUndecided, kLegacy, kProvider };
 
 struct DispatchHandle {
@@ -82,7 +86,7 @@ struct DispatchHandle {
   bool has_surface_size = false;
   engine_runtime_host_v1_t host{};
   engine_runtime_fragment_shader_host_v1_t fragment_shader_host{};
-  std::thread startup_thread;
+  StartupThread startup_thread;
   uint32_t startup_state = ENGINE_STARTUP_STATE_IDLE;
   std::deque<std::string> startup_logs;
   struct PlatformRequest {
@@ -628,7 +632,7 @@ engine_result_t engine_destroy(engine_handle_t public_handle) {
     handle = Cast(public_handle);
   }
 
-  std::thread startup_thread;
+  StartupThread startup_thread;
   {
     std::lock_guard<std::recursive_mutex> guard(handle->mutex);
     startup_thread = std::move(handle->startup_thread);
@@ -853,23 +857,30 @@ engine_result_t engine_open_game_async(engine_handle_t public_handle,
                                   ? startup_script_utf8
                                   : "";
   handle->startup_state = ENGINE_STARTUP_STATE_RUNNING;
-  handle->startup_thread = std::thread([handle, root, startup]() {
-    const char* startup_value = startup.empty() ? nullptr : startup.c_str();
-    AETHER_DISPATCH_DIAG_LOG("engine_open_game_async before provider open_game");
-    const auto open_result = handle->provider->open_game(
-        handle->runtime, root.c_str(), startup_value);
-    AETHER_DISPATCH_DIAG_LOG("engine_open_game_async after provider open_game");
-    std::lock_guard<std::recursive_mutex> thread_guard(handle->mutex);
-    handle->startup_state = open_result == ENGINE_RESULT_OK
-                                ? ENGINE_STARTUP_STATE_SUCCEEDED
-                                : ENGINE_STARTUP_STATE_FAILED;
-    handle->startup_logs.push_back(open_result == ENGINE_RESULT_OK
-                                       ? "runtime provider open_game => OK"
-                                       : "runtime provider open_game => FAILED");
-    SetProviderError(handle, open_result,
-                     "runtime provider failed to open game asynchronously");
-    if (open_result == ENGINE_RESULT_OK) StartTextTranslationLoading();
-  });
+  try {
+    handle->startup_thread = StartupThread([handle, root, startup]() {
+      const char* startup_value = startup.empty() ? nullptr : startup.c_str();
+      AETHER_DISPATCH_DIAG_LOG("engine_open_game_async before provider open_game");
+      const auto open_result = handle->provider->open_game(
+          handle->runtime, root.c_str(), startup_value);
+      AETHER_DISPATCH_DIAG_LOG("engine_open_game_async after provider open_game");
+      std::lock_guard<std::recursive_mutex> thread_guard(handle->mutex);
+      handle->startup_state = open_result == ENGINE_RESULT_OK
+                                  ? ENGINE_STARTUP_STATE_SUCCEEDED
+                                  : ENGINE_STARTUP_STATE_FAILED;
+      handle->startup_logs.push_back(open_result == ENGINE_RESULT_OK
+                                         ? "runtime provider open_game => OK"
+                                         : "runtime provider open_game => FAILED");
+      SetProviderError(handle, open_result,
+                       "runtime provider failed to open game asynchronously");
+      if (open_result == ENGINE_RESULT_OK) StartTextTranslationLoading();
+    });
+  } catch (const std::exception& error) {
+    handle->startup_state = ENGINE_STARTUP_STATE_FAILED;
+    handle->last_error =
+        std::string("failed to start runtime provider: ") + error.what();
+    return ThreadError(ENGINE_RESULT_INTERNAL_ERROR, handle->last_error.c_str());
+  }
   SetThreadError(nullptr);
   return ENGINE_RESULT_OK;
 }
