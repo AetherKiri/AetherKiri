@@ -88,6 +88,11 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
+      - name: Set up Rust for Minori
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
       - name: Resolve private runtime dependency cache
         id: private-runtime-cache-key
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
@@ -359,6 +364,11 @@ jobs:
           submodules: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && 'recursive' || 'false' }}
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
+
+      - name: Set up Rust for Minori
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
 
       - name: Resolve private runtime dependency cache
         id: private-runtime-cache-key
@@ -644,6 +654,11 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
+      - name: Set up Rust for Minori
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+
       - name: Resolve private runtime dependency cache
         id: private-runtime-cache-key
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
@@ -814,7 +829,7 @@ jobs:
             --path apps/godot_app \
             --script res://scripts/smoke_test.gd
 
-      - name: Run native motionplayer contract tests
+      - name: Run complete public and integrated private unit tests
         run: |
           set -euo pipefail
           test_build_dir="${GITHUB_WORKSPACE}/out/macos-x64/ci-tests"
@@ -839,7 +854,12 @@ jobs:
           fi
 
           cmake --build "$test_build_dir" --parallel 4
-          ctest --test-dir "$test_build_dir" --output-on-failure --parallel 4
+          ctest --test-dir "$test_build_dir" --show-only=human
+          ctest \
+            --test-dir "$test_build_dir" \
+            --output-on-failure \
+            --no-tests=error \
+            --parallel 4
 
       - name: Verify built .app
         run: |
@@ -936,6 +956,12 @@ jobs:
           submodules: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && 'recursive' || 'false' }}
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
+
+      - name: Set up Rust for Minori
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+          targets: wasm32-unknown-emscripten
 
       - name: Initialize public runtime packages
         if: env.AETHERKIRI_WITH_INTERNAL != 'true'

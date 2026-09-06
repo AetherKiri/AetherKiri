@@ -281,6 +281,12 @@ TJS_EXP_FUNC_DEF(ttstr, TVPChopStorageExt, (const ttstr &name));
 // chop storage's extension and return it.
 // extensition delimiter '.' will not be held.
 
+// Returns an existing alternate raster for narrowly recognized legacy save
+// thumbnail names (data_continue, numbered slots, and quick saves). Besides
+// graphic lookup, text streams use this to recover old compound BMP saves
+// when a newer plain thumbnail with another suffix exists beside them.
+ttstr TVPFindLegacySaveThumbnail(const ttstr &name);
+
 TJS_EXP_FUNC_DEF(void, TVPAddAutoPath, (const ttstr &name));
 // add given path to auto search path
 

@@ -4,6 +4,7 @@
 #include "LayerImpl.h"
 #include "BitmapIntf.h"
 #include "ScriptMgnIntf.h"
+#include "GlesCaptureUtils.h"
 #include "motionplayer/Player.h"
 
 #include <algorithm>
@@ -256,6 +257,16 @@ static bool GlesCompatGetObjectProperty(const tTJSVariant &object,
     iTJSDispatch2 *dispatch = object.AsObjectNoAddRef();
     return TJS_SUCCEEDED(dispatch->PropGet(
         TJS_IGNOREPROP, name, nullptr, &result, dispatch));
+}
+
+static bool GlesCompatGetDispatchProperty(iTJSDispatch2 *object,
+                                          const tjs_char *name,
+                                          tTJSVariant &result) {
+    result.Clear();
+    if(!object || !name)
+        return false;
+    return TJS_SUCCEEDED(object->PropGet(
+        TJS_IGNOREPROP, name, nullptr, &result, object));
 }
 
 static void GlesCompatSetObjectProperty(iTJSDispatch2 *object,
@@ -523,9 +534,23 @@ static iTJSDispatch2 *GlesCompatResolveLayerDispatch(const tTJSVariant &value,
     if(depth > 4 || value.Type() != tvtObject || !value.AsObjectNoAddRef())
         return nullptr;
 
-    iTJSDispatch2 *object = value.AsObjectNoAddRef();
-    if(GlesCompatIsLayerDispatch(object))
-        return object;
+    iTJSDispatch2 *base = value.AsObjectNoAddRef();
+    const auto closure = value.AsObjectClosureNoAddRef();
+    iTJSDispatch2 *candidates[] = {
+        base,
+        closure.ObjThis,
+        closure.Object,
+        nullptr,
+    };
+
+    // A TJS object-valued argument is a closure, not necessarily a bare
+    // dispatch. On some hosts Layer is carried by ObjThis while Object is the
+    // method/function dispatch. Checking only AsObjectNoAddRef() therefore
+    // makes layer discovery dependent on the platform's closure layout.
+    for(auto *candidate : candidates) {
+        if(GlesCompatIsLayerDispatch(candidate))
+            return candidate;
+    }
 
     static const tjs_char *kExplicitLayerProps[] = {
         TJS_W("targetLayer"), TJS_W("_targetLayer"),
@@ -539,15 +564,22 @@ static iTJSDispatch2 *GlesCompatResolveLayerDispatch(const tTJSVariant &value,
     };
 
     auto tryProps = [&](const tjs_char *const *props) -> iTJSDispatch2 * {
-        for(int i = 0; props[i]; ++i) {
-            tTJSVariant prop;
-            if(!GlesCompatGetObjectProperty(value, props[i], prop) ||
-               prop.Type() != tvtObject || !prop.AsObjectNoAddRef() ||
-               prop.AsObjectNoAddRef() == object) {
+        for(auto *candidate : candidates) {
+            if(!candidate)
                 continue;
+            for(int i = 0; props[i]; ++i) {
+                tTJSVariant prop;
+                if(!GlesCompatGetDispatchProperty(candidate, props[i], prop) ||
+                   prop.Type() != tvtObject || !prop.AsObjectNoAddRef() ||
+                   prop.AsObjectNoAddRef() == candidate ||
+                   prop.AsObjectNoAddRef() == base) {
+                    continue;
+                }
+                if(auto *resolved =
+                       GlesCompatResolveLayerDispatch(prop, depth + 1)) {
+                    return resolved;
+                }
             }
-            if(auto *resolved = GlesCompatResolveLayerDispatch(prop, depth + 1))
-                return resolved;
         }
         return nullptr;
     };
@@ -926,23 +958,44 @@ static tjs_error GlesCompatRenderCb(tTJSVariant *result, tjs_int,
     return TJS_S_OK;
 }
 
+static int GlesCompatCaptureCallbackIndex(tjs_int numparams,
+                                          tTJSVariant **param) {
+    return aetherkiri::plugins::gles::CaptureCallbackIndex(numparams, param);
+}
+
+static tjs_error GlesCompatInvokeCaptureCallback(tjs_int width, tjs_int height,
+                                                 tjs_int numparams,
+                                                 tTJSVariant **param) {
+    return aetherkiri::plugins::gles::InvokeCaptureCallback(
+        width, height, numparams, param);
+}
+
 static tjs_error GlesCompatCaptureCb(tTJSVariant *result, tjs_int numparams,
                                      tTJSVariant **param,
                                      iTJSDispatch2 *objthis) {
     LogGlesCompatArgsOnce(TJS_W("capture"), numparams, param);
+    const tjs_error callbackResult = GlesCompatInvokeCaptureCallback(
+        1920, 1080, numparams, param);
+    if(TJS_FAILED(callbackResult)) return callbackResult;
     iTJSDispatch2 *layerDispatch = GlesCompatFindLayerInParams(numparams, param);
+    if(!layerDispatch)
+        layerDispatch = g_glesCompatRegisteredLayer;
     if(layerDispatch)
         g_glesCompatRegisteredLayer = layerDispatch;
 	    GlesCompatRegisterRenderable(
 	        numparams, param, reinterpret_cast<uintptr_t>(objthis),
 	        TJS_W("capture"));
 	    GlesCompatRenderMotionPlayers(TJS_W("capture"));
-	    if(layerDispatch)
-	        GlesCompatRenderGodotLive2D(layerDispatch);
-	    GlesCompatIncrementRenderCount(objthis);
+    if(layerDispatch)
+        GlesCompatRenderGodotLive2D(layerDispatch);
+    GlesCompatIncrementRenderCount(objthis);
     if(result) {
-        if(numparams > 0 && param && param[0])
-            *result = *param[0];
+        const int callbackIndex =
+            GlesCompatCaptureCallbackIndex(numparams, param);
+        const int targetIndex = callbackIndex == 0 ? 1 : 0;
+        if(targetIndex >= 0 && targetIndex < numparams && param &&
+           param[targetIndex])
+            *result = *param[targetIndex];
         else
             *result = true;
     }
@@ -1161,8 +1214,14 @@ public:
     static tjs_error captureCb(tTJSVariant *result, tjs_int numparams,
                                tTJSVariant **param, GLESAdaptor *self) {
         LogGlesCompatArgsOnce(TJS_W("adaptor.capture"), numparams, param);
+        const tjs_error callbackResult = GlesCompatInvokeCaptureCallback(
+            self ? self->screenWidth_ : 0,
+            self ? self->screenHeight_ : 0, numparams, param);
+        if(TJS_FAILED(callbackResult)) return callbackResult;
         iTJSDispatch2 *layerDispatch =
             GlesCompatFindLayerInParams(numparams, param);
+        if(!layerDispatch)
+            layerDispatch = g_glesCompatRegisteredLayer;
         if(layerDispatch)
             g_glesCompatRegisteredLayer = layerDispatch;
 	    GlesCompatRegisterRenderable(
@@ -1171,11 +1230,15 @@ public:
 	    GlesCompatRenderMotionPlayers(TJS_W("adaptor.capture"));
 	    if(layerDispatch)
 	        GlesCompatRenderGodotLive2D(layerDispatch);
-	    if(self)
-	        ++self->renderCount_;
+        if(self)
+            ++self->renderCount_;
         if(result) {
-            if(numparams > 0 && param && param[0])
-                *result = *param[0];
+            const int callbackIndex =
+                GlesCompatCaptureCallbackIndex(numparams, param);
+            const int targetIndex = callbackIndex == 0 ? 1 : 0;
+            if(targetIndex >= 0 && targetIndex < numparams && param &&
+               param[targetIndex])
+                *result = *param[targetIndex];
             else
                 *result = true;
         }
@@ -1429,12 +1492,6 @@ NCB_REGISTER_CLASS(OGLDrawDevice) {
     NCB_METHOD_RAW_CALLBACK(finalize, &OGLDrawDevice::finalizeCb, 0);
 }
 
-static tjs_error GlesCompatDrawDeviceGetModuleCb(tTJSVariant *result,
-                                                 tjs_int, tTJSVariant **,
-                                                 iTJSDispatch2 *) {
-    return CreateGlesCompatModule(result, 0, 0);
-}
-
 static void GlesCompatPostRegist() {
     try {
         TVPExecuteExpression(
@@ -1460,12 +1517,10 @@ static void GlesCompatPreUnregist() {
 NCB_POST_REGIST_CALLBACK(GlesCompatPostRegist);
 NCB_PRE_UNREGIST_CALLBACK(GlesCompatPreUnregist);
 
-NCB_ATTACH_FUNCTION_WITHTAG(getModule, WindowPassThroughDrawDeviceGlesCompat,
-                            Window.PassThroughDrawDevice,
-                            GlesCompatDrawDeviceGetModuleCb);
-NCB_ATTACH_FUNCTION_WITHTAG(getModule, WindowBasicDrawDeviceGlesCompat,
-                            Window.BasicDrawDevice,
-                            GlesCompatDrawDeviceGetModuleCb);
+// BasicDrawDevice/PassThroughDrawDevice own getModule. Their implementation
+// initializes the owning window's GLES adaptor before creating the module.
+// Replacing it here skips that lifecycle step, so script glesCapture returns
+// void and never submits a frame.
 #endif
 
 #undef NCB_MODULE_NAME

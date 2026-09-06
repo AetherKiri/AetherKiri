@@ -302,9 +302,12 @@ void TVPAfterSystemInit() {
     } else {
         TVPGraphicCacheSystemLimit = limitmb * 1024 * 1024;
     }
-    // Cap at 256MB to leave headroom for VRAM, TJS heap, and system on mobile
-    if(TVPGraphicCacheSystemLimit >= 256 * 1024 * 1024)
-        TVPGraphicCacheSystemLimit = 256 * 1024 * 1024;
+    // Keep the historical 256MB cap for legacy renderers. Godot Native keeps
+    // decoded images in GPU resources and benefits from a larger cache on
+    // desktop-class machines; the backend-specific limit is selected after
+    // the renderer option is resolved below.
+    if(TVPGraphicCacheSystemLimit > 1024 * 1024 * 1024)
+        TVPGraphicCacheSystemLimit = 1024 * 1024 * 1024;
 
     if(TVPTotalPhysMemory <= 64 * 1024 * 1024)
         TVPSetFontCacheForLowMem();
@@ -327,6 +330,10 @@ void TVPAfterSystemInit() {
     if(_val.empty()) {
         _val = IndividualConfigManager::GetInstance()->GetValue<std::string>(
             "renderer", "opengl");
+    }
+    if(_val != "godot_native" &&
+       TVPGraphicCacheSystemLimit > 256 * 1024 * 1024) {
+        TVPGraphicCacheSystemLimit = 256 * 1024 * 1024;
     }
     // The Godot backend keeps decoded textures in GPU resources. On Apple
     // targets the legacy platform cache controller is not present, so the

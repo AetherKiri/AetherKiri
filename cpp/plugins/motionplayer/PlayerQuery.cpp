@@ -1787,8 +1787,14 @@ namespace motion {
         if(!_runtime->activeMotion) {
             return detail::makeArray({});
         }
+        // AnimKAGLayer compares this value with its previous result and only
+        // invalidates the Layer when it changes.  Expose the progress
+        // ping-pong token expected by that protocol.  Returning the static
+        // source-path list leaves the first transparent frame of fade-in
+        // motions resident forever because that list does not change while
+        // opacity, transforms and nested timelines advance.
         return detail::makeArray(
-            detail::stringsToVariants(activeSourceCandidates()));
+            {tTJSVariant(static_cast<tjs_int>(_commandListPulse ? 1 : 0))});
     }
 
     bool Player::getD3DAvailable() { return true; }
@@ -1906,7 +1912,24 @@ namespace motion {
         }
 
         const auto previousMatrix = nativeInstance->_runtime->drawAffineMatrix;
+        bool affineChanged = false;
+        for(size_t index = 0; index < matrix.size(); ++index) {
+            if(std::fabs(previousMatrix[index] - matrix[index]) > 1e-7) {
+                affineChanged = true;
+                break;
+            }
+        }
         nativeInstance->_runtime->drawAffineMatrix = matrix;
+        if(affineChanged) {
+            // The affine matrix is part of every prepared vertex position.
+            // A title/scene source can set it after the child motion has
+            // already prepared its first frame; keep that stale identity
+            // frame from being reused and make updateLayers propagate the
+            // new matrix through nested motion players before drawing.
+            nativeInstance->_runtime->preparedRenderItemsValid = false;
+            nativeInstance->_runtime->clearPresentationRenderReuse();
+            nativeInstance->_layersDirty = true;
+        }
         nativeInstance->invokeNativeBackend(
             "setpresentationaffine",
             {MotionBackendValue::Number(matrix[0]),
@@ -2723,6 +2746,9 @@ namespace motion {
                     target = tryResolveLayerDispatch(targetValue);
                 }
                 if(target) {
+                    const bool previousForceRasterRender =
+                        renderOwner->_forceMotionRasterRender;
+                    renderOwner->_forceMotionRasterRender = true;
                     renderOwner->_autoProgressRendering = true;
                     try {
                         // The normal selector frame may be translucent. Clear
@@ -2766,6 +2792,8 @@ namespace motion {
                                 variableKey);
                         }
                     }
+                    renderOwner->_forceMotionRasterRender =
+                        previousForceRasterRender;
                     renderOwner->_autoProgressRendering = false;
                 }
             }

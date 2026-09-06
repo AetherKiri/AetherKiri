@@ -13,3 +13,8 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_CURRENT_SOURCE_DIR}/bin/${OS
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_CURRENT_SOURCE_DIR}/bin/${OS_PLATFORM}/dbg")
 add_subdirectory(xp3)
 add_subdirectory(xp3_select)
+
+if(AETHERKIRI_INTERNAL_ENABLED AND
+   COMMAND aetherinternal_add_catsystem2_probe)
+    aetherinternal_add_catsystem2_probe()
+endif()

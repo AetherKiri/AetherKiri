@@ -1,14 +1,84 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "BinaryStream.h"
+#include "UtilStreams.h"
 #include "kbadDataPack.h"
+#include "tjsArray.h"
+#include "tjsNs0DataPack.h"
 
+#include <array>
+#include <chrono>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <initializer_list>
 #include <string_view>
 #include <vector>
 
 namespace {
 
 using Byte = std::uint8_t;
+
+class TemporaryFile {
+public:
+    TemporaryFile() {
+        const auto unique = std::chrono::steady_clock::now()
+                                .time_since_epoch()
+                                .count();
+        path = std::filesystem::temp_directory_path() /
+               ("aetherkiri-array-struct-" + std::to_string(unique) +
+                ".ksd");
+    }
+
+    ~TemporaryFile() {
+        std::error_code error;
+        std::filesystem::remove(path, error);
+    }
+
+    std::filesystem::path path;
+};
+
+class BinaryStreamFactoryScope {
+public:
+    BinaryStreamFactoryScope() : previous(TJS::TJSCreateBinaryStreamForRead) {
+        TJS::TJSCreateBinaryStreamForRead = &TVPCreateBinaryStreamForRead;
+    }
+
+    ~BinaryStreamFactoryScope() {
+        TJS::TJSCreateBinaryStreamForRead = previous;
+    }
+
+private:
+    decltype(TJS::TJSCreateBinaryStreamForRead) previous;
+};
+
+bool loadSyntheticStructuredPack(tTJSBinaryStream *stream,
+                                 tTJSVariant *result) {
+    static constexpr std::array<Byte, 8> signature = {
+        'A', 'K', 'P', 'K', '1', '0', '0', 0,
+    };
+    if(!stream || stream->GetSize() != signature.size())
+        return false;
+
+    std::array<Byte, signature.size()> bytes{};
+    stream->SetPosition(0);
+    if(stream->Read(bytes.data(), static_cast<tjs_uint>(bytes.size())) !=
+           bytes.size() ||
+       bytes != signature)
+        return false;
+    if(result)
+        *result = static_cast<tTVInteger>(42);
+    return true;
+}
+
+class StructuredLoaderScope {
+public:
+    StructuredLoaderScope() {
+        TJS::TJSSetStructuredDataPackLoader(&loadSyntheticStructuredPack);
+    }
+
+    ~StructuredLoaderScope() { TVPRegisterTjsNs0DataPackLoader(); }
+};
 
 void appendString(std::vector<Byte> &bytes, std::string_view value) {
     REQUIRE(value.size() <= 31);
@@ -23,6 +93,15 @@ void appendU16(std::vector<Byte> &bytes, std::uint16_t value) {
     bytes.push_back(0xcd);
     bytes.push_back(static_cast<Byte>(value));
     bytes.push_back(static_cast<Byte>(value >> 8));
+}
+
+void appendRaw16(std::vector<Byte> &bytes,
+                 std::initializer_list<Byte> value) {
+    REQUIRE(value.size() <= 0xffff);
+    bytes.push_back(0xda);
+    bytes.push_back(static_cast<Byte>(value.size()));
+    bytes.push_back(static_cast<Byte>(value.size() >> 8));
+    bytes.insert(bytes.end(), value);
 }
 
 tTJSVariant getIndex(const tTJSVariant &object, tjs_int index) {
@@ -84,6 +163,35 @@ TEST_CASE("KBAD data packs decode PBD canvas and layer metadata") {
     CHECK(getProperty(layer, TJS_W("visible")).AsInteger() == 1);
 }
 
+TEST_CASE("KBAD data packs preserve fixed and length-prefixed octets") {
+    std::vector<Byte> bytes = { 'K', 'B', 'A', 'D', '1', '0', '0', 0 };
+    bytes.push_back(0x92); // two octets
+    bytes.push_back(0xd9); // five-byte fixed octet
+    bytes.insert(bytes.end(), { 0x00, 0x7f, 0x80, 0xfe, 0xff });
+    appendRaw16(bytes, { 0x10, 0x20, 0x30, 0x40, 0x50, 0x60 });
+
+    tTJSVariant root;
+    REQUIRE(TVPDecodeKbadDataPack(bytes.data(), bytes.size(), &root));
+
+    const tTJSVariant fixed = getIndex(root, 0);
+    REQUIRE(fixed.Type() == tvtOctet);
+    const tTJSVariantOctet *fixedOctet = fixed.AsOctetNoAddRef();
+    REQUIRE(fixedOctet != nullptr);
+    REQUIRE(fixedOctet->GetLength() == 5);
+    CHECK(std::vector<Byte>(fixedOctet->GetData(),
+                            fixedOctet->GetData() + fixedOctet->GetLength()) ==
+          std::vector<Byte>{ 0x00, 0x7f, 0x80, 0xfe, 0xff });
+
+    const tTJSVariant raw16 = getIndex(root, 1);
+    REQUIRE(raw16.Type() == tvtOctet);
+    const tTJSVariantOctet *raw16Octet = raw16.AsOctetNoAddRef();
+    REQUIRE(raw16Octet != nullptr);
+    REQUIRE(raw16Octet->GetLength() == 6);
+    CHECK(std::vector<Byte>(raw16Octet->GetData(),
+                            raw16Octet->GetData() + raw16Octet->GetLength()) ==
+          std::vector<Byte>{ 0x10, 0x20, 0x30, 0x40, 0x50, 0x60 });
+}
+
 TEST_CASE("KBAD decoder rejects unrelated and truncated data") {
     const std::vector<Byte> unrelated = { 'T', 'J', 'S', '/', 'n', 's', '0', 0 };
     tTJSVariant result(static_cast<tjs_int>(77));
@@ -96,4 +204,48 @@ TEST_CASE("KBAD decoder rejects unrelated and truncated data") {
     };
     REQUIRE_THROWS(
         TVPDecodeKbadDataPack(truncated.data(), truncated.size(), &result));
+}
+
+TEST_CASE("registered structured loader accepts KBAD save containers") {
+    const std::vector<Byte> bytes = makePbdMetadataFixture();
+    tTVPMemoryStream stream(bytes.data(), static_cast<tjs_uint>(bytes.size()));
+    tTJSVariant root;
+
+    TVPRegisterTjsNs0DataPackLoader();
+    REQUIRE(TJS::TJSLoadStructuredDataPack(&stream, &root));
+    REQUIRE(root.Type() == tvtObject);
+    CHECK(getProperty(getIndex(root, 0), TJS_W("width")).AsInteger() == 1920);
+}
+
+TEST_CASE("Array.loadStruct delegates non-native binary data packs") {
+    const std::vector<Byte> bytes = {
+        'A', 'K', 'P', 'K', '1', '0', '0', 0,
+    };
+    TemporaryFile file;
+    BinaryStreamFactoryScope streamFactory;
+    StructuredLoaderScope structuredLoader;
+    {
+        std::ofstream output(file.path, std::ios::binary);
+        REQUIRE(output.good());
+        output.write(reinterpret_cast<const char *>(bytes.data()),
+                     static_cast<std::streamsize>(bytes.size()));
+        REQUIRE(output.good());
+    }
+
+    iTJSDispatch2 *arrayClass = nullptr;
+    iTJSDispatch2 *array = TJSCreateArrayObject(&arrayClass);
+    REQUIRE(array != nullptr);
+    REQUIRE(arrayClass != nullptr);
+    tTJSVariant filename(ttstr(file.path.string()));
+    tTJSVariant *params[] = { &filename };
+    tTJSVariant root;
+    const tjs_error error = arrayClass->FuncCall(
+        0, TJS_W("loadStruct"), nullptr, &root, 1, params, array);
+    array->Release();
+    arrayClass->Release();
+
+    INFO("Array.loadStruct error=" << error);
+    REQUIRE(TJS_SUCCEEDED(error));
+    REQUIRE(root.Type() == tvtInteger);
+    CHECK(root.AsInteger() == 42);
 }

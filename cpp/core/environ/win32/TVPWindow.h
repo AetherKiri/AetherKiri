@@ -23,6 +23,8 @@ enum {
     ssMiddle = TVP_SS_MIDDLE,
     ssDouble = TVP_SS_DOUBLE,
     ssRepeat = TVP_SS_REPEAT,
+    ssX1 = TVP_SS_X1,
+    ssX2 = TVP_SS_X2,
 };
 #if 0
 class tTVPWindow {

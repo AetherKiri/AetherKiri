@@ -22,3 +22,16 @@ TEST_CASE("built-in XP3 Cx selection rejects pre-decoded bytecode") {
     CHECK_FALSE(TVPShouldUseBuiltinXP3CxDecoder(
         0x12345678u, encrypted.data(), encrypted.size()));
 }
+
+TEST_CASE("built-in XP3 Cx decoder is shared by sibling archives") {
+    constexpr std::uint32_t fingerprint = 0xe425cd85u;
+
+    TVPResetBuiltinXP3CxDecoder();
+    CHECK_FALSE(TVPIsBuiltinXP3CxDecoderActive());
+
+    CHECK(TVPActivateBuiltinXP3CxDecoder(fingerprint));
+    CHECK(TVPIsBuiltinXP3CxDecoderActive());
+
+    TVPResetBuiltinXP3CxDecoder();
+    CHECK_FALSE(TVPIsBuiltinXP3CxDecoderActive());
+}

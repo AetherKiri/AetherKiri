@@ -591,6 +591,10 @@ void TVPResetBuiltinXP3CxDecoder() {
     gActiveDecoder.store(nullptr, std::memory_order_release);
 }
 
+bool TVPIsBuiltinXP3CxDecoderActive() {
+    return gActiveDecoder.load(std::memory_order_acquire) != nullptr;
+}
+
 bool TVPDecodeBuiltinXP3Cx(std::uint32_t hash, std::uint64_t offset,
                            void *buffer, std::uint32_t size) {
     const CxDecoder *decoder = gActiveDecoder.load(std::memory_order_acquire);

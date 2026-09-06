@@ -15,10 +15,21 @@ using CreateKrkrGLESModuleObjectFn = tjs_error (*)(tTJSVariant *, tjs_int, tjs_i
 using ModuleName = std::basic_string<tjs_char>;
 using ModuleStore = std::unordered_map<uintptr_t, std::unordered_map<ModuleName, tTJSVariant>>;
 
+#if defined(__APPLE__)
+extern "C" tjs_error TVPKrkrGLESCreateModuleObject(tTJSVariant *, tjs_int,
+                                                    tjs_int);
+#endif
+
 inline tjs_error TryCreateModuleViaKrkrGLES(tTJSVariant *result, tjs_int width,
                                             tjs_int height) {
 #if defined(_WIN32)
     return TJS_E_MEMBERNOTFOUND;
+#elif defined(__APPLE__)
+    // iOS statically links the compatibility plugin into the application.
+    // dlsym(RTLD_DEFAULT, ...) cannot discover symbols that are not exported
+    // from the final executable, so the old code silently selected the no-op
+    // module and skipped the capture callback used by Live2D games.
+    return TVPKrkrGLESCreateModuleObject(result, width, height);
 #else
     void *sym = dlsym(RTLD_DEFAULT, "TVPKrkrGLESCreateModuleObject");
     if(!sym) return TJS_E_MEMBERNOTFOUND;
@@ -257,12 +268,29 @@ inline void ClearCachedModulesForDevice(void *device) {
 inline void EnsureWindowGLESAdaptor(tTVPDrawDevice *device) {
     if(!device) return;
     iTVPWindow *window = device->GetWindowInterface();
-    if(!window) return;
+    // Legacy KAGWindow keeps its GPU draw device in the script-level
+    // KAGWindowBase class property. That object is a valid draw device but is
+    // not the native Window draw-device slot, so it has no iTVPWindow owner.
+    // The main window is the corresponding presentation target for this
+    // compatibility path; use it only as an owner fallback. Native devices
+    // still take their exact per-window binding above.
+    if(!window) {
+        window = TVPMainWindow;
+        if(!window) return;
+    }
     iTJSDispatch2 *windowObj = window->GetWindowDispatch();
     if(!windowObj) return;
 
     tTJSVariant adaptor;
-    windowObj->PropGet(0, TJS_W("glesAdaptor"), nullptr, &adaptor, windowObj);
+    try {
+        windowObj->PropGet(0, TJS_W("glesAdaptor"), nullptr, &adaptor,
+                           windowObj);
+    } catch(...) {
+        windowObj->Release();
+        throw;
+    }
+    // GetWindowDispatch returns an owned reference.
+    windowObj->Release();
 }
 
 template<typename DeviceT>

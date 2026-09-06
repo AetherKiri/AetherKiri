@@ -2,8 +2,64 @@ extends SceneTree
 
 const MAIN_SCRIPT := preload("res://scripts/main.gd")
 
+class MockRuntimePlayer:
+    extends Node
+
+    var key_events: Array[Dictionary] = []
+
+    func send_key_event(
+        pressed: bool,
+        key_code: int,
+        modifiers: int,
+        unicode_codepoint: int
+    ) -> int:
+        key_events.append({
+            "pressed": pressed,
+            "key_code": key_code,
+            "modifiers": modifiers,
+            "unicode": unicode_codepoint,
+        })
+        return 0
+
 func _initialize() -> void:
     var app = MAIN_SCRIPT.new()
+
+    assert(app.game_virtual_input_mode == "mouse")
+    assert(app._normalize_game_virtual_input_mode("mouse") == "mouse")
+    assert(app._normalize_game_virtual_input_mode("touch") == "touch")
+    assert(app._normalize_game_virtual_input_mode("invalid") == "mouse")
+
+    for runtime_kind in [app.RUNTIME_KIRIKIRI, app.RUNTIME_ONSCRIPTER]:
+        app.active_runtime_kind = runtime_kind
+        assert(app._should_enable_game_virtual_controls(true, true, false))
+    assert(not app._should_enable_game_virtual_controls(false, true, false))
+    assert(not app._should_enable_game_virtual_controls(true, false, false))
+    assert(not app._should_enable_game_virtual_controls(true, true, true))
+
+    var runtime_player := MockRuntimePlayer.new()
+    var game_viewport := TextureRect.new()
+    game_viewport.visible = true
+    app.add_child(runtime_player)
+    app.add_child(game_viewport)
+    app.player = runtime_player
+    app.viewport = game_viewport
+    app.game_running = true
+    app.cached_startup_state = app.STARTUP_SUCCEEDED
+    for runtime_kind in [app.RUNTIME_KIRIKIRI, app.RUNTIME_ONSCRIPTER]:
+        app.active_runtime_kind = runtime_kind
+        app._on_game_virtual_key_event(true, 0x1b, 0)
+        app._on_game_virtual_key_event(false, 0x1b, 0)
+    assert(runtime_player.key_events.size() == 4)
+    app._on_game_virtual_key_event(true, 0x57, 0)
+    app._on_game_virtual_key_event(false, 0x57, 0)
+    assert(runtime_player.key_events[-2].unicode == 0x77)
+    assert(runtime_player.key_events[-1].unicode == 0)
+    app._on_game_virtual_key_event(true, 0x31, 0)
+    app._on_game_virtual_key_event(true, 0x20, 0)
+    app._on_game_virtual_key_event(true, 0x41, 0x04)
+    assert(runtime_player.key_events[-3].unicode == 0x31)
+    assert(runtime_player.key_events[-2].unicode == 0x20)
+    assert(runtime_player.key_events[-1].unicode == 0)
 
     var portrait := app._scaled_display_safe_rect(
         Vector2(430, 932),
@@ -87,6 +143,45 @@ func _initialize() -> void:
     assert(dialog_rect.position.y >= portrait.position.y)
     assert(dialog_rect.end.x <= portrait.end.x)
     assert(dialog_rect.end.y <= portrait.end.y)
+
+    var runtime_dialog := PanelContainer.new()
+    runtime_dialog.clip_contents = true
+    root.add_child(runtime_dialog)
+    var runtime_safe_rect := Rect2(40, 24, 852, 382)
+    app._mark_centered_safe_dialog(runtime_dialog, Vector2(780, 520))
+    app._layout_safe_dialog(runtime_dialog, runtime_safe_rect)
+    app._build_runtime_dialog_content(runtime_dialog, {
+        "title": "Help",
+        "message": "\n".join(PackedStringArray(Array(range(120)).map(
+            func(index: int): return "Long Artemis help line %d" % index
+        ))),
+        "yes_no": "0",
+        "text_field": "0",
+    })
+    await process_frame
+    await process_frame
+    var runtime_dialog_rect := runtime_dialog.get_rect()
+    assert(runtime_dialog_rect.position.x >= runtime_safe_rect.position.x)
+    assert(runtime_dialog_rect.position.y >= runtime_safe_rect.position.y)
+    assert(runtime_dialog_rect.end.x <= runtime_safe_rect.end.x)
+    assert(runtime_dialog_rect.end.y <= runtime_safe_rect.end.y)
+    var message_scroll := runtime_dialog.get_node(
+        "ArtemisDialogMargin/ArtemisDialogContent/ArtemisDialogMessageScroll"
+    ) as ScrollContainer
+    var runtime_buttons := runtime_dialog.get_node(
+        "ArtemisDialogMargin/ArtemisDialogContent/ArtemisDialogButtons"
+    ) as HBoxContainer
+    assert(message_scroll != null)
+    assert(runtime_buttons != null)
+    assert(message_scroll.vertical_scroll_mode == ScrollContainer.SCROLL_MODE_AUTO)
+    assert(message_scroll.horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED)
+    assert(not message_scroll.mouse_force_pass_scroll_events)
+    assert(message_scroll.get_rect().end.y <= runtime_buttons.get_rect().position.y)
+    var message_scroll_bar := message_scroll.get_v_scroll_bar()
+    assert(message_scroll_bar.max_value > message_scroll_bar.page)
+    message_scroll.scroll_vertical = 120
+    await process_frame
+    assert(message_scroll.scroll_vertical > 0)
 
     assert(app._edge_back_gesture_qualified(
         Vector2(8, 400),
@@ -184,6 +279,7 @@ func _initialize() -> void:
     launch_shell.free()
     native_scroll_bar.free()
     dialog.free()
+    runtime_dialog.free()
     app.free()
     print("MOBILE_SAFE_AREA_OK")
     quit(0)

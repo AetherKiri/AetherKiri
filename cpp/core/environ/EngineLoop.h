@@ -39,7 +39,7 @@ struct EngineInputEvent {
     double   x = 0;             ///< Pointer X in logical pixels
     double   y = 0;             ///< Pointer Y in logical pixels
     double   delta_x = 0;       ///< Scroll delta X
-    double   delta_y = 0;       ///< Scroll delta Y
+    double   delta_y = 0;       ///< Scroll delta Y: positive=up, negative=down
     int32_t  pointer_id = 0;    ///< Pointer / touch ID
     int32_t  button = 0;        ///< Mouse button: 0=left, 1=right, 2=middle
     int32_t  key_code = 0;      ///< Virtual key code (Windows VK_*)

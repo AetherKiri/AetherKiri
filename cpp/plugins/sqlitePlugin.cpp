@@ -1,5 +1,6 @@
 #include "PluginStub.h"
 #include "StorageIntf.h"
+#include "TextTransform.h"
 #include "ncbind.hpp"
 #include "sqlite/sqlite3.h"
 
@@ -161,7 +162,72 @@ int bindParams(sqlite3_stmt *stmt, const tTJSVariant &params) {
     return errorCode;
 }
 
-void getColumnData(sqlite3_stmt *stmt, tTJSVariant &variant, int column) {
+int findColumn(sqlite3_stmt *stmt, const tjs_char *name) {
+    if(!stmt || !name)
+        return -1;
+    const int count = sqlite3_column_count(stmt);
+    for(int i = 0; i < count; ++i) {
+        const auto *columnName = reinterpret_cast<const tjs_char *>(
+            sqlite3_column_name16(stmt, i));
+        if(columnName && TJS_stricmp(name, columnName) == 0)
+            return i;
+    }
+    return -1;
+}
+
+bool isScenarioTextColumn(sqlite3_stmt *stmt, int column) {
+    return column >= 0 && column == findColumn(stmt, TJS_W("text")) &&
+        findColumn(stmt, TJS_W("scene")) >= 0 &&
+        findColumn(stmt, TJS_W("idx")) >= 0;
+}
+
+void prefetchColumnText(sqlite3_stmt *stmt, int column) {
+    if(!stmt || column < 0 ||
+       sqlite3_column_type(stmt, column) != SQLITE_TEXT)
+        return;
+    const auto *text = reinterpret_cast<const tjs_char *>(
+        sqlite3_column_text16(stmt, column));
+    if(text && *text)
+        TVPPrefetchText("kirikiri", ttstr(text).AsStdString());
+}
+
+void prefetchScenarioTextLookahead(sqlite3 *db, sqlite3_stmt *current) {
+    if(!db || !current)
+        return;
+    const int sceneColumn = findColumn(current, TJS_W("scene"));
+    const int indexColumn = findColumn(current, TJS_W("idx"));
+    const int textColumn = findColumn(current, TJS_W("text"));
+    if(sceneColumn < 0 || indexColumn < 0 || textColumn < 0 ||
+       sqlite3_column_type(current, sceneColumn) != SQLITE_INTEGER ||
+       sqlite3_column_type(current, indexColumn) != SQLITE_INTEGER)
+        return;
+
+    prefetchColumnText(current, textColumn);
+
+    // Several KiriKiri scene systems keep compiled dialogue in a SQLite table
+    // keyed by (scene, idx), then split the returned string into character
+    // draw calls.  Read a small, indexed window while the current line is on
+    // screen so later rows are already translated when the script asks for
+    // them.  The query is intentionally schema-driven and does not depend on
+    // a game path, archive, or script implementation.
+    static const tjs_char lookaheadSql[] =
+        TJS_W("SELECT text FROM text WHERE scene=?1 AND idx>?2 "
+              "ORDER BY idx LIMIT 12");
+    sqlite3_stmt *lookahead = nullptr;
+    if(sqlite3_prepare16_v2(db, lookaheadSql, -1, &lookahead, nullptr) !=
+       SQLITE_OK)
+        return;
+    sqlite3_bind_int64(lookahead, 1,
+                       sqlite3_column_int64(current, sceneColumn));
+    sqlite3_bind_int64(lookahead, 2,
+                       sqlite3_column_int64(current, indexColumn));
+    while(sqlite3_step(lookahead) == SQLITE_ROW)
+        prefetchColumnText(lookahead, 0);
+    sqlite3_finalize(lookahead);
+}
+
+void getColumnData(sqlite3_stmt *stmt, tTJSVariant &variant, int column,
+                   bool transformScenarioText = false) {
     switch(sqlite3_column_type(stmt, column)) {
         case SQLITE_INTEGER:
             variant = static_cast<tTVInteger>(sqlite3_column_int64(stmt, column));
@@ -169,11 +235,19 @@ void getColumnData(sqlite3_stmt *stmt, tTJSVariant &variant, int column) {
         case SQLITE_FLOAT:
             variant = sqlite3_column_double(stmt, column);
             break;
-        case SQLITE_TEXT:
-            variant =
-                reinterpret_cast<const tjs_char *>(sqlite3_column_text16(stmt,
-                                                                          column));
+        case SQLITE_TEXT: {
+            const auto *text = reinterpret_cast<const tjs_char *>(
+                sqlite3_column_text16(stmt, column));
+            variant = text;
+            if(transformScenarioText && text && *text) {
+                const std::string original = ttstr(text).AsStdString();
+                const std::string translated =
+                    TVPTransformText("kirikiri", original);
+                if(translated != original)
+                    variant = ttstr(translated);
+            }
             break;
+        }
         case SQLITE_BLOB:
             variant = tTJSVariant(
                 static_cast<const tjs_uint8 *>(sqlite3_column_blob(stmt, column)),
@@ -479,14 +553,18 @@ public:
 
     int exec() {
         const int ret = stmt_ ? sqlite3_step(stmt_) : SQLITE_MISUSE;
-        if(ret != SQLITE_ROW)
+        if(ret == SQLITE_ROW)
+            prefetchScenarioTextLookahead(db_, stmt_);
+        else
             reset();
         return ret;
     }
 
     bool step() {
-        if(stmt_ && sqlite3_step(stmt_) == SQLITE_ROW)
+        if(stmt_ && sqlite3_step(stmt_) == SQLITE_ROW) {
+            prefetchScenarioTextLookahead(db_, stmt_);
             return true;
+        }
         reset();
         return false;
     }
@@ -521,7 +599,8 @@ public:
             iTJSDispatch2 *line = TJSCreateArrayObject();
             for(int i = 0; i < count; ++i) {
                 tTJSVariant value;
-                getColumnData(self->stmt_, value, i);
+                getColumnData(self->stmt_, value, i,
+                              isScenarioTextColumn(self->stmt_, i));
                 tTJSVariant *argv[] = { &value };
                 line->FuncCall(0, TJS_W("add"), nullptr, nullptr, 1, argv, line);
             }
@@ -537,7 +616,8 @@ public:
             else
                 result->Clear();
         } else {
-            getColumnData(self->stmt_, *result, col);
+            getColumnData(self->stmt_, *result, col,
+                          isScenarioTextColumn(self->stmt_, col));
         }
         return TJS_S_OK;
     }
@@ -553,7 +633,8 @@ public:
             const int col = self->getColumnNo(*params[1]);
             if(col >= 0) {
                 tTJSVariant value;
-                getColumnData(self->stmt_, value, col);
+                getColumnData(self->stmt_, value, col,
+                              isScenarioTextColumn(self->stmt_, col));
                 params[2]->AsObjectClosureNoAddRef().PropSet(
                     0, nullptr, nullptr, &value, nullptr);
                 ret = true;

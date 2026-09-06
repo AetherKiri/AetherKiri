@@ -274,6 +274,16 @@ void ONScripter::waitEventSub(int count)
     // ONS_BREAK_EVENT. Avoid the shared queue for that synchronous case and
     // reproduce the exact timeout state handled by runEventLoop.
     if (count == 0) {
+        // Ctrl makes ONS skip timed waits entirely. A Ctrl key-up queued by
+        // the host would otherwise never reach runEventLoop, leaving
+        // ctrl_pressed_status latched forever. Drain key releases without
+        // consuming unrelated pointer/input events before taking the fast
+        // zero-timeout path.
+        SDL_Event host_key_release;
+        while (aetherkiri_onscripter_poll_host_key_release(
+                   &host_key_release)) {
+            keyUpEvent(&host_key_release.key);
+        }
         if (automode_flag || autoclick_time > 0)
             current_button_state.button = 0;
         else if (usewheel_flag) {
@@ -544,6 +554,40 @@ size_t ScriptParser::loadFileIOBuf( const char *filename )
             "OnscripterYuri envdata load path changed; update the embedded-host overlay.")
     endif()
     string(REPLACE "${envdata_load_original}" "${envdata_load_embedded}"
+           parser_source "${parser_source}")
+
+    set(text_token_original [=[
+        else{
+            script_h.addStringBuffer(ch);
+        }
+    }
+}
+
+int ScriptParser::readEffect( EffectLink *effect )
+]=])
+    set(text_token_embedded [=[
+        else{
+            script_h.addStringBuffer(ch);
+        }
+    }
+
+    // Translate after line-page click markers have been appended. The helper
+    // preserves those controls and never writes past ScriptHandler's buffer.
+    if (script_h.isText())
+        aetherkiri_onscripter_transform_text(
+            script_h.getStringBuffer(), 4096);
+    aetherkiri_onscripter_prefetch_text(script_h.getNext());
+}
+
+int ScriptParser::readEffect( EffectLink *effect )
+]=])
+    string(FIND "${parser_source}" "${text_token_original}"
+           text_token_position)
+    if(text_token_position EQUAL -1)
+        message(FATAL_ERROR
+            "OnscripterYuri text token path changed; update the embedded-host overlay.")
+    endif()
+    string(REPLACE "${text_token_original}" "${text_token_embedded}"
            parser_source "${parser_source}")
 
     set(generated_parser "${generated_dir}/ScriptParser.cpp")

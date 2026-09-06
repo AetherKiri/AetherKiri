@@ -137,6 +137,10 @@ namespace internal {
 
         inline bool isSyntheticMotionBlankSource(
             const std::string &sourceKey) {
+            // E-mote uses blank/<width>:<height>:<origin-x>:<origin-y> as an
+            // intrinsic transparent mesh canvas.  This is part of the motion
+            // stream format, not a resource supplied by an engine extension.
+            if(sourceKey.rfind("blank/", 0) == 0) return true;
             const auto *policy = motionRenderPolicy();
             return policy != nullptr &&
                 policy->isSyntheticMotionBlankSource != nullptr &&

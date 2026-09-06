@@ -79,6 +79,12 @@ TJS_EXP_FUNC_DEF(void, TVPExecuteBytecode,
                   const tjs_char *name = nullptr));
 
 extern void TVPExecuteStartupScript();
+
+// Native plug-ins can use this hook to refresh script members after the
+// framework's root patch and AfterStartup.tjs have replaced global classes.
+// Re-registering the same callback is harmless.
+using tTVPPostStartupScriptHook = void (*)();
+extern void TVPRegisterPostStartupScriptHook(tTVPPostStartupScriptHook hook);
 extern const tjs_char *TVPGetStartupPatchPrerequisitesScript();
 extern const tjs_char *TVPGetPatchWindowPrerequisitesScript();
 extern const tjs_char *TVPGetKagLoadContractGuardScript();

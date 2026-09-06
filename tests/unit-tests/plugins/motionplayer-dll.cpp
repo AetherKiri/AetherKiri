@@ -2169,6 +2169,40 @@ TEST_CASE("motionplayer non-loop motion clips finish at sync boundary") {
     REQUIRE(autoPlayer.getProgressCompat() == Catch::Approx(1.0));
 }
 
+TEST_CASE("motionplayer command list invalidates after every progress call") {
+    auto snapshot = std::make_shared<motion::detail::MotionSnapshot>();
+    snapshot->path = "unit/fade-in-title.psb";
+    snapshot->mainTimelineLabels.push_back("show");
+    snapshot->timelineTotalFrames["show"] = 60.0;
+    snapshot->sourceCandidates.push_back("src/title/menu_bg");
+
+    auto &clip = snapshot->clipsByLabel["show"];
+    clip.label = "show";
+    clip.totalFrames = 60.0;
+    clip.sourceCandidates.push_back("src/title/menu_bg");
+
+    motion::Player player;
+    player.loadFromSnapshot(snapshot);
+    player.playTimeline(TJS_W("show"), motion::PlayFlagForce);
+
+    const auto initial = player.getCommandList();
+    REQUIRE(variantCount(initial) == 1);
+    REQUIRE(getIndex(initial, 0).Type() == tvtInteger);
+    CHECK(getIndex(initial, 0).AsInteger() == 0);
+
+    // Zero-delta progress is used for hover/selector changes and must still
+    // request a repaint even though the playback clock does not advance.
+    player.frameProgress(0.0);
+    const auto afterZeroDelta = player.getCommandList();
+    REQUIRE(variantCount(afterZeroDelta) == 1);
+    CHECK(getIndex(afterZeroDelta, 0).AsInteger() == 1);
+
+    player.frameProgress(1.0);
+    const auto afterNextFrame = player.getCommandList();
+    REQUIRE(variantCount(afterNextFrame) == 1);
+    CHECK(getIndex(afterNextFrame, 0).AsInteger() == 0);
+}
+
 TEST_CASE("motionplayer title source clone prefers authored static clip") {
     auto snapshot = std::make_shared<motion::detail::MotionSnapshot>();
     snapshot->path = "motion/title_bg.psb";

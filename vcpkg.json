@@ -44,6 +44,10 @@
     "godot-cpp",
     "jxrlib",
     "libarchive",
+    {
+      "name": "libb2",
+      "platform": "osx"
+    },
     "libxml2",
     {
       "name": "libgdiplus",
@@ -51,6 +55,17 @@
     },
     "libjpeg-turbo",
     "lua",
+    {
+      "name": "llama-cpp",
+      "platform": "!emscripten"
+    },
+    {
+      "name": "ggml",
+      "features": [
+        "metal"
+      ],
+      "platform": "osx"
+    },
     {
       "name": "libogg",
       "platform": "android"
@@ -68,6 +83,7 @@
     },
     "oniguruma",
     "openal-soft",
+    "openssl",
     {
       "name": "opencv4",
       "default-features": false,

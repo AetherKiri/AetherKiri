@@ -536,6 +536,15 @@ namespace TJS {
                         }
                     }
                 }
+                if(!isbin) {
+                    stream->SetPosition(0);
+                    isbin = TJSLoadStructuredDataPack(stream, result);
+                    if(TJSArrayStructTraceEnabled()) {
+                        spdlog::info(
+                            "Array.loadStruct data-pack file={} loaded={}",
+                            name.AsStdString(), isbin);
+                    }
+                }
             } catch(...) {
                 delete stream;
                 throw;
@@ -889,6 +898,114 @@ namespace TJS {
             return TJS_S_OK;
         }
         TJS_END_NATIVE_METHOD_DECL(/* func.name */ reverse)
+        //----------------------------------------------------------------------
+        TJS_BEGIN_NATIVE_METHOD_DECL(/* func.name */ forEach) {
+            TJS_GET_NATIVE_INSTANCE(/* var. name */ ni,
+                                    /* var. type */ tTJSArrayNI);
+
+            if(numparams < 1)
+                return TJS_E_BADPARAMCOUNT;
+
+            // Artemis' Array.forEach accepts either a callback closure or a
+            // member name.  The callback form receives (item, index, ...),
+            // while the member-name form invokes that member with the
+            // remaining arguments.  A non-void callback result is a request
+            // to stop and is also the method result.
+            const bool callMember = param[0]->Type() == tvtString;
+            ttstr memberName;
+            tTJSVariantClosure callback(nullptr, nullptr);
+            if(callMember) {
+                memberName = *param[0];
+            } else if(param[0]->Type() == tvtObject) {
+                callback = param[0]->AsObjectClosureNoAddRef();
+                if(!callback.Object)
+                    return TJS_E_INVALIDOBJECT;
+            } else {
+                return TJS_E_INVALIDTYPE;
+            }
+
+            // Take a snapshot so a callback may add/remove elements without
+            // invalidating the iteration or changing the current sequence.
+            const std::vector<tTJSVariant> items(ni->Items.begin(),
+                                                 ni->Items.end());
+            for(size_t i = 0; i < items.size(); ++i) {
+                tTJSVariant callbackResult;
+                tjs_error hr;
+
+                if(callMember) {
+                    if(items[i].Type() != tvtObject)
+                        continue;
+
+                    const tTJSVariantClosure item =
+                        items[i].AsObjectClosureNoAddRef();
+                    if(!item.Object)
+                        continue;
+
+                    hr = item.FuncCall(
+                        0, memberName.c_str(), memberName.GetHint(),
+                        &callbackResult, numparams - 1,
+                        numparams > 1 ? param + 1 : nullptr, nullptr);
+                } else {
+                    tTJSVariant index(static_cast<tjs_int>(i));
+                    std::vector<tTJSVariant *> callbackParams;
+                    callbackParams.reserve(static_cast<size_t>(numparams) + 1);
+                    callbackParams.push_back(
+                        const_cast<tTJSVariant *>(&items[i]));
+                    callbackParams.push_back(&index);
+                    for(tjs_int p = 1; p < numparams; ++p)
+                        callbackParams.push_back(param[p]);
+
+                    hr = callback.FuncCall(
+                        0, nullptr, nullptr, &callbackResult,
+                        static_cast<tjs_int>(callbackParams.size()),
+                        callbackParams.data(), nullptr);
+                }
+
+                if(TJS_FAILED(hr))
+                    return hr;
+                if(callbackResult.Type() != tvtVoid) {
+                    if(result)
+                        *result = callbackResult;
+                    return TJS_S_OK;
+                }
+            }
+
+            if(result)
+                result->Clear();
+            return TJS_S_OK;
+        }
+        TJS_END_NATIVE_METHOD_DECL(/* func.name */ forEach)
+        //----------------------------------------------------------------------
+        TJS_BEGIN_NATIVE_METHOD_DECL(/* func.name */ includes) {
+            TJS_GET_NATIVE_INSTANCE(/* var. name */ ni,
+                                    /* var. type */ tTJSArrayNI);
+
+            if(numparams < 1)
+                return TJS_E_BADPARAMCOUNT;
+            if(result) {
+                tTJSVariant &value = *param[0];
+                tjs_int start = 0;
+                if(numparams >= 2)
+                    start = *param[1];
+                if(start < 0)
+                    start += static_cast<tjs_int>(ni->Items.size());
+                if(start < 0)
+                    start = 0;
+                if(start >= static_cast<tjs_int>(ni->Items.size())) {
+                    *result = 0;
+                    return TJS_S_OK;
+                }
+
+                auto item = ni->Items.begin() + start;
+                for(; item != ni->Items.end(); ++item) {
+                    if(value.DiscernCompare(*item))
+                        break;
+                }
+                *result = item == ni->Items.end() ? 0 : 1;
+            }
+            return TJS_S_OK;
+        }
+        TJS_END_NATIVE_METHOD_DECL(/* func.name */ includes)
         //----------------------------------------------------------------------
         TJS_BEGIN_NATIVE_METHOD_DECL(/* func.name */ assign) {
             TJS_GET_NATIVE_INSTANCE(/* var. name */ ni,

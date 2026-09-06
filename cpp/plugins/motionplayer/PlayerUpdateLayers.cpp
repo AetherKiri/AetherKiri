@@ -2139,8 +2139,18 @@ namespace motion {
                 assignIfChanged(child._pendingRootZ, rootState.posZ);
                 assignIfChanged(child._hasPendingRootPos, true);
                 assignIfChanged(child._zFactor, _zFactor);
+                const bool childAffineChanged =
+                    child._runtime->drawAffineMatrix !=
+                    _runtime->drawAffineMatrix;
                 assignIfChanged(child._runtime->drawAffineMatrix,
                                 _runtime->drawAffineMatrix);
+                if(childAffineChanged) {
+                    // Prepared child vertices already include the previous
+                    // inherited matrix.  Invalidate that cache immediately;
+                    // otherwise the first frame after a parent affine update
+                    // can be rendered at the origin before the next tick.
+                    child._runtime->preparedRenderItemsValid = false;
+                }
                 uint32_t packed;
                 std::memcpy(&packed, &parentNode.colorBytes[0],
                             sizeof(uint32_t));
@@ -3131,8 +3141,17 @@ namespace motion {
         _pendingRootZ = posZ;
         _hasPendingRootPos = true;
         _zFactor = _motionParentPlayer->_zFactor;
+        const bool inheritedAffineChanged =
+            _runtime->drawAffineMatrix !=
+            _motionParentPlayer->_runtime->drawAffineMatrix;
         _runtime->drawAffineMatrix =
             _motionParentPlayer->_runtime->drawAffineMatrix;
+        if(inheritedAffineChanged) {
+            // Child prepared items are keyed by drawAffineMatrix.  Parent
+            // propagation can happen during render, after the child was
+            // prepared once, so explicitly discard the old transform cache.
+            _runtime->preparedRenderItemsValid = false;
+        }
         {
             uint32_t packed;
             std::memcpy(&packed, &parentNode.colorBytes[0],

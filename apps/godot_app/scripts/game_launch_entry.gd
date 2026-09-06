@@ -1,12 +1,39 @@
 extends RefCounted
 
 const FIELD := "launchFile"
-const SUPPORTED_EXTENSIONS := ["exe", "xp3"]
+const SUPPORTED_EXTENSIONS := ["exe", "xp3", "hcb"]
+const DIRECTORY_RUNTIME_KINDS := [
+    "artemis",
+    "catsystem2",
+    "minori",
+    "onscripter",
+    "siglus",
+    "wa2",
+]
+const RFVP_ENCODING_FIELD := "rfvpEncoding"
+const RFVP_ENCODINGS := ["sjis", "gbk", "utf8"]
+
+
+static func rfvp_encoding(game: Dictionary, override_value: String = "") -> String:
+    var override_encoding := override_value.strip_edges().to_lower()
+    if RFVP_ENCODINGS.has(override_encoding):
+        return override_encoding
+    var saved := String(game.get(RFVP_ENCODING_FIELD, "sjis")).strip_edges().to_lower()
+    return saved if RFVP_ENCODINGS.has(saved) else "sjis"
+
+
+static func backfill(game: Dictionary, metadata: Dictionary) -> bool:
+    # An existing value (including an explicit empty auto-detect choice) is
+    # user configuration. Refreshing metadata must never replace it.
+    if game.has(FIELD) or not metadata.has(FIELD):
+        return false
+    game[FIELD] = metadata[FIELD]
+    return true
 
 
 static func configured_relative_path(game: Dictionary) -> String:
-    var relative_path := _normalize_path(String(game.get(FIELD, "")).strip_edges())
-    if relative_path.is_empty() or relative_path.is_absolute_path():
+    var relative_path := _normalize_path(String(game.get(FIELD, "")))
+    if relative_path.strip_edges().is_empty() or relative_path.is_absolute_path():
         return ""
     relative_path = relative_path.simplify_path()
     if relative_path == "." or relative_path == ".." or relative_path.begins_with("../"):
@@ -17,11 +44,29 @@ static func configured_relative_path(game: Dictionary) -> String:
 
 
 static func resolve(game: Dictionary) -> String:
-    var game_path := _normalize_path(String(game.get("path", "")).strip_edges())
+    # Whitespace is legal at either end of a POSIX path.  Library paths come
+    # from the native picker and must remain byte-for-byte intact.
+    var game_path := _normalize_path(String(game.get("path", "")))
     var relative_path := configured_relative_path(game)
     if game_path.is_empty() or relative_path.is_empty():
         return game_path
     return game_path.path_join(relative_path).simplify_path()
+
+
+static func resolve_for_runtime(
+    game: Dictionary, runtime_kind: String, requires_game_root: bool = false
+) -> String:
+    # Runtime providers and directory-based runtimes consume the game root. A
+    # selected EXE/XP3 is only a legacy KiriKiri entry point and must not
+    # replace the root passed to a provider probe/open pair.
+    if requires_game_root or runtime_uses_directory(runtime_kind):
+        # Preserve valid trailing spaces from native file-picker paths.
+        return _normalize_path(String(game.get("path", "")))
+    return resolve(game)
+
+
+static func runtime_uses_directory(runtime_kind: String) -> bool:
+    return DIRECTORY_RUNTIME_KINDS.has(runtime_kind.to_lower())
 
 
 static func is_supported_file(path: String) -> bool:
@@ -29,9 +74,9 @@ static func is_supported_file(path: String) -> bool:
 
 
 static func relative_path_for_selection(game_path: String, selected_path: String) -> String:
-    var root := _normalize_path(game_path.strip_edges()).simplify_path().trim_suffix("/")
-    var selected := _normalize_path(selected_path.strip_edges()).simplify_path()
-    if root.is_empty() or selected.is_empty() or not is_supported_file(selected):
+    var root := _normalize_path(game_path).simplify_path().trim_suffix("/")
+    var selected := _normalize_path(selected_path).simplify_path()
+    if root.strip_edges().is_empty() or selected.strip_edges().is_empty() or not is_supported_file(selected):
         return ""
     var root_prefix := root + "/"
     if not selected.begins_with(root_prefix):

@@ -1098,7 +1098,7 @@ static inline void *TLGArenaAlloc(size_t size, int align) {
 }
 
 static inline void TLGArenaDealloc(void *ptr) {
-    if(TVPDecodeArenaActive() && TVPDecodeArenaOwns(ptr)) return;
+    if(TVPDecodeArenaOwns(ptr)) return;
     TJSAlignedDealloc(ptr);
 }
 

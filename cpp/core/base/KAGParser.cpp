@@ -15,6 +15,7 @@
 #include "tjsDictionary.h"
 #include "DebugIntf.h"
 #include "TextStream.h"
+#include "TextTransform.h"
 #include "StorageIntf.h"
 #include "ncbind.hpp"
 #include <algorithm>
@@ -698,6 +699,8 @@ void tTJSNI_KAGParser::Invalidate() {
 
 //---------------------------------------------------------------------------
 void tTJSNI_KAGParser::operator=(const tTJSNI_KAGParser &ref) {
+    ClearTextTagQueue();
+
     // copy Macros
     {
         tTJSVariant src(ref.Macros, ref.Macros);
@@ -1324,6 +1327,7 @@ void tTJSNI_KAGParser::Clear() {
 //---------------------------------------------------------------------------
 void tTJSNI_KAGParser::ClearBuffer() {
     // clear internal buffer
+    ClearTextTagQueue();
     if(Scenario)
         Scenario->Release(), Scenario = nullptr, Lines = nullptr,
                              CurLineStr = nullptr;
@@ -1913,6 +1917,58 @@ parse_start:
                CurLineStr[CurPos] == TJS_W('[') &&
                    CurLineStr[CurPos + 1] == TJS_W('[')) {
                 // normal character
+                // KAG exposes ordinary scenario text to MessageLayer one
+                // character at a time.  Translate the complete plain-text
+                // run before that split so language detection and the model
+                // both receive useful context while KAG keeps its original
+                // typewriter timing and per-character layout behavior.
+                if(!RecordingMacro && ExcludeLevel == -1 &&
+                   CurLineStr[CurPos] != TJS_W('[')) {
+                    tjs_int run_end = CurPos;
+                    while(CurLineStr[run_end] != 0 &&
+                          CurLineStr[run_end] != TJS_W('\n') &&
+                          CurLineStr[run_end] != TJS_W('['))
+                        ++run_end;
+
+                    if(run_end > CurPos) {
+                        const ttstr original(CurLineStr + CurPos,
+                                             run_end - CurPos);
+                        const std::string original_utf8 =
+                            original.AsStdString();
+                        // Queue the current run first, then raw future runs.
+                        // The synchronous lookup below promotes the current
+                        // key while the model can continue through lookahead
+                        // during the typewriter/read interval.
+                        TVPPrefetchText("kirikiri", original_utf8);
+                        PrefetchTextLookahead(run_end);
+                        const std::string translated_utf8 =
+                            TVPTransformText("kirikiri", original_utf8);
+                        if(translated_utf8 != original_utf8) {
+                            const ttstr translated(translated_utf8);
+                            const tjs_int prefix_length = CurPos;
+                            const tjs_int suffix_length =
+                                TJS_strlen(CurLineStr + run_end);
+                            ttstr new_buffer;
+                            tjs_char *dest = new_buffer.AllocBuffer(
+                                prefix_length + translated.GetLen() +
+                                suffix_length + 1);
+                            TJS_strncpy_s(dest,
+                                          prefix_length +
+                                              translated.GetLen() +
+                                              suffix_length + 1,
+                                          CurLineStr, prefix_length);
+                            dest += prefix_length;
+                            TJS_strcpy(dest, translated.c_str());
+                            dest += translated.GetLen();
+                            TJS_strcpy(dest, CurLineStr + run_end);
+                            new_buffer.FixLen();
+                            LineBuffer = new_buffer;
+                            CurLineStr = LineBuffer.c_str();
+                            LineBufferUsing = true;
+                        }
+                    }
+                }
+
                 tjs_char ch = CurLineStr[CurPos];
                 TagLine = CurLine;
 
@@ -2909,7 +2965,167 @@ parse_start:
 }
 
 //---------------------------------------------------------------------------
-iTJSDispatch2 *tTJSNI_KAGParser::GetNextTag() { return _GetNextTag(); }
+namespace {
+
+bool TVPReadKagCharacterTag(iTJSDispatch2 *tag, ttstr &text) {
+    if(!tag)
+        return false;
+
+    tTJSVariant tag_name;
+    if(TJS_FAILED(tag->PropGet(0, TJS_W("tagname"), nullptr, &tag_name,
+                               tag)) ||
+       tag_name.Type() == tvtVoid || ttstr(tag_name) != TJS_W("ch"))
+        return false;
+
+    tTJSVariant tag_text;
+    if(TJS_FAILED(tag->PropGet(0, TJS_W("text"), nullptr, &tag_text, tag)) ||
+       tag_text.Type() == tvtVoid)
+        return false;
+
+    text = tag_text;
+    return true;
+}
+
+void TVPSetKagCharacterTagText(iTJSDispatch2 *tag, const ttstr &text) {
+    tTJSVariant value(text);
+    tag->PropSet(TJS_MEMBERENSURE, TJS_W("text"), nullptr, &value, tag);
+}
+
+} // namespace
+
+void tTJSNI_KAGParser::ClearTextTagQueue() {
+    while(!TextTagQueue.empty()) {
+        TextTagQueue.front()->Release();
+        TextTagQueue.pop_front();
+    }
+}
+
+void tTJSNI_KAGParser::PrefetchTextLookahead(tjs_int current_run_end) {
+    if(Lines == nullptr || CurLine >= LineCount || RecordingMacro ||
+       ExcludeLevel != -1)
+        return;
+
+    constexpr size_t kMaximumPrefetchRuns = 12;
+    size_t queued = 0;
+    for(tjs_int line_index = CurLine;
+        line_index < LineCount && queued < kMaximumPrefetchRuns;
+        ++line_index) {
+        const tjs_char *line = line_index == CurLine
+            ? CurLineStr
+            : Lines[line_index].Start;
+        if(line == nullptr)
+            continue;
+        tjs_int position = line_index == CurLine ? current_run_end : 0;
+        // Never speculate through an inline-script or macro definition. Their
+        // bodies are code/template text, and execution may redirect parsing.
+        if(TJS_strstr(line, TJS_W("[iscript]")) != nullptr ||
+           TJS_strstr(line, TJS_W("@iscript")) != nullptr ||
+           TJS_strstr(line, TJS_W("[macro")) != nullptr)
+            break;
+        if(position == 0 && (line[0] == TJS_W(';') ||
+                             line[0] == TJS_W('*') ||
+                             line[0] == TJS_W('@')))
+            continue;
+
+        while(line[position] != 0 && queued < kMaximumPrefetchRuns) {
+            if(line[position] == TJS_W('[')) {
+                const tjs_char *close =
+                    TJS_strchr(const_cast<tjs_char *>(line + position + 1),
+                               TJS_W(']'));
+                if(close == nullptr)
+                    break;
+                position = static_cast<tjs_int>(close - line) + 1;
+                continue;
+            }
+            const tjs_int run_start = position;
+            while(line[position] != 0 && line[position] != TJS_W('[') &&
+                  line[position] != TJS_W('\n'))
+                ++position;
+            if(position > run_start) {
+                const ttstr candidate(line + run_start,
+                                      position - run_start);
+                TVPPrefetchText("kirikiri", candidate.AsStdString());
+                ++queued;
+            }
+        }
+    }
+}
+
+iTJSDispatch2 *tTJSNI_KAGParser::CloneTag(iTJSDispatch2 *source) {
+    if(!source)
+        return nullptr;
+    tTJSVariant source_value(source, source);
+    tTJSVariant *params[] = { &source_value };
+    return CopyTag(1, params);
+}
+
+iTJSDispatch2 *tTJSNI_KAGParser::GetNextTag() {
+    if(Interrupted)
+        ClearTextTagQueue();
+
+    if(!TextTagQueue.empty()) {
+        iTJSDispatch2 *tag = TextTagQueue.front();
+        TextTagQueue.pop_front();
+        return tag;
+    }
+
+    iTJSDispatch2 *parsed = _GetNextTag();
+    ttstr first_text;
+    if(!TVPReadKagCharacterTag(parsed, first_text))
+        return parsed;
+
+    std::vector<iTJSDispatch2 *> source_tags;
+    source_tags.reserve(64);
+    source_tags.push_back(CloneTag(parsed));
+    parsed->Release();
+
+    ttstr source_text(first_text);
+    iTJSDispatch2 *boundary = nullptr;
+    constexpr size_t kMaxTextRunTags = 2048;
+    while(source_tags.size() < kMaxTextRunTags) {
+        parsed = _GetNextTag();
+        ttstr next_text;
+        if(!TVPReadKagCharacterTag(parsed, next_text)) {
+            if(parsed) {
+                boundary = CloneTag(parsed);
+                parsed->Release();
+            }
+            break;
+        }
+
+        source_tags.push_back(CloneTag(parsed));
+        source_text += next_text;
+        parsed->Release();
+    }
+
+    const std::string source_utf8 = source_text.AsStdString();
+    const std::string translated_utf8 =
+        TVPTransformText("kirikiri", source_utf8);
+    const ttstr translated(translated_utf8);
+
+    if(translated.IsEmpty() || translated_utf8 == source_utf8) {
+        for(auto *tag : source_tags)
+            TextTagQueue.push_back(tag);
+    } else {
+        for(tjs_int i = 0; i < translated.GetLen(); ++i) {
+            const size_t template_index = std::min<size_t>(
+                static_cast<size_t>(i), source_tags.size() - 1);
+            iTJSDispatch2 *tag = CloneTag(source_tags[template_index]);
+            const ttstr character(translated.c_str() + i, 1);
+            TVPSetKagCharacterTagText(tag, character);
+            TextTagQueue.push_back(tag);
+        }
+        for(auto *tag : source_tags)
+            tag->Release();
+    }
+
+    if(boundary)
+        TextTagQueue.push_back(boundary);
+
+    iTJSDispatch2 *tag = TextTagQueue.front();
+    TextTagQueue.pop_front();
+    return tag;
+}
 
 //---------------------------------------------------------------------------
 iTJSDispatch2 *tTJSNI_KAGParser::CopyTag(tjs_int numparams,

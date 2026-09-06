@@ -12,6 +12,7 @@ set(UTILS_SOURCE_FILES
     ${UTILS_PATH}/Random.cpp
     ${UTILS_PATH}/RealFFT_Default.cpp
     ${UTILS_PATH}/ThreadIntf.cpp
+    ${UTILS_PATH}/TextTransform.cpp
     ${UTILS_PATH}/TickCount.cpp
     ${UTILS_PATH}/TimerIntf.cpp
     ${UTILS_PATH}/VelocityTracker.cpp
