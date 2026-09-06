@@ -12221,6 +12221,10 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
     var click_every_frames: int = max(1, int(action.get("click_every_frames", 1)))
     var max_clicks: int = max(0, int(action.get("max_clicks", 0)))
     var capture_every: int = max(0, int(action.get("capture_every", 0)))
+    # Optional frame-accurate capture after Godot has advanced its present
+    # boundary.  The regular capture path runs before process_frame and can
+    # miss a transient swap/clear black frame visible in the native window.
+    var capture_after_present_every: int = max(0, int(action.get("capture_after_present_every", 0)))
     var spike_ms: float = max(0.0, float(action.get("spike_ms", 20.0)))
     var sample_interval_ms: int = max(0, int(action.get("sample_interval_ms", 0)))
     var pointer_id: int = int(action.get("pointer_id", TOUCH_POINTER_ID_OFFSET))
@@ -12330,6 +12334,27 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
             step += 1
         await get_tree().process_frame
         var sample_end_ticks := Time.get_ticks_usec()
+        if capture_after_present_every > 0 and (frame_index % capture_after_present_every) == 0:
+            var presented_image := _probe_capture_image()
+            var presented_path := _default_output_path("aetherkiri-step-%02d-%s_present_f%03d.png" % [
+                step,
+                label,
+                frame_index,
+            ])
+            presented_image.save_png(presented_path)
+            var presented_line := "step %02d label=%s frame=%d present_capture=1 texture_backend=%s renderer=\"%s\" screenshot=%s stats=%s" % [
+                step,
+                label,
+                frame_index,
+                player.get_frame_texture_backend(),
+                player.get_renderer_info(),
+                presented_path,
+                JSON.stringify(_image_stats(presented_image)),
+            ]
+            print(presented_line)
+            _write_probe_marker(presented_line)
+            step += 1
+
         # The overlay's Frame value is the host/Godot frame delta, which
         # includes the time spent yielding to the next process_frame. Keep
         # that wall-clock interval separate from the active engine work above

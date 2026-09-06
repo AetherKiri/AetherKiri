@@ -254,7 +254,18 @@ void tTVPSystemControl::RunMemoryGovernor(uint32_t tick) {
 
     const uint32_t idle_compact_interval =
         static_cast<uint32_t>(MemoryProfile ? 20000 : 40000);
-    if(pressure == 0 && tick - LastIdleCompactTick >= idle_compact_interval) {
+    // The low-pressure idle pass used to be emitted unconditionally while
+    // the game was still active.  That is not an idle/deactivation event from
+    // the engine's point of view: every layer receives it and drops its
+    // decoded/cache-backed images synchronously.  Godot native then has to
+    // recreate those textures on the next present, which shows up as a brief
+    // black flash when the pointer is moving over an animated title screen.
+    // Real host deactivation still calls OnDeactivate() and keeps this
+    // compaction path; only suppress the periodic maintenance pass while the
+    // application owns the active window.
+    const bool hostActive = Application == nullptr || Application->GetActivating();
+    if(pressure == 0 && !hostActive &&
+       tick - LastIdleCompactTick >= idle_compact_interval) {
         LastIdleCompactTick = tick;
 #ifndef __ANDROID__
         TVPDeliverCompactEvent(TVP_COMPACT_LEVEL_DEACTIVATE);

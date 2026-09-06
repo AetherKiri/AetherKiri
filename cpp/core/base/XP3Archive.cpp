@@ -1175,8 +1175,13 @@ tjs_uint tTVPXP3ArchiveStream::Read(void *buffer, tjs_uint read_size) {
                 Owner->GetFileHash(StorageIndex), Owner->GetName(StorageIndex));
             TVPXP3ArchiveExtractionFilter((tTVPXP3ExtractionFilterInfo *)&info,
                                           &FilterContext);
-        } else if(Owner->UsesBuiltinCxDecoder() &&
-                  Owner->IsFileProtected(StorageIndex)) {
+        } else if(Owner->IsFileProtected(StorageIndex) &&
+                  TVPIsBuiltinXP3CxDecoderActive()) {
+            // The Cx scheme is selected by the protected startup entry in
+            // the project's data archive, but the encrypted payload is split
+            // across sibling XP3 archives (for example adult.xp3). Keep the
+            // selection process global so protected entries in those sibling
+            // archives receive the same decoder.
             TVPDecodeBuiltinXP3Cx(
                 Owner->GetFileHash(StorageIndex), CurPos,
                 static_cast<tjs_uint8 *>(buffer) + write_size, one_size);
