@@ -129,7 +129,11 @@ public:
     bool UploadCpuToGpu(bool flush_pending_gpu_writes = true);
     bool UpdateGpuRgba(const void *pixels, uint32_t stride_bytes);
     void MarkGpuDirty() { gpu_dirty_ = true; }
-    void MarkCpuDirty() { cpu_dirty_ = true; gpu_dirty_ = false; }
+    void MarkCpuDirty() {
+        cpu_dirty_ = true;
+        gpu_dirty_ = false;
+        cpu_pixels_known_zero_ = false;
+    }
     void EnsureCpuReadable();
 
 private:
@@ -153,6 +157,11 @@ private:
     bool cpu_composite_target_ = false;
     bool retain_cpu_shadow_ = false;
     bool discard_unwritten_on_partial_update_ = false;
+    // Fresh render targets are initialized to transparent black. Preserve
+    // that fact until the first CPU write so the Godot bridge can allocate
+    // and clear the GPU image without packing and uploading a multi-megabyte
+    // zero-filled staging buffer.
+    bool cpu_pixels_known_zero_ = false;
 };
 
 class GodotRenderManager final : public iTVPRenderManager {
