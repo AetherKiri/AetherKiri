@@ -380,13 +380,14 @@ bool CDVDVideoCodecFFmpeg::Open(CDVDStreamInfo &hints,
                        0);
     }
 
-    while(avcodec_open2(m_pCodecContext, pCodec, nullptr) < 0) {
-        // trying set lowres to 0
-        if(pCodec->max_lowres < m_pCodecContext->lowres) {
-            m_pCodecContext->lowres = pCodec->max_lowres;
-            if(avcodec_open2(m_pCodecContext, pCodec, nullptr) >= 0)
-                break;
-        }
+    // Negotiate lowres before opening the decoder. avcodec_open2() derives
+    // width/height from coded_width/coded_height before it rejects an
+    // unsupported lowres value. Retrying that partially initialized context
+    // with lowres=0 leaves stale half-size dimensions (notably for WMV3), so
+    // later YUV conversion reads the full-size planes with the wrong layout.
+    m_pCodecContext->lowres =
+        std::min<int>(m_pCodecContext->lowres, pCodec->max_lowres);
+    if(avcodec_open2(m_pCodecContext, pCodec, nullptr) < 0) {
         //    CLog::Log(LOGDEBUG,"CDVDVideoCodecFFmpeg::Open() Unable
         //    to open codec");
         avcodec_free_context(&m_pCodecContext);
