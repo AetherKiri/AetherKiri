@@ -198,7 +198,7 @@ const engine_runtime_provider_v1_t kArtemisGateProvider = [] {
 
 }  // namespace
 
-TEST_CASE("primary click queue gate coalesces clicks before the next tick") {
+TEST_CASE("primary click queue gate bounds rapid primary gestures") {
   aetherkiri::engine_api::PrimaryClickQueueGate gate;
   engine_input_event_t event{};
   event.struct_size = sizeof(event);
@@ -212,6 +212,12 @@ TEST_CASE("primary click queue gate coalesces clicks before the next tick") {
   REQUIRE(gate.should_enqueue(event));
   const engine_input_event_t queued_release = event;
 
+  for (size_t click = 0; click < 7; ++click) {
+    event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
+    REQUIRE(gate.should_enqueue(event));
+    event.type = ENGINE_INPUT_EVENT_POINTER_UP;
+    REQUIRE(gate.should_enqueue(event));
+  }
   event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
   REQUIRE_FALSE(gate.should_enqueue(event));
   event.type = ENGINE_INPUT_EVENT_POINTER_MOVE;
@@ -224,17 +230,122 @@ TEST_CASE("primary click queue gate coalesces clicks before the next tick") {
   REQUIRE(gate.should_enqueue(event));
 }
 
-TEST_CASE("primary click queue gate preserves secondary pointer releases") {
+TEST_CASE("primary click queue gate preserves a cross-tick primary gesture") {
   aetherkiri::engine_api::PrimaryClickQueueGate gate;
   engine_input_event_t event{};
   event.struct_size = sizeof(event);
-  event.type = ENGINE_INPUT_EVENT_POINTER_UP;
-  event.button = 1;
+  event.button = 0;
+  event.pointer_id = 7;
 
+  event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
+  REQUIRE(gate.should_enqueue(event));
+
+  // A physical click normally spans multiple frames. Processing its press
+  // must not make the later release look like an orphaned pointer event.
+  gate.on_dequeued(event);
+  event.type = ENGINE_INPUT_EVENT_POINTER_UP;
+  REQUIRE(gate.should_enqueue(event));
+  gate.on_dequeued(event);
+
+  event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
   REQUIRE(gate.should_enqueue(event));
 }
 
-TEST_CASE("Artemis runtime is compiled but beta-gated in product builds") {
+TEST_CASE("primary click queue gate keeps the release after a duplicate down") {
+  aetherkiri::engine_api::PrimaryClickQueueGate gate;
+  engine_input_event_t event{};
+  event.struct_size = sizeof(event);
+  event.button = 0;
+  event.pointer_id = 0;
+
+  event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
+  REQUIRE(gate.should_enqueue(event));
+  gate.on_dequeued(event);
+
+  // macOS can route the same physical mouse event through two Godot input
+  // callbacks. Dropping the duplicate press must not also drop the release.
+  REQUIRE_FALSE(gate.should_enqueue(event));
+  event.type = ENGINE_INPUT_EVENT_POINTER_UP;
+  REQUIRE(gate.should_enqueue(event));
+  gate.on_dequeued(event);
+
+  event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
+  REQUIRE(gate.should_enqueue(event));
+}
+
+TEST_CASE("primary click queue gate isolates a second pointer") {
+  aetherkiri::engine_api::PrimaryClickQueueGate gate;
+  engine_input_event_t event{};
+  event.struct_size = sizeof(event);
+  event.button = 0;
+  event.pointer_id = 4;
+  event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
+  REQUIRE(gate.should_enqueue(event));
+
+  event.pointer_id = 5;
+  REQUIRE_FALSE(gate.should_enqueue(event));
+  event.type = ENGINE_INPUT_EVENT_POINTER_UP;
+  REQUIRE_FALSE(gate.should_enqueue(event));
+
+  event.pointer_id = 4;
+  REQUIRE(gate.should_enqueue(event));
+}
+
+TEST_CASE("primary click queue gate permits reused pointer ids") {
+  aetherkiri::engine_api::PrimaryClickQueueGate gate;
+  engine_input_event_t event{};
+  event.struct_size = sizeof(event);
+  event.button = 0;
+  event.pointer_id = 0;
+
+  // Fill the bounded complete-gesture queue.
+  for (size_t click = 0; click < 8; ++click) {
+    event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
+    REQUIRE(gate.should_enqueue(event));
+    event.type = ENGINE_INPUT_EVENT_POINTER_UP;
+    REQUIRE(gate.should_enqueue(event));
+  }
+
+  // Reject one contact and simulate losing its UP outside the window.
+  event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
+  REQUIRE_FALSE(gate.should_enqueue(event));
+
+  // Once an old queued gesture is consumed, the reused desktop/touch pointer
+  // id must form a complete new gesture instead of inheriting quarantine.
+  event.type = ENGINE_INPUT_EVENT_POINTER_UP;
+  gate.on_dequeued(event);
+  event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
+  REQUIRE(gate.should_enqueue(event));
+  event.type = ENGINE_INPUT_EVENT_POINTER_UP;
+  REQUIRE(gate.should_enqueue(event));
+}
+
+TEST_CASE("primary click queue gate preserves every secondary pointer edge") {
+  aetherkiri::engine_api::PrimaryClickQueueGate gate;
+  engine_input_event_t event{};
+  event.struct_size = sizeof(event);
+
+  // Leave a primary release waiting so a wrongly encoded virtual right click
+  // would be coalesced as stale primary input.
+  event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
+  event.button = 0;
+  REQUIRE(gate.should_enqueue(event));
+  event.type = ENGINE_INPUT_EVENT_POINTER_UP;
+  REQUIRE(gate.should_enqueue(event));
+  const engine_input_event_t queued_primary_release = event;
+
+  event.button = 1;
+  event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
+  REQUIRE(gate.should_enqueue(event));
+  event.type = ENGINE_INPUT_EVENT_POINTER_MOVE;
+  REQUIRE(gate.should_enqueue(event));
+  event.type = ENGINE_INPUT_EVENT_POINTER_UP;
+  REQUIRE(gate.should_enqueue(event));
+
+  gate.on_dequeued(queued_primary_release);
+}
+
+TEST_CASE("Artemis runtime opens without a beta entitlement") {
   const engine_result_t registration =
       engine_register_runtime_provider(&kArtemisGateProvider);
   REQUIRE(registration == ENGINE_RESULT_OK);
@@ -244,16 +355,12 @@ TEST_CASE("Artemis runtime is compiled but beta-gated in product builds") {
   runtime_option.key_utf8 = "runtime";
   runtime_option.value_utf8 = "artemis";
   REQUIRE(engine_set_option(handle.value, &runtime_option) == ENGINE_RESULT_OK);
-#if defined(NDEBUG)
-  REQUIRE(engine_open_game(handle.value, ".artemis-debug-gate-test",
-                           "first.iet") == ENGINE_RESULT_NOT_SUPPORTED);
-  REQUIRE(std::string(engine_get_last_error(handle.value)) ==
-          "Artemis runtime requires active beta access");
+  // Older hosts may still send this option. A false value must no longer
+  // block the generally available runtime.
   engine_option_t beta_option{};
   beta_option.key_utf8 = "artemis_beta_allowed";
-  beta_option.value_utf8 = "1";
+  beta_option.value_utf8 = "0";
   REQUIRE(engine_set_option(handle.value, &beta_option) == ENGINE_RESULT_OK);
-#endif
   REQUIRE(engine_open_game(handle.value, ".artemis-debug-gate-test",
                            "first.iet") == ENGINE_RESULT_OK);
 }
@@ -486,4 +593,32 @@ TEST_CASE("plugin debug snapshot is bounded JSON and validates buffers") {
   REQUIRE(engine_get_plugin_debug_info(handle.value, too_small, sizeof(too_small),
                                        &written) == ENGINE_RESULT_INVALID_ARGUMENT);
   REQUIRE(written == 0);
+}
+
+TEST_CASE("text translation state is disabled without the private provider") {
+  REQUIRE(engine_is_text_translation_available() == 0);
+  REQUIRE(engine_get_text_translation_state() ==
+          ENGINE_TEXT_TRANSLATION_DISABLED);
+  engine_text_translation_stats_t translation_stats{};
+  translation_stats.struct_size = sizeof(translation_stats);
+  REQUIRE(engine_get_text_translation_stats(&translation_stats) ==
+          ENGINE_RESULT_OK);
+  REQUIRE(translation_stats.state == ENGINE_TEXT_TRANSLATION_DISABLED);
+  REQUIRE(translation_stats.backend == ENGINE_TEXT_TRANSLATION_BACKEND_NONE);
+  REQUIRE(translation_stats.model_tensor_bytes == 0);
+  REQUIRE(engine_get_text_translation_stats(nullptr) ==
+          ENGINE_RESULT_INVALID_ARGUMENT);
+  engine_text_translation_stats_t short_translation_stats{};
+  short_translation_stats.struct_size = sizeof(uint32_t);
+  REQUIRE(engine_get_text_translation_stats(&short_translation_stats) ==
+          ENGINE_RESULT_INVALID_ARGUMENT);
+  REQUIRE(engine_prefetch_text_utf8("kirikiri", "テスト") == ENGINE_RESULT_OK);
+  REQUIRE(engine_set_text_translation_skipping("kirikiri", 1) ==
+          ENGINE_RESULT_OK);
+  REQUIRE(engine_prefetch_text_utf8(nullptr, "テスト") ==
+          ENGINE_RESULT_INVALID_ARGUMENT);
+  REQUIRE(engine_prefetch_text_utf8("kirikiri", nullptr) ==
+          ENGINE_RESULT_INVALID_ARGUMENT);
+  REQUIRE(engine_set_text_translation_skipping(nullptr, 1) ==
+          ENGINE_RESULT_INVALID_ARGUMENT);
 }

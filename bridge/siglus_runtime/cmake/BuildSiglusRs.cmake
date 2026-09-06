@@ -260,11 +260,11 @@ function(aetherkiri_add_siglus_rs imported_target)
     if(APPLE)
         if(IOS)
             list(APPEND SIGLUS_APPLE_FRAMEWORKS
-                UIKit Foundation Metal QuartzCore Security
+                UIKit Foundation CoreFoundation Metal QuartzCore Security
                 CoreGraphics CoreAudio AudioToolbox)
         else()
             list(APPEND SIGLUS_APPLE_FRAMEWORKS
-                AppKit Foundation Metal QuartzCore IOKit Security
+                AppKit Foundation ApplicationServices Metal QuartzCore IOKit Security
                 CoreGraphics CoreAudio AudioToolbox AudioUnit)
         endif()
         set(siglus_framework_flags "")

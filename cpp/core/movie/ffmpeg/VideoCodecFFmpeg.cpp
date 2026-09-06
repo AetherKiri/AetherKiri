@@ -380,13 +380,14 @@ bool CDVDVideoCodecFFmpeg::Open(CDVDStreamInfo &hints,
                        0);
     }
 
-    while(avcodec_open2(m_pCodecContext, pCodec, nullptr) < 0) {
-        // trying set lowres to 0
-        if(pCodec->max_lowres < m_pCodecContext->lowres) {
-            m_pCodecContext->lowres = pCodec->max_lowres;
-            if(avcodec_open2(m_pCodecContext, pCodec, nullptr) >= 0)
-                break;
-        }
+    // Negotiate lowres before opening the decoder. avcodec_open2() derives
+    // width/height from coded_width/coded_height before it rejects an
+    // unsupported lowres value. Retrying that partially initialized context
+    // with lowres=0 leaves stale half-size dimensions (notably for WMV3), so
+    // later YUV conversion reads the full-size planes with the wrong layout.
+    m_pCodecContext->lowres =
+        std::min<int>(m_pCodecContext->lowres, pCodec->max_lowres);
+    if(avcodec_open2(m_pCodecContext, pCodec, nullptr) < 0) {
         //    CLog::Log(LOGDEBUG,"CDVDVideoCodecFFmpeg::Open() Unable
         //    to open codec");
         avcodec_free_context(&m_pCodecContext);
@@ -852,18 +853,15 @@ bool CDVDVideoCodecFFmpeg::GetPicture(DVDVideoPicture *pDvdVideoPicture) {
     pix_fmt = (AVPixelFormat)m_pFrame->format;
     pDvdVideoPicture->format = CDVDCodecUtils::EFormatFromPixfmt(pix_fmt);
 
-    while(m_pCodecContext->coded_width > 0 &&
-          m_pCodecContext->coded_height > 0) {
-        if(pDvdVideoPicture->format == RENDER_FMT_YUV420P) {
-            int pitch = m_pFrame->linesize[0];
-            if(pitch < m_pCodecContext->coded_width ||
-               pitch > m_pCodecContext->coded_width + 16)
-                break;
-        }
-        m_pFrame->width = m_pCodecContext->coded_width;
-        m_pFrame->height = m_pCodecContext->coded_height;
-        break;
-    }
+    // AVFrame width/height describe the visible frame. coded_width and
+    // coded_height may include codec alignment padding (for example an H.264
+    // 1920x1080 frame can have coded_height == 1088). Passing that padding to
+    // swscale as visible pixels corrupts the conversion. Only use codec
+    // dimensions as a defensive fallback when the decoder omitted a size.
+    if(m_pFrame->width <= 0)
+        m_pFrame->width = m_pCodecContext->width;
+    if(m_pFrame->height <= 0)
+        m_pFrame->height = m_pCodecContext->height;
 
     if(!GetPictureCommon(pDvdVideoPicture))
         return false;

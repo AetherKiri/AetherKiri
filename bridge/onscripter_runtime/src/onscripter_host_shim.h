@@ -18,9 +18,13 @@ extern "C" int aetherkiri_onscripter_play_video(
 extern "C" void aetherkiri_onscripter_stop_video();
 extern "C" void aetherkiri_onscripter_shutdown_parallel();
 extern "C" int aetherkiri_onscripter_wait_event(SDL_Event *event);
+extern "C" int aetherkiri_onscripter_poll_host_key_release(SDL_Event *event);
 extern "C" void aetherkiri_onscripter_configure_video(
     int has_position, int x, int y, int width, int height,
     int asynchronous);
+extern "C" void aetherkiri_onscripter_transform_text(char *buffer,
+                                                       size_t capacity);
+extern "C" void aetherkiri_onscripter_prefetch_text(const char *script);
 
 #define exit(code) aetherkiri_onscripter_host_exit((code), __FILE__, __LINE__)
 #define SDL_FreeSurface aetherkiri_onscripter_free_surface

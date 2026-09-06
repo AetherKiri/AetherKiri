@@ -2,6 +2,7 @@ extends RefCounted
 
 const FIELD := "launchFile"
 const SUPPORTED_EXTENSIONS := ["exe", "xp3"]
+const DIRECTORY_RUNTIME_KINDS := ["artemis", "minori", "onscripter", "siglus"]
 
 
 static func configured_relative_path(game: Dictionary) -> String:
@@ -22,6 +23,16 @@ static func resolve(game: Dictionary) -> String:
     if game_path.is_empty() or relative_path.is_empty():
         return game_path
     return game_path.path_join(relative_path).simplify_path()
+
+
+static func resolve_for_runtime(game: Dictionary, runtime_kind: String) -> String:
+    if runtime_uses_directory(runtime_kind):
+        return _normalize_path(String(game.get("path", "")).strip_edges()).simplify_path()
+    return resolve(game)
+
+
+static func runtime_uses_directory(runtime_kind: String) -> bool:
+    return DIRECTORY_RUNTIME_KINDS.has(runtime_kind.to_lower())
 
 
 static func is_supported_file(path: String) -> bool:

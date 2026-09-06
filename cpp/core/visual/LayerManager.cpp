@@ -28,6 +28,8 @@
 #include "TickCount.h"
 #include "ScriptMgnIntf.h"
 #include "DebugIntf.h"
+#include "BitmapIntf.h"
+#include "BitmapLayerTreeOwner.h"
 #include "LayerTreeOwner.h"
 #include "WindowIntf.h"
 #include "EngineLoop.h"
@@ -861,6 +863,16 @@ void tTVPLayerManager::SetHoldAlpha(bool b) {
     static_cast<tTVPDestTexture *>(DrawBuffer)->SetHoldAlpha(b);
 }
 
+void tTVPLayerManager::ClearDrawBufferForAlpha() {
+    if(!DrawBuffer || HoldAlpha)
+        return;
+    tjs_int width = 0;
+    tjs_int height = 0;
+    if(!GetPrimaryLayerSize(width, height) || width <= 0 || height <= 0)
+        return;
+    DrawBuffer->Fill(tTVPRect(0, 0, width, height), 0x00000000u);
+}
+
 tTVPBaseTexture *tTVPLayerManager::EnsureDrawBufferSize(
     tjs_int w, tjs_int h, bool clear_on_resize) {
     if(w <= 0 || h <= 0)
@@ -870,9 +882,10 @@ tTVPBaseTexture *tTVPLayerManager::EnsureDrawBufferSize(
     // only updates part of the primary surface. KiriKiri defines those pixels
     // from the opaque primary layer's neutral color; a hard-coded black clear
     // leaks a black edge through otherwise valid transparent title artwork.
-    const tjs_uint32 clear_color = Primary
-        ? (Primary->GetNeutralColor() & 0x00ffffffu) | 0xff000000u
-        : 0xff000000u;
+    const tjs_uint32 neutral_color =
+        Primary ? (Primary->GetNeutralColor() & 0x00ffffffu) : 0;
+    const tjs_uint32 clear_color = HoldAlpha ? neutral_color | 0xff000000u
+                                             : neutral_color;
 
     const tjs_uint target_w = static_cast<tjs_uint>(w);
     const tjs_uint target_h = static_cast<tjs_uint>(h);
@@ -937,6 +950,20 @@ void tTVPLayerManager::DrawCompleted(const tTVPRect &destrect,
     // Window->GetDrawDevice()->GetSrcSize(w, h);
     EnsureDrawBufferSize(w, h, false);
 
+    // The Godot path composes each completion into DrawBuffer before it is
+    // presented.  BitmapLayerTreeOwner is also used as a drawable owner by
+    // LayerOwnerTexture (for message glyphs), so it still needs the legacy
+    // completion notification; otherwise its bitmap remains unchanged and
+    // the script-side Texture never receives the newly rendered text.
+    auto notify_bitmap_owner = [&]() {
+        if(auto *bitmap_owner =
+               dynamic_cast<tTJSNI_BitmapLayerTreeOwner *>(LayerTreeOwner)) {
+            bitmap_owner->NotifyBitmapCompleted(
+                this, destrect.left, destrect.top, bmp, cliprect, type,
+                opacity);
+        }
+    };
+
     if(const char *trace = std::getenv("AETHERKIRI_MESSAGE_FRAME_COMPOSE");
        trace && *trace && *trace != '0' && type == ltAlpha && bmp &&
        destrect.get_width() >= 1000 && destrect.get_height() >= 400) {
@@ -963,11 +990,25 @@ void tTVPLayerManager::DrawCompleted(const tTVPRect &destrect,
                         opacity, HoldAlpha);
         spdlog::info("message-frame compose dst_after=0x{:08x}",
                      DrawBuffer->GetPoint(dx, dy));
+        notify_bitmap_owner();
         return;
     }
 
-    DrawBuffer->Blt(destrect.left, destrect.top, bmp, cliprect, type, opacity,
-                    HoldAlpha);
+    // A D2D manager is an alpha-preserving composition surface even when
+    // one of its source layers advertises ltOpaque.  The generic layer-type
+    // overload maps that combination to CopyOpaqueImage, which deliberately
+    // forces alpha to 255; an untouched/transparent opaque layer then becomes
+    // opaque black and covers a lower manager (the RPG map in particular).
+    // Copy the source pixels verbatim for this manager so zero-alpha regions
+    // stay transparent while genuinely opaque pixels remain opaque.
+    if(!HoldAlpha && DesiredLayerType == ltAlpha && type == ltOpaque) {
+        DrawBuffer->Blt(destrect.left, destrect.top, bmp, cliprect, bmCopy,
+                         opacity, false);
+    } else {
+        DrawBuffer->Blt(destrect.left, destrect.top, bmp, cliprect, type,
+                         opacity, HoldAlpha);
+    }
+    notify_bitmap_owner();
 #endif
 }
 
@@ -1000,6 +1041,9 @@ void tTVPLayerManager::DetachPrimary() {
         NotifyPart(Primary);
         Primary = nullptr;
     }
+    // Preserve the active-gesture marker: an ensuing release must not target
+    // a replacement primary tree, but must not retain the detached tree either.
+    LeftPointerDownOwner.Clear();
 }
 //---------------------------------------------------------------------------
 bool tTVPLayerManager::GetPrimaryLayerSize(tjs_int &w, tjs_int &h) const {
@@ -1405,6 +1449,12 @@ bool tTVPLayerManager::IsTitleMenuControlPoint(tjs_int x, tjs_int y) {
     return left_title_controls || right_title_controls || far_right_switcher;
 }
 
+bool tTVPLayerManager::IsLeftPointerGestureTarget(tTJSNI_BaseLayer *layer) const {
+    return !LeftPointerGestureActive ||
+        (layer && LeftPointerDownOwner.Type() == tvtObject &&
+         layer->GetOwnerNoAddRef() == LeftPointerDownOwner.AsObjectNoAddRef());
+}
+
 void tTVPLayerManager::PrimaryClick(tjs_int x, tjs_int y) {
     if(SuppressCurrentTitleMenuPointerGesture) {
         if(TVPInputTraceEnabled()) {
@@ -1418,6 +1468,14 @@ void tTVPLayerManager::PrimaryClick(tjs_int x, tjs_int y) {
     tTJSNI_BaseLayer *l = GetClickableLayerAt(x, y);
     TVPTraceLayerHit("click", x, y, l);
     TVPTraceLayersAt(this, "click-stack", x, y);
+    if(!IsLeftPointerGestureTarget(l)) {
+        if(TVPInputTraceEnabled()) {
+            spdlog::info(
+                "LayerManager suppress cross-layer gesture click primary=({}, {})",
+                x, y);
+        }
+        return;
+    }
     if(l /*&& CaptureOwner == l*/) {
         if(TVPIsCgPreviewPresentationLayer(l)) {
             if(TVPInputTraceEnabled()) {
@@ -1446,10 +1504,9 @@ void tTVPLayerManager::PrimaryClick(tjs_int x, tjs_int y) {
             // captured layer's onMouseUp handler.  PrimaryClick is delivered
             // before PrimaryMouseUp on the Godot host, so evaluating the
             // bound expression here as well toggles state twice (open, then
-            // immediately closed).  Only synthesize the click when the
-            // button appeared after mouse-down and therefore does not own the
-            // capture; that case has no matching button mouse-up to dispatch
-            // its expression.
+            // immediately closed). Only synthesize for click-only dispatch or
+            // the original button when it explicitly released capture. A
+            // button revealed by this gesture must not receive its release.
             if(CaptureOwner == l) {
                 if(TVPInputTraceEnabled()) {
                     spdlog::info(
@@ -1486,7 +1543,7 @@ void tTVPLayerManager::PrimaryClick(tjs_int x, tjs_int y) {
 void tTVPLayerManager::PrimaryDoubleClick(tjs_int x, tjs_int y) {
     tTJSNI_BaseLayer *l = GetClickableLayerAt(x, y);
     TVPTraceLayersAt(this, "double-click-stack", x, y);
-    if(l /*&& CaptureOwner == l*/) {
+    if(l && IsLeftPointerGestureTarget(l)) {
         l->FromPrimaryCoordinates(x, y);
         l->FireDoubleClick(x, y);
     }
@@ -1494,6 +1551,10 @@ void tTVPLayerManager::PrimaryDoubleClick(tjs_int x, tjs_int y) {
 //---------------------------------------------------------------------------
 void tTVPLayerManager::PrimaryMouseDown(tjs_int x, tjs_int y,
                                         tTVPMouseButton mb, tjs_uint32 flags) {
+    if(mb == mbLeft) {
+        LeftPointerGestureActive = true;
+        LeftPointerDownOwner.Clear();
+    }
     if(mb == mbLeft && !IsTitleMenuControlPoint(x, y)) {
         tTJSNI_BaseLayer *title_hit = GetClickableLayerAt(x, y);
         if(IsTitleMenuInputState(title_hit) &&
@@ -1518,6 +1579,9 @@ void tTVPLayerManager::PrimaryMouseDown(tjs_int x, tjs_int y,
     TVPTraceLayerHit("down", x, y, l);
     TVPTraceLayersAt(this, "down-stack", x, y);
     SuppressCurrentTitleMenuPointerGesture = false;
+    if(mb == mbLeft && l) {
+        LeftPointerDownOwner = tTJSVariant(l->GetOwnerNoAddRef());
+    }
     if(l) {
         l->FromPrimaryCoordinates(x, y);
         ReleaseCaptureCalled = false;
@@ -1543,6 +1607,8 @@ void tTVPLayerManager::PrimaryMouseDown(tjs_int x, tjs_int y,
 void tTVPLayerManager::PrimaryMouseUp(tjs_int x, tjs_int y, tTVPMouseButton mb,
                                       tjs_uint32 flags) {
     if(mb == mbLeft && SuppressCurrentTitleMenuPointerGesture) {
+        LeftPointerGestureActive = false;
+        LeftPointerDownOwner.Clear();
         if(TVPInputTraceEnabled()) {
             spdlog::info(
                 "LayerManager suppress title repeat mouseup primary=({}, {})",
@@ -1558,6 +1624,29 @@ void tTVPLayerManager::PrimaryMouseUp(tjs_int x, tjs_int y, tTVPMouseButton mb,
         l = GetClickableLayerAt(x, y);
     TVPTraceLayerHit("up", x, y, l);
     TVPTraceLayersAt(this, "up-stack", x, y);
+
+    const bool matching_gesture =
+        mb != mbLeft || IsLeftPointerGestureTarget(l);
+    tTJSVariant pointer_down_owner;
+    if(mb == mbLeft) {
+        // Hold the owner through dispatch, but finish bookkeeping before a
+        // script handler can start another gesture or detach the layer tree.
+        pointer_down_owner = LeftPointerDownOwner;
+        LeftPointerDownOwner.Clear();
+        LeftPointerGestureActive = false;
+    }
+    if(!matching_gesture) {
+        if(TVPInputTraceEnabled()) {
+            spdlog::info(
+                "LayerManager suppress cross-layer gesture mouseup primary=({}, {})",
+                x, y);
+        }
+        if(!TVPIsAnyMouseButtonPressedInShiftStateFlags(flags)) {
+            ReleaseCapture();
+            PrimaryMouseMove(x, y, flags);
+        }
+        return;
+    }
 
     const int orig_x = x;
     const int orig_y = y;

@@ -5,12 +5,16 @@
 #include "GodotGpuBarrierShadowPlanner.h"
 #include "ComplexRect.h"
 #include "RuntimeTickPacer.h"
+#include "presentation/RuntimePresentationSprite.h"
 #include "frame_effect_host.h"
 #if defined(AETHERKIRI_WITH_ONSCRIPTER)
 #include "onscripter_runtime.h"
 #endif
 #if defined(AETHERKIRI_WITH_SIGLUS)
 #include "siglus_runtime.h"
+#endif
+#if defined(AETHERKIRI_WITH_MINORI)
+extern "C" engine_result_t aetherkiri_minori_register_runtime_provider();
 #endif
 #if defined(__APPLE__)
 #include "apple_external_texture.h"
@@ -22,15 +26,24 @@
 #include "android_external_texture.h"
 #endif
 
+#include <godot_cpp/classes/audio_effect_panner.hpp>
+#include <godot_cpp/classes/audio_server.hpp>
+#include <godot_cpp/classes/audio_stream_ogg_vorbis.hpp>
+#include <godot_cpp/classes/audio_stream_player.hpp>
+#include <godot_cpp/classes/confirmation_dialog.hpp>
 #include <godot_cpp/classes/engine.hpp>
+#include <godot_cpp/classes/font.hpp>
 #include <godot_cpp/classes/image.hpp>
 #include <godot_cpp/classes/image_texture.hpp>
 #include <godot_cpp/classes/java_class.hpp>
 #include <godot_cpp/classes/java_class_wrapper.hpp>
 #include <godot_cpp/classes/java_object.hpp>
+#include <godot_cpp/classes/label.hpp>
+#include <godot_cpp/classes/line_edit.hpp>
 #include <godot_cpp/classes/node.hpp>
 #include <godot_cpp/classes/os.hpp>
 #include <godot_cpp/classes/project_settings.hpp>
+#include <godot_cpp/classes/resource_loader.hpp>
 #include <godot_cpp/classes/rd_pipeline_color_blend_state.hpp>
 #include <godot_cpp/classes/rd_pipeline_color_blend_state_attachment.hpp>
 #include <godot_cpp/classes/rd_pipeline_depth_stencil_state.hpp>
@@ -47,9 +60,11 @@
 #include <godot_cpp/classes/texture2d.hpp>
 #include <godot_cpp/classes/texture2drd.hpp>
 #include <godot_cpp/classes/time.hpp>
+#include <godot_cpp/classes/viewport.hpp>
 #include <godot_cpp/core/binder_common.hpp>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/core/defs.hpp>
+#include <godot_cpp/core/memory.hpp>
 #include <godot_cpp/godot.hpp>
 #include <godot_cpp/variant/callable_method_pointer.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
@@ -81,6 +96,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <mutex>
 
@@ -98,6 +114,10 @@ int32_t aether_native_launch_file_picker_present(
 int32_t aether_native_cover_file_picker_present(
     const char *title, const char *initial_directory,
     const char *destination_directory);
+int32_t aether_native_translation_model_file_picker_present(
+    const char *title, const char *initial_directory);
+char *aether_native_translation_model_restore_path(
+    const char *fallback_path);
 char *aether_native_launch_file_picker_copy_result_json();
 void aether_native_launch_file_picker_free_string(char *value);
 }
@@ -247,8 +267,137 @@ struct GodotGpuOp {
     uint32_t native_height = 0;
     uint64_t imported_texture = 0;
     uint64_t queue_sequence = 0;
+    // Timestamp assigned when the operation enters the bridge queue.  This is
+    // intentionally separate from profile_enqueued_at, which is also used to
+    // measure the CPU packing interval for texture updates.
+    std::chrono::steady_clock::time_point profile_submitted_at{};
     std::mutex done_mutex;
     std::condition_variable done_cv;
+};
+
+const char *GodotGpuOpTypeName(GodotGpuOp::Type type) {
+    switch (type) {
+        case GodotGpuOp::Type::Update: return "update";
+        case GodotGpuOp::Type::Clear: return "clear";
+        case GodotGpuOp::Type::Copy: return "copy";
+        case GodotGpuOp::Type::CopySelf: return "copy_self";
+        case GodotGpuOp::Type::CopyTriangles: return "copy_triangles";
+        case GodotGpuOp::Type::DrawTriangles: return "draw_triangles";
+        case GodotGpuOp::Type::DrawMaskedTriangles: return "draw_masked_triangles";
+        case GodotGpuOp::Type::Mosaic: return "mosaic";
+        case GodotGpuOp::Type::Read: return "read";
+        case GodotGpuOp::Type::ReadAsync: return "read_async";
+        case GodotGpuOp::Type::Blend: return "blend";
+        case GodotGpuOp::Type::Blend2: return "blend2";
+        case GodotGpuOp::Type::Blend3: return "blend3";
+        case GodotGpuOp::Type::ArtemisShader: return "artemis_shader";
+        case GodotGpuOp::Type::PrepareNativeWrite: return "prepare_native_write";
+        case GodotGpuOp::Type::PublishNativeWrite: return "publish_native_write";
+        case GodotGpuOp::Type::ImportApplePixelBuffer: return "import_apple_pixel_buffer";
+        case GodotGpuOp::Type::ImportAndroidHardwareBuffer: return "import_android_hardware_buffer";
+        case GodotGpuOp::Type::Release: return "release";
+        case GodotGpuOp::Type::Flush: return "flush";
+    }
+    return "unknown";
+}
+
+bool GodotGpuOpProfileEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_GODOT_GPU_OP_PROFILE");
+        return value != nullptr && value[0] != '\0' &&
+               std::strcmp(value, "0") != 0;
+    }();
+    return enabled;
+}
+
+double GodotGpuOpProfileSlowMs() {
+    static const double threshold = [] {
+        const char *value = std::getenv("AETHERKIRI_GODOT_GPU_OP_SLOW_MS");
+        if (value == nullptr || value[0] == '\0') return 5.0;
+        char *end = nullptr;
+        const double parsed = std::strtod(value, &end);
+        return end != value && std::isfinite(parsed) && parsed > 0.0
+                   ? parsed
+                   : 5.0;
+    }();
+    return threshold;
+}
+
+void LogGodotGpuOpProfile(const char *phase,
+                          const GodotGpuOp *op,
+                          double elapsed_ms) {
+    if (!GodotGpuOpProfileEnabled() || op == nullptr ||
+        elapsed_ms < GodotGpuOpProfileSlowMs()) {
+        return;
+    }
+    const uint32_t width = op->profile_width != 0
+        ? op->profile_width
+        : static_cast<uint32_t>(std::max(0.0f, op->size.x));
+    const uint32_t height = op->profile_height != 0
+        ? op->profile_height
+        : static_cast<uint32_t>(std::max(0.0f, op->size.y));
+    double queue_ms = 0.0;
+    if (op->profile_submitted_at.time_since_epoch().count() != 0) {
+        queue_ms = std::chrono::duration<double, std::milli>(
+                       std::chrono::steady_clock::now() -
+                       op->profile_submitted_at)
+                       .count();
+    }
+    RenderingServer *server = RenderingServer::get_singleton();
+    std::ostringstream message;
+    message << std::fixed << std::setprecision(3)
+            << "godot gpu op profile: phase="
+            << (phase != nullptr ? phase : "unknown")
+            << " type=" << GodotGpuOpTypeName(op->type)
+            << " elapsed_ms=" << elapsed_ms
+            << " queue_ms=" << queue_ms
+            << " size=" << width << "x" << height
+            << " render_thread="
+            << (server != nullptr && server->is_on_render_thread() ? 1 : 0);
+    UtilityFunctions::print(String(message.str().c_str()));
+}
+
+class GodotGpuOpExecutionProfile final {
+public:
+    explicit GodotGpuOpExecutionProfile(
+        const std::shared_ptr<GodotGpuOp> &op)
+        : op_(op.get()), enabled_(GodotGpuOpProfileEnabled()),
+          started_(enabled_ ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{}) {}
+
+    ~GodotGpuOpExecutionProfile() {
+        if (!enabled_) return;
+        const double elapsed_ms = std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() - started_)
+                                      .count();
+        LogGodotGpuOpProfile("execute", op_, elapsed_ms);
+    }
+
+private:
+    const GodotGpuOp *op_ = nullptr;
+    bool enabled_ = false;
+    std::chrono::steady_clock::time_point started_{};
+};
+
+class GodotGpuOpWaitProfile final {
+public:
+    GodotGpuOpWaitProfile(const std::shared_ptr<GodotGpuOp> &op, bool wait)
+        : op_(op.get()), enabled_(wait && GodotGpuOpProfileEnabled()),
+          started_(enabled_ ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{}) {}
+
+    ~GodotGpuOpWaitProfile() {
+        if (!enabled_) return;
+        const double elapsed_ms = std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() - started_)
+                                      .count();
+        LogGodotGpuOpProfile("wait", op_, elapsed_ms);
+    }
+
+private:
+    const GodotGpuOp *op_ = nullptr;
+    bool enabled_ = false;
+    std::chrono::steady_clock::time_point started_{};
 };
 
 struct GodotGpuReadbackRequest {
@@ -276,6 +425,7 @@ std::atomic<uint64_t> g_gpu_op_failed{0};
 std::atomic<uint64_t> g_gpu_copy_failed{0};
 std::atomic<uint64_t> g_gpu_copy_triangles_failed{0};
 std::atomic<uint64_t> g_gpu_detail_minify_ops{0};
+std::atomic<uint64_t> g_gpu_native_character_aa_ops{0};
 std::atomic<uint64_t> g_gpu_triangle_pipeline_failed{0};
 std::atomic<uint64_t> g_gpu_triangle_buffer_failed{0};
 std::atomic<uint64_t> g_gpu_triangle_uniform_failed{0};
@@ -1433,6 +1583,8 @@ String GetGodotGpuBridgeDebugInfo() {
         << " bridge_tri_failed=" << g_gpu_copy_triangles_failed.load(std::memory_order_relaxed)
         << " bridge_detail_minify_ops="
         << g_gpu_detail_minify_ops.load(std::memory_order_relaxed)
+        << " bridge_native_character_aa_ops="
+        << g_gpu_native_character_aa_ops.load(std::memory_order_relaxed)
         << " bridge_tri_pipeline_failed=" << g_gpu_triangle_pipeline_failed.load(std::memory_order_relaxed)
         << " bridge_tri_buffer_failed=" << g_gpu_triangle_buffer_failed.load(std::memory_order_relaxed)
         << " bridge_tri_uniform_failed=" << g_gpu_triangle_uniform_failed.load(std::memory_order_relaxed)
@@ -1584,6 +1736,45 @@ bool PendingWritesOverlap(const GodotGpuPendingWrite &a,
                           const GodotGpuPendingWrite &b) {
     return a.rid == b.rid && a.left < b.right && b.left < a.right &&
            a.top < b.bottom && b.top < a.bottom;
+}
+
+// A bridge-owned RD texture is a distinct allocation for the lifetime of the
+// queued batch. Imported Apple/Android textures are the exception: their RID
+// can be a view over storage owned by another subsystem, so retain the old
+// conservative ordering whenever one participates in a batch.
+std::unordered_set<int64_t> ExternalGodotGpuRids() {
+    std::unordered_set<int64_t> result;
+    std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+    for (const auto &entry : g_gpu_textures) {
+        const auto &record = entry.second;
+        if (record.apple_pixel_buffer != nullptr ||
+            record.apple_vulkan_external_texture != nullptr ||
+            record.android_external_texture != nullptr) {
+            if (record.rid.is_valid()) result.insert(record.rid.get_id());
+        }
+    }
+    return result;
+}
+
+bool NonLiveGpuHazardTrackingSafe(
+    const std::vector<std::shared_ptr<GodotGpuOp>> &ops) {
+    const char *conservative =
+        std::getenv("AETHERKIRI_GODOT_CONSERVATIVE_BARRIERS");
+    if (conservative != nullptr && conservative[0] != '\0' &&
+        std::strcmp(conservative, "0") != 0) {
+        return false;
+    }
+    const auto external_rids = ExternalGodotGpuRids();
+    if (external_rids.empty()) return true;
+    for (const auto &op : ops) {
+        if (op == nullptr) continue;
+        const RID rids[] = {op->src, op->src2, op->src3, op->dst};
+        for (const RID &rid : rids) {
+            if (rid.is_valid() && external_rids.count(rid.get_id()) != 0)
+                return false;
+        }
+    }
+    return true;
 }
 
 bool BlendOpNeedsBarrierBeforeDispatch(
@@ -2897,14 +3088,79 @@ vec4 load_bilinear_premul(ivec2 limit, vec2 edge_coord,
     return clamp(premul, vec4(0.0), vec4(1.0));
 }
 
+float premul_luma(vec4 color) {
+    vec3 straight = color.a > 0.00001
+        ? color.rgb / color.a : vec3(0.0);
+    // Include alpha in the edge signal so the same filter also stabilizes
+    // the outline of the transparent native character surface.
+    return dot(straight, vec3(0.299, 0.587, 0.114)) * color.a;
+}
+
+vec4 load_native_character_antialiased(
+        ivec2 limit, vec2 edge_coord, vec2 source_dx, vec2 source_dy) {
+    vec4 center = load_bilinear_premul(limit, edge_coord, true);
+    vec4 nw = load_bilinear_premul(
+        limit, edge_coord - source_dx - source_dy, true);
+    vec4 ne = load_bilinear_premul(
+        limit, edge_coord + source_dx - source_dy, true);
+    vec4 sw = load_bilinear_premul(
+        limit, edge_coord - source_dx + source_dy, true);
+    vec4 se = load_bilinear_premul(
+        limit, edge_coord + source_dx + source_dy, true);
+    float l_center = premul_luma(center);
+    float l_nw = premul_luma(nw);
+    float l_ne = premul_luma(ne);
+    float l_sw = premul_luma(sw);
+    float l_se = premul_luma(se);
+    float range_min = min(
+        l_center, min(min(l_nw, l_ne), min(l_sw, l_se)));
+    float range_max = max(
+        l_center, max(max(l_nw, l_ne), max(l_sw, l_se)));
+    if (range_max - range_min <
+            max(1.0 / 24.0, range_max * (1.0 / 8.0))) {
+        return center;
+    }
+
+    vec2 direction = vec2(
+        -((l_nw + l_ne) - (l_sw + l_se)),
+         ((l_nw + l_sw) - (l_ne + l_se)));
+    float reduce = max(
+        (l_nw + l_ne + l_sw + l_se) * (0.25 / 8.0),
+        1.0 / 128.0);
+    // Two pixels is enough to join the one-pixel E-mote diagonals without
+    // softening broad painted regions or the independently composited text.
+    direction = clamp(
+        direction / (min(abs(direction.x), abs(direction.y)) + reduce),
+        vec2(-2.0), vec2(2.0));
+    vec2 source_direction =
+        source_dx * direction.x + source_dy * direction.y;
+    vec4 sample_a = 0.5 * (
+        load_bilinear_premul(
+            limit, edge_coord + source_direction * (1.0 / 3.0 - 0.5),
+            true) +
+        load_bilinear_premul(
+            limit, edge_coord + source_direction * (2.0 / 3.0 - 0.5),
+            true));
+    vec4 sample_b = sample_a * 0.5 + 0.25 * (
+        load_bilinear_premul(
+            limit, edge_coord - source_direction * 0.5, true) +
+        load_bilinear_premul(
+            limit, edge_coord + source_direction * 0.5, true));
+    float l_b = premul_luma(sample_b);
+    return (l_b < range_min || l_b > range_max) ? sample_a : sample_b;
+}
+
 vec4 load_minified(ivec2 limit, vec2 edge_coord,
                     vec2 source_dx, vec2 source_dy,
                     bool preserve_detail, bool source_premultiplied) {
     float footprint = max(length(source_dx), length(source_dy));
     vec4 premul;
     if (footprint <= 1.0001) {
-        premul = load_bilinear_premul(
-            limit, edge_coord, source_premultiplied);
+        premul = source_premultiplied
+            ? load_native_character_antialiased(
+                  limit, edge_coord, source_dx, source_dy)
+            : load_bilinear_premul(
+                  limit, edge_coord, source_premultiplied);
     } else if (preserve_detail) {
         vec2 dx = source_dx * 0.5;
         vec2 dy = source_dy * 0.5;
@@ -5225,6 +5481,7 @@ bool ExecuteGodotGpuMosaic(RenderingDevice *rd,
 
 bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &op) {
     if (rd == nullptr || op == nullptr) return false;
+    GodotGpuOpExecutionProfile execution_profile(op);
     bool result = false;
     bool wrote_texture = false;
     switch (op->type) {
@@ -5816,6 +6073,9 @@ void ExecuteGodotGpuComputeBatchLegacy(
     uint64_t nonlive_compute_ops = 0;
     uint64_t nonlive_compute_barriers = 0;
     std::vector<GodotGpuPendingWrite> live2d_pending_writes;
+    std::vector<GodotGpuPendingWrite> nonlive_pending_writes;
+    const bool nonlive_hazard_tracking_safe =
+        NonLiveGpuHazardTrackingSafe(ops);
     const bool shadow_enabled = GodotGpuBarrierShadowEnabled();
     std::unique_ptr<GodotGpuBarrierShadowPlanner> nonlive_shadow;
     if (shadow_enabled) {
@@ -5835,6 +6095,10 @@ void ExecuteGodotGpuComputeBatchLegacy(
             // real command list.
             nonlive_shadow->finish();
         }
+        if (live2d_triangle && !nonlive_pending_writes.empty()) {
+            rd->compute_list_add_barrier(compute_list);
+            nonlive_pending_writes.clear();
+        }
         if (live2d_triangle && TriangleOpNeedsBarrierBeforeDispatch(
                                    *ops[i], live2d_pending_writes)) {
             rd->compute_list_add_barrier(compute_list);
@@ -5842,6 +6106,13 @@ void ExecuteGodotGpuComputeBatchLegacy(
         } else if (!live2d_triangle && !live2d_pending_writes.empty()) {
             rd->compute_list_add_barrier(compute_list);
             live2d_pending_writes.clear();
+        }
+        if (!live2d_triangle &&
+            (!nonlive_hazard_tracking_safe ||
+             BlendOpNeedsBarrierBeforeDispatch(*ops[i],
+                                                nonlive_pending_writes))) {
+            rd->compute_list_add_barrier(compute_list);
+            nonlive_pending_writes.clear();
         }
         const bool batchable_triangle = IsBatchableTriangleOp(ops[i]);
         if (batchable_triangle) {
@@ -5871,11 +6142,16 @@ void ExecuteGodotGpuComputeBatchLegacy(
                 live2d_pending_writes.push_back(PendingWriteForRect(
                     ops[i]->dst, ops[i]->dst_pos, ops[i]->size));
             } else {
-                // Keep the more conservative E-mote/TVP behavior: those paths
-                // can expose different RIDs backed by aliased storage.
                 ++nonlive_compute_ops;
-                rd->compute_list_add_barrier(compute_list);
-                ++nonlive_compute_barriers;
+                nonlive_pending_writes.push_back(PendingWriteForRect(
+                    ops[i]->dst, ops[i]->dst_pos, ops[i]->size));
+                if (!nonlive_hazard_tracking_safe) {
+                    // Imported textures may alias storage outside this batch;
+                    // preserve the historical barrier after each operation.
+                    rd->compute_list_add_barrier(compute_list);
+                    nonlive_pending_writes.clear();
+                    ++nonlive_compute_barriers;
+                }
                 if (nonlive_shadow != nullptr) {
                     try {
                         RecordGodotGpuNonLiveShadowAccess(
@@ -5906,6 +6182,9 @@ void ExecuteGodotGpuComputeBatchLegacy(
             nonlive_compute_ops, std::memory_order_relaxed);
     }
     if (!live2d_pending_writes.empty()) {
+        rd->compute_list_add_barrier(compute_list);
+    }
+    if (!nonlive_pending_writes.empty()) {
         rd->compute_list_add_barrier(compute_list);
     }
     rd->compute_list_end();
@@ -6022,9 +6301,13 @@ void ForceDrainGodotGpuOpsOnRenderThread(uint64_t sequence_cutoff) {
 }
 
 bool RunGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool wait) {
+    GodotGpuOpWaitProfile wait_profile(op, wait);
     RenderingServer *server = RenderingServer::get_singleton();
     RenderingDevice *rd = MainRenderingDevice();
     if (op == nullptr) return false;
+    if (op->profile_submitted_at.time_since_epoch().count() == 0) {
+        op->profile_submitted_at = std::chrono::steady_clock::now();
+    }
     g_gpu_op_submitted.fetch_add(1, std::memory_order_relaxed);
     if (op->type == GodotGpuOp::Type::Blend ||
         op->type == GodotGpuOp::Type::Blend2 ||
@@ -6947,19 +7230,37 @@ uint64_t BridgeCreateRgba(uint32_t width, uint32_t height, const void *pixels,
     Ref<RDTextureView> view;
     view.instantiate();
     TypedArray<PackedByteArray> initial_data;
-    initial_data.push_back(PackRgbaBytes(pixels, width, height, stride_bytes));
+    RenderingServer *server = RenderingServer::get_singleton();
+    const bool on_render_thread =
+        server != nullptr && server->is_on_render_thread();
+    const bool use_device_clear = pixels == nullptr && on_render_thread;
+    if (!use_device_clear) {
+        initial_data.push_back(
+            PackRgbaBytes(pixels, width, height, stride_bytes));
+    }
     RID rid = rd->texture_create(MakeRgbaTextureFormat(width, height), view,
                                  initial_data);
+    // RenderingDevice accepts an empty initial-data array, but its contents
+    // are undefined. Fresh KiriKiri render targets require transparent black,
+    // so establish the same state with a device-side clear. This avoids
+    // allocating, zeroing and uploading a width*height*4 staging array for
+    // large PSD/transition scratch textures.
+    if (rid.is_valid() && use_device_clear &&
+        rd->texture_clear(rid, Color(0.0, 0.0, 0.0, 0.0), 0, 1, 0, 1) != OK) {
+        rd->free_rid(rid);
+        rid = RID();
+    }
     const double create_ms = std::chrono::duration<double, std::milli>(
                                  std::chrono::steady_clock::now() -
                                  create_started)
                                  .count();
     LogGodotGpuUpdateProfile(
         "texture_create", width, height,
-        static_cast<size_t>(width) * static_cast<size_t>(height) * 4u,
+        pixels != nullptr
+            ? static_cast<size_t>(width) * static_cast<size_t>(height) * 4u
+            : 0u,
         create_ms, 0.0, 0.0, rid.is_valid(),
-        RenderingServer::get_singleton() != nullptr &&
-            RenderingServer::get_singleton()->is_on_render_thread());
+        on_render_thread);
     if (!rid.is_valid()) return 0;
 
     GodotGpuTextureRecord record;
@@ -7132,6 +7433,71 @@ bool BridgeUpdateRgba(uint64_t texture, const void *pixels,
     const double pack_ms = std::chrono::duration<double, std::milli>(
                                packed_at - bridge_started)
                                .count();
+
+    // Updating a texture that Godot presented recently can make MoltenVK wait
+    // for the old VkImage's fence. PSD slice uploads are full replacements, so
+    // large surfaces can use a fresh RID and retire the old RID in normal GPU
+    // queue order. This preserves the exact uploaded pixels while avoiding a
+    // 20-35 ms texture_update stall on the render thread.
+    constexpr uint64_t kVersionedUploadMinPixels = 256u * 1024u;
+    const uint64_t pixel_count =
+        static_cast<uint64_t>(record.width) * record.height;
+    RenderingServer *server = RenderingServer::get_singleton();
+    const bool on_render_thread =
+        server != nullptr && server->is_on_render_thread();
+    const bool can_version_upload =
+        on_render_thread &&
+        pixel_count >= kVersionedUploadMinPixels &&
+        record.apple_pixel_buffer == nullptr &&
+        record.apple_vulkan_external_texture == nullptr &&
+        record.android_external_texture == nullptr;
+    if (can_version_upload) {
+        RenderingDevice *rd = MainRenderingDevice();
+        Ref<RDTextureView> view;
+        view.instantiate();
+        TypedArray<PackedByteArray> initial_data;
+        initial_data.push_back(data);
+        RID replacement = rd != nullptr
+            ? rd->texture_create(
+                  MakeRgbaTextureFormat(record.width, record.height), view,
+                  initial_data)
+            : RID();
+        if (replacement.is_valid()) {
+            bool replaced = false;
+            {
+                std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+                auto it = g_gpu_textures.find(texture);
+                if (it != g_gpu_textures.end() &&
+                    it->second.rid == record.rid &&
+                    it->second.apple_pixel_buffer == nullptr &&
+                    it->second.apple_vulkan_external_texture == nullptr &&
+                    it->second.android_external_texture == nullptr) {
+                    it->second.rid = replacement;
+                    it->second.requires_alpha_d_clear_version = false;
+                    it->second.texture->set_texture_rd_rid(replacement);
+                    replaced = true;
+                }
+            }
+            if (replaced) {
+                auto release = std::make_shared<GodotGpuOp>();
+                release->type = GodotGpuOp::Type::Release;
+                release->dst = record.rid;
+                const bool result = RunGodotGpuOpAsync(release);
+                const double bridge_ms =
+                    std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - bridge_started)
+                        .count();
+                LogGodotGpuUpdateProfile(
+                    "texture_replace_rgba", record.width, record.height,
+                    static_cast<size_t>(data.size()), bridge_ms, pack_ms, 0.0,
+                    result,
+                    on_render_thread);
+                return result;
+            }
+            rd->free_rid(replacement);
+        }
+    }
+
     auto op = std::make_shared<GodotGpuOp>();
     op->type = GodotGpuOp::Type::Update;
     op->dst = record.rid;
@@ -7145,11 +7511,10 @@ bool BridgeUpdateRgba(uint64_t texture, const void *pixels,
                                  std::chrono::steady_clock::now() -
                                  bridge_started)
                                  .count();
-    RenderingServer *server = RenderingServer::get_singleton();
     LogGodotGpuUpdateProfile(
         "bridge_update_rgba", record.width, record.height,
         static_cast<size_t>(data.size()), bridge_ms, pack_ms, 0.0, result,
-        server != nullptr && server->is_on_render_thread());
+        on_render_thread);
     return result;
 }
 
@@ -7173,18 +7538,30 @@ bool BridgeClearRgba(uint64_t texture, uint32_t argb, const tTVPRect *rect) {
     const bool full_transparent_clear = argb == 0 && rect->left == 0 &&
         rect->top == 0 && rect->right == static_cast<int>(record.width) &&
         rect->bottom == static_cast<int>(record.height);
-    if (full_transparent_clear && record.requires_alpha_d_clear_version) {
+    const bool can_version_clear =
+        RenderingServer::get_singleton() != nullptr &&
+        RenderingServer::get_singleton()->is_on_render_thread() &&
+        full_transparent_clear &&
+        record.requires_alpha_d_clear_version &&
+        record.apple_pixel_buffer == nullptr &&
+        record.apple_vulkan_external_texture == nullptr &&
+        record.android_external_texture == nullptr;
+    if (can_version_clear) {
         RenderingDevice *rd = MainRenderingDevice();
         Ref<RDTextureView> view;
         view.instantiate();
         TypedArray<PackedByteArray> initial_data;
-        initial_data.push_back(PackRgbaBytes(
-            nullptr, record.width, record.height, record.width * 4u));
         RID replacement = rd != nullptr
             ? rd->texture_create(MakeRgbaTextureFormat(record.width,
                                                        record.height),
                                  view, initial_data)
             : RID();
+        if (replacement.is_valid() &&
+            rd->texture_clear(replacement, Color(0.0, 0.0, 0.0, 0.0),
+                              0, 1, 0, 1) != OK) {
+            rd->free_rid(replacement);
+            replacement = RID();
+        }
         if (replacement.is_valid()) {
             bool replaced = false;
             {
@@ -7192,7 +7569,9 @@ bool BridgeClearRgba(uint64_t texture, uint32_t argb, const tTVPRect *rect) {
                 auto it = g_gpu_textures.find(texture);
                 if (it != g_gpu_textures.end() &&
                     it->second.rid == record.rid &&
-                    it->second.requires_alpha_d_clear_version) {
+                    it->second.apple_pixel_buffer == nullptr &&
+                    it->second.apple_vulkan_external_texture == nullptr &&
+                    it->second.android_external_texture == nullptr) {
                     it->second.rid = replacement;
                     it->second.requires_alpha_d_clear_version = false;
                     it->second.texture->set_texture_rd_rid(replacement);
@@ -7430,6 +7809,10 @@ bool BridgeDrawTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
     // survives even when global frame enhancement is off.
     const bool native_character_source =
         (blend_mode & TVP_GODOT_GPU_TRIANGLE_SOURCE_PREMULTIPLIED) != 0u;
+    if (native_character_source) {
+        g_gpu_native_character_aa_ops.fetch_add(
+            1, std::memory_order_relaxed);
+    }
     op->preserve_minified_detail = ShouldPreserveMinifiedTriangleDetail(
         triangle_count, dst_points, src_points, native_character_source);
     if (op->preserve_minified_detail) {
@@ -7730,6 +8113,8 @@ bool BridgeReadRgba(uint64_t texture, void *out_pixels, size_t out_pixels_size,
     auto op = std::make_shared<GodotGpuOp>();
     op->type = GodotGpuOp::Type::Read;
     op->src = record.rid;
+    op->profile_width = record.width;
+    op->profile_height = record.height;
     if (!RunGodotGpuOpSync(op)) return false;
     PackedByteArray data = op->data;
     const uint8_t *src = data.ptr();
@@ -8485,7 +8870,16 @@ class AetherRuntimePlayer final : public Node {
 public:
     AetherRuntimePlayer()
         : frame_effect_provider_(CreateFrameEffectProvider()) {}
-    ~AetherRuntimePlayer() override { destroy_engine(); }
+    ~AetherRuntimePlayer() override {
+        destroy_engine();
+        AudioServer *server = AudioServer::get_singleton();
+        if (server != nullptr) {
+            for (const StringName &bus : runtime_audio_buses_) {
+                const int32_t index = server->get_bus_index(bus);
+                if (index >= 0) server->remove_bus(index);
+            }
+        }
+    }
 
     bool initialize_engine(const String &writable_path, const String &cache_path) {
         if (handle_ != nullptr) {
@@ -8563,6 +8957,9 @@ public:
 
     void destroy_engine() {
         media_close();
+        clear_runtime_message();
+        clear_runtime_save_slots();
+        runtime_presentation_sprite_.Clear();
         reset_runtime_tick_timing();
         if (handle_ == nullptr) {
             return;
@@ -8596,6 +8993,56 @@ public:
 
     bool is_frame_enhancement_built() const {
         return frame_effect_provider_ != nullptr;
+    }
+
+    bool is_text_translation_available() const {
+        return engine_is_text_translation_available() != 0;
+    }
+
+    int get_text_translation_state() const {
+        return static_cast<int>(engine_get_text_translation_state());
+    }
+
+    Dictionary get_text_translation_stats() const {
+        Dictionary output;
+        engine_text_translation_stats_t stats{};
+        stats.struct_size = sizeof(stats);
+        if (engine_get_text_translation_stats(&stats) != ENGINE_RESULT_OK) {
+            return output;
+        }
+        output["state"] = static_cast<int64_t>(stats.state);
+        output["backend"] = static_cast<int64_t>(stats.backend);
+        output["active_jobs"] = static_cast<int64_t>(stats.active_jobs);
+        output["model_file_bytes"] = static_cast<int64_t>(stats.model_file_bytes);
+        output["model_tensor_bytes"] = static_cast<int64_t>(stats.model_tensor_bytes);
+        output["context_state_bytes"] = static_cast<int64_t>(stats.context_state_bytes);
+        output["model_resident_bytes_estimate"] =
+            static_cast<int64_t>(stats.model_resident_bytes_estimate);
+        output["priority_queue_entries"] =
+            static_cast<int64_t>(stats.priority_queue_entries);
+        output["prefetch_queue_entries"] =
+            static_cast<int64_t>(stats.prefetch_queue_entries);
+        output["cache_entries"] = static_cast<int64_t>(stats.cache_entries);
+        output["failed_entries"] = static_cast<int64_t>(stats.failed_entries);
+        output["cache_hits"] = static_cast<int64_t>(stats.cache_hits);
+        output["cache_misses"] = static_cast<int64_t>(stats.cache_misses);
+        output["translations_started"] =
+            static_cast<int64_t>(stats.translations_started);
+        output["translations_completed"] =
+            static_cast<int64_t>(stats.translations_completed);
+        output["translations_failed"] =
+            static_cast<int64_t>(stats.translations_failed);
+        output["translations_cancelled"] =
+            static_cast<int64_t>(stats.translations_cancelled);
+        output["model_load_us"] = static_cast<int64_t>(stats.model_load_us);
+        output["last_inference_us"] =
+            static_cast<int64_t>(stats.last_inference_us);
+        output["max_inference_us"] = static_cast<int64_t>(stats.max_inference_us);
+        output["last_synchronous_wait_us"] =
+            static_cast<int64_t>(stats.last_synchronous_wait_us);
+        output["total_synchronous_wait_us"] =
+            static_cast<int64_t>(stats.total_synchronous_wait_us);
+        return output;
     }
 
     bool is_frame_enhancement_available() const {
@@ -8841,7 +9288,13 @@ public:
         const uint32_t delta_ms =
             runtime_tick_quantizer_.Quantize(runtime_delta_seconds);
         const engine_result_t result = engine_tick(handle_, delta_ms);
+        update_runtime_message_reveal(runtime_delta_seconds);
         drain_platform_requests();
+        update_runtime_message_layout();
+        runtime_presentation_sprite_.Tick(get_viewport(), runtime_delta_seconds);
+        update_runtime_save_slot_layout();
+        update_runtime_audio_fades(runtime_delta_seconds);
+        update_runtime_movie();
         update_last_error(result);
         return result;
     }
@@ -9032,6 +9485,11 @@ public:
                            int modifiers = 0) {
         if (handle_ == nullptr) {
             return ENGINE_RESULT_INVALID_STATE;
+        }
+        if (runtime_movie_active_ && runtime_movie_skippable_ &&
+            type == ENGINE_INPUT_EVENT_POINTER_DOWN) {
+            finish_runtime_movie("result=skipped");
+            return ENGINE_RESULT_OK;
         }
         engine_input_event_t event{};
         event.struct_size = sizeof(event);
@@ -9439,6 +9897,13 @@ public:
     Ref<Texture2D> update_source_frame_texture() {
         if (handle_ == nullptr) {
             return Ref<Texture2D>();
+        }
+        if (runtime_movie_active_) {
+            Ref<Texture2D> texture = media_update_texture();
+            if (texture.is_valid()) {
+                frame_texture_backend_ = "minori_movie";
+                return texture;
+            }
         }
         source_query_ms_ = 0.0;
         present_copy_ms_ = 0.0;
@@ -10465,6 +10930,37 @@ void main() {
 #endif
     }
 
+    bool native_translation_model_file_picker_open(
+            const String &title, const String &initial_directory) const {
+#if defined(__APPLE__)
+        const CharString title_utf8 = title.utf8();
+        const CharString directory_utf8 = initial_directory.utf8();
+        return aether_native_translation_model_file_picker_present(
+                   title_utf8.get_data(), directory_utf8.get_data()) != 0;
+#else
+        (void)title;
+        (void)initial_directory;
+        return false;
+#endif
+    }
+
+    String native_translation_model_restore_path(
+            const String &fallback_path) const {
+#if defined(__APPLE__)
+        const CharString fallback_utf8 = fallback_path.utf8();
+        char *path = aether_native_translation_model_restore_path(
+            fallback_utf8.get_data());
+        if (path == nullptr) {
+            return fallback_path;
+        }
+        const String result = String::utf8(path);
+        aether_native_launch_file_picker_free_string(path);
+        return result;
+#else
+        return fallback_path;
+#endif
+    }
+
     String native_launch_file_picker_take_result_json() const {
 #if defined(__APPLE__)
         char *json = aether_native_launch_file_picker_copy_result_json();
@@ -10574,6 +11070,12 @@ protected:
                              &AetherRuntimePlayer::get_frame_texture_backend);
         ClassDB::bind_method(D_METHOD("is_frame_enhancement_built"),
                              &AetherRuntimePlayer::is_frame_enhancement_built);
+        ClassDB::bind_method(D_METHOD("is_text_translation_available"),
+                             &AetherRuntimePlayer::is_text_translation_available);
+        ClassDB::bind_method(D_METHOD("get_text_translation_state"),
+                             &AetherRuntimePlayer::get_text_translation_state);
+        ClassDB::bind_method(D_METHOD("get_text_translation_stats"),
+                             &AetherRuntimePlayer::get_text_translation_stats);
         ClassDB::bind_method(D_METHOD("is_frame_enhancement_available"),
                              &AetherRuntimePlayer::is_frame_enhancement_available);
         ClassDB::bind_method(D_METHOD("set_frame_enhancement_enabled", "enabled"),
@@ -10630,6 +11132,13 @@ protected:
                      "destination_directory"),
             &AetherRuntimePlayer::native_cover_file_picker_open);
         ClassDB::bind_method(
+            D_METHOD("native_translation_model_file_picker_open", "title",
+                     "initial_directory"),
+            &AetherRuntimePlayer::native_translation_model_file_picker_open);
+        ClassDB::bind_method(
+            D_METHOD("native_translation_model_restore_path", "fallback_path"),
+            &AetherRuntimePlayer::native_translation_model_restore_path);
+        ClassDB::bind_method(
             D_METHOD("native_launch_file_picker_take_result_json"),
             &AetherRuntimePlayer::native_launch_file_picker_take_result_json);
         ClassDB::bind_method(D_METHOD("probe_runtime", "runtime_id", "game_root_path"),
@@ -10677,9 +11186,464 @@ private:
                         "&error_response=-1&error_message="
                         "In%20App%20Billing%20is%20unavailable");
                 }
+            } else if (name == "text_input") {
+                show_runtime_text_input(value);
+            } else if (name == "presentation_sprite") {
+                runtime_presentation_sprite_.Update(this, get_viewport(), value);
+            } else if (name == "minori_save_slots") {
+                update_runtime_save_slots(value);
+            } else if (name == "minori_message") {
+                if (value.is_empty()) {
+                    clear_runtime_message();
+                } else {
+                    const PackedStringArray fields = value.split("\t", true, 3);
+                    if (fields.size() == 4) {
+                        update_runtime_message(
+                            fields[0], fields[1], fields[2].to_int(), fields[3]);
+                    } else {
+                        clear_runtime_message();
+                        UtilityFunctions::printerr("Malformed Minori message payload");
+                    }
+                }
+            } else if (name == "minori_message_reveal") {
+                reveal_runtime_message();
+            } else if (name == "minori_audio") {
+                const PackedStringArray fields = value.split("\t");
+                if (fields.size() != 8 || !update_runtime_audio(fields)) {
+                    submit_platform_response(
+                        name, "result=error&message=audio_playback_failed");
+                }
+            } else if (name == "minori_movie") {
+                const PackedStringArray fields = value.split("\t");
+                if (fields.size() != 6 || !media_open(fields[0]) ||
+                    media_play() != ENGINE_RESULT_OK) {
+                    const String message = last_error_.replace("\n", " ");
+                    submit_platform_response(
+                        name, "result=error&message=" + message);
+                    media_close();
+                } else {
+                    runtime_movie_active_ = true;
+                    runtime_movie_skippable_ = fields[5] == "1";
+                    update_runtime_movie();
+                }
             } else {
                 emit_signal("platform_request", name, value);
             }
+        }
+    }
+
+    void show_runtime_text_input(const String &value) {
+        const PackedStringArray fields = value.split("\t", true, 2);
+        if (fields.size() != 3) {
+            UtilityFunctions::printerr("Malformed text_input payload");
+            submit_platform_response("text_input", "result=cancel");
+            return;
+        }
+        finish_runtime_text_input(false);
+        runtime_text_input_dialog_ = memnew(ConfirmationDialog);
+        runtime_text_input_edit_ = memnew(LineEdit);
+        runtime_text_input_dialog_->set_title(fields[0]);
+        runtime_text_input_dialog_->set_text(fields[1]);
+        runtime_text_input_dialog_->set_size(Vector2i(460, 190));
+        runtime_text_input_edit_->set_text(fields[2]);
+        runtime_text_input_edit_->set_custom_minimum_size(Vector2(0, 42));
+        runtime_text_input_edit_->set_v_size_flags(Control::SIZE_SHRINK_CENTER);
+        runtime_text_input_dialog_->add_child(runtime_text_input_edit_);
+        add_child(runtime_text_input_dialog_);
+        runtime_text_input_dialog_->connect(
+            "confirmed", callable_mp(this, &AetherRuntimePlayer::confirm_runtime_text_input));
+        runtime_text_input_dialog_->connect(
+            "canceled", callable_mp(this, &AetherRuntimePlayer::cancel_runtime_text_input));
+        runtime_text_input_edit_->connect(
+            "text_submitted",
+            callable_mp(this, &AetherRuntimePlayer::submit_runtime_text_input));
+        runtime_text_input_dialog_->popup_centered();
+        runtime_text_input_edit_->grab_focus();
+        runtime_text_input_edit_->select_all();
+    }
+
+    void confirm_runtime_text_input() { finish_runtime_text_input(true); }
+    void cancel_runtime_text_input() { finish_runtime_text_input(false); }
+    void submit_runtime_text_input(const String &) { finish_runtime_text_input(true); }
+
+    void finish_runtime_text_input(bool accepted) {
+        if (runtime_text_input_dialog_ == nullptr) return;
+        String argument = "result=cancel";
+        if (accepted && runtime_text_input_edit_ != nullptr) {
+            argument = "result=ok\t" + runtime_text_input_edit_->get_text();
+        }
+        runtime_text_input_dialog_->queue_free();
+        runtime_text_input_dialog_ = nullptr;
+        runtime_text_input_edit_ = nullptr;
+        submit_platform_response("text_input", argument);
+    }
+
+    void clear_runtime_save_slots() {
+        for (Label *&label : runtime_save_slot_labels_) {
+            if (label != nullptr) label->queue_free();
+            label = nullptr;
+        }
+    }
+
+    void update_runtime_save_slots(const String &value) {
+        clear_runtime_save_slots();
+        if (value.is_empty()) return;
+        const PackedStringArray rows = value.split("\n", false);
+        for (const String &row : rows) {
+            const PackedStringArray fields = row.split("\t", true, 5);
+            if (fields.size() != 6) continue;
+            const int32_t slot = fields[0].to_int();
+            if (slot < 0 || slot >= 10) continue;
+            Label *label = create_runtime_message_label(
+                "MinoriSaveSlot" + String::num_int64(slot + 1), true);
+            label->set_text(
+                "Slot " + String::num_int64(slot + 1) + "\n" + fields[5]);
+            label->add_theme_color_override(
+                "font_color", Color(0.28, 0.20, 0.24, 1.0));
+            runtime_save_slot_positions_[slot] =
+                Vector2(fields[1].to_float(), fields[2].to_float());
+            runtime_save_slot_sizes_[slot] =
+                Vector2(fields[3].to_float(), fields[4].to_float());
+            runtime_save_slot_labels_[slot] = label;
+        }
+        update_runtime_save_slot_layout();
+    }
+
+    void update_runtime_save_slot_layout() {
+        if (get_viewport() == nullptr) return;
+        constexpr double kLogicalWidth = 1280.0;
+        constexpr double kLogicalHeight = 720.0;
+        const Vector2 viewport_size = get_viewport()->get_visible_rect().size;
+        const double scale = std::min(
+            static_cast<double>(viewport_size.x) / kLogicalWidth,
+            static_cast<double>(viewport_size.y) / kLogicalHeight);
+        const Vector2 offset(
+            (viewport_size.x - kLogicalWidth * scale) * 0.5,
+            (viewport_size.y - kLogicalHeight * scale) * 0.5);
+        const int32_t font_size =
+            std::max(1, static_cast<int32_t>(std::lround(18.0 * scale)));
+        for (int32_t slot = 0; slot < 10; ++slot) {
+            Label *label = runtime_save_slot_labels_[slot];
+            if (label == nullptr) continue;
+            const Vector2 logical_position = runtime_save_slot_positions_[slot];
+            const Vector2 logical_size = runtime_save_slot_sizes_[slot];
+            label->set_position(offset + logical_position * scale);
+            label->set_size(logical_size * scale);
+            label->add_theme_font_size_override("font_size", font_size);
+        }
+    }
+
+    void clear_runtime_message() {
+        runtime_message_reveal_active_ = false;
+        runtime_message_reveal_started_ = false;
+        runtime_message_reveal_elapsed_ms_ = 0.0;
+        runtime_message_reveal_step_ = 0;
+        runtime_message_reveal_total_steps_ = 0;
+        runtime_message_reveal_schedule_.clear();
+        if (runtime_message_speaker_label_ != nullptr) {
+            runtime_message_speaker_label_->queue_free();
+            runtime_message_speaker_label_ = nullptr;
+        }
+        if (runtime_message_label_ != nullptr) {
+            runtime_message_label_->queue_free();
+            runtime_message_label_ = nullptr;
+        }
+    }
+
+    Label *create_runtime_message_label(const String &name, bool wrap) {
+        Label *label = memnew(Label);
+        label->set_name(name);
+        label->set_z_index(100);
+        if (wrap) {
+            label->set_autowrap_mode(TextServer::AUTOWRAP_WORD_SMART);
+        }
+        label->set_vertical_alignment(VERTICAL_ALIGNMENT_TOP);
+        label->add_theme_color_override(
+            "font_color", Color(1.0, 1.0, 1.0, 1.0));
+        const Ref<Font> font = ResourceLoader::get_singleton()->load(
+            "res://assets/fonts/aetherkiri-runtime-cjk.otf");
+        if (font.is_valid()) {
+            label->add_theme_font_override("font", font);
+        }
+        add_child(label);
+        return label;
+    }
+
+    void update_runtime_message(
+        const String &speaker,
+        const String &text,
+        int32_t total_steps,
+        const String &schedule
+    ) {
+        if (text.is_empty()) {
+            clear_runtime_message();
+            return;
+        }
+        if (runtime_message_label_ == nullptr) {
+            runtime_message_label_ = create_runtime_message_label(
+                "MinoriMessageText", true);
+        }
+        runtime_message_label_->set_text(text);
+        runtime_message_reveal_schedule_.clear();
+        const PackedStringArray schedule_fields = schedule.split(",", false);
+        for (int32_t index = 0; index < schedule_fields.size(); ++index) {
+            runtime_message_reveal_schedule_.push_back(static_cast<int32_t>(
+                std::max<int64_t>(0, schedule_fields[index].to_int())));
+        }
+        runtime_message_reveal_total_steps_ = std::max(0, total_steps);
+        runtime_message_reveal_step_ = 0;
+        runtime_message_reveal_elapsed_ms_ = 0.0;
+        runtime_message_reveal_started_ = false;
+        runtime_message_reveal_active_ = runtime_message_reveal_total_steps_ > 0;
+        runtime_message_label_->set_visible_characters(
+            runtime_message_reveal_active_ ? 0 : -1);
+        if (speaker.is_empty()) {
+            if (runtime_message_speaker_label_ != nullptr) {
+                runtime_message_speaker_label_->queue_free();
+                runtime_message_speaker_label_ = nullptr;
+            }
+        } else {
+            if (runtime_message_speaker_label_ == nullptr) {
+                runtime_message_speaker_label_ = create_runtime_message_label(
+                    "MinoriMessageSpeaker", false);
+            }
+            runtime_message_speaker_label_->set_text(speaker);
+        }
+        update_runtime_message_layout();
+    }
+
+    void reveal_runtime_message() {
+        runtime_message_reveal_active_ = false;
+        runtime_message_reveal_started_ = true;
+        runtime_message_reveal_step_ = runtime_message_reveal_total_steps_;
+        if (runtime_message_label_ != nullptr) {
+            runtime_message_label_->set_visible_characters(-1);
+        }
+    }
+
+    void update_runtime_message_reveal(double delta_seconds) {
+        if (!runtime_message_reveal_active_ || runtime_message_label_ == nullptr) {
+            return;
+        }
+        if (!runtime_message_reveal_started_) {
+            runtime_message_reveal_started_ = true;
+            runtime_message_reveal_step_ = 1;
+        } else {
+            runtime_message_reveal_elapsed_ms_ +=
+                std::max(0.0, delta_seconds) * 1000.0;
+            while (runtime_message_reveal_elapsed_ms_ >= 100.0 &&
+                   runtime_message_reveal_step_ < runtime_message_reveal_total_steps_) {
+                runtime_message_reveal_elapsed_ms_ -= 100.0;
+                ++runtime_message_reveal_step_;
+            }
+        }
+        int32_t visible_characters = 0;
+        for (const int32_t step : runtime_message_reveal_schedule_) {
+            if (step > runtime_message_reveal_step_) break;
+            ++visible_characters;
+        }
+        runtime_message_label_->set_visible_characters(visible_characters);
+        if (runtime_message_reveal_step_ >= runtime_message_reveal_total_steps_) {
+            runtime_message_reveal_active_ = false;
+            runtime_message_label_->set_visible_characters(-1);
+        }
+    }
+
+    void update_runtime_message_layout() {
+        if (runtime_message_label_ == nullptr || get_viewport() == nullptr) {
+            return;
+        }
+        constexpr double kLogicalWidth = 1280.0;
+        constexpr double kLogicalHeight = 720.0;
+        const Vector2 viewport_size = get_viewport()->get_visible_rect().size;
+        const double scale = std::min(
+            static_cast<double>(viewport_size.x) / kLogicalWidth,
+            static_cast<double>(viewport_size.y) / kLogicalHeight);
+        const Vector2 offset(
+            (viewport_size.x - kLogicalWidth * scale) * 0.5,
+            (viewport_size.y - kLogicalHeight * scale) * 0.5);
+        const int32_t font_size =
+            std::max(1, static_cast<int32_t>(std::lround(26.0 * scale)));
+        const bool has_speaker = runtime_message_speaker_label_ != nullptr;
+        runtime_message_label_->set_position(
+            offset + Vector2(120.0 * scale, (has_speaker ? 590.0 : 552.0) * scale));
+        runtime_message_label_->set_size(Vector2(
+            1040.0 * scale, (has_speaker ? 130.0 : 168.0) * scale));
+        runtime_message_label_->add_theme_font_size_override("font_size", font_size);
+        if (has_speaker) {
+            runtime_message_speaker_label_->set_position(
+                offset + Vector2(120.0 * scale, 552.0 * scale));
+            runtime_message_speaker_label_->set_size(
+                Vector2(1040.0 * scale, 38.0 * scale));
+            runtime_message_speaker_label_->add_theme_font_size_override(
+                "font_size", font_size);
+        }
+    }
+
+    struct RuntimeAudioFade {
+        AudioStreamPlayer *player = nullptr;
+        double interval_ms = 0.0;
+        double elapsed_ms = 0.0;
+        int32_t level = 0;
+        int32_t target = 0;
+        int32_t step = 0;
+        bool stop_after = false;
+    };
+
+    void finish_runtime_audio_fade(RuntimeAudioFade &fade) {
+        if (fade.player != nullptr) {
+            fade.player->set_volume_linear(static_cast<float>(fade.target) / 100.0f);
+            if (fade.stop_after) {
+                fade.player->stop();
+                fade.player->queue_free();
+            }
+        }
+        fade = RuntimeAudioFade{};
+    }
+
+    void update_runtime_audio_fades(double delta_seconds) {
+        RuntimeAudioFade *fades[] = {&runtime_bgm_fade_in_, &runtime_bgm_fade_out_};
+        for (RuntimeAudioFade *fade : fades) {
+            if (fade->player == nullptr) continue;
+            fade->elapsed_ms += delta_seconds * 1000.0;
+            while (fade->elapsed_ms >= fade->interval_ms && fade->level != fade->target) {
+                fade->elapsed_ms -= fade->interval_ms;
+                fade->level += fade->step;
+                if ((fade->step > 0 && fade->level > fade->target) ||
+                    (fade->step < 0 && fade->level < fade->target)) {
+                    fade->level = fade->target;
+                }
+                fade->player->set_volume_linear(
+                    static_cast<float>(fade->level) / 100.0f);
+            }
+            if (fade->level == fade->target) finish_runtime_audio_fade(*fade);
+        }
+    }
+
+    void fade_out_runtime_bgm(int32_t interval_ms) {
+        if (runtime_bgm_fade_out_.player != nullptr) {
+            runtime_bgm_fade_out_.player->stop();
+            runtime_bgm_fade_out_.player->queue_free();
+            runtime_bgm_fade_out_ = RuntimeAudioFade{};
+        }
+        AudioStreamPlayer *player = runtime_audio_players_[0];
+        runtime_audio_players_[0] = nullptr;
+        if (runtime_bgm_fade_in_.player == player) {
+            runtime_bgm_fade_in_ = RuntimeAudioFade{};
+        }
+        if (player == nullptr) return;
+        const int32_t level = std::clamp(
+            static_cast<int32_t>(std::lround(player->get_volume_linear() * 100.0f)),
+            0, 100);
+        if (interval_ms < 1 || level == 0) {
+            player->stop();
+            player->queue_free();
+            return;
+        }
+        runtime_bgm_fade_out_ =
+            RuntimeAudioFade{player, static_cast<double>(interval_ms), 0.0,
+                             level, 0, -1, true};
+    }
+
+    bool update_runtime_audio(const PackedStringArray &fields) {
+        if (fields.size() != 8) return false;
+        const int32_t slot = fields[0].to_int();
+        if (slot < 0 || slot >= static_cast<int32_t>(runtime_audio_players_.size())) {
+            return false;
+        }
+        const int32_t fade_in = fields[6].to_int();
+        const int32_t fade_out = fields[7].to_int();
+        if (slot == 0 && runtime_audio_players_[0] != nullptr &&
+            runtime_audio_names_[0] == fields[5]) {
+            AudioStreamPlayer *player = runtime_audio_players_[0];
+            runtime_bgm_fade_in_ = RuntimeAudioFade{};
+            const int32_t level = std::clamp(
+                static_cast<int32_t>(std::lround(player->get_volume_linear() * 100.0f)),
+                0, 100);
+            const int32_t target = std::clamp(
+                static_cast<int32_t>(fields[3].to_int()), 0, 100);
+            if (fade_in < 1 || level == target) {
+                player->set_volume_linear(static_cast<float>(target) / 100.0f);
+            } else {
+                runtime_bgm_fade_in_ = RuntimeAudioFade{
+                    player, static_cast<double>(fade_in), 0.0, level, target,
+                    target > level ? 1 : -1, false};
+            }
+            return true;
+        }
+        if (slot == 0) {
+            fade_out_runtime_bgm(fade_out);
+            runtime_audio_names_[0] = String();
+            if (fields[1].is_empty()) return true;
+        }
+        AudioStreamPlayer *&player = runtime_audio_players_[slot];
+        AudioServer *server = AudioServer::get_singleton();
+        if (runtime_audio_buses_[slot].is_empty()) {
+            if (server == nullptr) return false;
+            const String bus_name =
+                "MinoriAudio" + String::num_uint64(get_instance_id()) + "_" +
+                String::num_int64(slot);
+            server->add_bus();
+            const int32_t bus_index = server->get_bus_count() - 1;
+            server->set_bus_name(bus_index, bus_name);
+            Ref<AudioEffectPanner> panner;
+            panner.instantiate();
+            server->add_bus_effect(bus_index, panner);
+            runtime_audio_buses_[slot] = StringName(bus_name);
+        }
+        if (player == nullptr) {
+            player = memnew(AudioStreamPlayer);
+            add_child(player);
+            player->set_bus(runtime_audio_buses_[slot]);
+        }
+        player->stop();
+        if (fields[1].is_empty()) return true;
+        Ref<AudioStreamOggVorbis> stream =
+            AudioStreamOggVorbis::load_from_file(fields[1]);
+        if (stream.is_null()) return false;
+        stream->set_loop(fields[2] == "1");
+        player->set_stream(stream);
+        const int32_t target_volume = std::clamp(
+            static_cast<int32_t>(fields[3].to_int()), 0, 100);
+        const int32_t initial_volume = slot == 0 && fade_in >= 1 ? 0 : target_volume;
+        player->set_volume_linear(static_cast<float>(initial_volume) / 100.0f);
+        const int32_t bus_index = server->get_bus_index(runtime_audio_buses_[slot]);
+        Ref<AudioEffectPanner> panner = server->get_bus_effect(bus_index, 0);
+        if (panner.is_valid()) {
+            panner->set_pan(static_cast<float>(fields[4].to_int()) / 100.0f);
+        }
+        player->play();
+        runtime_audio_names_[slot] = fields[5];
+        if (slot == 0 && initial_volume != target_volume) {
+            runtime_bgm_fade_in_ = RuntimeAudioFade{
+                player, static_cast<double>(fade_in), 0.0, initial_volume,
+                target_volume, 1, false};
+        }
+        return true;
+    }
+
+    void finish_runtime_movie(const String &result) {
+        if (!runtime_movie_active_) return;
+        runtime_movie_active_ = false;
+        runtime_movie_skippable_ = false;
+        media_close();
+        submit_platform_response("minori_movie", result);
+    }
+
+    void update_runtime_movie() {
+        if (!runtime_movie_active_ || media_ == nullptr) return;
+        engine_media_state_t state{};
+        state.struct_size = sizeof(state);
+        const engine_result_t result = engine_media_get_state(media_, &state);
+        if (result != ENGINE_RESULT_OK ||
+            state.status == ENGINE_MEDIA_STATUS_ERROR) {
+            finish_runtime_movie("result=error&message=media_playback_failed");
+            return;
+        }
+        media_width_ = state.width;
+        media_height_ = state.height;
+        if (state.status == ENGINE_MEDIA_STATUS_ENDED) {
+            finish_runtime_movie("result=complete");
         }
     }
 
@@ -10744,6 +11708,12 @@ private:
         frame_present_pending_slot_ = 0;
         frame_present_has_current_ = false;
         frame_present_has_pending_ = false;
+        // The copy op may still be queued on Godot's render thread. Keep the
+        // shared_ptr alive until the queued operation reaches the release
+        // fence below, then drop our reference. The queue owns its own
+        // reference, so clearing this member is safe after RunGodotGpuOpSync
+        // has ordered the releases behind all preceding work.
+        frame_present_pending_op_.reset();
         frame_present_pending_draw_frame_ = 0;
         frame_present_serial_ = UINT64_MAX;
         if (frame_texture_backend_ == "godot_native_gpu_presented" ||
@@ -10884,18 +11854,34 @@ private:
             ? static_cast<uint64_t>(engine->get_frames_drawn())
             : 0;
         if (frame_present_has_pending_) {
+            bool pending_done = false;
+            bool pending_result = false;
+            if (frame_present_pending_op_) {
+                std::lock_guard<std::mutex> done_lock(
+                    frame_present_pending_op_->done_mutex);
+                pending_done = frame_present_pending_op_->done;
+                pending_result = frame_present_pending_op_->result;
+            }
             const bool pending_complete =
                 drawn_frame > frame_present_pending_draw_frame_;
-            if (pending_complete) {
+            if (pending_complete && pending_done && pending_result) {
                 frame_present_current_slot_ = frame_present_pending_slot_;
                 frame_present_has_current_ = true;
                 frame_present_has_pending_ = false;
+                frame_present_pending_op_.reset();
                 // The RD storage stays stable while its pixels change. Notify
                 // TextureRect/Canvas explicitly so the already-bound
                 // Texture2DRD is invalidated without replacing the Resource
                 // object that the scene owns.
                 frame_present_textures_[frame_present_current_slot_]
                     ->emit_changed();
+            } else if (pending_complete && pending_done) {
+                // A failed asynchronous copy must not permanently block the
+                // presentation ring. Drop the failed slot and enqueue a fresh
+                // copy below; the current slot (if any) remains valid while
+                // that retry is in flight.
+                frame_present_has_pending_ = false;
+                frame_present_pending_op_.reset();
             } else {
                 frame_texture_serial_ = serial;
                 frame_texture_backend_ = backend_name;
@@ -10915,7 +11901,15 @@ private:
         op->src_pos = Vector3();
         op->dst_pos = Vector3();
         op->size = Vector3(width, height, 1);
-        if (!RunGodotGpuOpSync(op)) {
+        // Do not wait for the render thread here. This method runs from the
+        // Godot main thread, while the copy is encoded on the RenderingServer
+        // render thread. A synchronous wait couples a game-script frame to
+        // the next render submission and turns a character/face texture burst
+        // into a 100+ ms main-thread spike. The ring already delays promotion
+        // until a later drawn frame; retaining the op lets us additionally
+        // verify that the asynchronous copy really completed before exposing
+        // the destination texture.
+        if (!RunGodotGpuOpAsync(op)) {
             frame_texture_backend_ = "godot_native_gpu_present_timeout";
             if (frame_present_textures_[frame_present_current_slot_].is_valid()) {
                 return frame_present_textures_[frame_present_current_slot_];
@@ -10924,6 +11918,7 @@ private:
         }
         frame_present_pending_slot_ = next_slot;
         frame_present_has_pending_ = true;
+        frame_present_pending_op_ = std::move(op);
         frame_present_pending_draw_frame_ = drawn_frame;
         frame_present_serial_ = serial;
         frame_texture_serial_ = serial;
@@ -11080,6 +12075,7 @@ private:
     size_t frame_present_pending_slot_ = 0;
     bool frame_present_has_current_ = false;
     bool frame_present_has_pending_ = false;
+    std::shared_ptr<GodotGpuOp> frame_present_pending_op_;
     uint64_t frame_present_pending_draw_frame_ = 0;
     uint64_t frame_present_serial_ = UINT64_MAX;
     uint64_t frame_texture_serial_ = UINT64_MAX;
@@ -11102,6 +12098,27 @@ private:
     uint64_t media_frame_serial_ = UINT64_MAX;
     uint32_t media_width_ = 0;
     uint32_t media_height_ = 0;
+    bool runtime_movie_active_ = false;
+    bool runtime_movie_skippable_ = false;
+    Label *runtime_message_speaker_label_ = nullptr;
+    Label *runtime_message_label_ = nullptr;
+    RuntimePresentationSprite runtime_presentation_sprite_;
+    ConfirmationDialog *runtime_text_input_dialog_ = nullptr;
+    LineEdit *runtime_text_input_edit_ = nullptr;
+    std::array<Label *, 10> runtime_save_slot_labels_{};
+    std::array<Vector2, 10> runtime_save_slot_positions_{};
+    std::array<Vector2, 10> runtime_save_slot_sizes_{};
+    bool runtime_message_reveal_active_ = false;
+    bool runtime_message_reveal_started_ = false;
+    double runtime_message_reveal_elapsed_ms_ = 0.0;
+    int32_t runtime_message_reveal_step_ = 0;
+    int32_t runtime_message_reveal_total_steps_ = 0;
+    std::vector<int32_t> runtime_message_reveal_schedule_;
+    std::array<AudioStreamPlayer *, 5> runtime_audio_players_{};
+    std::array<StringName, 5> runtime_audio_buses_{};
+    std::array<String, 5> runtime_audio_names_{};
+    RuntimeAudioFade runtime_bgm_fade_in_{};
+    RuntimeAudioFade runtime_bgm_fade_out_{};
 };
 
 void InitializeAetherRuntime(ModuleInitializationLevel level) {
@@ -11116,6 +12133,11 @@ void InitializeAetherRuntime(ModuleInitializationLevel level) {
 #endif
 #if defined(AETHERKIRI_WITH_SIGLUS)
     aetherkiri::siglus::RegisterRuntimeProvider();
+#endif
+#if defined(AETHERKIRI_WITH_MINORI)
+    if (aetherkiri_minori_register_runtime_provider() != ENGINE_RESULT_OK) {
+        UtilityFunctions::printerr("Failed to register Minori runtime provider");
+    }
 #endif
     const engine_result_t shader_result =
         engine_set_runtime_fragment_shader_executor(

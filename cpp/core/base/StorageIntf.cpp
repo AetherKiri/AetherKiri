@@ -30,6 +30,7 @@
 #include "ncbind.hpp"
 #include "UtilStreams.h"
 #include "impl/ArchiveAutoPathOrder.h"
+#include "impl/GpuCompatScript.h"
 #include "spdlog/spdlog.h"
 
 #define TVP_DEFAULT_ARCHIVE_CACHE_NUM 128
@@ -39,26 +40,6 @@ static const tjs_char *TVP_AUTOPATH_CACHE_MISS_MARKER = TJS_W("\x01");
 static const char TVP_GFX_EFFECT_COMPAT_SCRIPT[] =
     "// AetherKiri gfxEffect.dll compatibility placeholder.\n"
     "try { Plugins.link(\"gfxEffect.dll\"); } catch(e) { }\n";
-static const char TVP_GPU_COMPAT_SCRIPT[] =
-    "// AetherKiri GPULayer/D3D compatibility placeholder.\n"
-    "try { Plugins.link(\"krkrgles.dll\"); } catch(e) { }\n"
-    "try { Plugins.link(\"krkrlive2d.dll\"); } catch(e) { }\n"
-    "try { Window.OGLDrawDevice = OGLDrawDevice; } catch(e) { }\n"
-    "try { Window.GLESAdaptor = GLESAdaptor; } catch(e) { }\n"
-    "function KAGWindow_createDrawDevice() {\n"
-    "    var dd = null;\n"
-    "    try { dd = new OGLDrawDevice(); } catch(e) { try { dd = new GLESAdaptor(); } catch(e2) { dd = null; } }\n"
-    "    try { if(dd !== null) dd.setScreenSize(this.width, this.height); } catch(e) { }\n"
-    "    try { this.gpuDrawDevice = dd; } catch(e) { }\n"
-    "    try { this.OGLDrawDevice = dd; } catch(e) { }\n"
-    "    try { this.GLESAdaptor = dd; } catch(e) { }\n"
-    "    try { return new global.Window.BasicDrawDevice(); } catch(e) { }\n"
-    "    try { return new global.Window.PassThroughDrawDevice(); } catch(e) { }\n"
-    "    return null;\n"
-    "}\n"
-    "try { KAGWindow.KAGWindow_createDrawDevice = KAGWindow_createDrawDevice; } catch(e) { }\n"
-    "try { KAGWindow.prototype.KAGWindow_createDrawDevice = KAGWindow_createDrawDevice; } catch(e) { }\n"
-    "try { KAGWindow_createDrawDevice = KAGWindow_createDrawDevice; } catch(e) { }\n";
 static const char TVP_D3DEMOTE_COMPAT_PREFIX[] =
     "// AetherKiri D3DEmote/motion.tjs compatibility bridge.\n"
     "try { Plugins.link(\"emoteplayer.dll\"); } catch(e) { }\n";
@@ -1452,7 +1433,13 @@ extern ttstr TVPChopStorageExt(const ttstr &name) {
 //---------------------------------------------------------------------------
 // Auto search path support
 //---------------------------------------------------------------------------
-#define TVP_AUTO_PATH_HASH_SIZE 1024
+// Voice-heavy titles can mount millions of archive entries. With 1024
+// buckets, a first lookup for each new voice name walks a chain containing
+// thousands of entries and shows up as 30-40 ms in getExistVoice(). Keep the
+// existing ordered chained table, but size its bucket array so those lookups
+// remain effectively constant-time. The table nodes already dominate memory
+// at that scale; the larger bucket array adds only a few MiB.
+#define TVP_AUTO_PATH_HASH_SIZE 65536
 std::vector<ttstr> TVPAutoPathList;
 tTJSHashCache<ttstr, ttstr> TVPAutoPathCache(TVP_DEFAULT_AUTOPATH_CACHE_NUM);
 tTJSHashTable<ttstr, ttstr, tTJSHashFunc<ttstr>, TVP_AUTO_PATH_HASH_SIZE>
@@ -1588,9 +1575,11 @@ static bool TVPStorageNameLooksLegacySaveThumbnail(const ttstr &name) {
     return path.find("savedata") != std::string::npos;
 }
 
-static ttstr TVPFindLegacySaveThumbnail(const ttstr &normalized) {
-    if(!TVPStorageNameLooksLegacySaveThumbnail(normalized))
+ttstr TVPFindLegacySaveThumbnail(const ttstr &name) {
+    if(!TVPStorageNameLooksLegacySaveThumbnail(name))
         return {};
+
+    const ttstr normalized = TVPNormalizeStorageName(name);
 
     const ttstr ext = TVPExtractStorageExt(normalized);
     if(ext.IsEmpty())

@@ -681,6 +681,11 @@ namespace motion {
         double _cameraTargetX = 0, _cameraTargetY = 0, _cameraTargetZ = 0;
         bool _speed = true;           // Aligned to libkrkr2.so +1093: bool flag
         double _frameTickCount = 0.0;
+        // getCommandList() is polled by AnimKAGLayer after every progress()
+        // call to decide whether its backing Layer needs repainting.  The
+        // compatible list is a one-value ping-pong token, not a list of the
+        // motion's static source paths.
+        bool _commandListPulse = false;
         tjs_int _maskMode = 0;                         // libkrkr2.so +1148
         std::uint32_t _colorWeightPacked = 0xFF808080u; // libkrkr2.so +1156
         bool _independentLayerInherit = false;          // libkrkr2.so +1097
@@ -712,6 +717,11 @@ namespace motion {
         bool _autoProgressHasLastTick = false;
         bool _autoProgressRegistered = false;
         bool _autoProgressRendering = false;
+        // A selector hover clears the retained target before repainting it.
+        // Do not let the normal raster throttle drop that repaint, or the
+        // cleared target can be presented as a one-frame black/transparent
+        // flash while the pointer moves between buttons.
+        bool _forceMotionRasterRender = false;
         tTJSVariant _presentationHoldLayer;
         tjs_uint64 _presentationHoldUntilTick = 0;
         tjs_uint64 _presentationHoldLastTick = 0;

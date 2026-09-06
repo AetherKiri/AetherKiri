@@ -100,6 +100,7 @@ uint64_t g_published_frame_serial = 0;
 std::atomic<bool> g_system_list_scroll_active{false};
 std::atomic<uint32_t> g_system_list_scroll_y{0};
 std::atomic<uint64_t> g_system_list_view_revision{0};
+std::atomic<ONScripter *> g_translation_ons{nullptr};
 
 void ResetPublishedFrame() {
     std::lock_guard<std::mutex> lock(g_published_frame_mutex);
@@ -124,6 +125,22 @@ bool PopHostEvent(SDL_Event *event) {
     }
     *event = g_host_events.front();
     g_host_events.pop_front();
+    return true;
+}
+
+bool PopHostKeyRelease(SDL_Event *event) {
+    if (event == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(g_host_event_mutex);
+    const auto release = std::find_if(
+        g_host_events.begin(), g_host_events.end(),
+        [](const SDL_Event &queued) { return queued.type == SDL_KEYUP; });
+    if (release == g_host_events.end()) {
+        return false;
+    }
+    *event = *release;
+    g_host_events.erase(release);
     return true;
 }
 
@@ -157,6 +174,24 @@ bool PushRuntimeEvent(const SDL_Event &event) {
     return true;
 }
 
+constexpr Uint8 MapPointerButtonToSdl(int button, int modifiers) {
+    // The public engine input contract is zero-based: left=0, right=1,
+    // middle=2. Keep the modifier fallbacks for older hosts that encoded a
+    // secondary button as a primary button plus its held-state flag.
+    if (button == 1 || (modifiers & 0x10) != 0) {
+        return SDL_BUTTON_RIGHT;
+    }
+    if (button == 2 || (modifiers & 0x20) != 0) {
+        return SDL_BUTTON_MIDDLE;
+    }
+    return SDL_BUTTON_LEFT;
+}
+
+static_assert(MapPointerButtonToSdl(0, 0) == SDL_BUTTON_LEFT);
+static_assert(MapPointerButtonToSdl(1, 0) == SDL_BUTTON_RIGHT);
+static_assert(MapPointerButtonToSdl(2, 0) == SDL_BUTTON_MIDDLE);
+static_assert(MapPointerButtonToSdl(0, 0x10) == SDL_BUTTON_RIGHT);
+
 class EmbeddedMovieHost {
 public:
     virtual ~EmbeddedMovieHost() = default;
@@ -184,6 +219,80 @@ extern "C" void aetherkiri_onscripter_end_system_list_scroll() {
     g_system_list_view_revision.fetch_add(1);
 }
 
+extern "C" void aetherkiri_onscripter_transform_text(char *buffer,
+                                                       size_t capacity) {
+    if (buffer == nullptr || capacity == 0 || buffer[0] == '\0') return;
+    ONScripter *active = g_translation_ons.load(std::memory_order_acquire);
+    const bool skipping =
+        active != nullptr &&
+        (active->skip_mode != ONScripter::SKIP_NONE ||
+         active->ctrl_pressed_status);
+    engine_set_text_translation_skipping("onscripter", skipping ? 1u : 0u);
+    if (skipping) {
+        return;
+    }
+    uint32_t required = 0;
+    if (engine_transform_text_utf8("onscripter", buffer, nullptr, 0,
+                                   &required) != ENGINE_RESULT_OK ||
+        required == 0 || required > capacity) {
+        return;
+    }
+    std::vector<char> transformed(required, '\0');
+    uint32_t written = 0;
+    if (engine_transform_text_utf8("onscripter", buffer,
+                                   transformed.data(), required,
+                                   &written) == ENGINE_RESULT_OK &&
+        written == required) {
+        std::memcpy(buffer, transformed.data(), required);
+    }
+}
+
+extern "C" void aetherkiri_onscripter_prefetch_text(const char *script) {
+    if (script == nullptr || *script == '\0') return;
+    ONScripter *active = g_translation_ons.load(std::memory_order_acquire);
+    const bool skipping =
+        active != nullptr &&
+        (active->skip_mode != ONScripter::SKIP_NONE ||
+         active->ctrl_pressed_status);
+    engine_set_text_translation_skipping("onscripter", skipping ? 1u : 0u);
+    if (skipping) return;
+
+    // ONS keeps the decoded script in one stable buffer. Scan a bounded
+    // number of subsequent physical lines and enqueue only lines containing
+    // non-ASCII text. Exact parser output is still promoted by transform_text
+    // when the line is reached; dynamic expressions simply miss this hint.
+    constexpr size_t kMaximumScanBytes = 16 * 1024;
+    constexpr size_t kMaximumLineBytes = 4095;
+    constexpr int kMaximumPrefetchLines = 12;
+    const char *cursor = script;
+    size_t scanned = 0;
+    int queued = 0;
+    while (*cursor != '\0' && scanned < kMaximumScanBytes &&
+           queued < kMaximumPrefetchLines) {
+        const char *line_end = cursor;
+        bool has_non_ascii = false;
+        while (*line_end != '\0' && *line_end != '\n' &&
+               scanned + static_cast<size_t>(line_end - cursor) <
+                   kMaximumScanBytes) {
+            has_non_ascii = has_non_ascii ||
+                static_cast<unsigned char>(*line_end) >= 0x80u;
+            ++line_end;
+        }
+        const size_t length = static_cast<size_t>(line_end - cursor);
+        if (has_non_ascii && length > 0 && length <= kMaximumLineBytes) {
+            std::string line(cursor, length);
+            engine_prefetch_text_utf8("onscripter", line.c_str());
+            ++queued;
+        }
+        scanned += length;
+        if (*line_end == '\n') {
+            ++line_end;
+            ++scanned;
+        }
+        cursor = line_end;
+    }
+}
+
 extern "C" int aetherkiri_onscripter_wait_event(SDL_Event *event) {
     while (event != nullptr) {
         // Only Runtime::shutdown injects a quit event into the private queue.
@@ -204,6 +313,11 @@ extern "C" int aetherkiri_onscripter_wait_event(SDL_Event *event) {
         }
     }
     return 0;
+}
+
+extern "C" int
+aetherkiri_onscripter_poll_host_key_release(SDL_Event *event) {
+    return PopHostKeyRelease(event) ? 1 : 0;
 }
 
 extern "C" void SDLCALL
@@ -615,10 +729,10 @@ struct Runtime::Impl final : EmbeddedMovieHost {
     engine_media_handle_t media = nullptr;
     MediaState latest_media_state;
     std::vector<uint8_t> media_rgba;
-    bool media_is_script_movie = false;
+    std::atomic<bool> media_is_script_movie{false};
     bool media_overlay_active = false;
     bool media_loop = false;
-    bool media_click_to_skip = false;
+    std::atomic<bool> media_click_to_skip{false};
     std::atomic<bool> media_skip_requested{false};
     MovieConfiguration next_movie_configuration;
     MovieConfiguration active_movie_configuration;
@@ -981,7 +1095,17 @@ struct Runtime::Impl final : EmbeddedMovieHost {
     }
 
     void overlay_movie(Frame &frame) {
-        std::lock_guard<std::mutex> media_lock(media_mutex);
+        // Provider frame reads already hold the engine dispatch registry.
+        // The ONS interpreter updates script movies on its own thread while
+        // holding media_mutex, then enters the media engine dispatcher. A
+        // blocking lock here would invert those locks and freeze both the
+        // rendered frame and all later input. Missing one overlay refresh is
+        // harmless; the next frame will pick up the latest decoded image.
+        std::unique_lock<std::mutex> media_lock(
+            media_mutex, std::try_to_lock);
+        if (!media_lock.owns_lock()) {
+            return;
+        }
         if (!media_overlay_active || !latest_media_state.frame_ready ||
             media_rgba.empty() || latest_media_state.width == 0 ||
             latest_media_state.height == 0 || frame.rgba.empty()) {
@@ -1116,6 +1240,7 @@ struct Runtime::Impl final : EmbeddedMovieHost {
             load_game_options(root);
             configure_encoding();
             ons = new (static_cast<void *>(&::ons)) ONScripter();
+            g_translation_ons.store(ons, std::memory_order_release);
             ons->setWindowMode();
             ons->setVsyncOff();
             ons->setArchivePath(root.u8string().c_str());
@@ -1289,6 +1414,7 @@ struct Runtime::Impl final : EmbeddedMovieHost {
         // explicitly before another object is placement-constructed in the
         // same ABI-visible storage.
         if (ons != nullptr) {
+            g_translation_ons.store(nullptr, std::memory_order_release);
             ons->~ONScripter();
             ons = nullptr;
         }
@@ -1428,7 +1554,14 @@ bool Runtime::tick() {
         return false;
     }
     {
-        std::lock_guard<std::mutex> media_lock(impl_->media_mutex);
+        // See Impl::overlay_movie: provider calls must never wait for the
+        // interpreter while they own the engine dispatch registry.
+        std::unique_lock<std::mutex> media_lock(
+            impl_->media_mutex, std::try_to_lock);
+        if (!media_lock.owns_lock()) {
+            return !impl_->ended.load() &&
+                   impl_->startup.load() != StartupState::Failed;
+        }
         if (impl_->media != nullptr) {
             impl_->update_media_locked(true);
         }
@@ -1444,7 +1577,11 @@ bool Runtime::pause() {
     Mix_Pause(-1);
     Mix_PauseMusic();
     {
-        std::lock_guard<std::mutex> media_lock(impl_->media_mutex);
+        std::unique_lock<std::mutex> media_lock(
+            impl_->media_mutex, std::try_to_lock);
+        if (!media_lock.owns_lock()) {
+            return true;
+        }
         if (impl_->media != nullptr) {
             engine_media_pause(impl_->media);
         }
@@ -1459,7 +1596,11 @@ bool Runtime::resume() {
     Mix_ResumeMusic();
     Mix_Resume(-1);
     {
-        std::lock_guard<std::mutex> media_lock(impl_->media_mutex);
+        std::unique_lock<std::mutex> media_lock(
+            impl_->media_mutex, std::try_to_lock);
+        if (!media_lock.owns_lock()) {
+            return true;
+        }
         if (impl_->media != nullptr) {
             engine_media_play(impl_->media);
         }
@@ -1542,18 +1683,17 @@ bool Runtime::send_pointer_event(int type, int pointer_id, double x, double y,
         }
     }
     if (type == 3) {
-        std::lock_guard<std::mutex> media_lock(impl_->media_mutex);
-        if (impl_->media_is_script_movie &&
-            impl_->media_click_to_skip) {
+        if (impl_->media_is_script_movie.load() &&
+            impl_->media_click_to_skip.load()) {
             impl_->media_skip_requested.store(true);
         }
     }
     if (type == 4) {
         int32_t scroll_delta = static_cast<int32_t>(
-            std::lround(delta_y * 40.0));
+            std::lround(-delta_y * 40.0));
         if (scroll_delta == 0 &&
             std::abs(delta_y) > std::numeric_limits<double>::epsilon()) {
-            scroll_delta = delta_y > 0.0 ? 40 : -40;
+            scroll_delta = delta_y > 0.0 ? -40 : 40;
         }
         if (adjust_system_list_scroll(scroll_delta)) {
             return true;
@@ -1561,7 +1701,7 @@ bool Runtime::send_pointer_event(int type, int pointer_id, double x, double y,
         SDL_Event event{};
         event.type = SDL_MOUSEWHEEL;
         event.wheel.x = static_cast<int>(std::lround(delta_x));
-        event.wheel.y = static_cast<int>(std::lround(-delta_y));
+        event.wheel.y = static_cast<int>(std::lround(delta_y));
         event.wheel.direction = SDL_MOUSEWHEEL_NORMAL;
         return PushRuntimeEvent(event);
     }
@@ -1626,13 +1766,7 @@ bool Runtime::send_pointer_event(int type, int pointer_id, double x, double y,
         event.button.state = type == 1 ? SDL_PRESSED : SDL_RELEASED;
         event.button.x = device_x;
         event.button.y = device_y;
-        if (button == 2 || (modifiers & 0x10) != 0) {
-            event.button.button = SDL_BUTTON_RIGHT;
-        } else if (button == 3 || (modifiers & 0x20) != 0) {
-            event.button.button = SDL_BUTTON_MIDDLE;
-        } else {
-            event.button.button = SDL_BUTTON_LEFT;
-        }
+        event.button.button = MapPointerButtonToSdl(button, modifiers);
         event.button.clicks = 1;
         return PushRuntimeEvent(event);
     }
@@ -1646,9 +1780,8 @@ bool Runtime::send_key_event(bool pressed, int key_code, int modifiers,
     }
     if (!pressed &&
         (key_code == 0x0d || key_code == 0x1b || key_code == 0x20)) {
-        std::lock_guard<std::mutex> media_lock(impl_->media_mutex);
-        if (impl_->media_is_script_movie &&
-            impl_->media_click_to_skip) {
+        if (impl_->media_is_script_movie.load() &&
+            impl_->media_click_to_skip.load()) {
             impl_->media_skip_requested.store(true);
         }
     }

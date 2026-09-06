@@ -1,4 +1,5 @@
 #include "engine_api.h"
+#include "engine_options.h"
 
 #include <algorithm>
 #include <chrono>
@@ -29,14 +30,36 @@
 
 #include "engine_runtime_provider_registry.h"
 #include "legacy_engine_api.h"
+#include "TextTransform.h"
 #if defined(ENGINE_API_USE_KRKR2_RUNTIME)
 #include "environ/Platform.h"
 #include "visual/RenderManager.h"
 #endif
 
+#if defined(AETHERKIRI_INTERNAL_TEXT_TRANSLATION)
+extern "C" bool AetherInternalConfigureTextTranslation(
+    const char* key_utf8, const char* value_utf8, char* error_buffer,
+    uint32_t error_buffer_size);
+extern "C" bool AetherInternalPrepareTextTranslation(
+    char* error_buffer, uint32_t error_buffer_size);
+extern "C" void AetherInternalReleaseTextTranslation(void);
+extern "C" uint32_t AetherInternalGetTextTranslationState(void);
+extern "C" bool AetherInternalGetTextTranslationStats(
+    engine_text_translation_stats_t* out_stats);
+extern "C" void AetherInternalStartTextTranslationLoading(void);
+extern "C" void AetherInternalPrefetchTextTranslation(
+    const char* runtime_id_utf8, const char* input_utf8);
+extern "C" void AetherInternalSetTextTranslationSkipping(
+    const char* runtime_id_utf8, uint32_t skipping);
+#endif
+
 #if defined(AETHERKIRI_INTERNAL_ARTEMIS) && \
     defined(AETHERKIRI_ENABLE_ARTEMIS_RUNTIME)
 extern "C" void AetherInternalRegisterArtemisRuntime(void);
+#endif
+
+#if defined(AETHERKIRI_INTERNAL_WA2) && defined(AETHERKIRI_ENABLE_WA2_RUNTIME)
+extern "C" void AetherInternalRegisterWa2Runtime(void);
 #endif
 
 namespace {
@@ -53,11 +76,6 @@ struct DispatchHandle {
   std::string writable_path;
   std::string cache_path;
   std::string requested_runtime = "auto";
-#if defined(NDEBUG) && !defined(__ANDROID__)
-  bool artemis_beta_allowed = false;
-#else
-  bool artemis_beta_allowed = true;
-#endif
   std::unordered_map<std::string, std::string> pending_options;
   uint32_t surface_width = 0;
   uint32_t surface_height = 0;
@@ -171,14 +189,60 @@ engine_result_t Unsupported(DispatchHandle* handle, const char* operation) {
   return ENGINE_RESULT_NOT_SUPPORTED;
 }
 
-engine_result_t CheckArtemisBetaAccess(DispatchHandle* handle) {
-  if (handle->backend != BackendKind::kProvider || handle->provider == nullptr ||
-      Normalize(handle->provider->runtime_id_utf8) != "artemis" ||
-      handle->artemis_beta_allowed) {
+bool IsTextTranslationOption(const std::string& key) {
+  return key == ENGINE_OPTION_TEXT_TRANSLATION_ENABLED ||
+         key == ENGINE_OPTION_TEXT_TRANSLATION_MODEL_PATH ||
+         key == ENGINE_OPTION_TEXT_TRANSLATION_TARGET_LANGUAGE;
+}
+
+engine_result_t ConfigureTextTranslationLocked(DispatchHandle* handle,
+                                               const char* key,
+                                               const char* value) {
+#if defined(AETHERKIRI_INTERNAL_TEXT_TRANSLATION)
+  char error[1024] = {};
+  if (AetherInternalConfigureTextTranslation(key, value, error,
+                                             sizeof(error))) {
+    handle->last_error.clear();
+    SetThreadError(nullptr);
     return ENGINE_RESULT_OK;
   }
-  handle->last_error = "Artemis runtime requires active beta access";
+  handle->last_error = error[0] != '\0'
+                           ? error
+                           : "private text translation rejected an option";
+  return ThreadError(ENGINE_RESULT_INVALID_ARGUMENT,
+                     handle->last_error.c_str());
+#else
+  (void)key;
+  (void)value;
+  handle->last_error =
+      "local-model text translation is unavailable in this build";
   return ThreadError(ENGINE_RESULT_NOT_SUPPORTED, handle->last_error.c_str());
+#endif
+}
+
+engine_result_t PrepareTextTranslationLocked(DispatchHandle* handle) {
+#if defined(AETHERKIRI_INTERNAL_TEXT_TRANSLATION)
+  char error[1024] = {};
+  if (AetherInternalPrepareTextTranslation(error, sizeof(error))) {
+    handle->startup_logs.push_back("text translation model prepare => OK");
+    return ENGINE_RESULT_OK;
+  }
+  handle->last_error = error[0] != '\0'
+                           ? error
+                           : "failed to prepare local translation model";
+  handle->startup_logs.push_back("text translation model prepare => FAILED");
+  return ThreadError(ENGINE_RESULT_INTERNAL_ERROR,
+                     handle->last_error.c_str());
+#else
+  (void)handle;
+  return ENGINE_RESULT_OK;
+#endif
+}
+
+void StartTextTranslationLoading() {
+#if defined(AETHERKIRI_INTERNAL_TEXT_TRANSLATION)
+  AetherInternalStartTextTranslationLoading();
+#endif
 }
 
 void HostLog(void* user_data, uint32_t level, const char* subsystem,
@@ -410,6 +474,9 @@ engine_result_t engine_create(const engine_create_desc_t* desc,
     defined(AETHERKIRI_ENABLE_ARTEMIS_RUNTIME)
   AetherInternalRegisterArtemisRuntime();
 #endif
+#if defined(AETHERKIRI_INTERNAL_WA2) && defined(AETHERKIRI_ENABLE_WA2_RUNTIME)
+  AetherInternalRegisterWa2Runtime();
+#endif
   if (desc->struct_size < sizeof(engine_create_desc_t)) {
     return ThreadError(ENGINE_RESULT_INVALID_ARGUMENT,
                        "engine_create_desc_t.struct_size is too small");
@@ -539,6 +606,7 @@ engine_result_t engine_destroy(engine_handle_t public_handle) {
   }
   DispatchHandle* handle = nullptr;
   std::vector<engine_media_handle_t> owned_media;
+  bool release_text_translation = false;
   {
     std::lock_guard<std::recursive_mutex> guard(g_dispatch_registry_mutex);
     const auto found = g_dispatch_handles.find(public_handle);
@@ -556,6 +624,7 @@ engine_result_t engine_destroy(engine_handle_t public_handle) {
       }
     }
     g_dispatch_handles.erase(found);
+    release_text_translation = g_dispatch_handles.empty();
     handle = Cast(public_handle);
   }
 
@@ -574,6 +643,14 @@ engine_result_t engine_destroy(engine_handle_t public_handle) {
   }
   const auto result = engine_legacy_destroy(handle->legacy);
   delete handle;
+#if defined(AETHERKIRI_INTERNAL_TEXT_TRANSLATION)
+  if (release_text_translation) {
+    std::lock_guard<std::recursive_mutex> guard(g_dispatch_registry_mutex);
+    if (g_dispatch_handles.empty()) AetherInternalReleaseTextTranslation();
+  }
+#else
+  (void)release_text_translation;
+#endif
   SetThreadError(nullptr);
   return result;
 }
@@ -717,11 +794,13 @@ engine_result_t engine_open_game(engine_handle_t public_handle,
   }
   result = SelectBackendLocked(handle, game_root_path_utf8);
   if (result != ENGINE_RESULT_OK) return result;
-  result = CheckArtemisBetaAccess(handle);
+  result = PrepareTextTranslationLocked(handle);
   if (result != ENGINE_RESULT_OK) return result;
   if (handle->backend == BackendKind::kLegacy) {
-    return engine_legacy_open_game(handle->legacy, game_root_path_utf8,
-                                   startup_script_utf8);
+    result = engine_legacy_open_game(handle->legacy, game_root_path_utf8,
+                                     startup_script_utf8);
+    if (result == ENGINE_RESULT_OK) StartTextTranslationLoading();
+    return result;
   }
   handle->startup_state = ENGINE_STARTUP_STATE_RUNNING;
   AETHER_DISPATCH_DIAG_LOG("engine_open_game before provider open_game");
@@ -735,6 +814,7 @@ engine_result_t engine_open_game(engine_handle_t public_handle,
                                      ? "runtime provider open_game => OK"
                                      : "runtime provider open_game => FAILED");
   SetProviderError(handle, result, "runtime provider failed to open game");
+  if (result == ENGINE_RESULT_OK) StartTextTranslationLoading();
   return result;
 }
 
@@ -761,7 +841,7 @@ engine_result_t engine_open_game_async(engine_handle_t public_handle,
     }
     return ThreadError(result, handle->last_error.c_str());
   }
-  result = CheckArtemisBetaAccess(handle);
+  result = PrepareTextTranslationLocked(handle);
   if (result != ENGINE_RESULT_OK) return result;
   if (handle->backend == BackendKind::kLegacy) {
     return engine_legacy_open_game_async(handle->legacy, game_root_path_utf8,
@@ -788,6 +868,7 @@ engine_result_t engine_open_game_async(engine_handle_t public_handle,
                                        : "runtime provider open_game => FAILED");
     SetProviderError(handle, open_result,
                      "runtime provider failed to open game asynchronously");
+    if (open_result == ENGINE_RESULT_OK) StartTextTranslationLoading();
   });
   SetThreadError(nullptr);
   return ENGINE_RESULT_OK;
@@ -798,14 +879,20 @@ engine_result_t engine_get_startup_state(engine_handle_t public_handle,
   if (out_state == nullptr) {
     return ThreadError(ENGINE_RESULT_INVALID_ARGUMENT, "out_state is null");
   }
-  return Route(public_handle, "get_startup_state",
-               [&](engine_handle_t legacy) {
-                 return engine_legacy_get_startup_state(legacy, out_state);
-               },
-               [&](DispatchHandle* handle) {
-                 *out_state = handle->startup_state;
-                 return ENGINE_RESULT_OK;
-               });
+  const engine_result_t result = Route(
+      public_handle, "get_startup_state",
+      [&](engine_handle_t legacy) {
+        return engine_legacy_get_startup_state(legacy, out_state);
+      },
+      [&](DispatchHandle* handle) {
+        *out_state = handle->startup_state;
+        return ENGINE_RESULT_OK;
+      });
+  if (result == ENGINE_RESULT_OK &&
+      *out_state == ENGINE_STARTUP_STATE_SUCCEEDED) {
+    StartTextTranslationLoading();
+  }
+  return result;
 }
 
 engine_result_t engine_drain_startup_logs(engine_handle_t public_handle,
@@ -904,9 +991,8 @@ engine_result_t engine_set_option(engine_handle_t public_handle,
   std::lock_guard<std::recursive_mutex> guard(handle->mutex);
   const std::string key = Normalize(option->key_utf8);
   if (key == "artemis_beta_allowed") {
-    const std::string value = Normalize(option->value_utf8);
-    handle->artemis_beta_allowed =
-        value == "1" || value == "true" || value == "yes" || value == "on";
+    // Kept as a no-op for compatibility with older hosts. Artemis is now a
+    // generally available runtime and no longer accepts an entitlement gate.
     SetThreadError(nullptr);
     return ENGINE_RESULT_OK;
   }
@@ -928,6 +1014,10 @@ engine_result_t engine_set_option(engine_handle_t public_handle,
     SetThreadError(nullptr);
     return ENGINE_RESULT_OK;
   }
+  if (IsTextTranslationOption(key)) {
+    return ConfigureTextTranslationLocked(handle, key.c_str(),
+                                          option->value_utf8);
+  }
   handle->pending_options[option->key_utf8] = option->value_utf8;
   if (handle->backend == BackendKind::kProvider) {
     if (!PROVIDER_HAS(handle->provider, set_option)) {
@@ -938,6 +1028,102 @@ engine_result_t engine_set_option(engine_handle_t public_handle,
     return result;
   }
   return engine_legacy_set_option(handle->legacy, option);
+}
+
+uint32_t engine_is_text_translation_available(void) {
+#if defined(AETHERKIRI_INTERNAL_TEXT_TRANSLATION)
+  return 1u;
+#else
+  return 0u;
+#endif
+}
+
+uint32_t engine_get_text_translation_state(void) {
+#if defined(AETHERKIRI_INTERNAL_TEXT_TRANSLATION)
+  return AetherInternalGetTextTranslationState();
+#else
+  return ENGINE_TEXT_TRANSLATION_DISABLED;
+#endif
+}
+
+engine_result_t engine_get_text_translation_stats(
+    engine_text_translation_stats_t* out_stats) {
+  if (out_stats == nullptr) {
+    return ThreadError(ENGINE_RESULT_INVALID_ARGUMENT,
+                       "translation statistics output is required");
+  }
+  if (out_stats->struct_size < sizeof(engine_text_translation_stats_t)) {
+    return ThreadError(
+        ENGINE_RESULT_INVALID_ARGUMENT,
+        "engine_text_translation_stats_t.struct_size is too small");
+  }
+  const uint32_t requested_size = out_stats->struct_size;
+  std::memset(out_stats, 0, sizeof(*out_stats));
+  out_stats->struct_size = requested_size;
+#if defined(AETHERKIRI_INTERNAL_TEXT_TRANSLATION)
+  if (!AetherInternalGetTextTranslationStats(out_stats)) {
+    return ThreadError(ENGINE_RESULT_INTERNAL_ERROR,
+                       "private translation statistics query failed");
+  }
+#else
+  out_stats->state = ENGINE_TEXT_TRANSLATION_DISABLED;
+  out_stats->backend = ENGINE_TEXT_TRANSLATION_BACKEND_NONE;
+#endif
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_transform_text_utf8(const char* runtime_id_utf8,
+                                           const char* input_utf8,
+                                           char* out_buffer,
+                                           uint32_t buffer_size,
+                                           uint32_t* out_required_size) {
+  if (input_utf8 == nullptr || out_required_size == nullptr) {
+    return ThreadError(ENGINE_RESULT_INVALID_ARGUMENT,
+                       "text transform input and size output are required");
+  }
+  const std::string transformed =
+      TVPTransformText(runtime_id_utf8 != nullptr ? runtime_id_utf8 : "",
+                       input_utf8);
+  if (transformed.size() >= UINT32_MAX) {
+    return ThreadError(ENGINE_RESULT_INVALID_ARGUMENT,
+                       "transformed text is too large");
+  }
+  *out_required_size = static_cast<uint32_t>(transformed.size() + 1u);
+  if (out_buffer == nullptr || buffer_size < *out_required_size) {
+    SetThreadError(nullptr);
+    return ENGINE_RESULT_OK;
+  }
+  std::memcpy(out_buffer, transformed.c_str(), transformed.size() + 1u);
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_prefetch_text_utf8(const char* runtime_id_utf8,
+                                          const char* input_utf8) {
+  if (runtime_id_utf8 == nullptr || input_utf8 == nullptr) {
+    return ThreadError(ENGINE_RESULT_INVALID_ARGUMENT,
+                       "translation prefetch runtime and input are required");
+  }
+#if defined(AETHERKIRI_INTERNAL_TEXT_TRANSLATION)
+  AetherInternalPrefetchTextTranslation(runtime_id_utf8, input_utf8);
+#endif
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_set_text_translation_skipping(
+    const char* runtime_id_utf8, uint32_t skipping) {
+  if (runtime_id_utf8 == nullptr) {
+    return ThreadError(ENGINE_RESULT_INVALID_ARGUMENT,
+                       "translation skip runtime is required");
+  }
+#if defined(AETHERKIRI_INTERNAL_TEXT_TRANSLATION)
+  AetherInternalSetTextTranslationSkipping(runtime_id_utf8,
+                                            skipping != 0 ? 1u : 0u);
+#endif
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
 }
 
 engine_result_t engine_set_surface_size(engine_handle_t public_handle,

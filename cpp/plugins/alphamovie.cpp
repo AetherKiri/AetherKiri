@@ -2,6 +2,8 @@
 #include "EventIntf.h"
 #include "LayerBitmapIntf.h"
 #include "LayerIntf.h"
+#include "RectItf.h"
+#include "RenderManager.h"
 #include "StorageIntf.h"
 #include "DebugIntf.h"
 #include "ncbind.hpp"
@@ -22,6 +24,13 @@
 #include <vector>
 
 #define NCB_MODULE_NAME TJS_W("AlphaMovie.dll")
+
+// GLAlphaMovie is the OpenGL-flavoured build of the same plug-in.  It
+// registers the same AlphaMovie TJS class and exposes the same AJPM/AMV
+// contract, so keep one implementation and let either shipped filename load
+// it.  LOVE3 requests the GL-prefixed name from alphamovienode.tjs.
+NCB_REGISTER_MODULE_ALIAS(TJS_W("GLAlphaMovie.dll"), NCB_MODULE_NAME,
+                          GLAlphaMovieCompat);
 
 extern "C"
 {
@@ -1269,8 +1278,12 @@ struct AlphaMovieFrame
     char magic[4];
     tjs_uint32 size_of_frame;
     tjs_uint32 index_of_cur_frame;
-    tjs_uint16 alpha_channel_width;
-    tjs_uint16 alpha_channel_height;
+    // GLAlphaMovie uses these two fields as the destination offset of the
+    // cropped frame inside the logical movie canvas.  The historical names
+    // referred to the alpha plane, but the native plug-in returns them as the
+    // Rect.left/Rect.top values from copyNextImageToTexture().
+    tjs_uint16 frame_left;
+    tjs_uint16 frame_top;
     tjs_uint16 frame_width;
     tjs_uint16 frame_height;
 
@@ -1293,8 +1306,8 @@ struct AlphaMovieFrame
         stream->ReadBuffer(&size_of_frame, 4);
         size_of_frame -= (isZlib ? 16 : 12);
         stream->ReadBuffer(&index_of_cur_frame, 4);
-        stream->ReadBuffer(&alpha_channel_width, 2);
-        stream->ReadBuffer(&alpha_channel_height, 2);
+        stream->ReadBuffer(&frame_left, 2);
+        stream->ReadBuffer(&frame_top, 2);
         stream->ReadBuffer(&frame_width, 2);
         stream->ReadBuffer(&frame_height, 2);
         if (isZlib)
@@ -1306,8 +1319,13 @@ struct AlphaMovieFrame
 struct AlphaMovieReadyFrame
 {
     tjs_uint8* ptrData = nullptr;
+    tjs_uint16 left = 0;
+    tjs_uint16 top = 0;
     tjs_uint16 width = 0;
     tjs_uint16 height = 0;
+    // A zero-sized AMV frame is still a completed frame.  Keeping readiness
+    // separate from ptrData prevents it from being decoded forever.
+    bool ready = false;
 };
 
 class tTJSNI_AlphaMovie : public tTJSNativeInstance,
@@ -1322,6 +1340,8 @@ public:
     void open(tTJSString fileName);
     void clear();
     tjs_int showNextImage(tTJSVariant layer);
+    tjs_int copyNextImageToTexture(tjs_int64 textureHandle,
+                                   tTJSVariant rect);
     bool isPlaying();
     void play();
     void stop();
@@ -1342,9 +1362,9 @@ public:
     void SetLeft(tjs_int left) { _left = left; }
     tjs_int GetTop() { return _top; }
     void SetTop(tjs_int top) { _top = top; }
-    tjs_int GetScreenWidth() { return _screenWidth; }
+    tjs_int GetScreenWidth();
     void SetScreenWidth(tjs_int screenWidth) { _screenWidth = screenWidth; }
-    tjs_int GetScreenHeight() { return _screenHeight; }
+    tjs_int GetScreenHeight();
     void SetScreenHeight(tjs_int screenHeight) { _screenHeight = screenHeight; }
     tjs_real GetFPSScale() { return _FPSScale; }
     void SetFPSScale(tjs_real fpsScale) { _FPSScale = fpsScale; }
@@ -1367,14 +1387,14 @@ private:
     tjs_int showNextFfmpegImage(tTJSVariant layer);
     void startAmvOpenAsync(tTJSString fileName);
     bool finishAmvOpenAsync();
+    bool finishAmvOpenBlocking();
     void cancelAmvOpenAsync();
     void removeAmvOpenCallback();
     void startAmvDecodeWorker();
     void stopAmvDecodeWorker();
     void enqueueAmvDecode(tjs_int frameIndex);
     void pruneAmvDecodeFrames(tjs_int currentFrameIndex, tjs_int nextFrameIndex);
-    tjs_uint8* takeAmvReadyFrame(tjs_int frameIndex, tjs_uint16* width,
-                                  tjs_uint16* height);
+    bool takeAmvReadyFrame(tjs_int frameIndex, AlphaMovieReadyFrame* frame);
     void amvDecodeWorkerMain();
     bool indexAmvFramesThrough(tjs_int frameIndex);
     void decodeAmvFrame(tjs_int frameIndex);
@@ -1440,6 +1460,8 @@ private:
     tjs_int _top = 0;
     tjs_int _screenWidth = 0;
     tjs_int _screenHeight = 0;
+    tjs_int textureFrameCursor_ = 0;
+    tjs_int textureLastFrame_ = -1;
     tjs_real _FPSScale = 1.0;
     tjs_real _FPSRate = 1.0;
 };
@@ -1615,8 +1637,29 @@ bool tTJSNI_AlphaMovie::finishAmvOpenAsync()
     if (m_BmpBits == nullptr)
         m_BmpBits = new tTVPBaseTexture(_header.width, _header.height, 32);
     _frame = 0;
+    textureFrameCursor_ = 0;
+    textureLastFrame_ = -1;
     startAmvDecodeWorker();
     return true;
+}
+
+bool tTJSNI_AlphaMovie::finishAmvOpenBlocking()
+{
+    if (backend_ != Backend::Amv)
+        return false;
+
+    // GLAlphaMovie's script reads screenWidth/screenHeight immediately after
+    // open() to allocate its texture atlas, and reads numOfFrame immediately
+    // after play().  Wait only for the small header/index bootstrap here;
+    // frame payloads continue to decode asynchronously on demand.
+    bool inFlight = false;
+    {
+        std::lock_guard<std::mutex> lock(amvOpenMutex_);
+        inFlight = amvOpenInFlight_;
+    }
+    if (inFlight && amvOpenThread_.joinable())
+        amvOpenThread_.join();
+    return finishAmvOpenAsync();
 }
 
 void tTJSNI_AlphaMovie::cancelAmvOpenAsync()
@@ -1673,7 +1716,7 @@ void tTJSNI_AlphaMovie::enqueueAmvDecode(tjs_int frameIndex)
     std::lock_guard<std::mutex> lock(amvDecodeMutex_);
     if (amvDecodeStop_ || static_cast<size_t>(frameIndex) >= amvReadyFrames_.size())
         return;
-    if (amvReadyFrames_[static_cast<size_t>(frameIndex)].ptrData != nullptr)
+    if (amvReadyFrames_[static_cast<size_t>(frameIndex)].ready)
         return;
     if (std::find(amvDecodeQueue_.begin(), amvDecodeQueue_.end(), frameIndex) !=
         amvDecodeQueue_.end())
@@ -1723,24 +1766,19 @@ void tTJSNI_AlphaMovie::pruneAmvDecodeFrames(tjs_int currentFrameIndex,
         amvDecodeQueue_.end());
 }
 
-tjs_uint8* tTJSNI_AlphaMovie::takeAmvReadyFrame(tjs_int frameIndex,
-                                                 tjs_uint16* width,
-                                                 tjs_uint16* height)
+bool tTJSNI_AlphaMovie::takeAmvReadyFrame(tjs_int frameIndex,
+                                          AlphaMovieReadyFrame* frame)
 {
     std::lock_guard<std::mutex> lock(amvDecodeMutex_);
-    if (frameIndex < 0 || static_cast<size_t>(frameIndex) >= amvReadyFrames_.size())
-        return nullptr;
+    if (frame == nullptr || frameIndex < 0 ||
+        static_cast<size_t>(frameIndex) >= amvReadyFrames_.size())
+        return false;
     AlphaMovieReadyFrame& ready = amvReadyFrames_[static_cast<size_t>(frameIndex)];
-    tjs_uint8* result = ready.ptrData;
-    if (result != nullptr)
-    {
-        if (width != nullptr)
-            *width = ready.width;
-        if (height != nullptr)
-            *height = ready.height;
-        ready = AlphaMovieReadyFrame{};
-    }
-    return result;
+    if (!ready.ready)
+        return false;
+    *frame = ready;
+    ready = AlphaMovieReadyFrame{};
+    return true;
 }
 
 void tTJSNI_AlphaMovie::amvDecodeWorkerMain()
@@ -1758,7 +1796,7 @@ void tTJSNI_AlphaMovie::amvDecodeWorkerMain()
             frameIndex = amvDecodeQueue_.front();
             amvDecodeQueue_.pop_front();
             if (frameIndex < 0 || static_cast<size_t>(frameIndex) >= amvReadyFrames_.size() ||
-                amvReadyFrames_[static_cast<size_t>(frameIndex)].ptrData != nullptr)
+                amvReadyFrames_[static_cast<size_t>(frameIndex)].ready)
                 continue;
         }
 
@@ -1768,12 +1806,16 @@ void tTJSNI_AlphaMovie::amvDecodeWorkerMain()
         decodeAmvFrame(frameIndex);
 
         tjs_uint8* decoded = nullptr;
+        tjs_uint16 left = 0;
+        tjs_uint16 top = 0;
         tjs_uint16 width = 0;
         tjs_uint16 height = 0;
         if (frameIndex >= 0 && static_cast<size_t>(frameIndex) < frameInfoList.size())
         {
             AlphaMovieFrame& frame = frameInfoList[static_cast<size_t>(frameIndex)];
             decoded = frame.ptrData;
+            left = frame.frame_left;
+            top = frame.frame_top;
             width = frame.frame_width;
             height = frame.frame_height;
             frame.ptrData = nullptr;
@@ -1787,13 +1829,16 @@ void tTJSNI_AlphaMovie::amvDecodeWorkerMain()
             return;
         }
         AlphaMovieReadyFrame& ready = amvReadyFrames_[static_cast<size_t>(frameIndex)];
-        if (ready.ptrData != nullptr)
+        if (ready.ready)
             delete[] decoded;
         else
         {
             ready.ptrData = decoded;
+            ready.left = left;
+            ready.top = top;
             ready.width = width;
             ready.height = height;
+            ready.ready = true;
         }
         amvDecodeCv_.notify_all();
     }
@@ -1924,6 +1969,8 @@ void tTJSNI_AlphaMovie::open(tTJSString fileName)
         if (m_BmpBits == nullptr)
             m_BmpBits = new tTVPBaseTexture(_header.width, _header.height, 32);
         _frame = 0;
+        textureFrameCursor_ = 0;
+        textureLastFrame_ = -1;
         return;
     }
 
@@ -2748,6 +2795,8 @@ void tTJSNI_AlphaMovie::setFrame(tjs_int frame)
 
 tjs_int tTJSNI_AlphaMovie::getNumberOfFrames()
 {
+    if (backend_ == Backend::Amv && filePtr == nullptr)
+        finishAmvOpenBlocking();
     if (backend_ == Backend::Ffmpeg && ffmpegMovie_)
     {
         int frames = 0;
@@ -2759,6 +2808,8 @@ tjs_int tTJSNI_AlphaMovie::getNumberOfFrames()
 
 tjs_real tTJSNI_AlphaMovie::getFPSRate()
 {
+    if (backend_ == Backend::Amv && filePtr == nullptr)
+        finishAmvOpenBlocking();
     if (backend_ == Backend::Ffmpeg && ffmpegMovie_)
     {
         double fps = 0.0;
@@ -2767,6 +2818,20 @@ tjs_real tTJSNI_AlphaMovie::getFPSRate()
             return fps * 1000.0;
     }
     return _FPSRate;
+}
+
+tjs_int tTJSNI_AlphaMovie::GetScreenWidth()
+{
+    if (backend_ == Backend::Amv && filePtr == nullptr)
+        finishAmvOpenBlocking();
+    return _screenWidth;
+}
+
+tjs_int tTJSNI_AlphaMovie::GetScreenHeight()
+{
+    if (backend_ == Backend::Amv && filePtr == nullptr)
+        finishAmvOpenBlocking();
+    return _screenHeight;
 }
 
 void tTJSNI_AlphaMovie::clear()
@@ -2809,6 +2874,8 @@ void tTJSNI_AlphaMovie::clear()
     _isPlaying = false;
     _numOfFrame = 0;
     _frame = 0;
+    textureFrameCursor_ = 0;
+    textureLastFrame_ = -1;
     amvFirstFrameOffset_ = 0;
     amvIndexedFrames_ = 0;
 }
@@ -2875,31 +2942,98 @@ tjs_int tTJSNI_AlphaMovie::showNextImage(tTJSVariant layer)
         // the old all-frames RGBA cache from returning on mobile devices.
         enqueueAmvDecode(nextFrameIndex);
 
-        tjs_uint16 frameWidth = 0;
-        tjs_uint16 frameHeight = 0;
-        tjs_uint8* frameData = takeAmvReadyFrame(frameIndex, &frameWidth, &frameHeight);
-        if (frameData != nullptr && frameWidth > 0 && frameHeight > 0)
+        AlphaMovieReadyFrame ready;
+        if (takeAmvReadyFrame(frameIndex, &ready))
         {
-            m_BmpBits->Update(frameData, frameWidth * 4, _left, _top,
-                              frameWidth, frameHeight);
-            // Update() copies into the reusable presentation texture.  Do not
-            // retain a decoded RGBA image per AMV frame: a 112-frame 1080p
-            // feather animation alone is almost a gigabyte.
-            delete[] frameData;
-            // Swap the frame into the display layer rather than sharing its
-            // texture. The layer's previous image becomes our next decode
-            // target, so the following Update() does not copy-on-write a
-            // full-size texture that is still being presented upstream.
-            if (!src->ExchangeMainImage(m_BmpBits))
+            std::unique_ptr<tjs_uint8[]> frameData(ready.ptrData);
+            if (frameData != nullptr && ready.width > 0 && ready.height > 0)
             {
-                // Keep the historical assignment behavior for unusual layer
-                // states (for example a size change while playback starts).
-                src->AssignMainImage(m_BmpBits);
-                src->Update();
+                m_BmpBits->Update(frameData.get(), ready.width * 4, _left, _top,
+                                  ready.width, ready.height);
+                // Update() copies into the reusable presentation texture.  Do
+                // not retain a decoded RGBA image per AMV frame: a 112-frame
+                // 1080p feather animation alone is almost a gigabyte. Swap the
+                // frame into the display layer rather than sharing its
+                // texture. The layer's previous image becomes our next decode
+                // target, so the following Update() does not copy-on-write a
+                // full-size texture that is still being presented upstream.
+                if (!src->ExchangeMainImage(m_BmpBits))
+                {
+                    // Keep the historical assignment behavior for unusual
+                    // layer states (for example a size change while playback
+                    // starts).
+                    src->AssignMainImage(m_BmpBits);
+                    src->Update();
+                }
             }
         }
     }
     return _frame;
+}
+
+tjs_int tTJSNI_AlphaMovie::copyNextImageToTexture(tjs_int64 textureHandle,
+                                                   tTJSVariant rect)
+{
+    tTJSNI_Rect* destinationRect = nullptr;
+    const tTJSVariantClosure rectClosure = rect.AsObjectClosureNoAddRef();
+    if (rectClosure.Object == nullptr ||
+        TJS_FAILED(rectClosure.Object->NativeInstanceSupport(
+            TJS_NIS_GETINSTANCE, tTJSNC_Rect::ClassID,
+            reinterpret_cast<iTJSNativeInstance**>(&destinationRect))) ||
+        destinationRect == nullptr)
+        return -1;
+    destinationRect->Clear();
+
+    if (backend_ != Backend::Amv || textureHandle == 0 ||
+        !finishAmvOpenBlocking() || _numOfFrame <= 0)
+        return -1;
+
+    // krkrgles' portable Texture.nativeHandle is the backing
+    // tTVPBaseBitmap pointer.  The original GLAlphaMovie plug-in receives an
+    // OpenGL texture id here and uploads at (0, 0); in top-left bitmap
+    // coordinates that same atlas slot is the bottom strip selected by
+    // alphamovienode.tjs.
+    auto* target = reinterpret_cast<tTVPBaseBitmap*>(
+        static_cast<uintptr_t>(textureHandle));
+    if (target == nullptr || target->GetWidth() == 0 || target->GetHeight() == 0)
+        return -1;
+
+    if (textureFrameCursor_ < 0 || textureFrameCursor_ >= _numOfFrame)
+        textureFrameCursor_ = 0;
+    const tjs_int frameIndex = textureFrameCursor_;
+    const tjs_int nextFrameIndex = (frameIndex + 1) % _numOfFrame;
+    pruneAmvDecodeFrames(frameIndex, nextFrameIndex);
+    enqueueAmvDecode(frameIndex);
+    enqueueAmvDecode(nextFrameIndex);
+
+    AlphaMovieReadyFrame ready;
+    if (!takeAmvReadyFrame(frameIndex, &ready))
+        return textureLastFrame_;
+    std::unique_ptr<tjs_uint8[]> frameData(ready.ptrData);
+
+    const tjs_uint targetWidth = target->GetWidth();
+    const tjs_uint targetHeight = target->GetHeight();
+    if (ready.width > targetWidth || ready.height > targetHeight)
+        return textureLastFrame_;
+
+    if (frameData != nullptr && ready.width > 0 && ready.height > 0)
+    {
+        iTVPTexture2D* texture = target->GetTexture();
+        if (texture == nullptr)
+            return textureLastFrame_;
+        const tjs_int atlasTop =
+            static_cast<tjs_int>(targetHeight - ready.height);
+        texture->Update(frameData.get(), TVPTextureFormat::RGBA,
+                        static_cast<int>(ready.width) * 4,
+                        tTVPRect(0, atlasTop, ready.width,
+                                 atlasTop + ready.height));
+    }
+
+    destinationRect->Set(ready.left, ready.top, ready.left + ready.width,
+                         ready.top + ready.height);
+    textureLastFrame_ = frameIndex;
+    textureFrameCursor_ = nextFrameIndex;
+    return textureLastFrame_;
 }
 
 bool tTJSNI_AlphaMovie::indexAmvFramesThrough(tjs_int frameIndex)
@@ -3082,6 +3216,20 @@ TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ showNextImage)
     return TJS_S_OK;
 }
 TJS_END_NATIVE_METHOD_DECL(/*func. name*/ showNextImage)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ copyNextImageToTexture)
+{
+    TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
+                            /*var. type*/ tTJSNI_AlphaMovie);
+    if (numparams < 2)
+        return TJS_E_BADPARAMCOUNT;
+    const tjs_int frame = _this->copyNextImageToTexture(
+        static_cast<tjs_int64>(param[0]->AsInteger()), *param[1]);
+    if (result)
+        *result = frame;
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_METHOD_DECL(/*func. name*/ copyNextImageToTexture)
 //----------------------------------------------------------------------
 TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ isPlaying)
 {

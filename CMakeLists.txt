@@ -11,9 +11,7 @@ endif ()
 add_compile_definitions(
         $<$<CONFIG:Debug>:DEBUG>
         $<$<CONFIG:Debug>:_DEBUG>   # 对于 MSVC 兼容性
-        # Artemis is compiled into Apple Store products as a gated preview.
-        # Debug builds bypass the product gate; Release requires a verified
-        # beta-access grant before the runtime can open a game.
+        # Artemis is a supported runtime in every product configuration.
         AETHERKIRI_ENABLE_ARTEMIS_RUNTIME
         $<$<NOT:$<CONFIG:Debug>>:NDEBUG>
 )
@@ -88,6 +86,8 @@ option(AETHERKIRI_ENABLE_ONSCRIPTER
        "enable the bundled OnscripterYuri runtime" ON)
 option(AETHERKIRI_ENABLE_SIGLUS
        "enable the bundled siglus_rs runtime (requires a Rust toolchain)" ON)
+option(AETHERKIRI_ENABLE_MINORI
+       "enable the independent Rust Minori runtime" ON)
 option(AETHERKIRI_ENABLE_CODE_OBFUSCATION
        "obfuscate private Internal translation units in release builds" OFF)
 set(AETHERKIRI_OBFUSCATOR_PLUGIN "" CACHE FILEPATH
@@ -114,7 +114,7 @@ if(AETHERKIRI_ENABLE_INTERNAL)
     find_package(AetherInternal CONFIG QUIET
         NO_DEFAULT_PATH)
     if(AetherInternal_FOUND)
-        if(NOT AETHERINTERNAL_PACKAGE_API_VERSION EQUAL 6 OR
+        if(NOT AETHERINTERNAL_PACKAGE_API_VERSION EQUAL 7 OR
            NOT AETHERINTERNAL_REQUIRED_MOTIONPLAYER_API_VERSION EQUAL
                AETHERKIRI_MOTIONPLAYER_BACKEND_API_VERSION OR
            NOT AETHERINTERNAL_REQUIRED_LIVE2D_HOST_API_VERSION EQUAL
@@ -126,6 +126,7 @@ if(AETHERKIRI_ENABLE_INTERNAL)
            NOT COMMAND aetherinternal_extend_legacy_plugins OR
            NOT COMMAND aetherinternal_extend_live2d OR
            NOT COMMAND aetherinternal_extend_artemis OR
+           NOT COMMAND aetherinternal_extend_text_translation OR
            NOT COMMAND aetherinternal_extend_godot_extension OR
            NOT COMMAND aetherinternal_extend_krkr2plugin OR
            NOT COMMAND aetherinternal_extend_krkr2plugin_tests)
@@ -219,6 +220,13 @@ if(AETHERKIRI_ENABLE_SIGLUS AND BUILD_GODOT_EXTENSION AND
    NOT (WEB OR EMSCRIPTEN))
     # Web stays excluded until the wasm host path is designed (phase 5).
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/siglus_runtime)
+endif()
+# The Rust provider has targets for Linux, Apple, Android, and Emscripten.
+# Keep it out of unsupported native targets, but do not make Linux the only
+# product platform that can register Minori.
+if(AETHERKIRI_ENABLE_MINORI AND BUILD_GODOT_EXTENSION AND
+   (LINUX OR APPLE OR ANDROID OR EMSCRIPTEN))
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/rust/minori_runtime)
 endif()
 if(BUILD_GODOT_EXTENSION)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/godot_extension)

@@ -23,6 +23,21 @@ endif()
 
 find_package(OpenAL CONFIG REQUIRED)
 
+if(APPLE)
+    # vcpkg's static OpenAL target exports clang-driver flags. They are either
+    # redundant (-pthread) or rejected when CMake uses swiftc as the final link
+    # driver for the mixed Swift/C++ Godot extension. BuildSiglusRs.cmake lists
+    # the required Apple frameworks as normal CMake link items instead.
+    get_target_property(AETHERKIRI_OPENAL_LINK_LIBRARIES
+        OpenAL::OpenAL INTERFACE_LINK_LIBRARIES)
+    if(AETHERKIRI_OPENAL_LINK_LIBRARIES)
+        list(FILTER AETHERKIRI_OPENAL_LINK_LIBRARIES
+            EXCLUDE REGEX "pthread|^-Wl,-framework")
+        set_property(TARGET OpenAL::OpenAL PROPERTY
+            INTERFACE_LINK_LIBRARIES "${AETHERKIRI_OPENAL_LINK_LIBRARIES}")
+    endif()
+endif()
+
 add_library(aether_siglus_runtime STATIC
     src/siglus_runtime_provider.cpp
     src/siglus_audio_output.cpp

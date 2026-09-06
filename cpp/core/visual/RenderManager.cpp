@@ -3406,7 +3406,7 @@ public:
             if(method != nullptr && method->GetName() == "Copy") {
                 TAffuncFunc affineloop = GetStretchFunction(
                     static_cast<tTVPRenderMethod_Software *>(method));
-                const tTVPPointD points[3] = {
+                const tTVPPointD firstTriangle[3] = {
                     {static_cast<double>(rctar.left),
                      static_cast<double>(rctar.top)},
                     {static_cast<double>(rctar.right),
@@ -3414,8 +3414,22 @@ public:
                     {static_cast<double>(rctar.left),
                      static_cast<double>(rctar.bottom)},
                 };
-                InternalAffineBlt(rctar, rcsrc, rcsrc, src, tar, points,
-                                  false, affineloop);
+                const tTVPPointD secondTriangle[3] = {
+                    {static_cast<double>(rctar.right),
+                     static_cast<double>(rctar.top)},
+                    {static_cast<double>(rctar.left),
+                     static_cast<double>(rctar.bottom)},
+                    {static_cast<double>(rctar.right),
+                     static_cast<double>(rctar.bottom)},
+                };
+                // InternalAffineBlt rasterizes one triangle at a time.  A
+                // rectangle therefore needs both its LT/RT/LB and
+                // RT/LB/RB halves; drawing only one leaves a diagonal
+                // untouched wedge in scaled backgrounds and SD CGs.
+                InternalAffineBlt(rctar, rcsrc, rcsrc, src, tar,
+                                  firstTriangle, true, affineloop);
+                InternalAffineBlt(rctar, rcsrc, rcsrc, src, tar,
+                                  secondTriangle, false, affineloop);
                 return;
             }
 

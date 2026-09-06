@@ -233,7 +233,6 @@ bool IsGpuRectFastPathEnabled(const char *name) {
                std::strcmp(name, "UnivTransBlend_d") == 0 ||
                std::strcmp(name, "UnivTransBlend_a") == 0 ||
                std::strcmp(name, "CopyColor") == 0 ||
-               std::strcmp(name, "ApplyColorMap_a") == 0 ||
                std::strcmp(name, "AdditiveAlphaBlend") == 0 ||
                std::strcmp(name, "AdditiveAlphaBlend_a") == 0 ||
                std::strcmp(name, "PsAddBlend") == 0 ||
@@ -260,7 +259,11 @@ bool IsGpuRectFastPathEnabled(const char *name) {
         const size_t end = setting.find_first_of(",;: ", start);
         const std::string token =
             setting.substr(start, end == std::string::npos ? end : end - start);
-        if (token == name) return true;
+        if (token == name ||
+            ((token == "default" || token == "1" || token == "all") &&
+             is_default_enabled())) {
+            return true;
+        }
         if (end == std::string::npos) break;
         start = end + 1;
     }
@@ -536,6 +539,7 @@ GodotTexture2D::GodotTexture2D(const void *pixel, int pitch, unsigned int w,
         MarkTransparentKnown();
     }
     MarkCpuDirty();
+    cpu_pixels_known_zero_ = pixel == nullptr;
 }
 
 GodotTexture2D::~GodotTexture2D() { ReleaseGpuHandle(); }
@@ -593,8 +597,12 @@ void GodotTexture2D::MarkOpaqueKnown() {
 void GodotTexture2D::CreateGpuHandle(const void *pixel, int pitch) {
     const auto *bridge = TVPGodotGpuBridgeGet();
     if (bridge == nullptr || bridge->create_rgba == nullptr) return;
-    const void *src = pixel != nullptr ? pixel :
-        (pixels_.empty() ? nullptr : pixels_.data());
+    const void *src = pixel != nullptr
+        ? pixel
+        : ((format_ == TVPTextureFormat::RGBA && cpu_pixels_known_zero_) ||
+                   pixels_.empty()
+               ? nullptr
+               : pixels_.data());
     uint32_t stride = static_cast<uint32_t>(
         pixel != nullptr && pitch > 0 ? pitch : pitch_);
     std::vector<uint32_t> expanded_gray;
@@ -622,6 +630,7 @@ void GodotTexture2D::CreateGpuHandle(const void *pixel, int pitch) {
     }
     gpu_dirty_ = false;
     cpu_dirty_ = false;
+    cpu_pixels_known_zero_ = false;
     if(format_ == TVPTextureFormat::RGBA && !retain_cpu_shadow_)
         DiscardCpuStorage();
 }
@@ -713,6 +722,7 @@ void GodotTexture2D::ReleaseGpuHandle() {
 }
 
 void GodotTexture2D::EnsureCpuReadable() {
+    ScopedRenderTiming cpu_read_timing("EnsureCpuReadable");
     if (cpu_dirty_) {
         EnsureCpuStorage();
         return;
@@ -740,6 +750,7 @@ void GodotTexture2D::EnsureCpuReadable() {
                 }
             }
             gpu_dirty_ = false;
+            cpu_pixels_known_zero_ = false;
         }
         return;
     }
@@ -747,6 +758,7 @@ void GodotTexture2D::EnsureCpuReadable() {
         bridge->read_rgba(gpu_handle_, pixels_.data(), pixels_.size(),
                           static_cast<uint32_t>(pitch_))) {
         gpu_dirty_ = false;
+        cpu_pixels_known_zero_ = false;
     }
 }
 
@@ -855,6 +867,7 @@ void GodotTexture2D::SetSize(unsigned int w, unsigned int h) {
     pixels_.assign(static_cast<size_t>(pitch_) * h, 0);
     MarkTransparentKnown();
     MarkCpuDirty();
+    cpu_pixels_known_zero_ = true;
 }
 
 bool GodotTexture2D::ClearGpu(uint32_t rgba, const tTVPRect &rc) {
@@ -1532,6 +1545,14 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         return;
     }
 
+    // Color-map operations are frequently emitted as thousands of tiny
+    // rectangles while a KAG character/expression is replaced.  Each GPU
+    // dispatch allocates a bridge op, descriptor set, and barrier; on mobile
+    // and MoltenVK that CPU submission cost dominates the actual color-map
+    // shader and creates a single 100ms+ timer tick.  Keep this path opt-in
+    // through AETHERKIRI_GODOT_GPU_RECT_FASTPATH=ApplyColorMap_a.  The normal
+    // software delegate is safe here because these source layers are CPU
+    // backed before the operation and avoids the per-rectangle GPU roundtrip.
     if (method_name == "ApplyColorMap_a" && dst != nullptr && src != nullptr &&
         IsGpuRectFastPathEnabled("ApplyColorMap_a") &&
         RectAbsSizeMatches(rctar, textures[0].second) &&

@@ -199,10 +199,21 @@ namespace {
             if(level < TVP_COMPACT_LEVEL_MINIMIZE) {
                 return;
             }
-            // Drop only process-level warm-cache ownership. Active players
-            // retain their own shared_ptrs until the current frame finishes.
-            clearSharedMotionSourceBitmapCache();
-            motion::ResourceManager::trimStaticStateForMemoryPressure();
+            // A MINIMIZE compaction is a reclaim hint, not a host-session
+            // boundary. Dropping the process-level Motion caches here makes
+            // the next scene transition synchronously reparse its PSB and
+            // decode every source again on the script thread. That is exactly
+            // the multi-hundred-millisecond hitch seen when a new
+            // MotionResourceManager is created during an EnvObjectWorld
+            // transition. Both caches already have bounded policies (the
+            // source bitmap cache is capped at 256 MiB and the warm module
+            // cache keeps only a small number of modules), so retain them for
+            // ordinary pressure notifications and release them only for the
+            // explicit MAX compaction level.
+            if(level >= TVP_COMPACT_LEVEL_MAX) {
+                clearSharedMotionSourceBitmapCache();
+                motion::ResourceManager::trimStaticStateForMemoryPressure();
+            }
         }
     };
 
@@ -1873,7 +1884,8 @@ namespace {
         motion::detail::PlayerRuntime &runtime,
         const std::string &motionPath,
         tjs_int canvasWidth,
-        tjs_int canvasHeight) {
+        tjs_int canvasHeight,
+        double frameTick) {
         if(!isYuzuPresentationMotion(motionPath) ||
            canvasWidth <= 0 || canvasHeight <= 0 ||
            runtime.preparedRenderItems.empty()) {
@@ -1888,6 +1900,48 @@ namespace {
             isYuzuStartupLogoMotion(motionPath);
 
         if(isTitleMotion) {
+            const auto loweredMotionPath = renderDebugLowercase(motionPath);
+            const auto filenameOffset = loweredMotionPath.find_last_of("/\\");
+            const auto motionFilename =
+                filenameOffset == std::string::npos
+                    ? loweredMotionPath
+                    : loweredMotionPath.substr(filenameOffset + 1);
+            const bool isUnevaluatedBaseTitleFrame =
+                frameTick <= 0.0001 &&
+                (motionFilename == "title_bg.mtn" ||
+                 motionFilename == "title_bg.psb");
+            if(isUnevaluatedBaseTitleFrame) {
+                // KAG creates and draws a Motion player immediately after
+                // play("title"), before the first progress callback.  At that
+                // point the nested char_move tree still contains its default
+                // persistent layers at full opacity, so the completed title
+                // card flashes once before the authored character entrance
+                // animation is evaluated.  Keep only the full-canvas white
+                // transition utility for this unevaluated frame.  Publishing
+                // even bg1/bg2 here makes the title background appear before
+                // the animation and then disappear behind its white flash.
+                // The first progressed frame publishes the authored scene.
+                int suppressed = 0;
+                for(auto &entry : runtime.preparedRenderItems) {
+                    if(!entry.drawFlag || entry.skipFlag0 || entry.skipFlag1 ||
+                       entry.opacity <= 0) {
+                        continue;
+                    }
+                    if(!isYuzuTitleWhiteUtilityLayer(
+                           motionPath, entry.nodeLabel, entry.sourceKey)) {
+                        entry.skipFlag0 = true;
+                        ++suppressed;
+                    }
+                }
+                if(suppressed > 0 && LOGGER &&
+                   shouldDebugTitleRender(motionPath) &&
+                   markRenderDebugLogged(
+                       "yuzu-title-unevaluated-frame:" + motionPath)) {
+                    LOGGER->info(
+                        "motion title unevaluated composition suppressed: motion={} suppressed={}",
+                        motionPath, suppressed);
+                }
+            }
             const bool hasSyntheticIntroLayer = std::any_of(
                 runtime.preparedRenderItems.begin(),
                 runtime.preparedRenderItems.end(),
@@ -8705,8 +8759,17 @@ namespace motion {
             }
             return false;
         }
-        TVPGodotGpuBatchScope gpuBatch(
-            _runtime->isEmoteMode && _runtime->renderCommands.size() > 1);
+        // A selector hover can call renderToLayer directly from the input
+        // event, before Window::UpdateContent has opened its outer batch.  If
+        // this scope is restricted to E-mote, every PSB button draw is
+        // submitted as a separate Godot GPU transaction; on the title page
+        // that turns a harmless 15-command repaint into a visible stall and
+        // can expose the cleared intermediate surface for one frame.  The
+        // bridge preserves ordering and handles nested scopes, so batch every
+        // multi-command motion render here (it is a no-op on non-Godot
+        // backends).  This keeps the clear + all compositing operations
+        // atomic from the host presenter's point of view.
+        TVPGodotGpuBatchScope gpuBatch(_runtime->renderCommands.size() > 1);
 
         // The same evaluated command list can be submitted through
         // renderToLayer, SeparateLayerAdaptor, and D3DAdaptor during a KAG
@@ -11620,7 +11683,7 @@ namespace motion {
         applyPreparedRenderItemTranslateOffsets();
         adjustPreparedRenderItemsForYuzuPresentation(
             *_runtime, motionPath, adaptor->getWidth(),
-            adaptor->getHeight());
+            adaptor->getHeight(), _clampedEvalTime);
         adjustPreparedRenderItemsForCenteredGameMotion(
             *_runtime, motionPath, adaptor->getWidth(),
             adaptor->getHeight(),
@@ -12572,7 +12635,8 @@ namespace motion {
             rasterNowUs - _runtime->lastMotionRasterPublishUs <
                 rasterThrottleUs;
         auto *cachedRasterLayer = resolveNativeLayer(renderLayerObject);
-        if(!_runtime->isEmoteMode && !skipUpdate && rasterThrottleUs != 0 &&
+        if(!_forceMotionRasterRender && !_runtime->isEmoteMode && !skipUpdate &&
+           rasterThrottleUs != 0 &&
            sameRasterTarget && cachedRasterLayer &&
            cachedRasterLayer->GetHasImage()) {
             _runtime->lastCanvas =
@@ -13926,6 +13990,11 @@ namespace motion {
         if(!_speed) {
             return;
         }
+        // Toggle the command-list token on every accepted progress call,
+        // including progress(0).  KAG uses that token solely as a dirty
+        // signal before scheduling onPaint; the evaluated frame itself stays
+        // in the retained node tree below.
+        _commandListPulse = !_commandListPulse;
         const bool hasNativeBackend = _nativeBackend != nullptr;
         _layersDirty = !hasNativeBackend;
         if(!_completedEndedTimelineRenderHoldLabel.empty()) {
