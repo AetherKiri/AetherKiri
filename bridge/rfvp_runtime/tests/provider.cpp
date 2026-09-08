@@ -37,7 +37,7 @@ struct Instance {
     void ok(engine_result_t code) {
         if (code != ENGINE_RESULT_OK) throw std::runtime_error(provider->get_last_error(value));
     }
-    void open(const fs::path& path) {
+    engine_result_t open_result(const fs::path& path) {
         // Match engine_open_game_async: macOS gives std::thread a much smaller
         // stack than main(). Tick, input and destruction stay on the host thread.
         engine_result_t result = ENGINE_RESULT_INTERNAL_ERROR;
@@ -46,7 +46,10 @@ struct Instance {
             result = provider->open_game(value, utf8.c_str(), nullptr);
         });
         startup.join();
-        ok(result);
+        return result;
+    }
+    void open(const fs::path& path) {
+        ok(open_result(path));
     }
     void step(int count = 1) { while (count--) ok(provider->tick(value, 16)); }
     engine_frame_desc_t frame() {
@@ -90,8 +93,27 @@ int main(int argc, char** argv) {
             Instance painter(scratch);
             painter.open(demo);
             painter.step(2);
+            uint64_t texture = 0, serial = 0;
+            uint32_t width = 0, height = 0;
+            check(provider->get_godot_native_frame_texture(
+                      painter.value, &texture, &width, &height, &serial) ==
+                      ENGINE_RESULT_NOT_SUPPORTED,
+                  "standalone provider uses CPU fallback without a GPU bridge");
             auto pixels = painter.pixels();
             check(pixels[(200 * 1024 + 200) * 4] > 200, "upstream painter renders its canvas");
+        }
+        {
+            Instance forced_gpu(scratch);
+            engine_option_t option{};
+            option.key_utf8 = "rfvp_renderer";
+            option.value_utf8 = "invalid";
+            check(provider->set_option(forced_gpu.value, &option) ==
+                      ENGINE_RESULT_INVALID_ARGUMENT,
+                  "invalid renderer");
+            option.value_utf8 = "gpu";
+            forced_gpu.ok(provider->set_option(forced_gpu.value, &option));
+            check(forced_gpu.open_result(demo) != ENGINE_RESULT_OK,
+                  "forced GPU rejects a missing bridge");
         }
         const auto fixture = scratch / "input.hcb";
         write_input_fixture(fixture);

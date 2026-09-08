@@ -2,7 +2,9 @@
 
 This is an opt-in native provider for FVP HCB games, using the pinned
 `packages/rfvp` submodule. It implements `engine_runtime_provider_v1_t`; Godot
-presents CPU-rendered RGBA frames and owns the window and input coordinates.
+presents the native-resolution frame and owns the window and input coordinates.
+The default `auto` renderer sends RFVP's scene traversal through AetherKiri's
+Godot GPU Bridge when RenderingDevice is available, with a software fallback.
 It does not launch the Windows executable or the standalone rfvp application.
 
 ## Build
@@ -51,6 +53,12 @@ the small generated workspace, not all upstream console and tool packages.
 - Script-driven save/load uses VM/state snapshots and CPU thumbnails. Legacy
   standalone native save/load dialogs are not implemented and return an
   explicit error. Exit requests return control to the application host.
+- `rfvp_renderer=auto|gpu|cpu` is a pre-open engine option. `auto` is the
+  default, `gpu` requires the Godot GPU Bridge, and `cpu` is useful for visual
+  comparison. The app-level developer override is
+  `AETHERKIRI_RFVP_RENDERER`. Normal GPU presentation stays on-device; a
+  readback occurs only when the host explicitly requests RGBA pixels, such as
+  for save thumbnails or screenshots.
 - New RFVS payloads use a version-2 envelope to preserve active motions, sprite
   and snow animations, and text-reveal coroutine linkage. Version-1 snapshots
   remain readable, but missing playback state in old files cannot be recovered
@@ -68,7 +76,8 @@ crate is a Rust static library behind a private C ABI;
 no Rust layout crosses the engine-provider ABI.
 
 The rfvp crate uses full optimization even in the development profile, retaining
-debug assertions. CPU rendering skips zero-opacity quads and rasterizes
+debug assertions. Release builds use ThinLTO and one code-generation unit. CPU
+rendering skips zero-opacity quads and rasterizes
 axis-aligned quads once, avoiding redundant triangle scans and a double-blended
 translucent diagonal. Rotated/sheared geometry retains the triangle path.
 
@@ -88,7 +97,8 @@ snapshot, then loads it: completing a write must release its request without
 discarding the pre-menu payload. Another fixture saves during a fade and checks
 that the animation reaches its destination after load. Rust regressions cover
 V1/V2 round trips, malformed payloads, fixed-buffer lengths, text waiters,
-opacity culling, translucent diagonals and sampling/clipping/flipping parity.
+opacity culling, translucent diagonals, sampling/clipping/flipping parity, and
+the lazy GPU texture, batching, readback and cleanup contract.
 Godot's input mapping regression covers rfvp
 at a mismatched presentation size while preserving KiriKiri's surface mapping.
 Games open on a native worker thread, matching the application's asynchronous

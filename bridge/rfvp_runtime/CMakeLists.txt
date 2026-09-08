@@ -71,7 +71,9 @@ add_library(aether_rfvp_runtime STATIC src/rfvp_runtime_provider.cpp)
 target_compile_features(aether_rfvp_runtime PUBLIC cxx_std_17)
 set_target_properties(aether_rfvp_runtime PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(aether_rfvp_runtime PUBLIC include
-    "${AETHERKIRI_RFVP_PROJECT_ROOT}/bridge/engine_api/include")
+    "${AETHERKIRI_RFVP_PROJECT_ROOT}/bridge/engine_api/include"
+    PRIVATE
+    "${AETHERKIRI_RFVP_PROJECT_ROOT}/cpp/core/visual/godot")
 target_link_libraries(aether_rfvp_runtime PUBLIC aether_rfvp_rust)
 if(APPLE)
     target_link_libraries(aether_rfvp_runtime PUBLIC

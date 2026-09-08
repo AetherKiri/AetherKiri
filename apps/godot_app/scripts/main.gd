@@ -3713,6 +3713,9 @@ func _apply_engine_options() -> void:
         player.set_engine_option("rfvp_encoding", GameLaunchEntry.rfvp_encoding(
             selected_game, OS.get_environment("AETHERKIRI_RFVP_ENCODING")
         ))
+        var rfvp_renderer := OS.get_environment("AETHERKIRI_RFVP_RENDERER").strip_edges().to_lower()
+        if not rfvp_renderer.is_empty():
+            player.set_engine_option("rfvp_renderer", rfvp_renderer)
 
 func _apply_frame_enhancement_settings() -> void:
     if player == null or not player.has_method("set_frame_enhancement_enabled"):
@@ -11889,7 +11892,14 @@ func _run_cli_script_probe() -> void:
         _refresh_known_games_for_auto_start()
         var game := _find_known_game_by_query(target_game_path)
         if not game.is_empty():
-            target_game_path = String(game.get("path", target_game_path))
+            var library_path := String(game.get("path", target_game_path))
+            if FileAccess.file_exists(library_path):
+                target_game_path = library_path
+            else:
+                var runtime_kind := String(game.get("engine", "")).strip_edges().to_lower()
+                if runtime_kind.is_empty():
+                    runtime_kind = _game_runtime_kind(library_path)
+                target_game_path = GameLaunchEntry.resolve_for_runtime(game, runtime_kind)
         else:
             target_game_path = _resolve_game_path(target_game_path)
     _write_probe_marker("cli_probe target requested=%s resolved=%s" % [requested_game_path, target_game_path])

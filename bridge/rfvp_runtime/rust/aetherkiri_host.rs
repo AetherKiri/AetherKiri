@@ -36,6 +36,67 @@ use std::{
 };
 
 const MAX_SCRIPT: u64 = 64 * 1024 * 1024;
+const HOST_GPU_CALLBACKS_API_VERSION: u32 = 0x01000000;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct HostGpuRect {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct HostGpuPoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct HostGpuCallbacks {
+    pub(crate) struct_size: u32,
+    pub(crate) api_version: u32,
+    pub create_rgba: Option<unsafe extern "C" fn(u32, u32, *const c_void, u32) -> u64>,
+    pub release_texture: Option<unsafe extern "C" fn(u64)>,
+    pub update_rgba:
+        Option<unsafe extern "C" fn(u64, *const c_void, u32, *const HostGpuRect) -> bool>,
+    pub clear_rgba: Option<unsafe extern "C" fn(u64, u32, *const HostGpuRect) -> bool>,
+    pub draw_triangles: Option<
+        unsafe extern "C" fn(
+            u64,
+            u64,
+            u32,
+            *const HostGpuRect,
+            *const HostGpuPoint,
+            *const HostGpuPoint,
+            f32,
+            u32,
+        ) -> bool,
+    >,
+    pub read_rgba: Option<unsafe extern "C" fn(u64, *mut c_void, usize, u32) -> bool>,
+    pub begin_batch: Option<unsafe extern "C" fn() -> u64>,
+    pub end_batch: Option<unsafe extern "C" fn(u64) -> bool>,
+    pub flush: Option<unsafe extern "C" fn() -> bool>,
+}
+impl HostGpuCallbacks {
+    fn valid(&self) -> bool {
+        self.struct_size >= std::mem::size_of::<Self>() as u32
+            && self.api_version == HOST_GPU_CALLBACKS_API_VERSION
+            && self.create_rgba.is_some()
+            && self.release_texture.is_some()
+            && self.update_rgba.is_some()
+            && self.clear_rgba.is_some()
+            && self.draw_triangles.is_some()
+            && self.read_rgba.is_some()
+            && self.begin_batch.is_some()
+            && self.end_batch.is_some()
+            && self.flush.is_some()
+    }
+}
+
 static ROOTS: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
 pub fn game_root() -> Option<PathBuf> {
     ROOTS.lock().unwrap().as_ref().map(|r| r.0.clone())
@@ -193,7 +254,15 @@ struct Core {
     _roots: RootsGuard,
 }
 impl Core {
-    fn new(path: &Path, startup: &str, writable: &Path, font: &str, nls: Nls) -> Result<Self> {
+    fn new(
+        path: &Path,
+        startup: &str,
+        writable: &Path,
+        font: &str,
+        nls: Nls,
+        gpu: Option<HostGpuCallbacks>,
+        require_gpu: bool,
+    ) -> Result<Self> {
         ensure!(
             !writable.as_os_str().is_empty(),
             "A writable save directory is required"
@@ -233,7 +302,15 @@ impl Core {
             current_scene: Some(Box::<AnzuScene>::default()),
         };
         scene.apply_scene_action(SceneAction::Start, &mut world);
-        let renderer = create_soft_renderer(size.0, size.1, PixelFormat::Rgba8)?;
+        let mut renderer = create_soft_renderer(size.0, size.1, PixelFormat::Rgba8)?;
+        let gpu_installed = gpu.is_some_and(|callbacks| renderer.install_host_gpu(callbacks));
+        ensure!(
+            !require_gpu || gpu_installed,
+            "Godot GPU Bridge is unavailable for rfvp"
+        );
+        if gpu.is_some() && !gpu_installed {
+            log::warn!("rfvp GPU renderer initialization failed; using CPU fallback");
+        }
         Ok(Self {
             world,
             parser,
@@ -307,6 +384,10 @@ impl Core {
                 w > 0 && h > 0 && w <= 4096 && h <= 4096,
                 "Invalid save thumbnail size"
             );
+            ensure!(
+                self.renderer.sync_host_gpu_framebuffer(),
+                "Read rfvp GPU frame for save thumbnail"
+            );
             let source = image::RgbaImage::from_raw(
                 self.size.0,
                 self.size.1,
@@ -372,6 +453,7 @@ impl Drop for Core {
 
 struct Session {
     core: Option<Core>,
+    gpu: Option<HostGpuCallbacks>,
     error: CString,
     poisoned: bool,
 }
@@ -412,10 +494,15 @@ unsafe fn call(p: *mut c_void, f: impl FnOnce(&mut Session) -> Result<i32>) -> i
     }
 }
 #[no_mangle]
-pub extern "C" fn aether_rfvp_new() -> *mut c_void {
+pub unsafe extern "C" fn aether_rfvp_new(gpu_callbacks: *const HostGpuCallbacks) -> *mut c_void {
     let _ = log::set_logger(&LOGGER).map(|_| log::set_max_level(log::LevelFilter::Info));
+    let gpu = gpu_callbacks
+        .as_ref()
+        .copied()
+        .filter(HostGpuCallbacks::valid);
     Box::into_raw(Box::new(Session {
         core: None,
+        gpu,
         error: CString::default(),
         poisoned: false,
     }))
@@ -447,15 +534,25 @@ pub unsafe extern "C" fn aether_rfvp_open(
     writable: *const c_char,
     font: *const c_char,
     encoding: *const c_char,
+    renderer: *const c_char,
 ) -> i32 {
     call(p, |s| {
         ensure!(s.core.is_none(), "Close the current game before reopening");
+        let renderer = string(renderer)?;
+        let (gpu, require_gpu) = match renderer {
+            "auto" => (s.gpu, false),
+            "gpu" => (s.gpu, true),
+            "cpu" => (None, false),
+            _ => return Err(anyhow!("rfvp renderer must be auto, gpu or cpu")),
+        };
         s.core = Some(Core::new(
             Path::new(string(path)?),
             string(script)?,
             Path::new(string(writable)?),
             string(font)?,
             Nls::from_str(string(encoding)?)?,
+            gpu,
+            require_gpu,
         )?);
         Ok(0)
     })
@@ -574,12 +671,37 @@ pub unsafe extern "C" fn aether_rfvp_frame(
     })
 }
 #[no_mangle]
+pub unsafe extern "C" fn aether_rfvp_gpu_frame(
+    p: *mut c_void,
+    texture: *mut u64,
+    w: *mut u32,
+    h: *mut u32,
+    serial: *mut u64,
+) -> i32 {
+    if texture.is_null() || w.is_null() || h.is_null() || serial.is_null() {
+        return -1;
+    }
+    call(p, |s| {
+        let c = s.core()?;
+        let Some(handle) = c.renderer.host_gpu_texture() else {
+            return Ok(-3);
+        };
+        *texture = handle;
+        *w = c.size.0;
+        *h = c.size.1;
+        *serial = c.serial;
+        Ok(0)
+    })
+}
+#[no_mangle]
 pub unsafe extern "C" fn aether_rfvp_read(p: *mut c_void, output: *mut c_void, size: usize) -> i32 {
     if output.is_null() {
         return -1;
     }
     call(p, |s| {
-        let bytes = s.core()?.renderer.framebuffer().pixels();
+        let renderer = &mut s.core()?.renderer;
+        ensure!(renderer.sync_host_gpu_framebuffer(), "Read rfvp GPU frame");
+        let bytes = renderer.framebuffer().pixels();
         ensure!(size >= bytes.len(), "Frame buffer is too small");
         ptr::copy_nonoverlapping(bytes.as_ptr(), output.cast(), bytes.len());
         Ok(0)

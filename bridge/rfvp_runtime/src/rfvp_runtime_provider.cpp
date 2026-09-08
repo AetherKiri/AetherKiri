@@ -1,6 +1,7 @@
 #include "rfvp_runtime_provider.h"
 #include "rfvp_host.h"
 #include "engine_runtime_provider.h"
+#include "GodotGpuBridge.h"
 
 #include <cstring>
 #include <memory>
@@ -9,12 +10,78 @@
 
 namespace aetherkiri::rfvp {
 namespace {
+TVPGodotGpuBridgeCallbacks g_gpu_bridge{};
+TVPGodotGpuBatchCallbacks g_gpu_batch{};
+bool g_gpu_bridge_registered = false;
+
+uint64_t GpuCreate(uint32_t width, uint32_t height, const void* pixels,
+                   uint32_t stride) {
+    return g_gpu_bridge_registered && g_gpu_bridge.create_rgba
+        ? g_gpu_bridge.create_rgba(width, height, pixels, stride)
+        : 0;
+}
+void GpuRelease(uint64_t texture) {
+    if (g_gpu_bridge_registered && g_gpu_bridge.release_texture)
+        g_gpu_bridge.release_texture(texture);
+}
+bool GpuUpdate(uint64_t texture, const void* pixels, uint32_t stride,
+               const aether_rfvp_gpu_rect_t* rect) {
+    return g_gpu_bridge_registered && g_gpu_bridge.update_rgba &&
+        g_gpu_bridge.update_rgba(texture, pixels, stride,
+            reinterpret_cast<const tTVPRect*>(rect));
+}
+bool GpuClear(uint64_t texture, uint32_t rgba,
+              const aether_rfvp_gpu_rect_t* rect) {
+    return g_gpu_bridge_registered && g_gpu_bridge.clear_rgba &&
+        g_gpu_bridge.clear_rgba(texture, rgba,
+            reinterpret_cast<const tTVPRect*>(rect));
+}
+bool GpuDraw(uint64_t dst, uint64_t src, uint32_t triangle_count,
+             const aether_rfvp_gpu_rect_t* clip,
+             const aether_rfvp_gpu_point_t* dst_points,
+             const aether_rfvp_gpu_point_t* src_points, float opacity,
+             uint32_t blend_mode) {
+    return g_gpu_bridge_registered && g_gpu_bridge.draw_triangles &&
+        g_gpu_bridge.draw_triangles(
+            dst, src, triangle_count,
+            reinterpret_cast<const tTVPRect*>(clip),
+            reinterpret_cast<const tTVPPointD*>(dst_points),
+            reinterpret_cast<const tTVPPointD*>(src_points), opacity,
+            blend_mode);
+}
+bool GpuRead(uint64_t texture, void* pixels, size_t size, uint32_t stride) {
+    return g_gpu_bridge_registered && g_gpu_bridge.read_rgba &&
+        g_gpu_bridge.read_rgba(texture, pixels, size, stride);
+}
+uint64_t GpuBegin() {
+    return g_gpu_bridge_registered && g_gpu_batch.begin_batch
+        ? g_gpu_batch.begin_batch()
+        : 0;
+}
+bool GpuEnd(uint64_t token) {
+    return g_gpu_bridge_registered && g_gpu_batch.end_batch &&
+        g_gpu_batch.end_batch(token);
+}
+bool GpuFlush() {
+    return g_gpu_bridge_registered && g_gpu_bridge.flush &&
+        g_gpu_bridge.flush();
+}
+const aether_rfvp_gpu_callbacks_t* GpuCallbacks() {
+    static const aether_rfvp_gpu_callbacks_t callbacks{
+        sizeof(aether_rfvp_gpu_callbacks_t),
+        AETHER_RFVP_GPU_CALLBACKS_API_VERSION,
+        GpuCreate, GpuRelease, GpuUpdate, GpuClear, GpuDraw, GpuRead,
+        GpuBegin, GpuEnd, GpuFlush};
+    return g_gpu_bridge_registered ? &callbacks : nullptr;
+}
+
 struct Runtime {
-    void* core = aether_rfvp_new();
+    void* core = nullptr;
     engine_runtime_host_v1_t host{};
-    std::string writable, font, encoding = "sjis", error;
+    std::string writable, font, encoding = "sjis", renderer = "auto", error;
     uint64_t read_serial = 0;
     bool opened = false;
+    Runtime() : core(aether_rfvp_new(GpuCallbacks())) {}
     ~Runtime() { aether_rfvp_free(core); }
     engine_result_t result(int32_t code) {
         char message[4096];
@@ -52,7 +119,8 @@ engine_result_t Open(void* p, const char* path, const char* startup) {
     if (!p || !path) return ENGINE_RESULT_INVALID_ARGUMENT;
     auto& r = *cast(p);
     const auto result = r.result(aether_rfvp_open(r.core, path, startup,
-        r.writable.c_str(), r.font.c_str(), r.encoding.c_str()));
+        r.writable.c_str(), r.font.c_str(), r.encoding.c_str(),
+        r.renderer.c_str()));
     if (result == ENGINE_RESULT_OK) r.opened = true;
     return result;
 }
@@ -73,19 +141,28 @@ engine_result_t Option(void* p, const engine_option_t* option) {
         return ENGINE_RESULT_INVALID_ARGUMENT;
     auto& r = *cast(p);
     const std::string key = option->key_utf8, value = option->value_utf8;
-    if (key == "default_font" || key == "rfvp_encoding") {
-        if (value == (key == "default_font" ? r.font : r.encoding)) return ENGINE_RESULT_OK;
+    if (key == "default_font" || key == "rfvp_encoding" ||
+        key == "rfvp_renderer") {
+        const std::string& current = key == "default_font" ? r.font
+            : key == "rfvp_encoding" ? r.encoding : r.renderer;
+        if (value == current) return ENGINE_RESULT_OK;
         if (r.opened) {
-            r.error = "rfvp font and encoding must be set before opening a game";
+            r.error = "rfvp font, encoding and renderer must be set before opening a game";
             return ENGINE_RESULT_INVALID_STATE;
         }
         if (key == "default_font") r.font = value;
-        else {
+        else if (key == "rfvp_encoding") {
             if (value != "sjis" && value != "gbk" && value != "utf8") {
                 r.error = "rfvp_encoding must be sjis, gbk or utf8";
                 return ENGINE_RESULT_INVALID_ARGUMENT;
             }
             r.encoding = value;
+        } else {
+            if (value != "auto" && value != "gpu" && value != "cpu") {
+                r.error = "rfvp_renderer must be auto, gpu or cpu";
+                return ENGINE_RESULT_INVALID_ARGUMENT;
+            }
+            r.renderer = value;
         }
         return ENGINE_RESULT_OK;
     }
@@ -120,6 +197,17 @@ engine_result_t Read(void* p, void* pixels, size_t size) {
     }
     return result;
 }
+engine_result_t NativeFrame(void* p, uint64_t* texture, uint32_t* width,
+                            uint32_t* height, uint64_t* serial) {
+    if (!p || !texture || !width || !height || !serial)
+        return ENGINE_RESULT_INVALID_ARGUMENT;
+    const auto result = aether_rfvp_gpu_frame(
+        cast(p)->core, texture, width, height, serial);
+    // A CPU-selected runtime legitimately has no native texture. Avoid
+    // replacing its last useful error with an expected capability miss.
+    return result == -3 ? ENGINE_RESULT_NOT_SUPPORTED
+                        : cast(p)->result(result);
+}
 engine_result_t Input(void* p, const engine_input_event_t* event) {
     if (!p || !event || event->struct_size < sizeof(*event)) return ENGINE_RESULT_INVALID_ARGUMENT;
     return cast(p)->result(aether_rfvp_input(cast(p)->core, event->type, event->x, event->y,
@@ -133,10 +221,16 @@ engine_result_t Rendered(void* p, uint32_t* rendered) {
     *rendered = result == ENGINE_RESULT_OK && serial != r.read_serial;
     return result;
 }
-engine_result_t Renderer(void*, char* buffer, uint32_t size) {
-    constexpr char name[] = "rfvp CPU RGBA8 (Godot presentation)";
-    if (!buffer || size < sizeof(name)) return ENGINE_RESULT_INVALID_ARGUMENT;
-    std::memcpy(buffer, name, sizeof(name));
+engine_result_t Renderer(void* p, char* buffer, uint32_t size) {
+    uint64_t texture = 0, serial = 0;
+    uint32_t width = 0, height = 0;
+    const bool gpu = p && aether_rfvp_gpu_frame(
+        cast(p)->core, &texture, &width, &height, &serial) == 0 && texture != 0;
+    const char* name = gpu ? "rfvp Godot GPU Bridge"
+                           : "rfvp CPU RGBA8 (Godot presentation)";
+    const size_t required = std::strlen(name) + 1;
+    if (!buffer || size < required) return ENGINE_RESULT_INVALID_ARGUMENT;
+    std::memcpy(buffer, name, required);
     return ENGINE_RESULT_OK;
 }
 engine_result_t TextInput(void*, uint32_t* flags) {
@@ -152,15 +246,37 @@ const engine_runtime_provider_v1_t& Provider() {
         p.probe = Probe; p.create = Create; p.destroy = Destroy; p.open_game = Open; p.tick = Tick;
         p.pause = Pause; p.resume = Resume; p.set_option = Option; p.set_surface_size = Resize;
         p.get_frame_desc = Frame; p.read_frame_rgba = Read; p.send_input = Input;
+        p.get_godot_native_frame_texture = NativeFrame;
         p.get_frame_rendered_flag = Rendered; p.get_renderer_info = Renderer;
         p.get_text_input_state = TextInput; p.get_last_error = Error;
         return p;
     }();
     return provider;
 }
-}
+} // namespace
+
 void RegisterRuntimeProvider() {
     static std::once_flag once;
     std::call_once(once, [] { engine_register_runtime_provider(&Provider()); });
 }
+void RegisterGpuBridge(const TVPGodotGpuBridgeCallbacks* callbacks,
+                       const TVPGodotGpuBatchCallbacks* batch_callbacks) {
+    g_gpu_bridge = {};
+    g_gpu_batch = {};
+    g_gpu_bridge_registered = false;
+    if (!callbacks || !batch_callbacks ||
+        batch_callbacks->struct_size < sizeof(TVPGodotGpuBatchCallbacks) ||
+        batch_callbacks->abi_version !=
+            TVP_GODOT_GPU_BATCH_CALLBACKS_ABI_VERSION ||
+        !callbacks->create_rgba || !callbacks->release_texture ||
+        !callbacks->update_rgba || !callbacks->clear_rgba ||
+        !callbacks->draw_triangles || !callbacks->read_rgba ||
+        !callbacks->flush || !batch_callbacks->begin_batch ||
+        !batch_callbacks->end_batch) {
+        return;
+    }
+    g_gpu_bridge = *callbacks;
+    g_gpu_batch = *batch_callbacks;
+    g_gpu_bridge_registered = true;
 }
+} // namespace aetherkiri::rfvp

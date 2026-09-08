@@ -188,6 +188,12 @@ constexpr uint32_t TVP_GODOT_GPU_TRIANGLE_TVP_BLEND =
 // The source stores premultiplied RGB (native E-mote/OpenGL output). The
 // triangle sampler must not multiply RGB by alpha a second time.
 constexpr uint32_t TVP_GODOT_GPU_TRIANGLE_SOURCE_PREMULTIPLIED = 0x20000000u;
+// Sample integer texels without interpolation. RFVP text/gaiji graph buffers
+// require this to match their authored pixel grid.
+constexpr uint32_t TVP_GODOT_GPU_TRIANGLE_SOURCE_NEAREST = 0x10000000u;
+// Interpolate straight RGBA without the bridge's premultiplied minification
+// filter. RFVP's software renderer defines graph sampling this way.
+constexpr uint32_t TVP_GODOT_GPU_TRIANGLE_SOURCE_STRAIGHT_LINEAR = 0x04000000u;
 
 extern "C" void TVPGodotGpuBridgeRegister(
     const TVPGodotGpuBridgeCallbacks *callbacks);

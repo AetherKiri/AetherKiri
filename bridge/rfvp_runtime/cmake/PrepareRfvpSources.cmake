@@ -24,7 +24,7 @@ function(aetherkiri_prepare_rfvp root output)
     file(COPY "${root}/packages/rfvp/LICENSE" "${root}/packages/rfvp/README.md"
          DESTINATION "${output}")
     file(WRITE "${output}/Cargo.toml"
-        "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\n[profile.dev]\ndebug = 0\nopt-level = 1\nincremental = false\n[profile.dev.package.rfvp]\nopt-level = 3\n[profile.release]\ndebug = 0\n")
+        "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\n[profile.dev]\ndebug = 0\nopt-level = 1\nincremental = false\n[profile.dev.package.rfvp]\nopt-level = 3\n[profile.release]\ndebug = 0\nlto = \"thin\"\ncodegen-units = 1\n")
     configure_file("${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../Cargo.lock" "${output}/Cargo.lock" COPYONLY)
     set(src "${output}/crates/rfvp/src")
     rfvp_replace("${output}/crates/rfvp/Cargo.toml"
@@ -74,6 +74,24 @@ function(aetherkiri_prepare_rfvp root output)
         file(COPY "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../rust/${helper}.rs" DESTINATION "${target_dir}")
         file(APPEND "${src}/${target}" "\ninclude!(\"${helper}.rs\");\n")
     endforeach()
+    rfvp_replace("${src}/soft_render/renderer.rs"
+        "    framebuffer: SoftFramebuffer,\n    stats: SoftRendererStats,"
+        "    framebuffer: SoftFramebuffer,\n    stats: SoftRendererStats,\n    host_gpu: Option<HostGpuRenderer>,")
+    rfvp_replace("${src}/soft_render/renderer.rs"
+        "            stats: SoftRendererStats::default(),\n        })"
+        "            stats: SoftRendererStats::default(),\n            host_gpu: None,\n        })")
+    rfvp_replace("${src}/soft_render/renderer.rs"
+        "        self.stats = SoftRendererStats::default();\n        self.framebuffer.clear_rgba(0, 0, 0, 255);"
+        "        self.stats = SoftRendererStats::default();\n        if !self.begin_host_gpu_frame() {\n            self.framebuffer.clear_rgba(0, 0, 0, 255);\n        }")
+    rfvp_replace("${src}/soft_render/renderer.rs"
+        "        let graphs = motion.graphs();\n        let snow_motions = motion.snow_motions();"
+        "        let graphs = motion.graphs();\n        self.prune_host_gpu_graphs(graphs);\n        let snow_motions = motion.snow_motions();")
+    rfvp_replace("${src}/soft_render/renderer.rs"
+        "        }\n\n        Ok(())\n    }\n\n    fn dissolve_color"
+        "        }\n\n        self.finish_host_gpu_frame();\n        Ok(())\n    }\n\n    fn dissolve_color")
+    rfvp_replace("${src}/soft_render/renderer.rs"
+        "        self.raster_triangle(v0, v1, v2, texture);\n        self.raster_triangle(v2, v1, v3, texture);"
+        "        if !self.try_host_gpu_quad(v0, v1, v2, v3, texture) {\n            self.raster_triangle(v0, v1, v2, texture);\n            self.raster_triangle(v2, v1, v3, texture);\n        }")
     # The common axis-aligned case needs one clipped rectangle, not two
     # overlapping triangle scans. Keep rotated/sheared quads on the old path.
     rfvp_replace("${src}/soft_render/renderer.rs"
