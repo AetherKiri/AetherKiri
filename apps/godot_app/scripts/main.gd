@@ -335,6 +335,7 @@ const UI_TEXT := {
         "detail.launch_entry": "启动入口：%s",
         "detail.default_launch_entry": "游戏目录（自动检测）",
         "detail.set_launch_file": "切换启动文件",
+        "detail.rfvp_encoding": "脚本编码（rfvp）",
         "detail.reset_launch_file": "恢复目录自动检测",
         "detail.set_cover": "设置封面",
         "detail.delete_cover": "删除封面",
@@ -380,7 +381,7 @@ const UI_TEXT := {
         "message.android_storage_permission_required": "需要允许 Aether 访问文件系统后才能导入或启动外部游戏。请在系统弹窗或权限设置中授予文件访问权限，然后再试。",
         "message.android_video_storage_permission_required": "需要允许 Aether 访问文件系统后才能导入视频。请在系统弹窗或权限设置中授予文件访问权限，然后再试。",
         "message.path_missing": "游戏路径不存在",
-        "message.launch_file_unsupported": "启动文件只支持 EXE 或 XP3",
+        "message.launch_file_unsupported": "启动文件只支持 EXE、XP3 或 HCB",
         "message.launch_file_outside_game": "启动文件必须位于当前游戏目录内",
         "message.launch_file_missing": "启动文件不存在：%s",
         "message.cover_file_missing": "无法读取所选封面图片：%s",
@@ -618,6 +619,7 @@ const UI_TEXT := {
         "detail.launch_entry": "啟動入口：%s",
         "detail.default_launch_entry": "遊戲目錄（自動偵測）",
         "detail.set_launch_file": "切換啟動檔案",
+        "detail.rfvp_encoding": "腳本編碼（rfvp）",
         "detail.reset_launch_file": "恢復目錄自動偵測",
         "detail.set_cover": "設定封面",
         "detail.rename": "重新命名",
@@ -661,7 +663,7 @@ const UI_TEXT := {
         "message.android_storage_permission_required": "需要允許 Aether 存取檔案系統後才能匯入或啟動外部遊戲。請在系統彈窗或權限設定中授予檔案存取權限，然後再試。",
         "message.android_video_storage_permission_required": "需要允許 Aether 存取檔案系統後才能匯入影片。請在系統彈窗或權限設定中授予檔案存取權限，然後再試。",
         "message.path_missing": "遊戲路徑不存在",
-        "message.launch_file_unsupported": "啟動檔案僅支援 EXE 或 XP3",
+        "message.launch_file_unsupported": "啟動檔案僅支援 EXE、XP3 或 HCB",
         "message.launch_file_outside_game": "啟動檔案必須位於目前遊戲目錄內",
         "message.launch_file_missing": "啟動檔案不存在：%s",
         "message.cover_file_missing": "無法讀取所選封面圖片：%s",
@@ -899,6 +901,7 @@ const UI_TEXT := {
         "detail.launch_entry": "Launch entry: %s",
         "detail.default_launch_entry": "Game folder (auto-detect)",
         "detail.set_launch_file": "Change Launch File",
+        "detail.rfvp_encoding": "Script encoding (rfvp)",
         "detail.reset_launch_file": "Restore Folder Auto-detect",
         "detail.set_cover": "Set Cover",
         "detail.delete_cover": "Delete Cover",
@@ -944,7 +947,7 @@ const UI_TEXT := {
         "message.android_storage_permission_required": "Allow Aether to access the file system before importing or launching external games. Grant file access in the system prompt or permission settings, then try again.",
         "message.android_video_storage_permission_required": "Allow Aether to access the file system before importing videos. Grant file access in the system prompt or permission settings, then try again.",
         "message.path_missing": "Game path does not exist",
-        "message.launch_file_unsupported": "The launch file must be an EXE or XP3 file",
+        "message.launch_file_unsupported": "The launch file must be an EXE, XP3 or HCB file",
         "message.launch_file_outside_game": "The launch file must be inside this game folder",
         "message.launch_file_missing": "Launch file does not exist: %s",
         "message.cover_file_missing": "Could not read the selected cover image: %s",
@@ -1182,6 +1185,7 @@ const UI_TEXT := {
         "detail.launch_entry": "起動エントリ：%s",
         "detail.default_launch_entry": "ゲームフォルダー（自動検出）",
         "detail.set_launch_file": "起動ファイルを変更",
+        "detail.rfvp_encoding": "スクリプトの文字コード（rfvp）",
         "detail.reset_launch_file": "フォルダーの自動検出に戻す",
         "detail.set_cover": "カバーを設定",
         "detail.rename": "名前を変更",
@@ -1225,7 +1229,7 @@ const UI_TEXT := {
         "message.android_storage_permission_required": "外部ゲームのインポートまたは起動には、Aether にファイルシステムへのアクセスを許可する必要があります。システムの権限ダイアログまたは設定でファイルアクセスを許可してから、もう一度お試しください。",
         "message.android_video_storage_permission_required": "動画をインポートするには、Aether にファイルシステムへのアクセスを許可する必要があります。システムの権限ダイアログまたは設定でファイルアクセスを許可してから、もう一度お試しください。",
         "message.path_missing": "ゲームパスが存在しません",
-        "message.launch_file_unsupported": "起動ファイルは EXE または XP3 のみ対応しています",
+        "message.launch_file_unsupported": "起動ファイルは EXE、XP3 または HCB のみ対応しています",
         "message.launch_file_outside_game": "起動ファイルは現在のゲームフォルダー内にある必要があります",
         "message.launch_file_missing": "起動ファイルが存在しません：%s",
         "message.cover_file_missing": "選択したカバー画像を読み込めません：%s",
@@ -1463,6 +1467,7 @@ const UI_TEXT := {
         "detail.launch_entry": "실행 진입점: %s",
         "detail.default_launch_entry": "게임 폴더(자동 감지)",
         "detail.set_launch_file": "실행 파일 변경",
+        "detail.rfvp_encoding": "스크립트 인코딩 (rfvp)",
         "detail.reset_launch_file": "폴더 자동 감지 복원",
         "detail.set_cover": "표지 설정",
         "detail.rename": "이름 변경",
@@ -1506,7 +1511,7 @@ const UI_TEXT := {
         "message.android_storage_permission_required": "외부 게임을 가져오거나 실행하려면 Aether의 파일 시스템 접근을 허용해야 합니다. 시스템 권한 창 또는 권한 설정에서 파일 접근 권한을 허용한 뒤 다시 시도하세요.",
         "message.android_video_storage_permission_required": "비디오를 가져오려면 Aether의 파일 시스템 접근을 허용해야 합니다. 시스템 권한 창 또는 권한 설정에서 파일 접근 권한을 허용한 뒤 다시 시도하세요.",
         "message.path_missing": "게임 경로가 존재하지 않습니다",
-        "message.launch_file_unsupported": "실행 파일은 EXE 또는 XP3만 지원합니다",
+        "message.launch_file_unsupported": "실행 파일은 EXE, XP3 또는 HCB만 지원합니다",
         "message.launch_file_outside_game": "실행 파일은 현재 게임 폴더 안에 있어야 합니다",
         "message.launch_file_missing": "실행 파일이 존재하지 않습니다: %s",
         "message.cover_file_missing": "선택한 표지 이미지를 읽을 수 없습니다: %s",
@@ -1553,6 +1558,7 @@ const KEY_MOD_CONTROL := 0x04
 const RUNTIME_KIRIKIRI := "kirikiri"
 const RUNTIME_ONSCRIPTER := "onscripter"
 const RUNTIME_MINORI := "minori"
+const RUNTIME_RFVP := "rfvp"
 const RUNTIME_PLAYER_CLASS := "AetherRuntimePlayer"
 const ONSCRIPTER_SCRIPT_MARKERS := [
     "0.txt",
@@ -3703,6 +3709,13 @@ func _apply_engine_options() -> void:
     var onscripter_encoding := OS.get_environment("AETHERKIRI_ONS_ENCODING").strip_edges()
     if not onscripter_encoding.is_empty():
         player.set_engine_option("onscripter_encoding", onscripter_encoding)
+    if current_player_runtime_kind == RUNTIME_RFVP:
+        player.set_engine_option("rfvp_encoding", GameLaunchEntry.rfvp_encoding(
+            selected_game, OS.get_environment("AETHERKIRI_RFVP_ENCODING")
+        ))
+        var rfvp_renderer := OS.get_environment("AETHERKIRI_RFVP_RENDERER").strip_edges().to_lower()
+        if not rfvp_renderer.is_empty():
+            player.set_engine_option("rfvp_renderer", rfvp_renderer)
 
 func _apply_frame_enhancement_settings() -> void:
     if player == null or not player.has_method("set_frame_enhancement_enabled"):
@@ -7602,6 +7615,24 @@ func _detail_information_panel(game: Dictionary) -> PanelContainer:
     info.add_child(_detail_line(ICON_LIBRARY, _game_type_label(String(game.get("type", "Directory")))))
     info.add_child(_detail_separator())
     info.add_child(_detail_line(ICON_PLAY, _t("detail.launch_entry", [_game_launch_entry_label(game)])))
+    if _game_runtime_kind(String(game.get("path", ""))) == RUNTIME_RFVP:
+        info.add_child(_detail_separator())
+        var row := _detail_line(ICON_PAGE, _t("detail.rfvp_encoding"))
+        var encoding := OptionButton.new()
+        encoding.name = "RfvpEncoding"
+        encoding.custom_minimum_size = Vector2(140, 40)
+        ui_widgets.secondary_button(encoding)
+        for label in ["Shift-JIS", "GBK", "UTF-8"]:
+            encoding.add_item(label)
+        encoding.select(GameLaunchEntry.RFVP_ENCODINGS.find(GameLaunchEntry.rfvp_encoding(game)))
+        var library_path := String(game.get("path", ""))
+        encoding.item_selected.connect(func(index: int):
+            _update_game(library_path, {
+                GameLaunchEntry.RFVP_ENCODING_FIELD: GameLaunchEntry.RFVP_ENCODINGS[index]
+            })
+        )
+        row.add_child(encoding)
+        info.add_child(row)
     return info_panel
 
 func _detail_remove_button(game: Dictionary) -> Button:
@@ -8425,7 +8456,7 @@ func _show_launch_file_godot_dialog(library_path: String) -> void:
     var dialog := _create_file_dialog(
         _t("dialog.choose_launch_file"),
         FileDialog.FILE_MODE_OPEN_FILE,
-        PackedStringArray(["*.exe,*.EXE,*.xp3,*.XP3;Visual novel launch file"])
+        PackedStringArray(["*.exe,*.EXE,*.xp3,*.XP3,*.hcb,*.HCB;Visual novel launch file"])
     )
     if DirAccess.dir_exists_absolute(library_path):
         dialog.current_dir = library_path
@@ -9955,7 +9986,9 @@ func _backfill_game_metadata(games: Array[Dictionary]) -> bool:
                 if String(game.get("name", "")).is_empty():
                     game["name"] = title
                 changed = true
-        for key in ["titleCandidates", "metadataSignals", "launchFile"]:
+        if GameLaunchEntry.backfill(game, metadata):
+            changed = true
+        for key in ["titleCandidates", "metadataSignals"]:
             var value = metadata.get(key, null)
             if value != null and JSON.stringify(game.get(key, null)) != JSON.stringify(value):
                 game[key] = value
@@ -11180,7 +11213,7 @@ func _create_runtime_player(runtime_kind: String = RUNTIME_KIRIKIRI) -> bool:
 
 func _switch_runtime_player(runtime_kind: String) -> bool:
     var normalized := runtime_kind
-    if normalized != RUNTIME_ONSCRIPTER and normalized != RUNTIME_MINORI:
+    if normalized not in [RUNTIME_ONSCRIPTER, RUNTIME_MINORI, RUNTIME_RFVP]:
         normalized = RUNTIME_KIRIKIRI
     if player != null and current_player_runtime_kind == normalized:
         return true
@@ -11207,11 +11240,11 @@ func _switch_runtime_player(runtime_kind: String) -> bool:
             diagnostic_session.finish()
         diagnostic_session.start(player, selected_backend)
     _append_log("Runtime selected: %s" % (
-        "OnscripterYuri"
-        if normalized == RUNTIME_ONSCRIPTER
-        else "MinoriRust"
-        if normalized == RUNTIME_MINORI
-        else "KiriKiri"
+        {
+            RUNTIME_ONSCRIPTER: "OnscripterYuri",
+            RUNTIME_MINORI: "MinoriRust",
+            RUNTIME_RFVP: "rfvp",
+        }.get(normalized, "KiriKiri")
     ))
     return true
 
@@ -11446,7 +11479,7 @@ func _ensure_player_initialized() -> bool:
         return false
 
     var runtime_id := "auto"
-    if current_player_runtime_kind in [RUNTIME_ONSCRIPTER, RUNTIME_MINORI]:
+    if current_player_runtime_kind in [RUNTIME_ONSCRIPTER, RUNTIME_MINORI, RUNTIME_RFVP]:
         runtime_id = current_player_runtime_kind
     var runtime_result := int(player.set_engine_option("runtime", runtime_id))
     if runtime_result != ENGINE_RESULT_OK:
@@ -11459,7 +11492,11 @@ func _ensure_player_initialized() -> bool:
         return false
 
     _append_log("%s engine initialized." % (
-        "OnscripterYuri" if current_player_runtime_kind == RUNTIME_ONSCRIPTER else "AetherKiri"
+        {
+            RUNTIME_ONSCRIPTER: "OnscripterYuri",
+            RUNTIME_MINORI: "MinoriRust",
+            RUNTIME_RFVP: "rfvp",
+        }.get(current_player_runtime_kind, "AetherKiri")
     ))
     return true
 
@@ -11855,7 +11892,14 @@ func _run_cli_script_probe() -> void:
         _refresh_known_games_for_auto_start()
         var game := _find_known_game_by_query(target_game_path)
         if not game.is_empty():
-            target_game_path = String(game.get("path", target_game_path))
+            var library_path := String(game.get("path", target_game_path))
+            if FileAccess.file_exists(library_path):
+                target_game_path = library_path
+            else:
+                var runtime_kind := String(game.get("engine", "")).strip_edges().to_lower()
+                if runtime_kind.is_empty():
+                    runtime_kind = _game_runtime_kind(library_path)
+                target_game_path = GameLaunchEntry.resolve_for_runtime(game, runtime_kind)
         else:
             target_game_path = _resolve_game_path(target_game_path)
     _write_probe_marker("cli_probe target requested=%s resolved=%s" % [requested_game_path, target_game_path])
@@ -13999,12 +14043,11 @@ func _game_input_content_size() -> Vector2:
     return Vector2(maxi(1, last_texture_size.x), maxi(1, last_texture_size.y))
 
 func _game_input_surface_size() -> Vector2:
-    # ONS and Minori consume coordinates in their published content space.
-    if active_runtime_kind in [RUNTIME_ONSCRIPTER, RUNTIME_MINORI]:
-        return _game_input_content_size()
-    if current_surface_size.x > 0 and current_surface_size.y > 0:
-        return Vector2(current_surface_size)
-    return _game_input_content_size()
+    return GameInputMapping.input_surface_size(
+        active_runtime_kind,
+        _game_input_content_size(),
+        Vector2(current_surface_size)
+    )
 
 func _update_frame() -> void:
     if present_hold_frames > 0:

@@ -30,6 +30,9 @@ func _initialize() -> void:
         return
 
     player.set_render_backend(ProbeConfig.backend(config, "AETHERKIRI_PROBE_BACKEND"))
+    var rfvp_renderer := OS.get_environment("AETHERKIRI_RFVP_RENDERER").strip_edges().to_lower()
+    if not rfvp_renderer.is_empty():
+        player.set_engine_option("rfvp_renderer", rfvp_renderer)
     var surface_size: Vector2i = ProbeConfig.surface_size(config)
     player.set_surface_size(surface_size.x, surface_size.y)
 
@@ -82,6 +85,7 @@ func _initialize() -> void:
     ])
 
     if OS.get_environment("AETHERKIRI_PROBE_SKIP_DESTROY") != "1":
+        rect.texture = null
         player.destroy_engine()
     quit(0)
 

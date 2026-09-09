@@ -81,6 +81,7 @@ option(ENABLE_TESTS "enable tests execute build(exclude android)" ON)
 option(BUILD_TOOLS "build tools execute build(exclude android ios)" ON)
 option(BUILD_ENGINE_API "build engine_api bridge shared library" ON)
 option(BUILD_GODOT_EXTENSION "build Godot GDExtension host library" ON)
+option(AETHERKIRI_ENABLE_RFVP "build the experimental native FVP runtime (requires Rust)" OFF)
 option(BUILD_GPU_BRIDGE "build legacy external GPU bridge renderer" OFF)
 option(AETHERKIRI_ENABLE_ONSCRIPTER
        "enable the bundled OnscripterYuri runtime" ON)
@@ -207,7 +208,7 @@ if(ENABLE_TESTS AND AETHERKIRI_ENABLE_ONSCRIPTER AND
     set(AETHERKIRI_BUILD_NATIVE_ONSCRIPTER_TESTS ON)
 endif()
 
-if(BUILD_ENGINE_API OR AETHERKIRI_BUILD_NATIVE_ONSCRIPTER_TESTS)
+if(BUILD_ENGINE_API OR AETHERKIRI_BUILD_NATIVE_ONSCRIPTER_TESTS OR AETHERKIRI_ENABLE_RFVP)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/engine_api)
 endif()
 if(AETHERKIRI_ENABLE_ONSCRIPTER AND
@@ -220,6 +221,9 @@ endif()
 if(AETHERKIRI_ENABLE_MINORI AND BUILD_GODOT_EXTENSION AND
    (LINUX OR APPLE OR ANDROID OR EMSCRIPTEN))
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/rust/minori_runtime)
+endif()
+if(AETHERKIRI_ENABLE_RFVP)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/rfvp_runtime)
 endif()
 if(BUILD_GODOT_EXTENSION)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/godot_extension)

@@ -1,8 +1,27 @@
 extends RefCounted
 
 const FIELD := "launchFile"
-const SUPPORTED_EXTENSIONS := ["exe", "xp3"]
+const SUPPORTED_EXTENSIONS := ["exe", "xp3", "hcb"]
 const DIRECTORY_RUNTIME_KINDS := ["artemis", "minori", "onscripter", "siglus"]
+const RFVP_ENCODING_FIELD := "rfvpEncoding"
+const RFVP_ENCODINGS := ["sjis", "gbk", "utf8"]
+
+
+static func rfvp_encoding(game: Dictionary, override_value: String = "") -> String:
+    var override_encoding := override_value.strip_edges().to_lower()
+    if RFVP_ENCODINGS.has(override_encoding):
+        return override_encoding
+    var saved := String(game.get(RFVP_ENCODING_FIELD, "sjis")).strip_edges().to_lower()
+    return saved if RFVP_ENCODINGS.has(saved) else "sjis"
+
+
+static func backfill(game: Dictionary, metadata: Dictionary) -> bool:
+    # An existing value (including an explicit empty auto-detect choice) is
+    # user configuration. Refreshing metadata must never replace it.
+    if game.has(FIELD) or not metadata.has(FIELD):
+        return false
+    game[FIELD] = metadata[FIELD]
+    return true
 
 
 static func configured_relative_path(game: Dictionary) -> String:
