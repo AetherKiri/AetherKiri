@@ -215,6 +215,14 @@ const engine_runtime_provider_v1_t kCatSystem2GateProvider = [] {
   return provider;
 }();
 
+const engine_runtime_provider_v1_t kRfvpGateProvider = [] {
+  engine_runtime_provider_v1_t provider = kFakeProvider;
+  provider.runtime_id_utf8 = "rfvp";
+  provider.display_name_utf8 = "RFVP gate test provider";
+  provider.probe = ArtemisGateProbe;
+  return provider;
+}();
+
 }  // namespace
 
 TEST_CASE("primary click queue gate bounds rapid primary gestures") {
@@ -369,10 +377,13 @@ TEST_CASE("Beta runtime providers require active coffee access") {
           ENGINE_RESULT_OK);
   REQUIRE(engine_register_runtime_provider(&kCatSystem2GateProvider) ==
           ENGINE_RESULT_OK);
+  REQUIRE(engine_register_runtime_provider(&kRfvpGateProvider) ==
+          ENGINE_RESULT_OK);
 
-  const std::array<std::array<const char*, 2>, 2> runtimes{{
+  const std::array<std::array<const char*, 2>, 3> runtimes{{
       {{"artemis", "Artemis runtime requires active beta access"}},
       {{"catsystem2", "CatSystem2 runtime requires active beta access"}},
+      {{"rfvp", "RFVP runtime requires active beta access"}},
   }};
   for (const auto& runtime : runtimes) {
     {

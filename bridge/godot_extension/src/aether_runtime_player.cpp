@@ -1,6 +1,9 @@
 #include "engine_api.h"
 #include "engine_options.h"
 #include "engine_runtime_provider.h"
+#if defined(AETHERKIRI_WITH_RFVP)
+#include "rfvp_runtime_provider.h"
+#endif
 #include "GodotGpuBridge.h"
 #include "GodotGpuBarrierShadowPlanner.h"
 #include "ComplexRect.h"
@@ -3085,6 +3088,29 @@ vec4 load_bilinear_premul(ivec2 limit, vec2 edge_coord,
     return clamp(premul, vec4(0.0), vec4(1.0));
 }
 
+vec4 load_nearest(ivec2 limit, vec2 edge_coord,
+                  bool source_premultiplied) {
+    ivec2 pos = clamp(ivec2(floor(edge_coord)), ivec2(0), limit);
+    vec4 color = imageLoad(src_img, pos);
+    if (source_premultiplied && color.a > 0.00001) {
+        color.rgb /= color.a;
+    }
+    return clamp(color, vec4(0.0), vec4(1.0));
+}
+
+vec4 load_straight_linear(ivec2 limit, vec2 edge_coord) {
+    vec2 center_coord = clamp(edge_coord - vec2(0.5), vec2(0.0), vec2(limit));
+    ivec2 p0 = ivec2(floor(center_coord));
+    ivec2 p1 = clamp(p0 + ivec2(1), ivec2(0), limit);
+    vec2 f = clamp(fract(center_coord), vec2(0.0), vec2(1.0));
+    vec4 c00 = imageLoad(src_img, p0);
+    vec4 c10 = imageLoad(src_img, ivec2(p1.x, p0.y));
+    vec4 c01 = imageLoad(src_img, ivec2(p0.x, p1.y));
+    vec4 c11 = imageLoad(src_img, p1);
+    return clamp(mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y),
+                 vec4(0.0), vec4(1.0));
+}
+
 float premul_luma(vec4 color) {
     vec3 straight = color.a > 0.00001
         ? color.rgb / color.a : vec3(0.0);
@@ -3595,7 +3621,11 @@ void main() {
         (uint(pc.color0.z) & 0x40000000u) != 0u;
     bool source_premultiplied =
         (uint(pc.color0.z) & 0x20000000u) != 0u;
-    int blend_flags = int(uint(pc.color0.z) & 0x1fffffffu);
+    bool source_nearest =
+        (uint(pc.color0.z) & 0x10000000u) != 0u;
+    bool source_straight_linear =
+        (uint(pc.color0.z) & 0x04000000u) != 0u;
+    int blend_flags = int(uint(pc.color0.z) & 0x03ffffffu);
     bool mask_write = (blend_flags & 131072) != 0;
     bool tvp_blend = !mask_write && (blend_flags & 65536) != 0;
     int tvp_blend_mode = blend_flags & 65535;
@@ -3632,9 +3662,12 @@ void main() {
             vec2 source_dy =
                 source10 * ((d2.x - d0.x) / area) +
                 source20 * ((d0.x - d1.x) / area);
-            vec4 src = load_minified(
-                src_limit, src_pos_f, source_dx, source_dy,
-                preserve_detail, source_premultiplied);
+            vec4 src = source_nearest
+                ? load_nearest(src_limit, src_pos_f, source_premultiplied)
+                : source_straight_linear
+                    ? load_straight_linear(src_limit, src_pos_f)
+                    : load_minified(src_limit, src_pos_f, source_dx, source_dy,
+                                    preserve_detail, source_premultiplied);
             if (tvp_blend) {
                 uint d = pack_u8(vec4_to_u8(dst));
                 uint s = pack_u8(vec4_to_u8(src));
@@ -8915,6 +8948,9 @@ public:
         batch_callbacks.begin_batch = BridgeBeginBatch;
         batch_callbacks.end_batch = BridgeEndBatch;
         engine_register_godot_gpu_batch_bridge(&batch_callbacks);
+#if defined(AETHERKIRI_WITH_RFVP)
+        aetherkiri::rfvp::RegisterGpuBridge(&callbacks, &batch_callbacks);
+#endif
         TVPGodotGpuExternalTextureCallbacks external_texture_callbacks{};
         external_texture_callbacks.struct_size =
             sizeof(external_texture_callbacks);
@@ -12133,6 +12169,9 @@ void InitializeAetherRuntime(ModuleInitializationLevel level) {
         UtilityFunctions::printerr("Failed to register Minori runtime provider");
     }
 #endif
+#if defined(AETHERKIRI_WITH_RFVP)
+    aetherkiri::rfvp::RegisterRuntimeProvider();
+#endif
     const engine_result_t shader_result =
         engine_set_runtime_fragment_shader_executor(
             ExecuteArtemisFragmentShader, nullptr);
@@ -12155,6 +12194,9 @@ void DeinitializeAetherRuntime(ModuleInitializationLevel level) {
     engine_register_godot_gpu_batch_bridge(nullptr);
     engine_register_godot_gpu_external_texture_bridge(nullptr);
     engine_register_godot_gpu_bridge(nullptr);
+#if defined(AETHERKIRI_WITH_RFVP)
+    aetherkiri::rfvp::RegisterGpuBridge(nullptr, nullptr);
+#endif
 #if defined(AETHERKIRI_INTERNAL_FRAME_EFFECTS)
     UnregisterAetherInternalFrameEffects();
 #endif

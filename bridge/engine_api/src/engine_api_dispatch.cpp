@@ -250,13 +250,16 @@ engine_result_t CheckBetaRuntimeAccess(DispatchHandle* handle) {
     return ENGINE_RESULT_OK;
   }
   const std::string runtime_id = Normalize(handle->provider->runtime_id_utf8);
-  if ((runtime_id != "artemis" && runtime_id != "catsystem2") ||
+  if ((runtime_id != "artemis" && runtime_id != "catsystem2" &&
+       runtime_id != "rfvp") ||
       handle->beta_runtime_allowed) {
     return ENGINE_RESULT_OK;
   }
   handle->last_error = runtime_id == "catsystem2"
                            ? "CatSystem2 runtime requires active beta access"
-                           : "Artemis runtime requires active beta access";
+                           : runtime_id == "rfvp"
+                                 ? "RFVP runtime requires active beta access"
+                                 : "Artemis runtime requires active beta access";
   return ThreadError(ENGINE_RESULT_NOT_SUPPORTED, handle->last_error.c_str());
 }
 

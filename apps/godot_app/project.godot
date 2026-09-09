@@ -15,7 +15,7 @@ game_path=""
 [application]
 
 config/name="Aether"
-config/version="1.0.2-alpha.5"
+config/version="1.0.2"
 config/use_custom_user_dir.macos=true
 config/custom_user_dir_name.macos="Godot/app_userdata/AetherKiri"
 config/use_custom_user_dir.windows=true
