@@ -38,9 +38,16 @@ static HWY_INLINE auto BlendChannel(
     -> hn::Vec<hn::ScalableTag<uint16_t>> {
     const auto v255 = hn::Set(d16, static_cast<uint16_t>(255));
     auto inv_a = hn::Sub(v255, a);  // 255 - a
-    // (s * a >> 8) + (d * (255 - a) >> 8) — split to avoid u16 overflow
-    return hn::Add(hn::ShiftRight<8>(hn::Mul(s, a)),
-                   hn::ShiftRight<8>(hn::Mul(d, inv_a)));
+    // (s * a >> 8) + (d * (255 - a) >> 8) — split to avoid u16 overflow.
+    // The integer approximation of d*255/256 is one level below d for any
+    // non-zero channel.  That is correct for a partially covered source,
+    // but not for a==0: a transparent texel is a strict no-op.  Character
+    // fade helper layers use transparent white padding over the full message
+    // frame, so letting that rounding through creates a visible brightness
+    // pulse between lines.
+    auto blended = hn::Add(hn::ShiftRight<8>(hn::Mul(s, a)),
+                           hn::ShiftRight<8>(hn::Mul(d, inv_a)));
+    return hn::IfThenElse(hn::Eq(a, hn::Zero(d16)), d, blended);
 }
 
 void AlphaBlend_HWY(tjs_uint32 *dest, const tjs_uint32 *src, tjs_int len) {
@@ -75,6 +82,8 @@ void AlphaBlend_HWY(tjs_uint32 *dest, const tjs_uint32 *src, tjs_int len) {
     for (; i < len; i++) {
         tjs_uint32 s = src[i], d = dest[i];
         tjs_uint32 a = s >> 24;
+        if(a == 0)
+            continue;
         tjs_uint32 d1 = d & 0xff00ff;
         d1 = (d1 + (((s & 0xff00ff) - d1) * a >> 8)) & 0xff00ff;
         tjs_uint32 d2 = d & 0xff00;
@@ -115,6 +124,8 @@ void AlphaBlend_HDA_HWY(tjs_uint32 *dest, const tjs_uint32 *src, tjs_int len) {
     for (; i < len; i++) {
         tjs_uint32 s = src[i], d = dest[i];
         tjs_uint32 a = s >> 24;
+        if(a == 0)
+            continue;
         tjs_uint32 d1 = d & 0xff00ff;
         d1 = (d1 + (((s & 0xff00ff) - d1) * a >> 8)) & 0xff00ff;
         tjs_uint32 d2 = d & 0xff00;
@@ -156,6 +167,8 @@ void AlphaBlend_o_HWY(tjs_uint32 *dest, const tjs_uint32 *src,
     for (; i < len; i++) {
         tjs_uint32 s = src[i], d = dest[i];
         tjs_uint32 a = ((s >> 24) * opa) >> 8;
+        if(a == 0)
+            continue;
         tjs_uint32 d1 = d & 0xff00ff;
         d1 = (d1 + (((s & 0xff00ff) - d1) * a >> 8)) & 0xff00ff;
         tjs_uint32 d2 = d & 0xff00;
@@ -199,6 +212,8 @@ void AlphaBlend_HDA_o_HWY(tjs_uint32 *dest, const tjs_uint32 *src,
     for (; i < len; i++) {
         tjs_uint32 s = src[i], d = dest[i];
         tjs_uint32 a = ((s >> 24) * opa) >> 8;
+        if(a == 0)
+            continue;
         tjs_uint32 d1 = d & 0xff00ff;
         d1 = (d1 + (((s & 0xff00ff) - d1) * a >> 8)) & 0xff00ff;
         tjs_uint32 d2 = d & 0xff00;

@@ -753,79 +753,39 @@ TVP_GL_FUNC_DECL(void, TVPAlphaBlend_a_c,
 TVP_GL_FUNC_DECL(void, TVPAlphaBlend_do_c,
                  (tjs_uint32 * dest, const tjs_uint32 *src, tjs_int len,
                   tjs_int opa)) {
-    tjs_uint32 d1, s, d, sopa, addr, destalpha;
-    if(len > 0) {
-        int lu_n = (len + (4 - 1)) / 4;
-        switch(len % 4) {
-            case 0:
-                do {
-                    {
-                        s = *src;
-                        src++;
-                        d = *dest;
-                        addr = (((s >> 24) * opa) & 0xff00) + (d >> 24);
-                        destalpha = TVPNegativeMulTable[addr] << 24;
-                        sopa = TVPOpacityOnOpacityTable[addr];
-                        d1 = d & 0xff00ff;
-                        d1 = (d1 + (((s & 0xff00ff) - d1) * sopa >> 8)) &
-                            0xff00ff;
-                        d &= 0xff00;
-                        s &= 0xff00;
-                        *dest = d1 + ((d + ((s - d) * sopa >> 8)) & 0xff00) +
-                            destalpha;
-                        dest++;
-                    };
-                    case 3: {
-                        s = *src;
-                        src++;
-                        d = *dest;
-                        addr = (((s >> 24) * opa) & 0xff00) + (d >> 24);
-                        destalpha = TVPNegativeMulTable[addr] << 24;
-                        sopa = TVPOpacityOnOpacityTable[addr];
-                        d1 = d & 0xff00ff;
-                        d1 = (d1 + (((s & 0xff00ff) - d1) * sopa >> 8)) &
-                            0xff00ff;
-                        d &= 0xff00;
-                        s &= 0xff00;
-                        *dest = d1 + ((d + ((s - d) * sopa >> 8)) & 0xff00) +
-                            destalpha;
-                        dest++;
-                    };
-                    case 2: {
-                        s = *src;
-                        src++;
-                        d = *dest;
-                        addr = (((s >> 24) * opa) & 0xff00) + (d >> 24);
-                        destalpha = TVPNegativeMulTable[addr] << 24;
-                        sopa = TVPOpacityOnOpacityTable[addr];
-                        d1 = d & 0xff00ff;
-                        d1 = (d1 + (((s & 0xff00ff) - d1) * sopa >> 8)) &
-                            0xff00ff;
-                        d &= 0xff00;
-                        s &= 0xff00;
-                        *dest = d1 + ((d + ((s - d) * sopa >> 8)) & 0xff00) +
-                            destalpha;
-                        dest++;
-                    };
-                    case 1: {
-                        s = *src;
-                        src++;
-                        d = *dest;
-                        addr = (((s >> 24) * opa) & 0xff00) + (d >> 24);
-                        destalpha = TVPNegativeMulTable[addr] << 24;
-                        sopa = TVPOpacityOnOpacityTable[addr];
-                        d1 = d & 0xff00ff;
-                        d1 = (d1 + (((s & 0xff00ff) - d1) * sopa >> 8)) &
-                            0xff00ff;
-                        d &= 0xff00;
-                        s &= 0xff00;
-                        *dest = d1 + ((d + ((s - d) * sopa >> 8)) & 0xff00) +
-                            destalpha;
-                        dest++;
-                    };
-                } while(--lu_n);
-        }
+    if(len <= 0 || opa <= 0)
+        return;
+
+    // Character-fade helper layers use transparent white texels
+    // (0x00ffffff) outside the glyph.  The old table path still rounded the
+    // destination through the opacity tables for those texels, changing an
+    // otherwise opaque pixel by one level on every composition.  Apart from
+    // being incorrect, doing that over the full message frame produced the
+    // short brightness pulse seen when a line changed.  A zero-coverage
+    // source is explicitly a no-op; covered pixels retain the exact legacy
+    // table formula.
+    auto blend_pixel = [opa](tjs_uint32 &d, tjs_uint32 s) {
+        if((s & 0xff000000u) == 0)
+            return;
+        const tjs_uint32 addr = (((s >> 24) * opa) & 0xff00) + (d >> 24);
+        const tjs_uint32 destalpha = TVPNegativeMulTable[addr] << 24;
+        const tjs_uint32 sopa = TVPOpacityOnOpacityTable[addr];
+        tjs_uint32 d1 = d & 0xff00ff;
+        d1 = (d1 + (((s & 0xff00ff) - d1) * sopa >> 8)) & 0xff00ff;
+        d &= 0xff00;
+        s &= 0xff00;
+        d = d1 + ((d + ((s - d) * sopa >> 8)) & 0xff00) + destalpha;
+    };
+
+    tjs_int i = 0;
+    for(; i + 4 <= len; i += 4) {
+        blend_pixel(dest[i + 0], src[i + 0]);
+        blend_pixel(dest[i + 1], src[i + 1]);
+        blend_pixel(dest[i + 2], src[i + 2]);
+        blend_pixel(dest[i + 3], src[i + 3]);
     }
+    for(; i < len; ++i)
+        blend_pixel(dest[i], src[i]);
 }
 
 /*export*/

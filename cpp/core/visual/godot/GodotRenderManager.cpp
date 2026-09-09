@@ -1333,6 +1333,14 @@ iTVPTexture2D *GodotRenderManager::CreateTexture2D(unsigned int neww,
     auto *ret = new GodotTexture2D(nullptr, 0, neww, newh,
                                   tex != nullptr ? tex->GetFormat()
                                                  : TVPTextureFormat::RGBA);
+    // Preserve the layer-manager marker across copy-on-write clones.  The
+    // manager's composition surface is deliberately kept on the software
+    // path so its readback-visible bitmap remains authoritative; losing the
+    // marker here silently routes the next blend through the GPU path and
+    // reintroduces alpha-rounding differences for transparent glyph layers.
+    if (tex != nullptr && tex->IsCpuCompositeTarget()) {
+        ret->SetCpuCompositeTarget(true);
+    }
     if (tex != nullptr) {
         const tTVPRect copy_rc(0, 0,
                                std::min<tjs_int>(neww, tex->GetWidth()),
