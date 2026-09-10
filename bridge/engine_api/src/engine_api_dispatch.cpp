@@ -18,6 +18,9 @@
 
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
+#include <mach/mach.h>
+#include <mach/task_info.h>
+#include <sys/sysctl.h>
 #endif
 
 #if defined(__ANDROID__)
@@ -34,6 +37,10 @@
 #if defined(ENGINE_API_USE_KRKR2_RUNTIME)
 #include "environ/Platform.h"
 #include "visual/RenderManager.h"
+#endif
+
+#if defined(AETHERKIRI_INTERNAL_CATSYSTEM2)
+extern "C" void AetherInternalRegisterCatSystem2Runtime(void);
 #endif
 
 #if defined(AETHERKIRI_INTERNAL_TEXT_TRANSLATION)
@@ -76,6 +83,11 @@ struct DispatchHandle {
   std::string writable_path;
   std::string cache_path;
   std::string requested_runtime = "auto";
+#if defined(NDEBUG) && !defined(__ANDROID__)
+  bool beta_runtime_allowed = false;
+#else
+  bool beta_runtime_allowed = true;
+#endif
   std::unordered_map<std::string, std::string> pending_options;
   uint32_t surface_width = 0;
   uint32_t surface_height = 0;
@@ -106,6 +118,50 @@ bool ActivateProviderAudioSessionForHost() {
   return TVPActivateAudioSessionForHost();
 #else
   return true;
+#endif
+}
+
+void PopulateHostMemoryStats(engine_memory_stats_t* stats) {
+  if (stats == nullptr) return;
+#if defined(__APPLE__)
+  task_vm_info_data_t vm_info{};
+  mach_msg_type_number_t vm_info_count = TASK_VM_INFO_COUNT;
+  if (task_info(mach_task_self(), TASK_VM_INFO,
+                reinterpret_cast<task_info_t>(&vm_info),
+                &vm_info_count) == KERN_SUCCESS) {
+    stats->process_resident_bytes = vm_info.resident_size;
+    stats->process_physical_footprint_bytes = vm_info.phys_footprint;
+    stats->process_peak_physical_footprint_bytes = std::max<uint64_t>(
+        stats->process_physical_footprint_bytes,
+        vm_info.ledger_phys_footprint_peak > 0
+            ? static_cast<uint64_t>(vm_info.ledger_phys_footprint_peak)
+            : 0u);
+    if (stats->self_used_mb == 0u && stats->process_resident_bytes != 0u) {
+      stats->self_used_mb = static_cast<uint32_t>(
+          stats->process_resident_bytes / (1024u * 1024u));
+    }
+  }
+
+  uint64_t total_bytes = 0u;
+  size_t total_size = sizeof(total_bytes);
+  if (sysctlbyname("hw.memsize", &total_bytes, &total_size, nullptr, 0) == 0) {
+    stats->system_total_mb =
+        static_cast<uint32_t>(total_bytes / (1024u * 1024u));
+  }
+  const mach_port_t host = mach_host_self();
+  vm_size_t page_size = 0u;
+  vm_statistics64_data_t vm_stats{};
+  mach_msg_type_number_t stats_count = HOST_VM_INFO64_COUNT;
+  if (host_page_size(host, &page_size) == KERN_SUCCESS &&
+      host_statistics64(host, HOST_VM_INFO64,
+                        reinterpret_cast<host_info64_t>(&vm_stats),
+                        &stats_count) == KERN_SUCCESS) {
+    const uint64_t available_pages =
+        static_cast<uint64_t>(vm_stats.free_count) + vm_stats.inactive_count;
+    stats->system_free_mb = static_cast<uint32_t>(
+        available_pages * page_size / (1024u * 1024u));
+  }
+  mach_port_deallocate(mach_task_self(), host);
 #endif
 }
 
@@ -187,6 +243,24 @@ engine_result_t Unsupported(DispatchHandle* handle, const char* operation) {
   handle->last_error = std::string("runtime provider does not implement ") + operation;
   SetThreadError(handle->last_error.c_str());
   return ENGINE_RESULT_NOT_SUPPORTED;
+}
+
+engine_result_t CheckBetaRuntimeAccess(DispatchHandle* handle) {
+  if (handle->backend != BackendKind::kProvider || handle->provider == nullptr) {
+    return ENGINE_RESULT_OK;
+  }
+  const std::string runtime_id = Normalize(handle->provider->runtime_id_utf8);
+  if ((runtime_id != "artemis" && runtime_id != "catsystem2" &&
+       runtime_id != "rfvp") ||
+      handle->beta_runtime_allowed) {
+    return ENGINE_RESULT_OK;
+  }
+  handle->last_error = runtime_id == "catsystem2"
+                           ? "CatSystem2 runtime requires active beta access"
+                           : runtime_id == "rfvp"
+                                 ? "RFVP runtime requires active beta access"
+                                 : "Artemis runtime requires active beta access";
+  return ThreadError(ENGINE_RESULT_NOT_SUPPORTED, handle->last_error.c_str());
 }
 
 bool IsTextTranslationOption(const std::string& key) {
@@ -470,6 +544,9 @@ engine_result_t engine_create(const engine_create_desc_t* desc,
                        "engine_create requires non-null desc and out_handle");
   }
   *out_handle = nullptr;
+#if defined(AETHERKIRI_INTERNAL_CATSYSTEM2)
+  AetherInternalRegisterCatSystem2Runtime();
+#endif
 #if defined(AETHERKIRI_INTERNAL_ARTEMIS) && \
     defined(AETHERKIRI_ENABLE_ARTEMIS_RUNTIME)
   AetherInternalRegisterArtemisRuntime();
@@ -794,6 +871,8 @@ engine_result_t engine_open_game(engine_handle_t public_handle,
   }
   result = SelectBackendLocked(handle, game_root_path_utf8);
   if (result != ENGINE_RESULT_OK) return result;
+  result = CheckBetaRuntimeAccess(handle);
+  if (result != ENGINE_RESULT_OK) return result;
   result = PrepareTextTranslationLocked(handle);
   if (result != ENGINE_RESULT_OK) return result;
   if (handle->backend == BackendKind::kLegacy) {
@@ -841,6 +920,8 @@ engine_result_t engine_open_game_async(engine_handle_t public_handle,
     }
     return ThreadError(result, handle->last_error.c_str());
   }
+  result = CheckBetaRuntimeAccess(handle);
+  if (result != ENGINE_RESULT_OK) return result;
   result = PrepareTextTranslationLocked(handle);
   if (result != ENGINE_RESULT_OK) return result;
   if (handle->backend == BackendKind::kLegacy) {
@@ -991,8 +1072,15 @@ engine_result_t engine_set_option(engine_handle_t public_handle,
   std::lock_guard<std::recursive_mutex> guard(handle->mutex);
   const std::string key = Normalize(option->key_utf8);
   if (key == "artemis_beta_allowed") {
-    // Kept as a no-op for compatibility with older hosts. Artemis is now a
-    // generally available runtime and no longer accepts an entitlement gate.
+    // Kept as a no-op for compatibility with older hosts. The explicit
+    // beta_runtime_allowed option controls provider-gated runtimes.
+    SetThreadError(nullptr);
+    return ENGINE_RESULT_OK;
+  }
+  if (key == "beta_runtime_allowed") {
+    const std::string value = Normalize(option->value_utf8);
+    handle->beta_runtime_allowed =
+        value == "1" || value == "true" || value == "yes" || value == "on";
     SetThreadError(nullptr);
     return ENGINE_RESULT_OK;
   }
@@ -1443,10 +1531,22 @@ engine_result_t engine_get_memory_stats(engine_handle_t public_handle,
                  return engine_legacy_get_memory_stats(legacy, out_stats);
                },
                [&](DispatchHandle* handle) {
-                 return PROVIDER_HAS(handle->provider, get_memory_stats)
-                            ? handle->provider->get_memory_stats(handle->runtime,
-                                                                 out_stats)
-                            : ENGINE_RESULT_NOT_SUPPORTED;
+                 if (out_stats == nullptr ||
+                     out_stats->struct_size < sizeof(engine_memory_stats_t)) {
+                   return ENGINE_RESULT_INVALID_ARGUMENT;
+                 }
+                 if (!PROVIDER_HAS(handle->provider, get_memory_stats)) {
+                   return ENGINE_RESULT_NOT_SUPPORTED;
+                 }
+                 std::memset(out_stats, 0, sizeof(*out_stats));
+                 out_stats->struct_size = sizeof(*out_stats);
+                 const engine_result_t result =
+                     handle->provider->get_memory_stats(handle->runtime,
+                                                        out_stats);
+                 if (result == ENGINE_RESULT_OK) {
+                   PopulateHostMemoryStats(out_stats);
+                 }
+                 return result;
                });
 }
 
