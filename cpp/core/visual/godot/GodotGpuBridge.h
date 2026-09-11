@@ -124,26 +124,6 @@ private:
 
 bool TVPGodotGpuBridgeBatchActive();
 
-// Marks the narrow MotionPlayer render section that is already enclosed by a
-// GPU batch.  Its purpose is different from batch nesting: the layer manager
-// normally stages CPU-readable surfaces conservatively, but a MotionPlayer
-// command list is ordered entirely on the GPU and must not trigger a full
-// canvas readback between two affine operations.
-class TVPGodotGpuMotionRenderScope {
-public:
-    explicit TVPGodotGpuMotionRenderScope(bool enabled = true);
-    ~TVPGodotGpuMotionRenderScope() noexcept;
-
-    TVPGodotGpuMotionRenderScope(const TVPGodotGpuMotionRenderScope &) = delete;
-    TVPGodotGpuMotionRenderScope &operator=(
-        const TVPGodotGpuMotionRenderScope &) = delete;
-
-private:
-    bool active_ = false;
-};
-
-bool TVPGodotGpuMotionRenderActive();
-
 enum TVPGodotGpuBlendMode : uint32_t {
     TVP_GODOT_GPU_BLEND_ALPHA = 1,
     TVP_GODOT_GPU_BLEND_ALPHA_D = 2,
