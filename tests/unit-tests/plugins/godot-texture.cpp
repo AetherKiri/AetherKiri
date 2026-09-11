@@ -743,6 +743,27 @@ TEST_CASE("Godot GPU batch scope defers pending alpha source flushes") {
     CHECK(g_last_batch_token == 0xabcdu);
 }
 
+TEST_CASE("Godot motion target scope only bypasses staging for its target") {
+    int target_a = 0;
+    int target_b = 0;
+
+    CHECK_FALSE(TVPGodotGpuMotionRenderTargetActive(&target_a));
+    {
+        TVPGodotGpuMotionRenderTargetScope outer(&target_a);
+        CHECK(TVPGodotGpuMotionRenderTargetActive(&target_a));
+        CHECK_FALSE(TVPGodotGpuMotionRenderTargetActive(&target_b));
+        {
+            TVPGodotGpuMotionRenderTargetScope inner(&target_b);
+            CHECK_FALSE(TVPGodotGpuMotionRenderTargetActive(&target_a));
+            CHECK(TVPGodotGpuMotionRenderTargetActive(&target_b));
+        }
+        CHECK(TVPGodotGpuMotionRenderTargetActive(&target_a));
+        CHECK_FALSE(TVPGodotGpuMotionRenderTargetActive(&target_b));
+    }
+    CHECK_FALSE(TVPGodotGpuMotionRenderTargetActive(&target_a));
+    CHECK_FALSE(TVPGodotGpuMotionRenderTargetActive(&target_b));
+}
+
 TEST_CASE("Godot GPU batch scope finishes exactly once") {
     TestGpuBridge bridge;
     TVPGodotGpuBatchScope batch;

@@ -228,6 +228,26 @@ void TVPForceRegisterGodotRenderManager();
 void TVPSetGodotRenderManagerGpuFastPathEnabled(bool enabled);
 std::string TVPGetGodotRenderManagerFallbackStats();
 
+// Marks only the final MotionPlayer presentation target that is safe to keep
+// GPU-resident for the duration of one ordered command list. Private command
+// layers remain on the conservative CPU-visible path.
+class TVPGodotGpuMotionRenderTargetScope {
+public:
+    explicit TVPGodotGpuMotionRenderTargetScope(const void *target);
+    ~TVPGodotGpuMotionRenderTargetScope() noexcept;
+
+    TVPGodotGpuMotionRenderTargetScope(
+        const TVPGodotGpuMotionRenderTargetScope &) = delete;
+    TVPGodotGpuMotionRenderTargetScope &operator=(
+        const TVPGodotGpuMotionRenderTargetScope &) = delete;
+
+private:
+    const void *previous_ = nullptr;
+    bool active_ = false;
+};
+
+bool TVPGodotGpuMotionRenderTargetActive(const void *target);
+
 class iTVPBaseBitmap;
 
 // Motion scratch layers are completely repainted before their next use. They

@@ -86,6 +86,7 @@ std::unordered_map<std::string, RenderTimingStats> g_render_timing_stats;
 // readback diagnostics must identify the operation that caused the boundary
 // without adding synchronization to the hot path.
 thread_local const char *g_render_operation_name = nullptr;
+thread_local const void *g_motion_render_target = nullptr;
 uint64_t g_upload_count = 0;
 uint64_t g_upload_success_count = 0;
 uint64_t g_upload_bytes = 0;
@@ -147,6 +148,90 @@ public:
 private:
     bool enabled_ = false;
     std::string name_;
+    std::chrono::steady_clock::time_point start_;
+};
+
+class ScopedSlowRenderTrace final {
+public:
+    ScopedSlowRenderTrace(const char *kind, const std::string &method,
+                          const tTVPRect &rect, int triangles = 0,
+                          const GodotTexture2D *dst = nullptr,
+                          const GodotTexture2D *src = nullptr)
+        : kind_(kind != nullptr ? kind : "unknown"), method_(method),
+          rect_(rect), triangles_(triangles), enabled_(Enabled()),
+          dst_(Snapshot(dst)), src_(Snapshot(src)),
+          start_(enabled_ ? std::chrono::steady_clock::now()
+                          : std::chrono::steady_clock::time_point()) {}
+
+    ~ScopedSlowRenderTrace() {
+        if (!enabled_) return;
+        const double elapsed = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - start_).count();
+        if (elapsed < ThresholdMs()) return;
+        std::fprintf(
+            stderr,
+            "godot slow render kind=%s method=%s elapsed_ms=%.3f "
+            "rect=(%d,%d,%d,%d) triangles=%d "
+            "dst=%p[%dx%d cpu_comp=%d cpu_pref=%d cpu=%d gpu_pending=%d readback=%d] "
+            "src=%p[%dx%d cpu_comp=%d cpu_pref=%d cpu=%d gpu_pending=%d readback=%d]\n",
+            kind_.c_str(), method_.empty() ? "(null)" : method_.c_str(),
+            elapsed, rect_.left, rect_.top, rect_.right, rect_.bottom,
+            triangles_, dst_.pointer, dst_.width, dst_.height,
+            dst_.cpu_composite, dst_.prefers_cpu, dst_.has_cpu,
+            dst_.gpu_pending, dst_.requires_readback, src_.pointer,
+            src_.width, src_.height, src_.cpu_composite, src_.prefers_cpu,
+            src_.has_cpu, src_.gpu_pending, src_.requires_readback);
+    }
+
+private:
+    struct TextureSnapshot {
+        const void *pointer = nullptr;
+        int width = 0;
+        int height = 0;
+        int cpu_composite = 0;
+        int prefers_cpu = 0;
+        int has_cpu = 0;
+        int gpu_pending = 0;
+        int requires_readback = 0;
+    };
+
+    static TextureSnapshot Snapshot(const GodotTexture2D *texture) {
+        TextureSnapshot snapshot;
+        if (texture == nullptr) return snapshot;
+        snapshot.pointer = texture;
+        snapshot.width = texture->GetWidth();
+        snapshot.height = texture->GetHeight();
+        snapshot.cpu_composite = texture->IsCpuCompositeTarget() ? 1 : 0;
+        snapshot.prefers_cpu = texture->PrefersCpuOperations() ? 1 : 0;
+        snapshot.has_cpu = texture->HasCurrentCpuPixels() ? 1 : 0;
+        snapshot.gpu_pending = texture->HasPendingGpuWrites() ? 1 : 0;
+        snapshot.requires_readback = texture->RequiresGpuReadback() ? 1 : 0;
+        return snapshot;
+    }
+
+    static bool Enabled() {
+        const char *value = std::getenv("AETHERKIRI_GODOT_SLOW_OP_TRACE");
+        return value != nullptr && value[0] != '\0' &&
+               std::strcmp(value, "0") != 0;
+    }
+
+    static double ThresholdMs() {
+        const char *value = std::getenv("AETHERKIRI_GODOT_SLOW_OP_MS");
+        if (value == nullptr || value[0] == '\0') return 10.0;
+        char *end = nullptr;
+        const double parsed = std::strtod(value, &end);
+        return end != value && std::isfinite(parsed) && parsed > 0.0
+            ? parsed
+            : 10.0;
+    }
+
+    std::string kind_;
+    std::string method_;
+    tTVPRect rect_;
+    int triangles_ = 0;
+    TextureSnapshot dst_;
+    TextureSnapshot src_;
+    bool enabled_ = false;
     std::chrono::steady_clock::time_point start_;
 };
 
@@ -1449,6 +1534,8 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
     ScopedRenderTiming render_timing(method_name.empty() ? "(null)" : method_name);
 
     auto *dst = dynamic_cast<GodotTexture2D *>(tar);
+    const bool motion_target_active =
+        TVPGodotGpuMotionRenderTargetActive(dst);
     auto *src = textures.size() == 1
         ? dynamic_cast<GodotTexture2D *>(textures[0].first)
         : nullptr;
@@ -1467,6 +1554,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
     auto *src3_3 = textures.size() == 3
         ? dynamic_cast<GodotTexture2D *>(textures[2].first)
         : nullptr;
+    ScopedSlowRenderTrace slow_trace("rect", method_name, rctar, 0, dst, src);
     const bool nearest_scaled = textures.size() == 1 &&
         !RectAbsSizeMatches(rctar, textures[0].second) &&
         (stretch_type_ & stTypeMask) == stNearest;
@@ -1510,7 +1598,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
     // buffer.  This is deliberately limited to operations that read the
     // existing destination; a full replacement/clear can remain GPU-native.
     const bool cpu_staging_transition =
-        CpuStagingOnGpuReadback() && dst != nullptr &&
+        !motion_target_active && CpuStagingOnGpuReadback() && dst != nullptr &&
         dst->RequiresGpuReadback() &&
         // BoxBlurAlpha already has an alias-safe GPU implementation. Keep
         // the surface GPU-resident for this read/modify/write operation and
@@ -1521,7 +1609,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         dst->ExpectCpuAccess();
         dst->SetCpuCompositeTarget(true);
     }
-    if (dst != nullptr &&
+    if (dst != nullptr && !motion_target_active &&
         (dst->IsCpuCompositeTarget() || cpu_resident_rect ||
          cpu_staging_transition ||
          (dst->PrefersCpuOperations() &&
@@ -2133,11 +2221,18 @@ void GodotRenderManager::OperateTriangles(iTVPRenderMethod *method, int nTriangl
     const std::string method_name =
         method != nullptr ? method->GetName() : std::string();
     ScopedRenderOperation render_operation(method_name.c_str());
+    ScopedRenderTiming triangle_timing(
+        method_name.empty() ? "Triangles:(null)" :
+                              "Triangles:" + method_name);
     auto *godot_method = dynamic_cast<GodotRenderMethod *>(method);
     auto *dst = dynamic_cast<GodotTexture2D *>(target);
+    const bool motion_target_active =
+        TVPGodotGpuMotionRenderTargetActive(dst);
     auto *src = textures.size() == 1
         ? dynamic_cast<GodotTexture2D *>(textures[0].first)
         : nullptr;
+    ScopedSlowRenderTrace slow_trace("triangles", method_name, rcclip,
+                                     nTriangles, dst, src);
     const auto *reference = dynamic_cast<GodotTexture2D *>(reftar);
     // Affine layer painting is another producer of CPU-composited bitmaps.
     // Keep already-resident inputs on that side of the boundary too; otherwise
@@ -2147,7 +2242,7 @@ void GodotRenderManager::OperateTriangles(iTVPRenderMethod *method, int nTriangl
         src->HasCurrentCpuPixels() &&
         (reftar == nullptr || reftar == target ||
          (reference != nullptr && reference->HasCurrentCpuPixels()));
-    if (dst != nullptr &&
+    if (dst != nullptr && !motion_target_active &&
         (dst->IsCpuCompositeTarget() || cpu_resident_triangles)) {
         CountMethodFallback(method);
         SoftwareDelegate()->OperateTriangles(
@@ -2650,4 +2745,22 @@ void TVPForceRegisterGodotRenderManager() {}
 
 void TVPSetGodotRenderManagerGpuFastPathEnabled(bool enabled) {
     g_gpu_fastpath_enabled.store(enabled, std::memory_order_relaxed);
+}
+
+TVPGodotGpuMotionRenderTargetScope::TVPGodotGpuMotionRenderTargetScope(
+    const void *target) {
+    if (target == nullptr) return;
+    previous_ = g_motion_render_target;
+    g_motion_render_target = target;
+    active_ = true;
+}
+
+TVPGodotGpuMotionRenderTargetScope::~TVPGodotGpuMotionRenderTargetScope() noexcept {
+    if (active_) {
+        g_motion_render_target = previous_;
+    }
+}
+
+bool TVPGodotGpuMotionRenderTargetActive(const void *target) {
+    return target != nullptr && g_motion_render_target == target;
 }
