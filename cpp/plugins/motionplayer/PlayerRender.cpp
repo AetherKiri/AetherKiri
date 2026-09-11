@@ -8770,6 +8770,10 @@ namespace motion {
         // backends).  This keeps the clear + all compositing operations
         // atomic from the host presenter's point of view.
         TVPGodotGpuBatchScope gpuBatch(_runtime->renderCommands.size() > 1);
+        // The render command list is already ordered as one GPU transaction.
+        // Tell the Godot texture manager not to turn an intermediate affine
+        // copy into a CPU staging/readback boundary.
+        TVPGodotGpuMotionRenderScope gpuMotionRender(gpuBatch.active());
 
         // The same evaluated command list can be submitted through
         // renderToLayer, SeparateLayerAdaptor, and D3DAdaptor during a KAG

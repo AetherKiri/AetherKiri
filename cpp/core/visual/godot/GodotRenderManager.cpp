@@ -1488,6 +1488,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         (method_name == "ConstAlphaBlend_SD" ||
          method_name == "ConstAlphaBlend_SD_d");
     const bool cpu_resident_rect = [&]() {
+        if (TVPGodotGpuMotionRenderActive()) return false;
         if (dst == nullptr || !dst->PrefersCpuOperations() ||
             method_name == "BoxBlurAlpha") return false;
         if (reftar != nullptr && reftar != tar) {
@@ -1510,6 +1511,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
     // buffer.  This is deliberately limited to operations that read the
     // existing destination; a full replacement/clear can remain GPU-native.
     const bool cpu_staging_transition =
+        !TVPGodotGpuMotionRenderActive() &&
         CpuStagingOnGpuReadback() && dst != nullptr &&
         dst->RequiresGpuReadback() &&
         // BoxBlurAlpha already has an alias-safe GPU implementation. Keep
@@ -1521,7 +1523,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         dst->ExpectCpuAccess();
         dst->SetCpuCompositeTarget(true);
     }
-    if (dst != nullptr &&
+    if (dst != nullptr && !TVPGodotGpuMotionRenderActive() &&
         (dst->IsCpuCompositeTarget() || cpu_resident_rect ||
          cpu_staging_transition ||
          (dst->PrefersCpuOperations() &&
@@ -2147,7 +2149,7 @@ void GodotRenderManager::OperateTriangles(iTVPRenderMethod *method, int nTriangl
         src->HasCurrentCpuPixels() &&
         (reftar == nullptr || reftar == target ||
          (reference != nullptr && reference->HasCurrentCpuPixels()));
-    if (dst != nullptr &&
+    if (dst != nullptr && !TVPGodotGpuMotionRenderActive() &&
         (dst->IsCpuCompositeTarget() || cpu_resident_triangles)) {
         CountMethodFallback(method);
         SoftwareDelegate()->OperateTriangles(

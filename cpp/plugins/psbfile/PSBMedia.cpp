@@ -1717,14 +1717,16 @@ namespace PSB {
             if(prefetchEnv == nullptr || *prefetchEnv != '0') {
                 const std::string archiveBase =
                     LowerAscii(Basename(archiveKey));
-                const char *syncEnv =
-                    std::getenv("AETHERKIRI_PSB_SYNC_PREFETCH");
-                const bool syncPrefetchCandidate =
-                    (syncEnv == nullptr || *syncEnv != '0') &&
+                const bool pimgPrefetchCandidate =
                     archiveBase.size() > 8 &&
                     archiveBase.rfind("cha", 0) == 0 &&
                     archiveBase.compare(archiveBase.size() - 5, 5,
                                        ".pimg") == 0;
+                const char *syncEnv =
+                    std::getenv("AETHERKIRI_PSB_SYNC_PREFETCH");
+                const bool syncPrefetchCandidate =
+                    syncEnv != nullptr && *syncEnv != '0' &&
+                    pimgPrefetchCandidate;
                 std::vector<std::string> prefetchKeys;
                 {
                     std::lock_guard<std::mutex> lock(_mutex);
@@ -1735,7 +1737,7 @@ namespace PSB {
                            resourceKey.compare(resourceKey.size() - 4, 4,
                                                ".tlg") != 0 ||
                            !entry.resource ||
-                           (!syncPrefetchCandidate &&
+                           (!syncPrefetchCandidate && !pimgPrefetchCandidate &&
                             (entry.resource->data.size() < 256 * 1024 ||
                              entry.resource->data.size() > 2 * 1024 * 1024))) {
                             continue;
@@ -1744,14 +1746,10 @@ namespace PSB {
                     }
                 }
                 // Stand PIMGs are immutable and their first use is normally
-                // immediately followed by a dialogue click.  Worker
-                // prefetch can still be decoding when that click arrives,
-                // so synchronously seed the normal graphic cache while the
-                // archive is being opened.  This moves the exact same decode
-                // ahead of subsequent dialogue ticks; it does not alter pixels or
-                // publish a partially decoded image.  Limit the default path
-                // to authored `cha*.pimg` stand packs; callers can disable it
-                // for diagnostics with AETHERKIRI_PSB_SYNC_PREFETCH=0.
+                // immediately followed by a dialogue click.  Queue their
+                // decode on the idle image thread instead of doing a burst of
+                // synchronous decodes while the script thread opens the PSB.
+                // The explicit sync switch remains available for diagnostics.
                 const bool syncPrefetch = syncPrefetchCandidate;
                 if(syncPrefetch) {
                     for(const auto &resourceKey : prefetchKeys) {

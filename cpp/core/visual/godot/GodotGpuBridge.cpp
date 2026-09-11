@@ -10,6 +10,7 @@ bool g_batch_registered = false;
 TVPGodotGpuExternalTextureCallbacks g_external_texture_callbacks{};
 bool g_external_texture_registered = false;
 thread_local uint32_t g_batch_scope_depth = 0;
+thread_local uint32_t g_motion_render_scope_depth = 0;
 } // namespace
 
 extern "C" void TVPGodotGpuBridgeRegister(
@@ -135,4 +136,20 @@ bool TVPGodotGpuBatchScope::finish() {
 
 bool TVPGodotGpuBridgeBatchActive() {
     return g_batch_scope_depth != 0;
+}
+
+TVPGodotGpuMotionRenderScope::TVPGodotGpuMotionRenderScope(bool enabled) {
+    if(!enabled) return;
+    ++g_motion_render_scope_depth;
+    active_ = true;
+}
+
+TVPGodotGpuMotionRenderScope::~TVPGodotGpuMotionRenderScope() noexcept {
+    if(active_ && g_motion_render_scope_depth != 0) {
+        --g_motion_render_scope_depth;
+    }
+}
+
+bool TVPGodotGpuMotionRenderActive() {
+    return g_motion_render_scope_depth != 0;
 }
