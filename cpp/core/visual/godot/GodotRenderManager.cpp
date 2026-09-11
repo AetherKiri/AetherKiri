@@ -477,6 +477,18 @@ bool CpuStagingOnGpuReadback() {
     return enabled;
 }
 
+bool GpuCopyIntoCpuTargetEnabled() {
+    static const bool enabled = []() {
+        const char *value = std::getenv("AETHERKIRI_GODOT_GPU_CPU_COPY");
+        // A replacement-style Copy can stay on the GPU and publish its
+        // pixels through an asynchronous readback. Keep an escape hatch for
+        // older drivers whose async texture_get_data path is unreliable.
+        return value == nullptr || value[0] == '\0' ||
+               std::strcmp(value, "0") != 0;
+    }();
+    return enabled;
+}
+
 bool IsOpaqueAlphaBlendCopyEnabled() {
     static const bool enabled = []() {
         const char *value = std::getenv("AETHERKIRI_GODOT_GPU_OPAQUE_COPY");
@@ -704,7 +716,10 @@ GodotTexture2D::GodotTexture2D(const void *pixel, int pitch, unsigned int w,
     cpu_pixels_known_zero_ = pixel == nullptr;
 }
 
-GodotTexture2D::~GodotTexture2D() { ReleaseGpuHandle(); }
+GodotTexture2D::~GodotTexture2D() {
+    CancelPendingGpuReadback();
+    ReleaseGpuHandle();
+}
 
 void GodotTexture2D::EnsureCpuStorage() {
     const size_t required = static_cast<size_t>(pitch_) * Height;
@@ -716,6 +731,65 @@ void GodotTexture2D::EnsureCpuStorage() {
 void GodotTexture2D::DiscardCpuStorage() {
     if (pixels_.empty()) return;
     std::vector<uint8_t>().swap(pixels_);
+}
+
+void GodotTexture2D::CancelPendingGpuReadback() {
+    if (pending_cpu_readback_ != 0) {
+        DiscardGpuReadback(pending_cpu_readback_);
+        pending_cpu_readback_ = 0;
+    }
+    pending_cpu_readback_pixels_.clear();
+}
+
+bool GodotTexture2D::BeginCpuReadback() {
+    if (pending_cpu_readback_ != 0) return true;
+    if (format_ != TVPTextureFormat::RGBA || gpu_handle_ == 0 ||
+        !gpu_dirty_ || cpu_dirty_) {
+        return false;
+    }
+    const size_t required = static_cast<size_t>(pitch_) * Height;
+    if (required == 0) return false;
+    const uint64_t request = BeginGpuReadback();
+    if (request == 0) return false;
+    try {
+        pending_cpu_readback_pixels_.resize(required);
+    } catch (...) {
+        DiscardGpuReadback(request);
+        return false;
+    }
+    pending_cpu_readback_ = request;
+    if (TraceGpuReadback()) {
+        std::fprintf(
+            stderr,
+            "godot readback async tex=%p op=%s size=%dx%d bytes=%zu\n",
+            static_cast<const void *>(this),
+            g_render_operation_name != nullptr && *g_render_operation_name != '\0'
+                ? g_render_operation_name
+                : "(outside-op)",
+            Width, Height, required);
+    }
+    return true;
+}
+
+bool GodotTexture2D::CompletePendingGpuReadback() {
+    if (pending_cpu_readback_ == 0) return false;
+    bool ready = false;
+    const bool success = PollGpuReadback(
+        pending_cpu_readback_, pending_cpu_readback_pixels_.data(),
+        pending_cpu_readback_pixels_.size(), static_cast<uint32_t>(pitch_),
+        &ready);
+    if (!ready) return false;
+    pending_cpu_readback_ = 0;
+    if (!success) {
+        pending_cpu_readback_pixels_.clear();
+        return false;
+    }
+    pixels_.swap(pending_cpu_readback_pixels_);
+    pending_cpu_readback_pixels_.clear();
+    gpu_dirty_ = false;
+    cpu_dirty_ = false;
+    cpu_pixels_known_zero_ = false;
+    return true;
 }
 
 bool GodotTexture2D::CopyCpuSnapshotFrom(GodotTexture2D &source) {
@@ -923,6 +997,13 @@ void GodotTexture2D::EnsureCpuReadable() {
         return;
     }
     if (!gpu_dirty_ && !pixels_.empty()) return;
+    if (pending_cpu_readback_ != 0) {
+        if (CompletePendingGpuReadback()) return;
+        // The async request is still in flight.  Drop it before using the
+        // synchronous bridge so the same frame never owns two readbacks for
+        // one texture.
+        CancelPendingGpuReadback();
+    }
     // A scanline accessor reaches this function for every row.  Only time an
     // actual GPU readback, not the already-resident CPU fast path.
     ScopedRenderTiming cpu_read_timing("EnsureCpuReadable");
@@ -1089,6 +1170,7 @@ bool GodotTexture2D::ClearGpu(uint32_t rgba, const tTVPRect &rc) {
     const auto *bridge = TVPGodotGpuBridgeGet();
     if (bridge == nullptr || bridge->clear_rgba == nullptr) return false;
     if (!bridge->clear_rgba(gpu_handle_, rgba, &rc)) return false;
+    CancelPendingGpuReadback();
     gpu_dirty_ = true;
     cpu_dirty_ = false;
     if (IsFullTextureRect(rc, Width, Height)) {
@@ -1110,6 +1192,7 @@ bool GodotTexture2D::CopyGpuFrom(GodotTexture2D *src, const tTVPRect &dst_rc,
     if (!bridge->copy_rect(gpu_handle_, src->gpu_handle_, &dst_rc, &src_rc)) {
         return false;
     }
+    CancelPendingGpuReadback();
     gpu_dirty_ = true;
     cpu_dirty_ = false;
     if (IsFullTextureRect(dst_rc, Width, Height) &&
@@ -1137,6 +1220,7 @@ bool GodotTexture2D::CopyTrianglesGpuFrom(GodotTexture2D *src,
                                 &clip_rc, dst_points, src_points)) {
         return false;
     }
+    CancelPendingGpuReadback();
     gpu_dirty_ = true;
     cpu_dirty_ = false;
     MarkOpacityUnknown();
@@ -1184,6 +1268,7 @@ bool GodotTexture2D::DrawTrianglesGpuFrom(GodotTexture2D *src,
                                normalizedOpacity, blend_mode)) {
         return false;
     }
+    CancelPendingGpuReadback();
     gpu_dirty_ = true;
     cpu_dirty_ = false;
     MarkOpacityUnknown();
@@ -1208,6 +1293,7 @@ bool GodotTexture2D::DrawExternalTrianglesGpuFrom(
            dst_points, src_points, normalizedOpacity, blend_mode)) {
         return false;
     }
+    CancelPendingGpuReadback();
     gpu_dirty_ = true;
     cpu_dirty_ = false;
     MarkOpacityUnknown();
@@ -1241,6 +1327,7 @@ bool GodotTexture2D::DrawMaskedTrianglesGpuFrom(
            blend_mode, use_mask_alpha)) {
         return false;
     }
+    CancelPendingGpuReadback();
     gpu_dirty_ = true;
     cpu_dirty_ = false;
     MarkOpacityUnknown();
@@ -1267,6 +1354,7 @@ bool GodotTexture2D::BlendGpuFrom(GodotTexture2D *src, const tTVPRect &dst_rc,
                             mode, opacity, color)) {
         return false;
     }
+    CancelPendingGpuReadback();
     gpu_dirty_ = true;
     cpu_dirty_ = false;
     MarkOpacityUnknown();
@@ -1289,6 +1377,7 @@ bool GodotTexture2D::BlendGpuFrom2(GodotTexture2D *src1, GodotTexture2D *src2,
                              color)) {
         return false;
     }
+    CancelPendingGpuReadback();
     gpu_dirty_ = true;
     cpu_dirty_ = false;
     MarkOpacityUnknown();
@@ -1313,6 +1402,7 @@ bool GodotTexture2D::BlendGpuFrom3(
            opacity, color)) {
         return false;
     }
+    CancelPendingGpuReadback();
     gpu_dirty_ = true;
     cpu_dirty_ = false;
     MarkOpacityUnknown();
@@ -1375,6 +1465,7 @@ bool GodotTexture2D::UpdateGpuRgba(const void *pixels,
             return false;
         }
     }
+    CancelPendingGpuReadback();
     gpu_dirty_ = true;
     cpu_dirty_ = false;
     DiscardCpuStorage();
@@ -1605,11 +1696,24 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         // let the next CPU boundary perform one readback if it is needed.
         method_name != "BoxBlurAlpha" &&
         ReadsExistingDestination(method_name.c_str(), rctar, dst);
+    const bool gpu_copy_cpu_destination =
+        !motion_target_active && GpuCopyIntoCpuTargetEnabled() &&
+        method_name == "Copy" && dst != nullptr && src != nullptr &&
+        src != dst && dst->PrefersCpuOperations() &&
+        !dst->IsCpuCompositeTarget() &&
+        src->HasPendingGpuWrites() && !nearest_scaled &&
+        IsGpuRectFastPathEnabled("Copy") &&
+        RectBoundsInsideTexture(rctar, dst) &&
+        RectBoundsInsideTexture(textures[0].second, src) &&
+        !RectNeedsAlphaAreaDownsample(rctar, textures[0].second, src) &&
+        (RectAbsSizeMatches(rctar, textures[0].second) ||
+         IsGpuCopyTrianglesEnabled());
     if (cpu_staging_transition) {
         dst->ExpectCpuAccess();
         dst->SetCpuCompositeTarget(true);
     }
     if (dst != nullptr && !motion_target_active &&
+        !gpu_copy_cpu_destination &&
         (dst->IsCpuCompositeTarget() || cpu_resident_rect ||
          cpu_staging_transition ||
          (dst->PrefersCpuOperations() &&
@@ -1730,6 +1834,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
             src_rc.get_height() == rctar.get_height() &&
             dst->CopyGpuFrom(src, rctar, src_rc)) {
             CountGpuFastPath(method_name);
+            if (gpu_copy_cpu_destination) dst->BeginCpuReadback();
             return;
         }
         if(nearest_scaled) {
@@ -1762,6 +1867,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
             };
             if (dst->CopyTrianglesGpuFrom(src, 2, rctar, dst_pt, src_pt)) {
                 CountGpuFastPath(method_name);
+                if (gpu_copy_cpu_destination) dst->BeginCpuReadback();
                 return;
             }
         }
@@ -1800,6 +1906,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         };
         if (dst->CopyTrianglesGpuFrom(src, 2, rctar, dst_pt, src_pt)) {
             CountGpuFastPath(method_name);
+            if (gpu_copy_cpu_destination) dst->BeginCpuReadback();
             return;
         }
     }

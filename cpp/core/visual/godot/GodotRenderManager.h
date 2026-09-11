@@ -138,13 +138,22 @@ public:
                        uint32_t color);
     bool UploadCpuToGpu(bool flush_pending_gpu_writes = true);
     bool UpdateGpuRgba(const void *pixels, uint32_t stride_bytes);
-    void MarkGpuDirty() { gpu_dirty_ = true; }
+    void MarkGpuDirty() {
+        CancelPendingGpuReadback();
+        gpu_dirty_ = true;
+    }
     void MarkCpuDirty() {
+        CancelPendingGpuReadback();
         cpu_dirty_ = true;
         gpu_dirty_ = false;
         cpu_pixels_known_zero_ = false;
     }
     void EnsureCpuReadable();
+    // Starts a non-blocking readback for a texture that will soon cross back
+    // into the CPU bitmap API.  EnsureCpuReadable consumes it when the
+    // caller actually asks for pixels, falling back to the synchronous path
+    // if the GPU has not finished yet.
+    bool BeginCpuReadback();
 
 private:
     friend class GodotRenderManager;
@@ -153,6 +162,8 @@ private:
     void ReleaseGpuHandle();
     void EnsureCpuStorage();
     void DiscardCpuStorage();
+    void CancelPendingGpuReadback();
+    bool CompletePendingGpuReadback();
     void SetOpacityFromPixels(const void *pixel, int pitch);
     void MarkOpacityUnknown();
     void MarkTransparentKnown();
@@ -170,6 +181,8 @@ private:
     bool retain_cpu_shadow_ = false;
     bool cpu_access_expected_ = false;
     bool discard_unwritten_on_partial_update_ = false;
+    mutable uint64_t pending_cpu_readback_ = 0;
+    mutable std::vector<uint8_t> pending_cpu_readback_pixels_;
     // Fresh render targets are initialized to transparent black. Preserve
     // that fact until the first CPU write so the Godot bridge can allocate
     // and clear the GPU image without packing and uploading a multi-megabyte
