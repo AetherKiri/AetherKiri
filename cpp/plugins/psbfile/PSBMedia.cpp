@@ -17,6 +17,8 @@
 
 #include "PSBFile.h"
 #include "PSBMediaRegistry.h"
+#include "GraphicsLoadThread.h"
+#include "LayerIntf.h"
 #include "resources/ImageMetadata.h"
 #include "MsgIntf.h"
 #include "Platform.h"
@@ -1272,7 +1274,7 @@ namespace PSB {
             ttstr profile = ttstr(val).AsLowerCase();
             if(profile == TJS_W("aggressive") || profile == TJS_W("lowmem")) {
                 _configuredMaxEntryCount = 1024;
-                _configuredMaxByteSize = 128ULL * 1024ULL * 1024ULL;
+                _configuredMaxByteSize = 256ULL * 1024ULL * 1024ULL;
             }
         }
 
@@ -1294,7 +1296,7 @@ namespace PSB {
         _configuredMaxEntryCount =
             ClampSizeT(_configuredMaxEntryCount, 128, 8192);
         _configuredMaxByteSize = ClampSizeT(
-            _configuredMaxByteSize, 16ULL * 1024ULL * 1024ULL,
+            _configuredMaxByteSize, 256ULL * 1024ULL * 1024ULL,
             512ULL * 1024ULL * 1024ULL);
         _maxEntryCount = _configuredMaxEntryCount;
         _maxByteSize = _configuredMaxByteSize;
@@ -1372,16 +1374,10 @@ namespace PSB {
 
         if((self_used_mb >= 1500) || (free_mb >= 0 && free_mb < 512)) {
             max_entry_count = std::min(max_entry_count, static_cast<size_t>(512));
-            max_byte_size = std::min(
-                max_byte_size, static_cast<size_t>(96ULL * 1024ULL * 1024ULL));
         } else if((self_used_mb >= 1100) || (free_mb >= 0 && free_mb < 800)) {
             max_entry_count = std::min(max_entry_count, static_cast<size_t>(768));
-            max_byte_size = std::min(
-                max_byte_size, static_cast<size_t>(144ULL * 1024ULL * 1024ULL));
         } else if((self_used_mb >= 850) || (free_mb >= 0 && free_mb < 1200)) {
             max_entry_count = std::min(max_entry_count, static_cast<size_t>(1024));
-            max_byte_size = std::min(
-                max_byte_size, static_cast<size_t>(192ULL * 1024ULL * 1024ULL));
         }
 
         _maxEntryCount = max_entry_count;
@@ -1710,6 +1706,86 @@ namespace PSB {
             // duplicate the archive's image metadata.  The registry remains
             // data-driven and never knows a title's `truss`/`frame` names.
             registerMotionSliceResources(ttstr(archiveKey.c_str()), *psb);
+
+            // PIMG archives are immutable and their image set is known at
+            // parse time.  Warm the larger TLG entries on the idle decoder
+            // thread while the title is still settling (slot/menu setup is
+            // normally hundreds of frames before the next story click).
+            // The layer is only published after a complete decode, so this
+            // cannot expose a partially rendered image or alter scene order.
+            const char *prefetchEnv = std::getenv("AETHERKIRI_PSB_PREFETCH");
+            if(prefetchEnv == nullptr || *prefetchEnv != '0') {
+                const std::string archiveBase =
+                    LowerAscii(Basename(archiveKey));
+                const char *syncEnv =
+                    std::getenv("AETHERKIRI_PSB_SYNC_PREFETCH");
+                const bool syncPrefetchCandidate =
+                    (syncEnv == nullptr || *syncEnv != '0') &&
+                    archiveBase.size() > 8 &&
+                    archiveBase.rfind("cha", 0) == 0 &&
+                    archiveBase.compare(archiveBase.size() - 5, 5,
+                                       ".pimg") == 0;
+                std::vector<std::string> prefetchKeys;
+                {
+                    std::lock_guard<std::mutex> lock(_mutex);
+                    const std::string prefix = archiveKey + "/";
+                    for(const auto &[resourceKey, entry] : _resources) {
+                        if(resourceKey.rfind(prefix, 0) != 0 ||
+                           resourceKey.size() < 4 ||
+                           resourceKey.compare(resourceKey.size() - 4, 4,
+                                               ".tlg") != 0 ||
+                           !entry.resource ||
+                           (!syncPrefetchCandidate &&
+                            (entry.resource->data.size() < 256 * 1024 ||
+                             entry.resource->data.size() > 2 * 1024 * 1024))) {
+                            continue;
+                        }
+                        prefetchKeys.push_back(resourceKey);
+                    }
+                }
+                // Stand PIMGs are immutable and their first use is normally
+                // immediately followed by a dialogue click.  Worker
+                // prefetch can still be decoding when that click arrives,
+                // so synchronously seed the normal graphic cache while the
+                // archive is being opened.  This moves the exact same decode
+                // ahead of subsequent dialogue ticks; it does not alter pixels or
+                // publish a partially decoded image.  Limit the default path
+                // to authored `cha*.pimg` stand packs; callers can disable it
+                // for diagnostics with AETHERKIRI_PSB_SYNC_PREFETCH=0.
+                const bool syncPrefetch = syncPrefetchCandidate;
+                if(syncPrefetch) {
+                    for(const auto &resourceKey : prefetchKeys) {
+                        try {
+                            TVPLoadGraphic(nullptr,
+                                          ttstr(TJS_W("psb://")) +
+                                              ttstr(resourceKey.c_str()),
+                                          TVP_clNone, 0, 0, glmNormal,
+                                          nullptr, nullptr);
+                        } catch(...) {
+                            // A failed optional warm-up must not reject the
+                            // archive or replace the normal load error path.
+                        }
+                    }
+                    if(LOGGER && std::getenv("AETHERKIRI_PSB_PREFETCH_TRACE")) {
+                        LOGGER->info("PSB sync image prefetch: archive={} count={}",
+                                     archiveKey, prefetchKeys.size());
+                    }
+                } else {
+                    for(const auto &resourceKey : prefetchKeys) {
+                        TVPPreloadGraphic(ttstr(TJS_W("psb://")) +
+                                          ttstr(resourceKey.c_str()));
+                    }
+                }
+                if(LOGGER && prefetchEnv && *prefetchEnv != '0' &&
+                   std::getenv("AETHERKIRI_PSB_PREFETCH_TRACE")) {
+                    LOGGER->info("PSB image prefetch: archive={} count={}",
+                                 archiveKey, prefetchKeys.size());
+                    for(size_t i = 0; i < std::min<size_t>(prefetchKeys.size(), 8);
+                        ++i) {
+                        LOGGER->info("PSB image prefetch key={}", prefetchKeys[i]);
+                    }
+                }
+            }
             {
                 std::lock_guard<std::mutex> lock(_mutex);
                 _failedArchives.erase(archiveKey);
@@ -1850,7 +1926,8 @@ namespace PSB {
         std::lock_guard<std::mutex> lock(_mutex);
         _configuredMaxEntryCount = ClampSizeT(maxEntries, 128, 8192);
         _configuredMaxByteSize = ClampSizeT(
-            maxBytes, 16ULL * 1024ULL * 1024ULL, 512ULL * 1024ULL * 1024ULL);
+            maxBytes, 256ULL * 1024ULL * 1024ULL,
+            512ULL * 1024ULL * 1024ULL);
         _maxEntryCount = _configuredMaxEntryCount;
         _maxByteSize = _configuredMaxByteSize;
         evictIfNeededLocked();

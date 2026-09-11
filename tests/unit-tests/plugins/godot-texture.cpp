@@ -5,6 +5,7 @@
 #include "godot/GodotRenderManager.h"
 #include "LayerBitmapIntf.h"
 #include "LayerIntf.h"
+#include "tvpgl.h"
 #include "motionplayer/D3DAdaptor.h"
 #include "../../../bridge/godot_extension/src/GodotGpuBarrierShadowPlanner.h"
 
@@ -37,6 +38,7 @@ TriangleDrawCall g_triangle_draw_call;
 int g_blend_rect_calls = 0;
 int g_read_rgba_calls = 0;
 int g_update_rgba_calls = 0;
+int g_copy_rect_calls = 0;
 uint32_t g_last_blend_mode = 0;
 uint32_t g_last_blend_color = 0;
 int g_last_blend_opacity = 0;
@@ -74,6 +76,11 @@ bool ReadTestGrayTexture(uint64_t, void *out_pixels, size_t out_pixels_size,
 bool UpdateTestTexture(uint64_t, const void *, uint32_t,
                        const tTVPRect *) {
     ++g_update_rgba_calls;
+    return true;
+}
+
+bool CopyTestRect(uint64_t, uint64_t, const tTVPRect *, const tTVPRect *) {
+    ++g_copy_rect_calls;
     return true;
 }
 
@@ -123,6 +130,13 @@ bool BlendTestRect(uint64_t, uint64_t, const tTVPRect *, const tTVPRect *,
     return true;
 }
 
+bool BlendTestRect2(uint64_t dst, uint64_t src1, uint64_t,
+                    const tTVPRect *dst_rc, const tTVPRect *src1_rc,
+                    const tTVPRect *, uint32_t mode, int opacity,
+                    uint32_t color) {
+    return BlendTestRect(dst, src1, dst_rc, src1_rc, mode, opacity, color);
+}
+
 bool FlushTestGpu() {
     g_gpu_calls.push_back(GpuCall::Flush);
     return true;
@@ -149,6 +163,7 @@ public:
         g_blend_rect_calls = 0;
         g_read_rgba_calls = 0;
         g_update_rgba_calls = 0;
+        g_copy_rect_calls = 0;
         g_last_blend_mode = 0;
         g_last_blend_color = 0;
         g_last_blend_opacity = 0;
@@ -165,8 +180,10 @@ public:
         callbacks.create_rgba = CreateTestTexture;
         callbacks.release_texture = ReleaseTestTexture;
         callbacks.update_rgba = UpdateTestTexture;
+        callbacks.copy_rect = CopyTestRect;
         callbacks.draw_triangles = DrawTestTriangles;
         callbacks.blend_rect = BlendTestRect;
+        callbacks.blend_rect2 = BlendTestRect2;
         callbacks.read_rgba = ReadTestGrayTexture;
         callbacks.begin_read_rgba = BeginTestReadback;
         callbacks.poll_read_rgba = PollTestReadback;
@@ -331,6 +348,7 @@ TEST_CASE("Godot textures skip zero-filled RGBA staging uploads") {
     TestGpuBridge bridge;
 
     GodotTexture2D empty_rgba(nullptr, 0, 8, 8, TVPTextureFormat::RGBA);
+    CHECK_FALSE(empty_rgba.HasCurrentCpuPixels());
     REQUIRE(empty_rgba.EnsureGpuHandle());
     CHECK(g_last_create_pixels_were_null);
 
@@ -343,6 +361,295 @@ TEST_CASE("Godot textures skip zero-filled RGBA staging uploads") {
     GodotTexture2D empty_gray(nullptr, 0, 1, 1, TVPTextureFormat::Gray);
     REQUIRE(empty_gray.EnsureGpuHandle());
     CHECK_FALSE(g_last_create_pixels_were_null);
+}
+
+TEST_CASE("Godot blank RGBA bitmaps materialize zeroes only when accessed") {
+    TestGpuBridge bridge;
+    GodotTexture2D texture(nullptr, 0, 256, 256, TVPTextureFormat::RGBA);
+    CHECK_FALSE(texture.HasCurrentCpuPixels());
+    CHECK(texture.GetPoint(255, 255) == 0);
+    CHECK(texture.HasCurrentCpuPixels());
+    texture.SetPoint(0, 0, 0xffffffffu);
+    texture.SetSize(128, 128);
+    CHECK_FALSE(texture.HasCurrentCpuPixels());
+    CHECK(texture.GetPoint(0, 0) == 0);
+    CHECK(texture.GetPoint(127, 127) == 0);
+    CHECK(g_read_rgba_calls == 0);
+
+    texture.SetSize(256, 256);
+    REQUIRE(texture.UploadCpuToGpu());
+    CHECK(texture.HasGodotGpuHandle());
+    CHECK(g_last_create_pixels_were_null);
+    CHECK(g_update_rgba_calls == 0);
+}
+
+TEST_CASE("Godot CPU texture clones avoid a GPU round trip") {
+    TestGpuBridge bridge;
+    GodotRenderManager manager;
+    const std::array<uint32_t, 6> pixels = {
+        0x00112233, 0x44556677, 0x8899aabb,
+        0xff102030, 0xff405060, 0xff708090,
+    };
+    GodotTexture2D src(pixels.data(), 12, 3, 2, TVPTextureFormat::RGBA);
+
+    SECTION("CPU-only image") {}
+    SECTION("CPU composition target") { src.SetCpuCompositeTarget(true); }
+    SECTION("uploaded image with a current CPU shadow") {
+        REQUIRE(src.GetScanLineForWrite(0) != nullptr);
+        REQUIRE(src.EnsureGpuHandle());
+    }
+    SECTION("CPU write newer than the GPU image") {
+        REQUIRE(src.GetScanLineForWrite(0) != nullptr);
+        REQUIRE(src.EnsureGpuHandle());
+        src.SetPoint(0, 0, pixels[0]);
+    }
+
+    REQUIRE(src.HasCurrentCpuPixels());
+    const auto next_handle = g_next_texture_handle;
+    auto *clone = manager.CreateTexture2D(4, 3, &src);
+    REQUIRE(clone != nullptr);
+    CHECK(clone->IsCpuCompositeTarget() == src.IsCpuCompositeTarget());
+    for(int y = 0; y < 3; ++y) {
+        for(int x = 0; x < 4; ++x) {
+            CHECK(clone->GetPoint(x, y) ==
+                  (x < 3 && y < 2 ? pixels[y * 3 + x] : 0u));
+        }
+    }
+    CHECK(g_next_texture_handle == next_handle);
+    CHECK(g_copy_rect_calls == 0);
+    CHECK(g_update_rgba_calls == 0);
+    CHECK(g_read_rgba_calls == 0);
+    clone->Release();
+}
+
+TEST_CASE("Godot loaded images retain a CPU shadow after upload") {
+    TestGpuBridge bridge;
+    GodotTexture2D image(
+        std::array<std::uint8_t, 16>{1, 2, 3, 255, 4, 5, 6, 255,
+                                     7, 8, 9, 255, 10, 11, 12, 255}
+            .data(),
+        8, 2, 2, TVPTextureFormat::RGBA);
+    REQUIRE(image.EnsureGpuHandle());
+    CHECK(image.HasCurrentCpuPixels());
+    CHECK(g_read_rgba_calls == 0);
+
+    const std::array<std::uint8_t, 16> updated_pixels = {
+        21, 22, 23, 255, 24, 25, 26, 255,
+        27, 28, 29, 255, 30, 31, 32, 255,
+    };
+    GodotTexture2D updated(nullptr, 0, 2, 2, TVPTextureFormat::RGBA);
+    updated.Update(updated_pixels.data(), TVPTextureFormat::RGBA, 8,
+                   tTVPRect(0, 0, 2, 2));
+    REQUIRE(updated.EnsureGpuHandle());
+    CHECK(updated.HasCurrentCpuPixels());
+}
+
+TEST_CASE("Godot GPU-only texture clones stay on the GPU") {
+    TestGpuBridge bridge;
+    GodotRenderManager manager;
+    GodotTexture2D src(nullptr, 0, 3, 2, TVPTextureFormat::RGBA);
+
+    SECTION("uploaded without a CPU shadow") {
+        REQUIRE(src.EnsureGpuHandle());
+    }
+    SECTION("GPU write newer than the retained CPU shadow") {
+        REQUIRE(src.GetScanLineForWrite(0) != nullptr);
+        REQUIRE(src.EnsureGpuHandle());
+        src.MarkGpuDirty();
+    }
+
+    REQUIRE_FALSE(src.HasCurrentCpuPixels());
+    auto *clone = manager.CreateTexture2D(4, 3, &src);
+    REQUIRE(clone != nullptr);
+    CHECK(g_copy_rect_calls == 1);
+    CHECK(g_read_rgba_calls == 0);
+    CHECK(g_update_rgba_calls == 0);
+    CHECK(static_cast<GodotTexture2D *>(clone)->HasPendingGpuWrites());
+    clone->Release();
+}
+
+TEST_CASE("Godot CPU-accessed rectangles do not ping-pong through the GPU") {
+    TVPInitTVPGL();
+    TestGpuBridge bridge;
+    GodotRenderManager manager;
+    std::vector<uint32_t> source_pixels(256u * 256u, 0xff123456u);
+    std::vector<uint32_t> target_pixels(256u * 256u, 0x66554433u);
+    GodotTexture2D src(source_pixels.data(), 256 * 4, 256, 256,
+                       TVPTextureFormat::RGBA);
+    GodotTexture2D dst(target_pixels.data(), 256 * 4, 256, 256,
+                       TVPTextureFormat::RGBA);
+    // A readback-visible bitmap can also have an uploaded presentation image.
+    // Neither the handle nor the large area should override CPU residency.
+    CHECK(dst.GetPoint(0, 0) == target_pixels[0]);
+    REQUIRE(dst.EnsureGpuHandle());
+    REQUIRE(src.EnsureGpuHandle());
+    REQUIRE(dst.PrefersCpuOperations());
+    tRenderTexRectArray::Element source(&src, tTVPRect(0, 0, 256, 256));
+
+    manager.OperateRect(manager.GetRenderMethod("CopyColor"), &dst, &dst,
+                        tTVPRect(0, 0, 256, 256),
+                        tRenderTexRectArray(&source, 1));
+    CHECK(dst.GetPoint(0, 0) == 0x66123456u);
+    CHECK(dst.GetPoint(255, 255) == 0x66123456u);
+    CHECK(g_blend_rect_calls == 0);
+    CHECK(g_read_rgba_calls == 0);
+    CHECK(g_update_rgba_calls == 0);
+
+    auto *clone = static_cast<GodotTexture2D *>(
+        manager.CreateTexture2D(256, 256, &dst));
+    REQUIRE(clone != nullptr);
+    CHECK(clone->PrefersCpuOperations());
+    clone->Release();
+}
+
+TEST_CASE("Godot CPU snapshots preserve pixels and resolve unknown opacity") {
+    TestGpuBridge bridge;
+    GodotRenderManager manager;
+    std::vector<uint32_t> pixels(256u * 256u, 0xff123456u);
+    GodotTexture2D source(pixels.data(), 256 * 4, 256, 256,
+                          TVPTextureFormat::RGBA);
+    SECTION("known opaque") { REQUIRE(source.IsOpaque()); }
+    SECTION("unknown after a write") {
+        source.SetPoint(1, 1, 0x80123456u);
+        REQUIRE_FALSE(source.IsOpaque());
+        REQUIRE_FALSE(source.HasKnownTransparency());
+    }
+    auto *copy = static_cast<GodotTexture2D *>(
+        manager.CreateTexture2D(256, 256, &source));
+    REQUIRE(copy != nullptr);
+    CHECK(copy->IsOpaque() == source.IsOpaque());
+    CHECK(copy->HasKnownTransparency() == !source.IsOpaque());
+    CHECK(copy->GetPoint(1, 1) == source.GetPoint(1, 1));
+    source.SetPoint(1, 1, 0x00000000u);
+    CHECK(copy->GetPoint(1, 1) != source.GetPoint(1, 1));
+    CHECK(g_copy_rect_calls == 0);
+    CHECK(g_update_rgba_calls == 0);
+    CHECK(g_read_rgba_calls == 0);
+    copy->Release();
+}
+
+TEST_CASE("Godot cloning a lazy blank bitmap does not create GPU work") {
+    TestGpuBridge bridge;
+    GodotRenderManager manager;
+    GodotTexture2D source(nullptr, 0, 64, 64, TVPTextureFormat::RGBA);
+    auto *copy = static_cast<GodotTexture2D *>(
+        manager.CreateTexture2D(128, 128, &source));
+    REQUIRE(copy != nullptr);
+    CHECK_FALSE(copy->HasGodotGpuHandle());
+    CHECK_FALSE(copy->HasCurrentCpuPixels());
+    CHECK(copy->GetPoint(0, 0) == 0);
+    CHECK(copy->GetPoint(127, 127) == 0);
+    CHECK(g_copy_rect_calls == 0);
+    CHECK(g_read_rgba_calls == 0);
+    copy->Release();
+}
+
+TEST_CASE("Godot CPU preference does not download GPU-authored sources") {
+    TestGpuBridge bridge;
+    GodotRenderManager manager;
+    std::vector<uint32_t> pixels(256u * 256u, 0xff123456u);
+    GodotTexture2D src(pixels.data(), 256 * 4, 256, 256,
+                       TVPTextureFormat::RGBA);
+    GodotTexture2D dst(pixels.data(), 256 * 4, 256, 256,
+                       TVPTextureFormat::RGBA);
+    REQUIRE(dst.GetScanLineForRead(0) != nullptr);
+    REQUIRE(src.EnsureGpuHandle());
+    src.MarkGpuDirty();
+    tRenderTexRectArray::Element source(&src, tTVPRect(0, 0, 256, 256));
+
+    manager.OperateRect(manager.GetRenderMethod("AlphaBlend"), &dst, &dst,
+                        tTVPRect(0, 0, 256, 256),
+                        tRenderTexRectArray(&source, 1));
+    CHECK(g_blend_rect_calls == 1);
+    CHECK(g_read_rgba_calls == 0);
+    CHECK(dst.HasPendingGpuWrites());
+    CHECK_FALSE(dst.PrefersCpuOperations());
+}
+
+TEST_CASE("Godot CPU-accessed affine layers retain CPU residency") {
+    TVPInitTVPGL();
+    TestGpuBridge bridge;
+    GodotRenderManager manager;
+    std::vector<uint32_t> source_pixels(256u * 256u, 0xff123456u);
+    std::vector<uint32_t> target_pixels(256u * 256u, 0x66554433u);
+    GodotTexture2D src(source_pixels.data(), 256 * 4, 256, 256,
+                       TVPTextureFormat::RGBA);
+    GodotTexture2D dst(target_pixels.data(), 256 * 4, 256, 256,
+                       TVPTextureFormat::RGBA);
+    REQUIRE(dst.GetScanLineForRead(0) != nullptr);
+    REQUIRE(src.EnsureGpuHandle());
+    REQUIRE(dst.EnsureGpuHandle());
+    const std::array<tTVPPointD, 6> points = {{
+        {0, 0}, {256, 0}, {0, 256}, {256, 0}, {0, 256}, {256, 256},
+    }};
+    tRenderTexQuadArray::Element source(&src, points.data());
+
+    SECTION("CPU-authored source") {
+        manager.OperateTriangles(manager.GetRenderMethod("CopyColor"), 2,
+                                 &dst, &dst, tTVPRect(0, 0, 256, 256),
+                                 points.data(), tRenderTexQuadArray(&source, 1));
+        CHECK(dst.GetPoint(0, 0) == 0x66123456u);
+        CHECK(dst.GetPoint(255, 255) == 0x66123456u);
+        CHECK(dst.PrefersCpuOperations());
+        CHECK(g_triangle_draw_call.calls == 0);
+    }
+    SECTION("GPU-authored source") {
+        src.MarkGpuDirty();
+        manager.OperateTriangles(manager.GetRenderMethod("CopyColor"), 2,
+                                 &dst, &dst, tTVPRect(0, 0, 256, 256),
+                                 points.data(), tRenderTexQuadArray(&source, 1));
+        CHECK(dst.HasPendingGpuWrites());
+        CHECK(g_triangle_draw_call.calls == 1);
+    }
+    CHECK(g_read_rgba_calls == 0);
+    CHECK(g_update_rgba_calls == 0);
+}
+
+TEST_CASE("Godot CPU-composited fades download static snapshots only once") {
+    TVPInitTVPGL();
+    TestGpuBridge bridge;
+    GodotRenderManager manager;
+    const std::array<uint32_t, 6> pixels = {
+        0xff808080u, 0xff808080u, 0xff808080u,
+        0xff808080u, 0xff808080u, 0xff808080u,
+    };
+    GodotTexture2D src1(pixels.data(), 12, 3, 2, TVPTextureFormat::RGBA);
+    GodotTexture2D src2(pixels.data(), 12, 3, 2, TVPTextureFormat::RGBA);
+    GodotTexture2D dst(pixels.data(), 12, 3, 2, TVPTextureFormat::RGBA);
+    REQUIRE(src2.EnsureGpuHandle());
+    src2.MarkGpuDirty();
+    const tTVPRect rect(0, 0, 3, 2);
+    std::array<tRenderTexRectArray::Element, 2> sources = {{
+        {&src1, rect}, {&src2, rect},
+    }};
+    auto *method = manager.GetRenderMethod("ConstAlphaBlend_SD");
+    const int opacity_id = method->EnumParameterID("opacity");
+
+    SECTION("CPU destination reuses the source readback through the fade") {
+        REQUIRE(dst.GetScanLineForRead(0) != nullptr);
+        for (int opacity : {32, 64, 128, 192}) {
+            method->SetParameterOpa(opacity_id, opacity);
+            manager.OperateRect(method, &dst, nullptr, rect,
+                                tRenderTexRectArray(sources.data(), 2));
+            CHECK(g_read_rgba_calls == 1);
+            CHECK(g_blend_rect_calls == 0);
+            CHECK(dst.PrefersCpuOperations());
+        }
+        // Updating the GPU input invalidates its shadow, so a later frame
+        // must read the new pixels rather than reusing a stale snapshot.
+        src2.MarkGpuDirty();
+        manager.OperateRect(method, &dst, nullptr, rect,
+                            tRenderTexRectArray(sources.data(), 2));
+        CHECK(g_read_rgba_calls == 2);
+    }
+    SECTION("GPU destination keeps the two-source GPU operation") {
+        method->SetParameterOpa(opacity_id, 128);
+        manager.OperateRect(method, &dst, nullptr, rect,
+                            tRenderTexRectArray(sources.data(), 2));
+        CHECK(g_read_rgba_calls == 0);
+        CHECK(g_blend_rect_calls == 1);
+        CHECK(dst.HasPendingGpuWrites());
+    }
 }
 
 TEST_CASE("Godot nearest scaled alpha uses the software sampler") {

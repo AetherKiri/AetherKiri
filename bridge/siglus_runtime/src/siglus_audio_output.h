@@ -14,6 +14,7 @@ namespace aetherkiri::siglus::audio {
     // Closes the stream and logs cumulative drained/underrun statistics.
     // Safe to call when not started.
     void StopOutput();
+    void SetPaused(bool paused);
 
 }  // namespace aetherkiri::siglus::audio
 

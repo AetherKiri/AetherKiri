@@ -864,7 +864,7 @@ namespace TJS {
         iTJSDispatch2 *objthis) {
         // called indirectly from
         // tTJSDictionaryNI::SaveStructuredBinary
-        if(numparams < 3)
+        if(numparams < 2)
             return TJS_E_BADPARAMCOUNT;
         // hidden members are not processed
         tjs_uint32 flags = (tjs_int)*param[1];
@@ -897,7 +897,10 @@ namespace TJS {
                 // reserve area
                 tSaveMemberCountCallback countCallback;
                 tTJSVariantClosure cclo(&countCallback, nullptr);
-                dsp->EnumMembers(TJS_IGNOREPROP, &cclo, dsp);
+                // Sizing only needs names and flags. Copying every value here
+                // adds a second round of object/string refcount traffic to
+                // each dictionary in a deep history snapshot.
+                dsp->EnumMembers(TJS_IGNOREPROP | TJS_ENUM_NO_VALUE, &cclo, dsp);
                 tjs_int reqcount = countCallback.Count + Owner->Count;
                 Owner->RebuildHash(reqcount);
 

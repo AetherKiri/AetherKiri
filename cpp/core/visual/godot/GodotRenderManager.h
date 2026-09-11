@@ -77,6 +77,16 @@ public:
     }
     uint64_t GetGodotGpuHandle() const { return gpu_handle_; }
     bool HasGodotGpuHandle() const { return gpu_handle_ != 0; }
+    bool HasCurrentCpuPixels() const {
+        return !pixels_.empty() && (cpu_dirty_ || !gpu_dirty_);
+    }
+    bool PrefersCpuOperations() const {
+        return cpu_access_expected_ && HasCurrentCpuPixels();
+    }
+    void ExpectCpuAccess() {
+        cpu_access_expected_ = true;
+        retain_cpu_shadow_ = true;
+    }
     bool HasPendingGpuWrites() const { return gpu_dirty_ && !cpu_dirty_; }
     bool RequiresGpuReadback() const {
         return gpu_handle_ != 0 && gpu_dirty_ && !cpu_dirty_;
@@ -137,6 +147,8 @@ public:
     void EnsureCpuReadable();
 
 private:
+    friend class GodotRenderManager;
+    bool CopyCpuSnapshotFrom(GodotTexture2D &source);
     void CreateGpuHandle(const void *pixel, int pitch);
     void ReleaseGpuHandle();
     void EnsureCpuStorage();
@@ -156,6 +168,7 @@ private:
     bool opaque_ = false;
     bool cpu_composite_target_ = false;
     bool retain_cpu_shadow_ = false;
+    bool cpu_access_expected_ = false;
     bool discard_unwritten_on_partial_update_ = false;
     // Fresh render targets are initialized to transparent black. Preserve
     // that fact until the first CPU write so the Godot bridge can allocate

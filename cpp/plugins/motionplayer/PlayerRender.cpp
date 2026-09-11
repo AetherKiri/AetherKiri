@@ -11238,7 +11238,7 @@ namespace motion {
                     layerBytes(entry.unionMaskLayer);
             };
             constexpr std::size_t kCommandOutputCacheLimitBytes =
-                96u * 1024u * 1024u;
+                256u * 1024u * 1024u;
             auto totalBytes = [&]() {
                 std::size_t result = 0;
                 for(const auto &entry : cache) {

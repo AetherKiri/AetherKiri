@@ -179,58 +179,21 @@ void tTVPSystemControl::RunMemoryGovernor(uint32_t tick) {
     }
 #endif
 
-    const tjs_int base_graphic_limit_mb =
-#ifdef __ANDROID__
-        // Android UI screens commonly reuse dozens of decoded RGBA assets.
-        // Keep the normal cache ceiling when memory is healthy; pressure
-        // levels below still shrink it aggressively.
-        TVPClampInt(budget_mb / (MemoryProfile ? 10 : 12), 32,
-                    MemoryProfile ? 96 : 256);
-#else
-        TVPClampInt(budget_mb / (MemoryProfile ? 10 : 12), 16,
-                    MemoryProfile ? 64 : 96);
-#endif
-    tjs_int target_graphic_limit_mb = base_graphic_limit_mb;
-    if(pressure == 1)
-#ifdef __ANDROID__
-        target_graphic_limit_mb =
-            TVPClampInt(base_graphic_limit_mb * 2 / 3, 48, 160);
-#else
-        target_graphic_limit_mb =
-            TVPClampInt(base_graphic_limit_mb * 2 / 3, 24, 64);
-#endif
-    else if(pressure >= 2)
-#ifdef __ANDROID__
-        target_graphic_limit_mb =
-            TVPClampInt(base_graphic_limit_mb / 3, 32, 96);
-#else
-        target_graphic_limit_mb =
-            TVPClampInt(base_graphic_limit_mb / 3, 24, 48);
-#endif
+    // Keep every decoded-graphic cache at the same desktop budget.  The
+    // renderer owns eviction and the caller explicitly requests a 256 MiB
+    // budget; the governor must not silently shrink it back to the old
+    // 48/64/96 MiB pressure values while a game is running.
+    constexpr tjs_int target_graphic_limit_mb = 256;
 
     const tjs_uint64 target_graphic_bytes =
         static_cast<tjs_uint64>(target_graphic_limit_mb) * 1024ULL * 1024ULL;
     if(TVPGetGraphicCacheLimit() != target_graphic_bytes)
         TVPSetGraphicCacheLimit(target_graphic_bytes);
 
-    tjs_uint archive_limit = MemoryProfile ? 48 : 128;
-    if(budget_mb > 2500)
-        archive_limit = 128;
-    if(pressure == 1)
-        archive_limit = std::max<tjs_uint>(32, archive_limit * 3 / 4);
-    else if(pressure == 2)
-        archive_limit = std::max<tjs_uint>(20, archive_limit / 2);
-    else if(pressure >= 3)
-        archive_limit = 12;
+    tjs_uint archive_limit = 256;
     TVPSetArchiveCacheCount(archive_limit);
 
-    tjs_uint auto_path_limit = 256;
-    if(pressure == 1)
-        auto_path_limit = 192;
-    else if(pressure == 2)
-        auto_path_limit = 128;
-    else if(pressure >= 3)
-        auto_path_limit = 96;
+    constexpr tjs_uint auto_path_limit = 256;
     TVPSetAutoPathCacheMaxCount(auto_path_limit);
 
     TVPFreeUnusedLayerCache = (MemoryProfile == 1 || pressure >= 1);

@@ -34,8 +34,23 @@
 extern "C" {
 #endif
 
+/* Borrowed Metal device and retained BGRA8 host target pool (optional). */
+void *siglus_ak_metal_device(void *handle);
+int32_t siglus_ak_select_metal_target(void *handle, void *texture, uint32_t width, uint32_t height);
+/* Non-blocking producer completion status for a shared native target. */
+int32_t siglus_ak_metal_target_ready(void *handle, void *texture);
+void siglus_ak_clear_metal_targets(void *handle);
+
 /* ABI handshake; call once and compare against SIGLUS_AK_FFI_API_VERSION. */
 uint32_t siglus_ak_ffi_api_version(void);
+
+/* Optional process-lifetime, thread-safe JPEG decoder. Zero means success;
+ * errors fall back to Rust. The decoder validates width/height against the JPEG
+ * header before writing exactly width*height*4 top-down RGBA8 bytes. Borrowed
+ * buffers must not escape the call; exceptions must not cross the ABI. */
+typedef int32_t (*siglus_jpeg_decode_fn)(const uint8_t *, size_t, uint32_t,
+                                        uint32_t, uint8_t *, size_t);
+int32_t siglus_register_jpeg_decoder(siglus_jpeg_decode_fn decoder);
 
 /* Creates an empty host shell (no GPU work yet). Owned; destroy exactly once
  * with siglus_ak_destroy. scale_factor > 0 selects the logical pixel density;
@@ -59,6 +74,10 @@ int32_t siglus_ak_resize(void *handle, uint32_t width, uint32_t height);
 /* Advances simulation + renders one offscreen frame. Returns SIGLUS_AK_OK,
  * SIGLUS_AK_EXIT_REQUESTED when the engine asked to quit, or negative. */
 int32_t siglus_ak_step(void *handle, uint32_t dt_ms);
+int32_t siglus_ak_set_paused(void *handle, int32_t paused);
+int32_t siglus_ak_cache_stats(void *handle, uint64_t *cpu_bytes, uint64_t *gpu_bytes,
+                            uint64_t *cpu_limit, uint64_t *gpu_limit);
+int32_t siglus_ak_debug_info(void *handle, char *output, size_t size);
 
 /* Frame geometry of the latest rendered frame (tightly packed RGBA rows).
  * Out pointers may be null individually. */
@@ -73,6 +92,7 @@ int32_t siglus_ak_read_frame_rgba(void *handle, uint8_t *out_pixels,
                                   size_t out_size);
 
 int32_t siglus_ak_mouse_move(void *handle, double x, double y);
+int32_t siglus_ak_pointer_cancel(void *handle);
 int32_t siglus_ak_mouse_button(void *handle, int32_t button, int32_t pressed);
 /* phase: 0 = begin, 1 = move, 2 = end (upstream mobile-host convention). */
 int32_t siglus_ak_touch(void *handle, int32_t phase, double x, double y);
@@ -81,6 +101,16 @@ int32_t siglus_ak_mouse_wheel(void *handle, int32_t delta_y);
 int32_t siglus_ak_key(void *handle, int32_t key_code, int32_t pressed);
 /* NUL-terminated UTF-8; null clears the IME composition. */
 int32_t siglus_ak_text_input(void *handle, const char *text_utf8);
+
+typedef struct siglus_ak_text_input_state_t {
+    uint32_t active;
+    int32_t x, y;
+    uint32_t text_bytes;
+    int32_t selection_start, selection_end;
+} siglus_ak_text_input_state_t;
+int32_t siglus_ak_get_text_input_state(void *handle, siglus_ak_text_input_state_t *output);
+int32_t siglus_ak_copy_text_input_text(void *handle, char *output, size_t size, uint32_t *written);
+int32_t siglus_ak_ime_preedit(void *handle, const char *text_utf8, int32_t start, int32_t length);
 
 /* Native message box bridge; pass null callback for engine-internal UI.
  * String pointers are valid only for the duration of the callback; answers
@@ -91,6 +121,15 @@ typedef void (*siglus_ak_messagebox_fn)(void *user_data, uint64_t request_id,
 int32_t siglus_ak_set_messagebox_callback(void *handle,
                                           siglus_ak_messagebox_fn callback,
                                           void *user_data);
+
+typedef void (*siglus_ak_platform_request_fn)(void *user_data, const char *operation,
+                                             const char *argument);
+int32_t siglus_ak_set_platform_request_callback(void *handle,
+                                               siglus_ak_platform_request_fn callback,
+                                               void *user_data);
+int32_t siglus_ak_submit_platform_response(void *handle, const char *operation,
+                                          const char *argument);
+int32_t siglus_ak_joypad_button(void *handle, uint32_t button, uint32_t pressed);
 int32_t siglus_ak_submit_messagebox_result(void *handle, uint64_t request_id,
                                            int64_t value);
 

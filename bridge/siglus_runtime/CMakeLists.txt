@@ -22,6 +22,7 @@ if(NOT siglus_scene_vm_rs_FOUND)
 endif()
 
 find_package(OpenAL CONFIG REQUIRED)
+find_package(libjpeg-turbo CONFIG REQUIRED)
 
 if(APPLE)
     # vcpkg's static OpenAL target exports clang-driver flags. They are either
@@ -41,7 +42,16 @@ endif()
 add_library(aether_siglus_runtime STATIC
     src/siglus_runtime_provider.cpp
     src/siglus_audio_output.cpp
+    src/siglus_jpeg_decoder.cpp
 )
+if(APPLE)
+    enable_language(OBJCXX)
+    target_sources(aether_siglus_runtime PRIVATE src/siglus_shared_frame.mm)
+    target_include_directories(aether_siglus_runtime PRIVATE "${CMAKE_SOURCE_DIR}/cpp/core/visual/godot")
+    target_link_libraries(aether_siglus_runtime PRIVATE "-framework CoreVideo" "-framework Metal")
+else()
+    target_sources(aether_siglus_runtime PRIVATE src/siglus_shared_frame.cpp)
+endif()
 
 target_compile_features(aether_siglus_runtime PUBLIC cxx_std_17)
 set_target_properties(aether_siglus_runtime PROPERTIES
@@ -66,4 +76,9 @@ target_link_libraries(aether_siglus_runtime PUBLIC
 # SDL audio consumer alongside the krkrsdl3/ONS hosts.
 target_link_libraries(aether_siglus_runtime PRIVATE
     OpenAL::OpenAL
+    $<IF:$<TARGET_EXISTS:libjpeg-turbo::turbojpeg>,libjpeg-turbo::turbojpeg,libjpeg-turbo::turbojpeg-static>
 )
+
+if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_siglus)
+    aetherinternal_extend_siglus(aether_siglus_runtime)
+endif()

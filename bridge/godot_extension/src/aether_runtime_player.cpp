@@ -165,6 +165,7 @@ struct GodotGpuTextureRecord {
     Ref<Texture2DRD> texture;
     uint32_t width = 0;
     uint32_t height = 0;
+    RenderingDevice::DataFormat format = RenderingDevice::DATA_FORMAT_R8G8B8A8_UNORM;
     // AlphaBlend_d dispatches are asynchronous. A following scratch-layer
     // clear must not rewrite this RID until the queued shader has sampled it.
     bool requires_alpha_d_clear_version = false;
@@ -1517,6 +1518,11 @@ bool SupportsGodotRenderingDeviceGpu() {
            method.find("gl_compatibility") == std::string::npos &&
            driver.find("opengl") == std::string::npos &&
            driver.find("OpenGL") == std::string::npos;
+}
+
+bool GodotUsesNativeMetal() {
+    auto *server = RenderingServer::get_singleton();
+    return server != nullptr && server->get_current_rendering_driver_name().to_lower() == "metal";
 }
 
 bool DirectPresentGodotNativeFrameEnabled() {
@@ -5620,7 +5626,7 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
             return AetherApplePollMetalCommandQueue(
                 rd->get_driver_resource(
                     RenderingDevice::DRIVER_RESOURCE_COMMAND_QUEUE,
-                    RID(), 0));
+                    RID(), 0), GodotUsesNativeMetal());
 #else
             ApplyGodotGpuBarrier(rd);
             return true;
@@ -5637,7 +5643,7 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
                 RenderingDevice::DRIVER_RESOURCE_LOGICAL_DEVICE, RID(), 0);
             void *vulkan_external_texture = nullptr;
             RID rid;
-#if defined(IOS_ENABLED)
+            if (GodotUsesNativeMetal()) {
             const uint64_t native_texture =
                 AetherAppleCreateMetalTextureFromPixelBuffer(
                     device, op->native_image, op->native_width,
@@ -5656,7 +5662,8 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
                 AetherAppleReleaseMetalTexture(native_texture);
                 return false;
             }
-#else
+            } else {
+#if !defined(IOS_ENABLED)
             const uint64_t physical_device = rd->get_driver_resource(
                 RenderingDevice::DRIVER_RESOURCE_PHYSICAL_DEVICE, RID(), 0);
             const uint64_t command_queue = rd->get_driver_resource(
@@ -5688,13 +5695,17 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
                 AetherAppleReleaseVulkanTexture(vulkan_external_texture);
                 return false;
             }
+#else
+            return false;
 #endif
+            }
 
             GodotGpuTextureRecord record;
             record.rid = rid;
             record.width = op->native_width;
             record.height = op->native_height;
             record.apple_pixel_buffer = op->native_image;
+            record.format = RenderingDevice::DATA_FORMAT_B8G8R8A8_UNORM;
             record.apple_vulkan_external_texture = vulkan_external_texture;
             AetherAppleRetainPixelBuffer(record.apple_pixel_buffer);
             record.texture.instantiate();
@@ -7384,7 +7395,8 @@ bool BridgePublishNativeWrite(uint64_t texture) {
     // and PrepareForExport() flush make this generation visible; no second
     // Metal copy or out-of-band write to a MoltenVK-owned texture is needed.
     return record.rid.is_valid() &&
-           record.apple_vulkan_external_texture != nullptr;
+           (record.apple_vulkan_external_texture != nullptr ||
+            (GodotUsesNativeMetal() && record.apple_pixel_buffer != nullptr));
 #else
     (void)texture;
     return true;
@@ -7669,8 +7681,16 @@ bool BridgeCopyRect(uint64_t dst, uint64_t src, const tTVPRect *dst_rect,
     // otherwise terminates that batch for every child layer, creating hundreds
     // of Metal submissions per frame. The shader path uses integer imageLoad /
     // imageStore conversion and copies all RGBA channels exactly.
-    op->type =
-        dst == src ? GodotGpuOp::Type::CopySelf : GodotGpuOp::Type::Blend;
+    // Keep non-aliasing copies as their own queue operation.  A copy is often
+    // immediately followed by a blend that samples the same scratch layer
+    // (PackinOne/PSD atlas slices do this for every UI state).  Treating the
+    // copy as a regular blend lets it join a large compute batch; on Metal the
+    // following dispatch can then observe the previous scratch contents even
+    // though a compute-list barrier was recorded.  A standalone copy keeps
+    // the producer/consumer boundary explicit without forcing the pixels
+    // through a CPU readback.
+    op->type = dst == src ? GodotGpuOp::Type::CopySelf
+                          : GodotGpuOp::Type::Copy;
     op->src = src_record.rid;
     op->dst = dst_record.rid;
     op->src_pos = Vector3(src_rect->left, src_rect->top, 0);
@@ -9590,6 +9610,20 @@ public:
         return result;
     }
 
+    int send_ime_preedit(const String& text, int start, int length) {
+        if (handle_ == nullptr) return ENGINE_RESULT_INVALID_STATE;
+        const CharString cursor = (String::num_int64(start) + "," + String::num_int64(length)).utf8();
+        engine_option_t option{};
+        option.key_utf8 = "ime_preedit_cursor";
+        option.value_utf8 = cursor.get_data();
+        const auto result = engine_set_option(handle_, &option);
+        if (result != ENGINE_RESULT_OK) return result;
+        const CharString utf8 = text.utf8();
+        option.key_utf8 = "ime_preedit";
+        option.value_utf8 = utf8.get_data();
+        return engine_set_option(handle_, &option);
+    }
+
     Dictionary get_text_input_state() {
         Dictionary state;
         state["available"] = false;
@@ -11083,6 +11117,8 @@ protected:
                              &AetherRuntimePlayer::send_text_input);
         ClassDB::bind_method(D_METHOD("get_text_input_state"),
                              &AetherRuntimePlayer::get_text_input_state);
+        ClassDB::bind_method(D_METHOD("send_ime_preedit", "text", "start", "length"),
+                             &AetherRuntimePlayer::send_ime_preedit);
         ClassDB::bind_method(D_METHOD("get_startup_state"),
                              &AetherRuntimePlayer::get_startup_state);
         ClassDB::bind_method(D_METHOD("drain_startup_logs"),
@@ -11814,7 +11850,7 @@ private:
         return frame_rd_texture_;
     }
 
-    bool ensure_presentation_textures(uint32_t width, uint32_t height) {
+    bool ensure_presentation_textures(uint32_t width, uint32_t height, RenderingDevice::DataFormat source_format) {
         RenderingDevice *rd = main_rendering_device();
         if (rd == nullptr || !SupportsGodotRenderingDeviceGpu() ||
             width == 0 || height == 0) {
@@ -11824,6 +11860,7 @@ private:
         const bool reusable =
             frame_present_width_ == width &&
             frame_present_height_ == height &&
+            frame_present_format_ == source_format &&
             frame_present_rids_[0].is_valid() &&
             frame_present_rids_[1].is_valid() &&
             frame_present_textures_[0].is_valid() &&
@@ -11834,6 +11871,9 @@ private:
 
         release_presentation_textures(true);
         Ref<RDTextureFormat> format = MakeRgbaTextureFormat(width, height);
+        // texture_copy preserves bytes; it cannot convert BGRA to RGBA.
+        // Keep the producer format through the presentation ring.
+        format->set_format(source_format);
         Ref<RDTextureView> view;
         view.instantiate();
         TypedArray<PackedByteArray> initial_data;
@@ -11849,6 +11889,7 @@ private:
         }
         frame_present_width_ = width;
         frame_present_height_ = height;
+        frame_present_format_ = source_format;
         frame_present_current_slot_ = 0;
         frame_present_pending_slot_ = 0;
         frame_present_has_current_ = false;
@@ -11871,7 +11912,7 @@ private:
             !source.rid.is_valid()) {
             return Ref<Texture2D>();
         }
-        if (!ensure_presentation_textures(width, height)) {
+        if (!ensure_presentation_textures(width, height, source.format)) {
             return Ref<Texture2D>();
         }
         // The texture contents can change while the engine serial remains the
@@ -11997,7 +12038,7 @@ private:
 
         RID imported_rid = rd->texture_create_from_extension(
             RenderingDevice::TEXTURE_TYPE_2D,
-            RenderingDevice::DATA_FORMAT_R8G8B8A8_UNORM,
+            source.format,
             RenderingDevice::TEXTURE_SAMPLES_1,
             BitField<RenderingDevice::TextureUsageBits>(
                 RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
@@ -12107,6 +12148,7 @@ private:
     std::array<RID, 2> frame_present_rids_;
     uint32_t frame_present_width_ = 0;
     uint32_t frame_present_height_ = 0;
+    RenderingDevice::DataFormat frame_present_format_ = RenderingDevice::DATA_FORMAT_R8G8B8A8_UNORM;
     size_t frame_present_current_slot_ = 0;
     size_t frame_present_pending_slot_ = 0;
     bool frame_present_has_current_ = false;

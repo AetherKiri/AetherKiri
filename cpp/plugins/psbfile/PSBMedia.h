@@ -165,9 +165,9 @@ namespace PSB {
         std::list<std::string> _lru;
         size_t _bytesInUse = 0;
         size_t _configuredMaxEntryCount = 2048;
-        size_t _configuredMaxByteSize = 192ULL * 1024ULL * 1024ULL;
+        size_t _configuredMaxByteSize = 256ULL * 1024ULL * 1024ULL;
         size_t _maxEntryCount = 2048;
-        size_t _maxByteSize = 192ULL * 1024ULL * 1024ULL;
+        size_t _maxByteSize = 256ULL * 1024ULL * 1024ULL;
         uint64_t _hitCount = 0;
         uint64_t _missCount = 0;
         std::unordered_set<std::string> _loadedArchives;

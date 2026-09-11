@@ -53,6 +53,7 @@ namespace aetherkiri::siglus::audio {
         ALuint g_buffers[kBufferCount] = {};
         std::thread g_pump;
         std::atomic<bool> g_stop { false };
+        std::atomic<bool> g_paused { false };
         uint32_t g_rate = 0;
 
         void PrintStats(const char *tag) {
@@ -124,6 +125,11 @@ namespace aetherkiri::siglus::audio {
             alSourcePlay(g_source);
 
             while(!g_stop.load(std::memory_order_relaxed)) {
+                if(g_paused.load(std::memory_order_acquire)) {
+                    alSourcePause(g_source);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(8));
+                    continue;
+                }
                 ALint processed = 0;
                 alGetSourcei(g_source, AL_BUFFERS_PROCESSED, &processed);
                 while(processed-- > 0) {
@@ -237,6 +243,7 @@ namespace aetherkiri::siglus::audio {
             RefillBuffer(buffer);
         }
         g_stop.store(false, std::memory_order_relaxed);
+        g_paused.store(false, std::memory_order_relaxed);
         g_pump = std::thread(PumpLoop);
         PrintStats("started");
         return true;
@@ -245,6 +252,10 @@ namespace aetherkiri::siglus::audio {
     void StopOutput() {
         std::lock_guard<std::mutex> lock(g_mutex);
         StopLocked();
+    }
+
+    void SetPaused(bool paused) {
+        g_paused.store(paused, std::memory_order_release);
     }
 
 }  // namespace aetherkiri::siglus::audio

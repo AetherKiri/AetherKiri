@@ -118,7 +118,32 @@ function(aetherkiri_add_siglus_rs imported_target)
         return()
     endif()
 
-    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    # The host build type and the Rust profile are normally kept in lockstep,
+    # but keeping them independently selectable is useful for profiling: a
+    # Debug Godot/editor shell can load an optimized Rust runtime without
+    # changing the host's debug assertions or export mode. The environment
+    # override is intentionally opt-in and is consumed at configure time, so
+    # the generated cargo command remains deterministic afterwards.
+    set(rust_profile_override "$ENV{AETHERKIRI_SIGLUS_RS_PROFILE}")
+    if(DEFINED AETHERKIRI_SIGLUS_RS_PROFILE AND
+            NOT "${AETHERKIRI_SIGLUS_RS_PROFILE}" STREQUAL "")
+        set(rust_profile_override "${AETHERKIRI_SIGLUS_RS_PROFILE}")
+    endif()
+    string(TOLOWER "${rust_profile_override}" rust_profile_override)
+    if(NOT "${rust_profile_override}" STREQUAL "" AND
+            NOT "${rust_profile_override}" STREQUAL "debug" AND
+            NOT "${rust_profile_override}" STREQUAL "release")
+        message(FATAL_ERROR
+            "AETHERKIRI_SIGLUS_RS_PROFILE must be debug or release, got "
+            "${rust_profile_override}")
+    endif()
+    if("${rust_profile_override}" STREQUAL "release")
+        set(rust_profile "release")
+        set(rust_profile_flag "--release")
+    elseif("${rust_profile_override}" STREQUAL "debug")
+        set(rust_profile "debug")
+        set(rust_profile_flag "")
+    elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
         set(rust_profile "debug")
         set(rust_profile_flag "")
     else()
@@ -219,6 +244,14 @@ function(aetherkiri_add_siglus_rs imported_target)
         list(PREPEND SIGLUS_PATH_PREFIX "PATH=${siglus_path_leading}$ENV{PATH}")
     else()
         list(PREPEND SIGLUS_PATH_PREFIX "PATH=${siglus_path_leading}\;$ENV{PATH}")
+    endif()
+
+    # Rust and cc-rs native dependencies must use the same macOS minimum as
+    # the embedding application, including x86_64 builds made on Apple Silicon.
+    if(APPLE AND NOT IOS AND CMAKE_OSX_DEPLOYMENT_TARGET
+            AND rust_triple MATCHES "-apple-darwin$")
+        list(APPEND SIGLUS_PATH_PREFIX
+            "MACOSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}")
     endif()
 
     # Panic = abort keeps unwinding from ever crossing the C boundary while the

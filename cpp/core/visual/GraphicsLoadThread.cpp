@@ -14,6 +14,7 @@
 #include "BitmapBitsAlloc.h"
 #include "LayerIntf.h"
 #include "TVPDecodeArena.h"
+#include "../environ/Application.h"
 
 tTVPTmpBitmapImage::tTVPTmpBitmapImage() : MetaInfo(nullptr) {}
 tTVPTmpBitmapImage::~tTVPTmpBitmapImage() {
@@ -140,8 +141,16 @@ void tTVPAsyncImageLoader::HandleLoadedImage() {
             }
         }
         if(cmd != nullptr) {
-            cmd->bmp_->SetLoading(false);
             if(cmd->result_.length() > 0) {
+                if(cmd->prefetch_) {
+                    if(cmd->dest_->bmp) {
+                        cmd->dest_->bmp->Release();
+                        cmd->dest_->bmp = nullptr;
+                    }
+                    delete cmd;
+                    continue;
+                }
+                cmd->bmp_->SetLoading(false);
                 cmd->bmp_->OnAsyncImageLoaded(false);
                 // error
                 tTJSVariant param[4];
@@ -163,10 +172,14 @@ void tTVPAsyncImageLoader::HandleLoadedImage() {
                     cmd->dest_->MetaInfo = nullptr;
                 }
             } else {
-                iTJSDispatch2 *metainfo =
+                // Build the callback dictionary before handing ownership of
+                // MetaInfo to the cache (or dropping a duplicate entry).
+                iTJSDispatch2 *metainfo = cmd->prefetch_ ? nullptr :
                     TVPMetaInfoPairsToDictionary(cmd->dest_->MetaInfo);
-
-                cmd->bmp_->SetSizeAndImageBuffer(cmd->dest_->bmp);
+                if(!cmd->prefetch_) {
+                    cmd->bmp_->SetLoading(false);
+                    cmd->bmp_->SetSizeAndImageBuffer(cmd->dest_->bmp);
+                }
                 // 読込み完了時にもキャッシュチェック(非同期なので完了前に読み込まれている可能性あり)
                 if(TVPHasImageCache(cmd->path_, glmNormal, 0, 0, TVP_clNone) ==
                    false) {
@@ -177,8 +190,14 @@ void tTVPAsyncImageLoader::HandleLoadedImage() {
                     delete cmd->dest_->MetaInfo;
                     cmd->dest_->MetaInfo = nullptr;
                 }
+                // Drop the loader's reference, not the bitmap itself: the
+                // graphic cache (and a normal Bitmap owner) may retain it.
                 cmd->dest_->bmp->Release();
                 cmd->dest_->bmp = nullptr;
+                if(cmd->prefetch_) {
+                    delete cmd;
+                    continue;
+                }
                 cmd->bmp_->OnAsyncImageLoaded(true);
 
                 tTJSVariant param[4];
@@ -241,6 +260,36 @@ void tTVPAsyncImageLoader::LoadRequest(iTJSDispatch2 *owner, tTJSNI_Bitmap *bmp,
     }
 
     PushLoadQueue(owner, bmp, nname);
+}
+
+void tTVPAsyncImageLoader::PrefetchRequest(const ttstr &name) {
+    if(name.IsEmpty())
+        return;
+
+    const ttstr nname = TVPNormalizeStorageName(name);
+    tTVPBaseBitmap probe(TVPGetInitialBitmap());
+    if(TVPCheckImageCache(nname, &probe, glmNormal, 0, 0, TVP_clNone,
+                          nullptr))
+        return;
+    if(!TVPIsExistentStorage(nname))
+        return;
+
+    auto *cmd = new tTVPImageLoadCommand();
+    cmd->prefetch_ = true;
+    cmd->path_ = nname;
+    cmd->dest_ = new tTVPTmpBitmapImage();
+    cmd->result_.Clear();
+    {
+        tTJSCriticalSectionHolder cs(CommandQueueCS);
+        CommandQueue.push(cmd);
+    }
+    PushCommandQueueEvent.Set();
+}
+
+void TVPPreloadGraphic(const ttstr &name) {
+    if(!Application || !Application->GetAsyncImageLoader())
+        return;
+    Application->GetAsyncImageLoader()->PrefetchRequest(name);
 }
 
 // tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);

@@ -445,6 +445,15 @@ engine_result_t SelectBackendLocked(DispatchHandle* handle,
       option.key_utf8 = option_value.first.c_str();
       option.value_utf8 = option_value.second.c_str();
       result = handle->provider->set_option(handle->runtime, &option);
+      if (result == ENGINE_RESULT_NOT_SUPPORTED) {
+        // Options queued before auto-detection may belong to another engine
+        // (the common shell configures KiriKiri tracing, plugin loading, etc.).
+        // Providers must be able to reject those without pretending they were
+        // applied. Only this pre-selection replay is optional; direct option
+        // calls still return NOT_SUPPORTED to the caller.
+        handle->startup_logs.push_back("runtime option not applicable: " + option_value.first);
+        continue;
+      }
       if (result != ENGINE_RESULT_OK) {
         SetProviderError(handle, result, "runtime provider rejected an option");
         return result;
@@ -1391,6 +1400,9 @@ engine_result_t engine_get_text_input_state(
                [&](DispatchHandle* handle) {
                  engine_text_input_state_t snapshot{};
                  snapshot.struct_size = sizeof(snapshot);
+                 if (PROVIDER_HAS(handle->provider, get_text_input_details)) {
+                   return handle->provider->get_text_input_details(handle->runtime, out_state);
+                 }
                  if (!PROVIDER_HAS(handle->provider, get_text_input_state)) {
                    *out_state = snapshot;
                    return ENGINE_RESULT_OK;
@@ -1432,7 +1444,11 @@ engine_result_t engine_copy_text_input_text(engine_handle_t public_handle,
                  return engine_legacy_copy_text_input_text(
                      legacy, out_buffer, buffer_size, out_bytes_written);
                },
-               [&](DispatchHandle*) { return ENGINE_RESULT_OK; });
+               [&](DispatchHandle* handle) {
+                 return PROVIDER_HAS(handle->provider, copy_text_input_text)
+                     ? handle->provider->copy_text_input_text(handle->runtime, out_buffer, buffer_size, out_bytes_written)
+                     : ENGINE_RESULT_OK;
+               });
 }
 
 engine_result_t engine_get_main_menu_json(engine_handle_t public_handle,
