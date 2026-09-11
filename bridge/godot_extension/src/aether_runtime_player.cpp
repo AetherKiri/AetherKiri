@@ -1704,9 +1704,10 @@ bool DeferredGodotGpuDrainEnabled() {
         const char *value = std::getenv("AETHERKIRI_GODOT_DEFER_GPU_DRAIN");
         // Deferring operations created on Godot's render thread lets a clear
         // become visible before the following blends during fast page
-        // transitions on Metal.  Execute those operations immediately by
-        // default; the old batched behavior remains available for profiling
-        // with AETHERKIRI_GODOT_DEFER_GPU_DRAIN=1.
+        // transitions on Metal. Desktop keeps the historical immediate
+        // behavior, while Android defaults to the ordered deferred queue so
+        // a provider tick does not wait on the separate Godot render thread.
+        // AETHERKIRI_GODOT_DEFER_GPU_DRAIN overrides either platform default.
         if (value == nullptr || value[0] == '\0') {
             return TVP_GODOT_DEFER_GPU_DRAIN_DEFAULT;
         }

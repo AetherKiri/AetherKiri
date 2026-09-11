@@ -444,11 +444,10 @@ bool IsFullTextureRect(const tTVPRect &rc, int width, int height);
 // sequence on the GPU looks attractive, but every later software operation
 // then has to synchronously download the whole 1920x1080 image.  On Metal
 // that download is the dominant source of the visible 50--150 ms spikes.
-// Once a destination already has pending GPU writes, switch that surface to
-// the software side at the next destination-reading blend.  The first
-// operation performs the one readback required for exact pixels; subsequent
-// operations stay CPU-resident and the final upload happens only at the
-// normal presentation boundary.
+// Desktop therefore switches a pending destination to the software side at
+// the next destination-reading blend. Android leaves compatible operations on
+// the ordered GPU queue to avoid paying that readback during the provider tick;
+// the `AETHERKIRI_GODOT_CPU_STAGING=1` override restores the desktop policy.
 bool ReadsExistingDestination(const char *name, const tTVPRect &rect,
                               const GodotTexture2D *dst) {
     if (name == nullptr || dst == nullptr) return false;
@@ -468,11 +467,21 @@ bool ReadsExistingDestination(const char *name, const tTVPRect &rect,
 bool CpuStagingOnGpuReadback() {
     static const bool enabled = []() {
         const char *value = std::getenv("AETHERKIRI_GODOT_CPU_STAGING");
-        // Keep this conservative optimization on by default.  It only takes
-        // effect after a destination has pending GPU writes and never changes
-        // the pixel operation itself.
-        return value == nullptr || value[0] == '\0' ||
-               std::strcmp(value, "0") != 0;
+        if (value != nullptr && value[0] != '\0') {
+            return std::strcmp(value, "0") != 0;
+        }
+        // On Android, leave the destination on the ordered GPU path whenever
+        // the blend operation has a bridge implementation.  Promoting it to
+        // the CPU compositor here forces a full GPU->CPU readback in the
+        // middle of a provider tick, which is the source of the large mobile
+        // frame spikes. Unsupported/aliasing operations still fall back to
+        // the exact software path below. Desktop keeps the conservative
+        // staging policy that avoids an extra boundary on older drivers.
+#if defined(__ANDROID__)
+        return false;
+#else
+        return true;
+#endif
     }();
     return enabled;
 }
