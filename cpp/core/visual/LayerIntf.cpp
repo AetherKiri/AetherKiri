@@ -134,6 +134,36 @@ namespace {
         return value && *value && *value != '0';
     }
 
+    inline bool TVPDeferLayerOnPaint() {
+        const char *value = std::getenv("AETHERKIRI_DEFER_LAYER_ONPAINT");
+        return value && *value && *value != '0';
+    }
+
+    inline bool TVPKeepFrameDuringAsyncImageLoad() {
+        const char *value =
+            std::getenv("AETHERKIRI_ASYNC_LARGE_IMAGE_KEEP_FRAME");
+        return value && *value && *value != '0';
+    }
+
+    inline uint64_t TVPAsyncLargeImageLoadPixelLimit() {
+        // Keep the historical 1920x1080 cutoff unless a probe or a
+        // compatibility profile explicitly asks to stage smaller TLGs too.
+        // The override is deliberately opt-in: older scripts can depend on
+        // a small layer being populated before loadImages returns.
+        constexpr uint64_t kDefaultPixels = 1920ULL * 1080ULL;
+        const char *value =
+            std::getenv("AETHERKIRI_ASYNC_LARGE_IMAGE_PIXELS");
+        if(!value || !*value) {
+            return kDefaultPixels;
+        }
+        char *end = nullptr;
+        const unsigned long long parsed = std::strtoull(value, &end, 10);
+        if(end == value || *end != '\0' || parsed == 0) {
+            return kDefaultPixels;
+        }
+        return static_cast<uint64_t>(parsed);
+    }
+
     inline bool TVPShouldDeferLargeTLG(const ttstr &name, tjs_uint32 colorkey,
                                        tjs_uint &width, tjs_uint &height) {
         if(!TVPAsyncLargeImageLoadEnabled() || colorkey != TVP_clNone)
@@ -152,8 +182,8 @@ namespace {
                 return false;
             width = static_cast<tjs_uint>(header_width);
             height = static_cast<tjs_uint>(header_height);
-            constexpr uint64_t kLargeImagePixels = 1920ULL * 1080ULL;
-            return static_cast<uint64_t>(width) * height >= kLargeImagePixels;
+            return static_cast<uint64_t>(width) * height >=
+                TVPAsyncLargeImageLoadPixelLimit();
         } catch(...) {
             // Header probing is an optimization only. If a virtual/pack-backed
             // source cannot expose a header, use the established loader.
@@ -543,6 +573,22 @@ static bool TVPLayerLoadTraceEnabled() {
         return value && *value && *value != '0';
     }();
     return enabled;
+}
+
+static bool TVPLayerIsImmutableRepeatedImage(const ttstr &name) {
+    const char *value = std::getenv("AETHERKIRI_SKIP_REDUNDANT_IMAGE_LOADS");
+    if(value && *value == '0')
+        return false;
+    std::string lower = name.AsStdString();
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](const unsigned char ch) {
+                       return static_cast<char>(std::tolower(ch));
+                   });
+    // These are immutable full-frame/UI assets in the affected PIMG title.
+    // Re-reading them into the same layer only reuploads identical pixels;
+    // keeping the existing image preserves the authored scene exactly.
+    return lower.find("facemask") != std::string::npos ||
+        lower.find("textwindow.pimg/2.tlg") != std::string::npos;
 }
 
 static bool TVPAffineTraceEnabled() {
@@ -2943,10 +2989,50 @@ static bool TVPLayerLoadPimgComposite(tTJSNI_BaseLayer *layer,
     const std::string archive =
         TVPLayerPimgArchiveFromStorage(storage.AsStdString());
     const std::string setonText = seton.AsStdString();
+    const bool profile = [] {
+        const char *value = std::getenv("AETHERKIRI_PIMG_PROFILE");
+        return value && *value && *value != '0';
+    }();
+    const auto profileStart = profile ? std::chrono::steady_clock::now()
+                                      : std::chrono::steady_clock::time_point{};
     const std::vector<std::string> requestedLayers =
         TVPLayerSplitPimgSeton(setonText);
     if(archive.empty() || requestedLayers.empty()) {
         return false;
+    }
+
+    // PIMG stands are immutable: the same archive/seton combination always
+    // produces the same pixels.  StandImage asks for those combinations again
+    // on every dialogue transition, and rebuilding the complete composite can
+    // otherwise spend 50-150 ms decoding and blending the same PSD layers.
+    // Keep a bounded CPU bitmap cache for the composite itself.  We still copy
+    // into the destination layer, so callers retain their normal ownership and
+    // mutation semantics and no rendered pixels are shared with the scene.
+    struct PimgCompositeCacheEntry {
+        std::shared_ptr<tTVPBaseBitmap> bitmap;
+        size_t bytes = 0;
+    };
+    static std::mutex compositeCacheMutex;
+    static std::unordered_map<std::string, PimgCompositeCacheEntry>
+        compositeCache;
+    static size_t compositeCacheBytes = 0;
+    const char *cacheEnv = std::getenv("AETHERKIRI_PIMG_COMPOSITE_CACHE");
+    const bool cacheEnabled = cacheEnv == nullptr || *cacheEnv != '0';
+    const std::string cacheKey = archive + "\n" + setonText + "\n" +
+        std::to_string(colorkey);
+    if(cacheEnabled) {
+        std::lock_guard<std::mutex> lock(compositeCacheMutex);
+        const auto found = compositeCache.find(cacheKey);
+        if(found != compositeCache.end() && found->second.bitmap) {
+            if(profile) {
+                const double elapsed = std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - profileStart).count();
+                spdlog::info("PIMG profile cache-hit archive={} seton={} total_ms={:.3f}",
+                             archive, setonText, elapsed);
+            }
+            layer->AssignMainImageWithUpdate(found->second.bitmap.get());
+            return true;
+        }
     }
 
     media->ensureArchiveLoaded(archive, false);
@@ -2958,6 +3044,9 @@ static bool TVPLayerLoadPimgComposite(tTJSNI_BaseLayer *layer,
     if(entries.empty()) {
         return false;
     }
+
+    const auto entriesDone = profile ? std::chrono::steady_clock::now()
+                                     : std::chrono::steady_clock::time_point{};
 
     std::unordered_map<std::string, const PSB::PSBMedia::ImageInfoEntry *>
         entriesByLabel;
@@ -3019,8 +3108,18 @@ static bool TVPLayerLoadPimgComposite(tTJSNI_BaseLayer *layer,
             iTJSDispatch2 *layerMeta = nullptr;
             const ttstr layerStorage =
                 ttstr(TJS_W("psb://")) + ttstr(entry->key.c_str());
+            const auto loadStart = profile ? std::chrono::steady_clock::now()
+                                           : std::chrono::steady_clock::time_point{};
             TVPLoadGraphic(&source, layerStorage, colorkey, 0, 0, glmNormal,
                            nullptr, compositeMeta ? nullptr : &layerMeta);
+            if(profile) {
+                const double loadMs = std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - loadStart).count();
+                spdlog::info(
+                    "PIMG profile layer archive={} seton={} key={} size={}x{} load_ms={:.3f}",
+                    archive, setonText, entry->key, source.GetWidth(),
+                    source.GetHeight(), loadMs);
+            }
             if(layerMeta) {
                 if(!compositeMeta) {
                     compositeMeta = layerMeta;
@@ -3048,7 +3147,46 @@ static bool TVPLayerLoadPimgComposite(tTJSNI_BaseLayer *layer,
             return false;
         }
 
+        if(cacheEnabled) {
+            auto cached = std::make_shared<tTVPBaseBitmap>(canvas);
+            const size_t bytes = static_cast<size_t>(cached->GetWidth()) *
+                static_cast<size_t>(cached->GetHeight()) *
+                std::max<size_t>(1, static_cast<size_t>(cached->GetBPP() / 8));
+            std::lock_guard<std::mutex> lock(compositeCacheMutex);
+            auto existing = compositeCache.find(cacheKey);
+            if(existing != compositeCache.end()) {
+                compositeCacheBytes -= existing->second.bytes;
+                existing->second = {std::move(cached), bytes};
+            } else {
+                compositeCache.emplace(cacheKey,
+                                       PimgCompositeCacheEntry{std::move(cached),
+                                                               bytes});
+            }
+            compositeCacheBytes += bytes;
+            // Keep at most 256 MiB and at most 64 entries.  Eviction is
+            // intentionally simple; cache entries are immutable and a later
+            // transition can rebuild an evicted combination safely.
+            while(compositeCacheBytes > 256u * 1024u * 1024u ||
+                  compositeCache.size() > 64) {
+                auto victim = compositeCache.begin();
+                if(victim == compositeCache.end())
+                    break;
+                compositeCacheBytes -= victim->second.bytes;
+                compositeCache.erase(victim);
+            }
+        }
+
         layer->AssignMainImageWithUpdate(&canvas);
+        if(profile) {
+            const double totalMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - profileStart).count();
+            const double entriesMs = std::chrono::duration<double, std::milli>(
+                entriesDone - profileStart).count();
+            spdlog::info(
+                "PIMG profile complete archive={} seton={} entries={} selected={} bounds={}x{} entries_ms={:.3f} total_ms={:.3f}",
+                archive, setonText, entries.size(), selected.size(),
+                bounds.width, bounds.height, entriesMs, totalMs);
+        }
         spdlog::debug(
             "Layer.loadImages PIMG composite storage={} archive={} seton={} origin={},{} size={}x{} layers={}",
             storage.AsStdString(), archive, setonText, bounds.left, bounds.top,
@@ -6619,6 +6757,12 @@ iTJSDispatch2 *tTJSNI_BaseLayer::LoadImages(const ttstr &name,
     //                          alpha blending.
     // returns graphic image metainfo.
 
+    if(TVPLayerIsImmutableRepeatedImage(name) && MainImage &&
+       !_bitmapEvicted && name == _evictedImageName &&
+       colorkey == _evictedColorKey) {
+        return nullptr;
+    }
+
     if(_bitmapEvicted) {
         AllocateImage();
         _bitmapEvicted = false;
@@ -6672,7 +6816,16 @@ iTJSDispatch2 *tTJSNI_BaseLayer::LoadImages(const ttstr &name,
         // already contains a frame this keeps it visible; a newly-created
         // layer receives a correctly-sized neutral canvas until decoding
         // completes on the worker.
-        ChangeImageSize(deferred_width, deferred_height);
+        // Resizing/filling a full stage texture here can itself create a long
+        // frame before the worker has produced any pixels.  An opt-in probe
+        // mode keeps the currently presented frame and lets the completion
+        // callback publish the decoded image (and its authored dimensions)
+        // atomically.  The default path retains the historical sizing
+        // semantics for scripts that inspect image dimensions immediately.
+        if(!TVPKeepFrameDuringAsyncImageLoad() || !MainImage ||
+           MainImage->GetWidth() <= 1 || MainImage->GetHeight() <= 1) {
+            ChangeImageSize(deferred_width, deferred_height);
+        }
         auto *async_bitmap = new TVPLayerDeferredBitmap(
             this, DeferredImageLoadToken, load_name, colorkey, generation);
         try {
@@ -8264,7 +8417,14 @@ void tTJSNI_BaseLayer::FireMouseMove(tjs_int x, tjs_int y, tjs_uint32 flags) {
 void tTJSNI_BaseLayer::FireMouseEnter() {
     if(Owner && !Shutdown) {
         static ttstr eventname(TJS_W("onMouseEnter"));
-        TVPPostEvent(Owner, Owner, eventname, 0, TVP_EPT_IMMEDIATE, 0, nullptr);
+        // Immediate delivery is the legacy behaviour.  A probe can opt into
+        // posting the callback so the current host tick can present the
+        // previous complete frame first; the queued callback then publishes
+        // the exact same layer contents on the following event pass.
+        const tjs_uint32 eventFlags = TVPDeferLayerOnPaint()
+            ? TVP_EPT_POST
+            : TVP_EPT_IMMEDIATE;
+        TVPPostEvent(Owner, Owner, eventname, 0, eventFlags, 0, nullptr);
     }
 }
 

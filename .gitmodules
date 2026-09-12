@@ -14,3 +14,6 @@
 [submodule "packages/rfvp"]
 	path = packages/rfvp
 	url = https://github.com/xmoezzz/rfvp.git
+[submodule "packages/AetherSiglus"]
+	path = packages/AetherSiglus
+	url = https://github.com/AetherKiri/siglus_rs.git

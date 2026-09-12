@@ -110,6 +110,27 @@ export ANDROID_SDK_ROOT="$ANDROID_HOME"
 export ANDROID_NDK_HOME="$ANDROID_NDK_HOME_RESOLVED"
 export ANDROID_NDK="$ANDROID_NDK_HOME_RESOLVED"
 
+# The Android export uses a custom Gradle build template (minSdk 26 lives in
+# export_presets.cfg). The template is generated content and gitignored;
+# materialize it from the installed Godot export templates when missing.
+# Layout mirrors Godot's official installer (ExportTemplateManager::
+# install_android_template): <android>/.build_version marks the template
+# version, <android>/build/.gdignore keeps Godot from scanning it.
+if [[ ! -f "$GODOT_APP_DIR/android/.build_version" || ! -f "$GODOT_APP_DIR/android/build/build.gradle" ]]; then
+    if [[ ! -f "$GODOT_TEMPLATE_DIR/android_source.zip" ]]; then
+        echo "Error: Android build template missing and " >&2
+        echo "       $GODOT_TEMPLATE_DIR/android_source.zip not found." >&2
+        echo "       Install Godot export templates or set GODOT_TEMPLATE_DIR." >&2
+        exit 1
+    fi
+    echo "Installing Godot Android build template into apps/godot_app/android/build"
+    rm -rf "$GODOT_APP_DIR/android"
+    mkdir -p "$GODOT_APP_DIR/android/build"
+    unzip -qo "$GODOT_TEMPLATE_DIR/android_source.zip" -d "$GODOT_APP_DIR/android/build"
+    printf '%s\n' "${GODOT_TEMPLATE_DIR##*/}" > "$GODOT_APP_DIR/android/.build_version"
+    : > "$GODOT_APP_DIR/android/build/.gdignore"
+fi
+
 command -v cmake >/dev/null
 NINJA_BIN="${CMAKE_MAKE_PROGRAM:-$(command -v ninja || command -v ninja-build || true)}"
 if [[ -z "$NINJA_BIN" ]]; then

@@ -163,6 +163,16 @@ struct dest_alpha_translucent_op {
     inline dest_alpha_translucent_op() : opa_(255) {}
     inline dest_alpha_translucent_op(tjs_uint32 opa) : opa_(opa) {}
     inline tjs_uint32 operator()(tjs_uint32 d, tjs_uint32 s) const {
+        // A zero-coverage source is a no-op even when a constant opacity is
+        // supplied.  The table formula below rounds the destination alpha
+        // through TVPNegativeMulTable/TVPOpacityOnOpacityTable; for an
+        // opaque destination that turns a transparent texel such as
+        // 0x00ffffff into a one-level RGB change.  Character-fade helper
+        // layers contain exactly these transparent white texels and are
+        // composited over the full message frame, so the rounding manifests
+        // as a short whole-screen brightness pulse between lines.
+        if((s & 0xff000000u) == 0 || opa_ <= 0)
+            return d;
 #ifdef NOT_USE_TABLE
         tjs_uint32 sa = ((s >> 24) * opa_) >> 8;
         tjs_uint32 da = d >> 24;

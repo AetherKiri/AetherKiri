@@ -48,6 +48,14 @@ set(BASE_HEADERS_DIR
 )
 
 add_library(${PROJECT_NAME} STATIC ${BASE_SOURCE_FILES})
+
+# Keep Debug symbols while optimizing the event/script bridge.  Scene changes
+# enter through this module and the legacy -Og default makes each queued TJS
+# callback needlessly expensive, even though the visual output is identical.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT MSVC)
+    target_compile_options(${PROJECT_NAME} PRIVATE -O2)
+endif()
+
 target_include_directories(${PROJECT_NAME} PUBLIC ${BASE_HEADERS_DIR})
 target_link_libraries(${PROJECT_NAME} PUBLIC tjs2 PRIVATE core_visual_module core_plugin_module core_environ_module core_extension_module core_sound_module core_utils_module)
 

@@ -24,6 +24,10 @@ struct tTVPImageLoadCommand {
     ttstr path_;
     tTVPTmpBitmapImage *dest_;
     ttstr result_;
+    // A prefetch has no Bitmap/TJS owner.  It still goes through the same
+    // decoder and publishes into the normal graphic cache, but must not post
+    // an onLoaded callback or dereference a null bitmap on completion.
+    bool prefetch_ = false;
     tTVPImageLoadCommand();
     ~tTVPImageLoadCommand();
 };
@@ -101,6 +105,15 @@ public:
      */
     void LoadRequest(iTJSDispatch2 *owner, tTJSNI_Bitmap *bmp,
                      const ttstr &name);
+
+    /** Queue a cache-only decode for a storage name. */
+    void PrefetchRequest(const ttstr &name);
 };
+
+// Queue a cache-only decode on the application's idle image loader.  This is
+// intentionally separate from Layer.loadImages: the caller can warm a set of
+// immutable PSB/PIMG resources before a scene transition without publishing
+// a partially decoded layer.
+void TVPPreloadGraphic(const ttstr &name);
 
 #endif // __GRAPHICS_LOAD_THREAD_H__
