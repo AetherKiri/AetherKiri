@@ -182,6 +182,9 @@ enum TVPGodotGpuBlendMode : uint32_t {
     TVP_GODOT_GPU_BLEND_ALPHA_TO_ADDITIVE_ALPHA = 29,
     // Convert additive/premultiplied-alpha RGB to straight-alpha RGB in place.
     TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA_TO_ALPHA = 30,
+    // Blend source RGB into destination RGB with a constant opacity while
+    // preserving the destination alpha channel.
+    TVP_GODOT_GPU_BLEND_CONST_ALPHA = 31,
     // draw_triangles is shared by Cubism (whose low bits describe Cubism
     // colour/alpha modes) and KiriKiri (whose low bits are the modes above).
     // Tag the latter so AlphaBlend/AlphaBlend_d are not mistaken for Cubism

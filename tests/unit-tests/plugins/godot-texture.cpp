@@ -468,7 +468,7 @@ TEST_CASE("Godot GPU-only texture clones stay on the GPU") {
     clone->Release();
 }
 
-TEST_CASE("Godot CPU-accessed rectangles do not ping-pong through the GPU") {
+TEST_CASE("Godot CPU-accessed rectangles stay on the ordered GPU path") {
     TVPInitTVPGL();
     TestGpuBridge bridge;
     GodotRenderManager manager;
@@ -479,7 +479,8 @@ TEST_CASE("Godot CPU-accessed rectangles do not ping-pong through the GPU") {
     GodotTexture2D dst(target_pixels.data(), 256 * 4, 256, 256,
                        TVPTextureFormat::RGBA);
     // A readback-visible bitmap can also have an uploaded presentation image.
-    // Neither the handle nor the large area should override CPU residency.
+    // The default policy keeps compatible operations ordered on the GPU;
+    // AETHERKIRI_GODOT_CPU_STAGING=1 remains the explicit legacy escape hatch.
     CHECK(dst.GetPoint(0, 0) == target_pixels[0]);
     REQUIRE(dst.EnsureGpuHandle());
     REQUIRE(src.EnsureGpuHandle());
@@ -489,16 +490,18 @@ TEST_CASE("Godot CPU-accessed rectangles do not ping-pong through the GPU") {
     manager.OperateRect(manager.GetRenderMethod("CopyColor"), &dst, &dst,
                         tTVPRect(0, 0, 256, 256),
                         tRenderTexRectArray(&source, 1));
-    CHECK(dst.GetPoint(0, 0) == 0x66123456u);
-    CHECK(dst.GetPoint(255, 255) == 0x66123456u);
-    CHECK(g_blend_rect_calls == 0);
+    CHECK(g_blend_rect_calls == 1);
     CHECK(g_read_rgba_calls == 0);
     CHECK(g_update_rgba_calls == 0);
+    CHECK(dst.HasPendingGpuWrites());
+    CHECK_FALSE(dst.PrefersCpuOperations());
 
     auto *clone = static_cast<GodotTexture2D *>(
         manager.CreateTexture2D(256, 256, &dst));
     REQUIRE(clone != nullptr);
-    CHECK(clone->PrefersCpuOperations());
+    CHECK(clone->HasPendingGpuWrites());
+    CHECK_FALSE(clone->PrefersCpuOperations());
+    CHECK(g_copy_rect_calls == 1);
     clone->Release();
 }
 
@@ -566,7 +569,7 @@ TEST_CASE("Godot CPU preference does not download GPU-authored sources") {
     CHECK_FALSE(dst.PrefersCpuOperations());
 }
 
-TEST_CASE("Godot CPU-accessed affine layers retain CPU residency") {
+TEST_CASE("Godot CPU-accessed affine layers stay on the ordered GPU path") {
     TVPInitTVPGL();
     TestGpuBridge bridge;
     GodotRenderManager manager;
@@ -588,10 +591,9 @@ TEST_CASE("Godot CPU-accessed affine layers retain CPU residency") {
         manager.OperateTriangles(manager.GetRenderMethod("CopyColor"), 2,
                                  &dst, &dst, tTVPRect(0, 0, 256, 256),
                                  points.data(), tRenderTexQuadArray(&source, 1));
-        CHECK(dst.GetPoint(0, 0) == 0x66123456u);
-        CHECK(dst.GetPoint(255, 255) == 0x66123456u);
-        CHECK(dst.PrefersCpuOperations());
-        CHECK(g_triangle_draw_call.calls == 0);
+        CHECK(dst.HasPendingGpuWrites());
+        CHECK_FALSE(dst.PrefersCpuOperations());
+        CHECK(g_triangle_draw_call.calls == 1);
     }
     SECTION("GPU-authored source") {
         src.MarkGpuDirty();
@@ -605,7 +607,7 @@ TEST_CASE("Godot CPU-accessed affine layers retain CPU residency") {
     CHECK(g_update_rgba_calls == 0);
 }
 
-TEST_CASE("Godot CPU-composited fades download static snapshots only once") {
+TEST_CASE("Godot CPU-composited fades stay on the ordered GPU path") {
     TVPInitTVPGL();
     TestGpuBridge bridge;
     GodotRenderManager manager;
@@ -625,22 +627,26 @@ TEST_CASE("Godot CPU-composited fades download static snapshots only once") {
     auto *method = manager.GetRenderMethod("ConstAlphaBlend_SD");
     const int opacity_id = method->EnumParameterID("opacity");
 
-    SECTION("CPU destination reuses the source readback through the fade") {
+    SECTION("CPU destination remains GPU ordered after CPU access") {
         REQUIRE(dst.GetScanLineForRead(0) != nullptr);
+        int expected_blends = 0;
         for (int opacity : {32, 64, 128, 192}) {
             method->SetParameterOpa(opacity_id, opacity);
             manager.OperateRect(method, &dst, nullptr, rect,
                                 tRenderTexRectArray(sources.data(), 2));
-            CHECK(g_read_rgba_calls == 1);
-            CHECK(g_blend_rect_calls == 0);
-            CHECK(dst.PrefersCpuOperations());
+            ++expected_blends;
+            CHECK(g_read_rgba_calls == 0);
+            CHECK(g_blend_rect_calls == expected_blends);
+            CHECK(dst.HasPendingGpuWrites());
+            CHECK_FALSE(dst.PrefersCpuOperations());
         }
-        // Updating the GPU input invalidates its shadow, so a later frame
-        // must read the new pixels rather than reusing a stale snapshot.
+        // Updating the GPU input keeps the whole two-source operation ordered;
+        // it must not force a synchronous readback of the destination.
         src2.MarkGpuDirty();
         manager.OperateRect(method, &dst, nullptr, rect,
                             tRenderTexRectArray(sources.data(), 2));
-        CHECK(g_read_rgba_calls == 2);
+        CHECK(g_read_rgba_calls == 0);
+        CHECK(g_blend_rect_calls == expected_blends + 1);
     }
     SECTION("GPU destination keeps the two-source GPU operation") {
         method->SetParameterOpa(opacity_id, 128);

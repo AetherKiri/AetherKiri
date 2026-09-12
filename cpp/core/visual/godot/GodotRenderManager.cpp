@@ -336,6 +336,7 @@ bool IsGpuRectFastPathEnabled(const char *name) {
                std::strcmp(name, "AlphaBlend") == 0 ||
                std::strcmp(name, "AlphaBlend_a") == 0 ||
                std::strcmp(name, "AlphaBlend_d") == 0 ||
+               std::strcmp(name, "ConstAlphaBlend") == 0 ||
                std::strcmp(name, "ConstAlphaBlend_d") == 0 ||
                std::strcmp(name, "ConstAlphaBlend_SD") == 0 ||
                std::strcmp(name, "ConstAlphaBlend_SD_d") == 0 ||
@@ -470,18 +471,15 @@ bool CpuStagingOnGpuReadback() {
         if (value != nullptr && value[0] != '\0') {
             return std::strcmp(value, "0") != 0;
         }
-        // On Android, leave the destination on the ordered GPU path whenever
-        // the blend operation has a bridge implementation.  Promoting it to
-        // the CPU compositor here forces a full GPU->CPU readback in the
-        // middle of a provider tick, which is the source of the large mobile
-        // frame spikes. Unsupported/aliasing operations still fall back to
-        // the exact software path below. Desktop keeps the conservative
-        // staging policy that avoids an extra boundary on older drivers.
-#if defined(__ANDROID__)
+        // Keep every platform on the ordered GPU path whenever the blend
+        // operation has a bridge implementation. Promoting the destination
+        // to the CPU compositor forces a full GPU->CPU readback in the
+        // middle of a provider tick, which is the source of the large
+        // animation and story-mode frame spikes. Unsupported/aliasing
+        // operations still fall back to the exact software path below. The
+        // environment override remains available for older drivers that need
+        // the conservative staging policy.
         return false;
-#else
-        return true;
-#endif
     }();
     return enabled;
 }
@@ -492,7 +490,13 @@ bool GpuCopyIntoCpuTargetEnabled() {
         // A replacement-style Copy can stay on the GPU and publish its
         // pixels through an asynchronous readback. Keep an escape hatch for
         // older drivers whose async texture_get_data path is unreliable.
-        return value == nullptr || value[0] == '\0' ||
+        // Keep the historical CPU-copy path as the default.  A CPU-preferred
+        // destination already owns a readable shadow; routing a tiny Copy
+        // through the GPU first uploads the entire destination and immediately
+        // schedules a full-texture readback, producing ~100 ms stalls on the
+        // 1920x1440 layer surface.  Drivers that benefit from the asynchronous
+        // path can still opt in explicitly with AETHERKIRI_GODOT_GPU_CPU_COPY=1.
+        return value != nullptr && value[0] != '\0' &&
                std::strcmp(value, "0") != 0;
     }();
     return enabled;
@@ -1665,33 +1669,6 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
     // Metal/Vulkan do not define a read-only image and writable storage image
     // bound to the same resource.  Keep this one semantic boundary on the
     // software renderer; regular layer textures retain their GPU fast paths.
-    // Once a bitmap has been read through the CPU interface, avoid promoting
-    // its unscaled CPU-resident work to the GPU just because the rectangle is
-    // large. The layer manager would immediately download the result again.
-    // Two-snapshot fades are an exception to source residency: downloading a
-    // static input once is cheaper than downloading the blended output on
-    // every animation frame. GPU-target fades and ordinary GPU-authored
-    // sources still retain their existing paths.
-    const bool cpu_snapshot_blend = textures.size() == 2 &&
-        (method_name == "ConstAlphaBlend_SD" ||
-         method_name == "ConstAlphaBlend_SD_d");
-    const bool cpu_resident_rect = [&]() {
-        if (dst == nullptr || !dst->PrefersCpuOperations() ||
-            method_name == "BoxBlurAlpha") return false;
-        if (reftar != nullptr && reftar != tar) {
-            const auto *reference = dynamic_cast<GodotTexture2D *>(reftar);
-            if (reference == nullptr || !reference->HasCurrentCpuPixels())
-                return false;
-        }
-        for (size_t i = 0; i < textures.size(); ++i) {
-            const auto &texture = textures[i];
-            const auto *source = dynamic_cast<GodotTexture2D *>(texture.first);
-            if (source == nullptr ||
-                (!source->HasCurrentCpuPixels() && !cpu_snapshot_blend) ||
-                !RectAbsSizeMatches(rctar, texture.second)) return false;
-        }
-        return true;
-    }();
     // If this destination was already modified by the GPU, do not append one
     // more GPU blend to a surface that the layer manager will immediately read
     // back. Promote it to the same CPU-composition boundary used by the draw
@@ -1717,16 +1694,22 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         !RectNeedsAlphaAreaDownsample(rctar, textures[0].second, src) &&
         (RectAbsSizeMatches(rctar, textures[0].second) ||
          IsGpuCopyTrianglesEnabled());
+    // A CPU-preferred layer already has a valid shadow buffer.  Unless the
+    // experimental GPU-copy/readback path is explicitly enabled, keep small
+    // replacement copies on that shadow instead of uploading the whole layer
+    // merely to copy a glyph-sized rectangle into it.
+    const bool cpu_resident_copy =
+        !motion_target_active && !gpu_copy_cpu_destination &&
+        method_name == "Copy" && dst != nullptr && src != nullptr &&
+        !dst->IsCpuCompositeTarget() && dst->PrefersCpuOperations();
     if (cpu_staging_transition) {
         dst->ExpectCpuAccess();
         dst->SetCpuCompositeTarget(true);
     }
     if (dst != nullptr && !motion_target_active &&
         !gpu_copy_cpu_destination &&
-        (dst->IsCpuCompositeTarget() || cpu_resident_rect ||
-         cpu_staging_transition ||
-         (dst->PrefersCpuOperations() &&
-          method_name != "BoxBlurAlpha"))) {
+        (dst->IsCpuCompositeTarget() || cpu_staging_transition ||
+         cpu_resident_copy)) {
         if (method_name == "Copy") {
             CountCopyFallbackReason(dst->IsCpuCompositeTarget()
                                         ? "cpu_composite_target"
@@ -2010,6 +1993,20 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
         dst->BlendGpuFrom(src, rctar, textures[0].second,
                           TVP_GODOT_GPU_BLEND_ALPHA_D,
+                          godot_method != nullptr ? godot_method->Opacity() : 255,
+                          0)) {
+        CountGpuFastPath(method_name);
+        return;
+    }
+
+    if (method_name == "ConstAlphaBlend" && dst != nullptr && src != nullptr &&
+        src != dst && IsGpuRectFastPathEnabled("ConstAlphaBlend") &&
+        ShouldUseGpuRectFastPath(rctar, method_name.c_str(), dst, src) &&
+        RectBoundsInsideTexture(textures[0].second, src) &&
+        dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
+        src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
+        dst->BlendGpuFrom(src, rctar, textures[0].second,
+                          TVP_GODOT_GPU_BLEND_CONST_ALPHA,
                           godot_method != nullptr ? godot_method->Opacity() : 255,
                           0)) {
         CountGpuFastPath(method_name);
@@ -2349,17 +2346,8 @@ void GodotRenderManager::OperateTriangles(iTVPRenderMethod *method, int nTriangl
         : nullptr;
     ScopedSlowRenderTrace slow_trace("triangles", method_name, rcclip,
                                      nTriangles, dst, src);
-    const auto *reference = dynamic_cast<GodotTexture2D *>(reftar);
-    // Affine layer painting is another producer of CPU-composited bitmaps.
-    // Keep already-resident inputs on that side of the boundary too; otherwise
-    // a single triangle operation undoes the rectangle residency decision.
-    const bool cpu_resident_triangles = dst != nullptr &&
-        dst->PrefersCpuOperations() && src != nullptr &&
-        src->HasCurrentCpuPixels() &&
-        (reftar == nullptr || reftar == target ||
-         (reference != nullptr && reference->HasCurrentCpuPixels()));
     if (dst != nullptr && !motion_target_active &&
-        (dst->IsCpuCompositeTarget() || cpu_resident_triangles)) {
+        dst->IsCpuCompositeTarget()) {
         CountMethodFallback(method);
         SoftwareDelegate()->OperateTriangles(
             godot_method != nullptr ? godot_method->Delegate() : method,

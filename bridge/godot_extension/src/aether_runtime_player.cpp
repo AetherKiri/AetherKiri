@@ -2015,6 +2015,20 @@ uint alpha_blend_d(uint d, uint s, uint opa) {
     return (out_alpha << 24) | r | (g << 8) | (b << 16);
 }
 
+uint const_alpha_blend(uint d, uint s, uint opa) {
+    int opacity = int(opa);
+    int dr = int(d & 0xffu);
+    int dg = int((d >> 8) & 0xffu);
+    int db = int((d >> 16) & 0xffu);
+    int sr = int(s & 0xffu);
+    int sg = int((s >> 8) & 0xffu);
+    int sb = int((s >> 16) & 0xffu);
+    uint r = uint(dr + (((sr - dr) * opacity) >> 8));
+    uint g = uint(dg + (((sg - dg) * opacity) >> 8));
+    uint b = uint(db + (((sb - db) * opacity) >> 8));
+    return (d & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
 uint const_alpha_blend_d(uint d, uint s, uint opa) {
     uint dest_alpha = (d >> 24) & 0xffu;
     uint blend_alpha = opacity_on_opacity(dest_alpha, opa);
@@ -2272,6 +2286,8 @@ void main() {
         out_color = alpha_blend_hda_o(d, s, opa);
         } else if (pc.rect1.z == 2) {
         out_color = alpha_blend_d(d, s, opa);
+        } else if (pc.rect1.z == 31) {
+        out_color = const_alpha_blend(d, s, opa);
         } else if (pc.rect1.z == 3) {
         out_color = (d & 0xff000000u) + (s & 0x00ffffffu);
         } else if (pc.rect1.z == 10) {
@@ -8336,6 +8352,19 @@ uint32_t CpuAlphaBlendD(uint32_t d, uint32_t s, int opacity) {
            (blend((d >> 16) & 0xffu, (s >> 16) & 0xffu) << 16);
 }
 
+uint32_t CpuConstAlphaBlend(uint32_t d, uint32_t s, int opacity) {
+    const int opa = std::clamp(opacity, 0, 255);
+    const auto blend = [opa](uint32_t dc, uint32_t sc) -> uint32_t {
+        const int value = static_cast<int>(dc) +
+                          ((static_cast<int>(sc) - static_cast<int>(dc)) * opa >> 8);
+        return static_cast<uint32_t>(value);
+    };
+    return (d & 0xff000000u) |
+           blend(d & 0xffu, s & 0xffu) |
+           (blend((d >> 8) & 0xffu, (s >> 8) & 0xffu) << 8) |
+           (blend((d >> 16) & 0xffu, (s >> 16) & 0xffu) << 16);
+}
+
 uint32_t CpuCopyColor(uint32_t d, uint32_t s) {
     return (d & 0xff000000u) | (s & 0x00ffffffu);
 }
@@ -8609,6 +8638,8 @@ uint32_t CpuBlendReference(uint32_t mode, uint32_t d, uint32_t s,
             return CpuAlphaBlendHda(d, s, opacity);
         case TVP_GODOT_GPU_BLEND_ALPHA_D:
             return CpuAlphaBlendD(d, s, opacity);
+        case TVP_GODOT_GPU_BLEND_CONST_ALPHA:
+            return CpuConstAlphaBlend(d, s, opacity);
         case TVP_GODOT_GPU_BLEND_COPY_COLOR:
             return CpuCopyColor(d, s);
         case TVP_GODOT_GPU_BLEND_FILL_ARGB:
@@ -8700,6 +8731,9 @@ uint32_t BlendModeFromName(const String &mode_name) {
     }
     if (lower == "alphablend_d" || lower == "alpha_blend_d") {
         return TVP_GODOT_GPU_BLEND_ALPHA_D;
+    }
+    if (lower == "constalphablend" || lower == "const_alpha_blend") {
+        return TVP_GODOT_GPU_BLEND_CONST_ALPHA;
     }
     if (lower == "copycolor" || lower == "copy_color") {
         return TVP_GODOT_GPU_BLEND_COPY_COLOR;
