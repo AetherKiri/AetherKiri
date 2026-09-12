@@ -56,5 +56,8 @@ apps/godot_app/.godot
 plugin_trace.log
 __pycache__/
 *.pyc
+
+# Godot Android Gradle build template (generated from export templates)
+apps/godot_app/android/
 build-linux/
 .aetherkiri-cache

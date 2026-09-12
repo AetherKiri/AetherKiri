@@ -1560,6 +1560,11 @@ void tTJSArrayNI::AssignStructure(iTJSDispatch2 *dsp,
         try {
             Items.clear();
 
+            // Deep snapshots know their final element count. Reserve once so
+            // growing the destination does not repeatedly copy the closures
+            // that have already been cloned.
+            Items.reserve(arrayni->Items.size());
+
             tArrayItemIterator i;
             for(i = arrayni->Items.begin(); i != arrayni->Items.end(); i++) {
                 tTJSVariantType type = i->Type();

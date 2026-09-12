@@ -67,6 +67,15 @@ extern unsigned char TVPNegativeMulTable65[65 * 256];
 struct alpha_blend_func {
     inline tjs_uint32 operator()(tjs_uint32 d, tjs_uint32 s,
                                  tjs_uint32 a) const {
+        // A fully transparent source must not perturb the destination.  The
+        // packed channel arithmetic below is equivalent for ordinary alpha,
+        // but its unsigned subtract/multiply sequence can round a zero-alpha
+        // texel (for example the transparent white padding used by KiriKiri
+        // character-fade layers) by one level.  Those texels cover the whole
+        // message frame during a line transition, making the rounding
+        // visible as a brief brightness pulse.
+        if(a == 0)
+            return d;
         tjs_uint32 d1 = d & 0xff00ff;
         d1 = (d1 + (((s & 0xff00ff) - d1) * a >> 8)) & 0xff00ff;
         d &= 0xff00;

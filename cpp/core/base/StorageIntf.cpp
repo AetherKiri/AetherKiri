@@ -1866,13 +1866,44 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
         }
     }
 
+    // Consult a successful placement before invoking a resolver.  Apart from
+    // avoiding duplicate archive probes, this is required for stream opens:
+    // _TVPCreateStream holds TVPCreateStreamCS while asking for the placed
+    // path, and a resolver's exact-storage probe takes that same lock.
+    // Re-entering the resolver for an already-cached virtual URI would
+    // deadlock the engine at the first CSV read.
+    ttstr *incache = TVPAutoPathCache.FindAndTouch(name);
+    if(incache) {
+        if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
+            spdlog::info("StorageTrace cache request={} result={}",
+                         name.AsStdString(), incache->AsStdString());
+        }
+        if(*incache == TVP_AUTOPATH_CACHE_MISS_MARKER)
+            return {};
+        return *incache; // found in cache
+    }
+
     // Give private compatibility plug-ins one chance to translate a logical
     // storage name (for example a PackinOne virtual UI atlas) to a concrete
-    // archive entry. This runs before the placement lock and miss cache: a
-    // resolver may safely probe the concrete candidate through normal storage
-    // APIs, and a previous miss cannot hide a later plugin registration.
+    // archive entry. A successful resolver result is cached above, so later
+    // placement/stream calls remain lock-safe.
     ttstr resolved;
     if(TVPResolveStorageName(name, resolved)) {
+        // A resolver may return a fully-qualified virtual URI backed by a
+        // registered storage media.  Do not recursively place that URI: the
+        // media has already provided the concrete target, and asking the
+        // resolver chain to place it again can re-enter the same existence
+        // probe while the caller is opening the stream.
+        const std::string resolvedName = resolved.AsStdString();
+        if(resolvedName.rfind("aetherui://", 0) == 0) {
+            TVPAutoPathCache.Add(name, resolved);
+            if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
+                spdlog::info(
+                    "StorageTrace resolver virtual request={} resolved={}",
+                    name.AsStdString(), resolved.AsStdString());
+            }
+            return resolved;
+        }
         ttstr placed = TVPGetPlacedPath(resolved);
         if(!placed.IsEmpty()) {
             TVPAutoPathCache.Add(name, placed);
@@ -1884,17 +1915,6 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
             }
             return placed;
         }
-    }
-
-    ttstr *incache = TVPAutoPathCache.FindAndTouch(name);
-    if(incache) {
-        if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
-            spdlog::info("StorageTrace cache request={} result={}",
-                         name.AsStdString(), incache->AsStdString());
-        }
-        if(*incache == TVP_AUTOPATH_CACHE_MISS_MARKER)
-            return {};
-        return *incache; // found in cache
     }
 
     tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
@@ -2106,7 +2126,11 @@ bool TVPIsExistentStorage(const ttstr &name) {
 //---------------------------------------------------------------------------
 static tTJSBinaryStream *_TVPCreateStream(const ttstr &_name,
                                           tjs_uint32 flags) {
-    tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
+    if(std::getenv("AETHERKIRI_STORAGE_TRACE") != nullptr &&
+       TVPStorageTraceName(_name) &&
+       _name.AsStdString().find("afterstory") != std::string::npos)
+        spdlog::info("StorageTrace create-stream afterstory request={} flags={}",
+                     _name.AsStdString(), flags);
 
     if(std::getenv("AETHERKIRI_STORAGE_TRACE") != nullptr &&
        _name.AsStdString().find("langselect_auto.func") != std::string::npos)
@@ -2121,6 +2145,14 @@ static tTJSBinaryStream *_TVPCreateStream(const ttstr &_name,
         name = TVPNormalizeStorageName(_name);
     else
         name = TVPGetPlacedPath(_name); // file must exist
+
+    // Resolve the placed path before taking the stream lock.  Resolvers may
+    // perform exact-storage probes, and those probes use TVPCreateStreamCS;
+    // holding the lock across TVPGetPlacedPath therefore deadlocks the first
+    // uncached read of an ordinary archive entry (for example
+    // scnchartdata.tjs).  Keep the lock for the actual open/cache mutation
+    // below, after all resolver work has completed.
+    tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
 
     if(std::getenv("AETHERKIRI_STORAGE_TRACE") != nullptr &&
        _name.AsStdString().find("langselect_auto.func") != std::string::npos)
@@ -2137,6 +2169,11 @@ static tTJSBinaryStream *_TVPCreateStream(const ttstr &_name,
             TVPRemoveFromStorageCache(_name);
         TVPThrowExceptionMessage(TVPCannotOpenStorage, _name);
     }
+
+    if(std::getenv("AETHERKIRI_STORAGE_TRACE") != nullptr &&
+       _name.AsStdString().find("afterstory") != std::string::npos)
+        spdlog::info("StorageTrace create-stream afterstory placed={} access={}",
+                     name.AsStdString(), access);
 
     if(access == TJS_BS_READ && TVPIsGfxEffectCompanionScript(name) &&
        !TVPIsRealStorageNoSearchNoNormalize(name))
@@ -2177,15 +2214,28 @@ static tTJSBinaryStream *_TVPCreateStream(const ttstr &_name,
         if((flags & TJS_BS_ACCESS_MASK) != TJS_BS_READ)
             TVPThrowExceptionMessage(TVPCannotWriteToArchive);
 
+        const bool traceChartArchive =
+            std::getenv("AETHERKIRI_STORAGE_TRACE") != nullptr &&
+            name.AsStdString().find("scnchartdata.tjs") != std::string::npos;
+        if(traceChartArchive)
+            spdlog::info("StorageTrace archive-open begin name={}",
+                         name.AsStdString());
+
         ttstr arcname(name, (int)(sharp_pos - name.c_str()));
 
         tTVPArchive *arc;
         tTJSBinaryStream *stream;
         arc = TVPArchiveCache.Get(arcname);
+        if(traceChartArchive)
+            spdlog::info("StorageTrace archive-open cache-ready archive={}",
+                         arcname.AsStdString());
         try {
             ttstr in_arc_name(sharp_pos + 1);
             tTVPArchive::NormalizeInArchiveStorageName(in_arc_name);
             stream = arc->CreateStream(in_arc_name);
+            if(traceChartArchive)
+                spdlog::info("StorageTrace archive-open stream-ready entry={}",
+                             in_arc_name.AsStdString());
         } catch(...) {
             arc->Release();
             if(access >= 1)

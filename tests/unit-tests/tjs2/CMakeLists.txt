@@ -3,6 +3,7 @@ project(TestTJS2 LANGUAGES CXX)
 
 add_executable(tjs2-missing
     missing.cpp
+    assign-structure.cpp
     variant-array-stack.cpp
     gles-contract.cpp
     main.cpp

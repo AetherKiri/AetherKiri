@@ -8,8 +8,9 @@
 
 namespace {
 
-id<MTLCommandQueue> ResolveMetalCommandQueue(uint64_t command_queue) {
+id<MTLCommandQueue> ResolveMetalCommandQueue(uint64_t command_queue, bool native_metal) {
   if (command_queue == 0) return nil;
+  if (native_metal) return (__bridge id<MTLCommandQueue>)(reinterpret_cast<void *>(command_queue));
 #if defined(IOS_ENABLED)
   // Godot's iOS export uses RenderingDeviceDriverMetal, so
   // DRIVER_RESOURCE_COMMAND_QUEUE is already an id<MTLCommandQueue>. Passing
@@ -74,8 +75,8 @@ void AetherAppleReleasePixelBuffer(void *pixel_buffer) {
   if (pixel_buffer != nullptr) CFRelease(pixel_buffer);
 }
 
-bool AetherApplePollMetalCommandQueue(uint64_t metal_command_queue) {
-  id<MTLCommandQueue> queue = ResolveMetalCommandQueue(metal_command_queue);
+bool AetherApplePollMetalCommandQueue(uint64_t metal_command_queue, bool native_metal) {
+  id<MTLCommandQueue> queue = ResolveMetalCommandQueue(metal_command_queue, native_metal);
   if (queue == nil) return false;
 
   static std::mutex marker_mutex;

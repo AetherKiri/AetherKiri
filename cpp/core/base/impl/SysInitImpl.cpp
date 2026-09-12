@@ -265,6 +265,10 @@ void TVPAfterSystemInit() {
     TVPDetectCPU();
 
     TVPAllocGraphicCacheOnHeap = false; // always false since beta 20
+    // Keep the compressed XP3 segment cache on the same unified byte budget.
+    // This is intentionally applied after the legacy low-memory heuristics so
+    // a later governor pass cannot leave this cache disabled on desktop.
+    TVPSegmentCacheLimit = 256 * 1024 * 1024;
 
     // determine maximum graphic cache limit
     tTJSVariant opt;
@@ -331,19 +335,20 @@ void TVPAfterSystemInit() {
         _val = IndividualConfigManager::GetInstance()->GetValue<std::string>(
             "renderer", "opengl");
     }
-    if(_val != "godot_native" &&
-       TVPGraphicCacheSystemLimit > 256 * 1024 * 1024) {
+    if(TVPGraphicCacheSystemLimit > 256 * 1024 * 1024) {
         TVPGraphicCacheSystemLimit = 256 * 1024 * 1024;
     }
-    // The Godot backend keeps decoded textures in GPU resources. On Apple
-    // targets the legacy platform cache controller is not present, so the
-    // computed graphic-cache budget otherwise remains unused and every
-    // repeated TLG request rebuilds a texture and uploads it again. Enable
-    // the normal memory-derived budget for this backend; other renderers
-    // retain their historical cache policy.
-    if(_val == "godot_native" && TVPGetGraphicCacheLimit() == 0) {
-        TVPSetGraphicCacheLimit(static_cast<tjs_uint64>(-1));
+    // Use one predictable desktop budget across renderers.  The
+    // memory-derived value in the x86_64 macOS test environment is about
+    // 96 MiB; that evicts a just-prefetched character sheet before the next
+    // sentence uses it and forces an identical 70--100 ms decode again.  The
+    // cache retains immutable decoded images only and does not alter pixels.
+    if(TVPGraphicCacheSystemLimit < 256 * 1024 * 1024) {
+        TVPGraphicCacheSystemLimit = 256 * 1024 * 1024;
     }
+    // Apply the unified budget even when a platform default initialized the
+    // live limit before the renderer option was selected.
+    TVPSetGraphicCacheLimit(256 * 1024 * 1024);
     if(_val != "software") {
         TVPGraphicSplitOperationType = gsotNone;
     } else {

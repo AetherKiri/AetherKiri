@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cstring>
 #include <deque>
+#include <exception>
 #include <functional>
 #include <mutex>
 #include <new>
@@ -32,6 +33,7 @@
 #endif
 
 #include "engine_runtime_provider_registry.h"
+#include "engine_startup_thread.h"
 #include "legacy_engine_api.h"
 #include "TextTransform.h"
 #if defined(ENGINE_API_USE_KRKR2_RUNTIME)
@@ -71,6 +73,8 @@ extern "C" void AetherInternalRegisterWa2Runtime(void);
 
 namespace {
 
+using aetherkiri::engine_api::StartupThread;
+
 enum class BackendKind { kUndecided, kLegacy, kProvider };
 
 struct DispatchHandle {
@@ -94,7 +98,7 @@ struct DispatchHandle {
   bool has_surface_size = false;
   engine_runtime_host_v1_t host{};
   engine_runtime_fragment_shader_host_v1_t fragment_shader_host{};
-  std::thread startup_thread;
+  StartupThread startup_thread;
   uint32_t startup_state = ENGINE_STARTUP_STATE_IDLE;
   std::deque<std::string> startup_logs;
   struct PlatformRequest {
@@ -441,6 +445,15 @@ engine_result_t SelectBackendLocked(DispatchHandle* handle,
       option.key_utf8 = option_value.first.c_str();
       option.value_utf8 = option_value.second.c_str();
       result = handle->provider->set_option(handle->runtime, &option);
+      if (result == ENGINE_RESULT_NOT_SUPPORTED) {
+        // Options queued before auto-detection may belong to another engine
+        // (the common shell configures KiriKiri tracing, plugin loading, etc.).
+        // Providers must be able to reject those without pretending they were
+        // applied. Only this pre-selection replay is optional; direct option
+        // calls still return NOT_SUPPORTED to the caller.
+        handle->startup_logs.push_back("runtime option not applicable: " + option_value.first);
+        continue;
+      }
       if (result != ENGINE_RESULT_OK) {
         SetProviderError(handle, result, "runtime provider rejected an option");
         return result;
@@ -705,7 +718,7 @@ engine_result_t engine_destroy(engine_handle_t public_handle) {
     handle = Cast(public_handle);
   }
 
-  std::thread startup_thread;
+  StartupThread startup_thread;
   {
     std::lock_guard<std::recursive_mutex> guard(handle->mutex);
     startup_thread = std::move(handle->startup_thread);
@@ -934,23 +947,30 @@ engine_result_t engine_open_game_async(engine_handle_t public_handle,
                                   ? startup_script_utf8
                                   : "";
   handle->startup_state = ENGINE_STARTUP_STATE_RUNNING;
-  handle->startup_thread = std::thread([handle, root, startup]() {
-    const char* startup_value = startup.empty() ? nullptr : startup.c_str();
-    AETHER_DISPATCH_DIAG_LOG("engine_open_game_async before provider open_game");
-    const auto open_result = handle->provider->open_game(
-        handle->runtime, root.c_str(), startup_value);
-    AETHER_DISPATCH_DIAG_LOG("engine_open_game_async after provider open_game");
-    std::lock_guard<std::recursive_mutex> thread_guard(handle->mutex);
-    handle->startup_state = open_result == ENGINE_RESULT_OK
-                                ? ENGINE_STARTUP_STATE_SUCCEEDED
-                                : ENGINE_STARTUP_STATE_FAILED;
-    handle->startup_logs.push_back(open_result == ENGINE_RESULT_OK
-                                       ? "runtime provider open_game => OK"
-                                       : "runtime provider open_game => FAILED");
-    SetProviderError(handle, open_result,
-                     "runtime provider failed to open game asynchronously");
-    if (open_result == ENGINE_RESULT_OK) StartTextTranslationLoading();
-  });
+  try {
+    handle->startup_thread = StartupThread([handle, root, startup]() {
+      const char* startup_value = startup.empty() ? nullptr : startup.c_str();
+      AETHER_DISPATCH_DIAG_LOG("engine_open_game_async before provider open_game");
+      const auto open_result = handle->provider->open_game(
+          handle->runtime, root.c_str(), startup_value);
+      AETHER_DISPATCH_DIAG_LOG("engine_open_game_async after provider open_game");
+      std::lock_guard<std::recursive_mutex> thread_guard(handle->mutex);
+      handle->startup_state = open_result == ENGINE_RESULT_OK
+                                  ? ENGINE_STARTUP_STATE_SUCCEEDED
+                                  : ENGINE_STARTUP_STATE_FAILED;
+      handle->startup_logs.push_back(open_result == ENGINE_RESULT_OK
+                                         ? "runtime provider open_game => OK"
+                                         : "runtime provider open_game => FAILED");
+      SetProviderError(handle, open_result,
+                       "runtime provider failed to open game asynchronously");
+      if (open_result == ENGINE_RESULT_OK) StartTextTranslationLoading();
+    });
+  } catch (const std::exception& error) {
+    handle->startup_state = ENGINE_STARTUP_STATE_FAILED;
+    handle->last_error =
+        std::string("failed to start runtime provider: ") + error.what();
+    return ThreadError(ENGINE_RESULT_INTERNAL_ERROR, handle->last_error.c_str());
+  }
   SetThreadError(nullptr);
   return ENGINE_RESULT_OK;
 }
@@ -1380,6 +1400,9 @@ engine_result_t engine_get_text_input_state(
                [&](DispatchHandle* handle) {
                  engine_text_input_state_t snapshot{};
                  snapshot.struct_size = sizeof(snapshot);
+                 if (PROVIDER_HAS(handle->provider, get_text_input_details)) {
+                   return handle->provider->get_text_input_details(handle->runtime, out_state);
+                 }
                  if (!PROVIDER_HAS(handle->provider, get_text_input_state)) {
                    *out_state = snapshot;
                    return ENGINE_RESULT_OK;
@@ -1421,7 +1444,11 @@ engine_result_t engine_copy_text_input_text(engine_handle_t public_handle,
                  return engine_legacy_copy_text_input_text(
                      legacy, out_buffer, buffer_size, out_bytes_written);
                },
-               [&](DispatchHandle*) { return ENGINE_RESULT_OK; });
+               [&](DispatchHandle* handle) {
+                 return PROVIDER_HAS(handle->provider, copy_text_input_text)
+                     ? handle->provider->copy_text_input_text(handle->runtime, out_buffer, buffer_size, out_bytes_written)
+                     : ENGINE_RESULT_OK;
+               });
 }
 
 engine_result_t engine_get_main_menu_json(engine_handle_t public_handle,

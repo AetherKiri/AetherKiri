@@ -782,7 +782,7 @@ tjs_int64 tTVPXP3Archive::ReadI64FromMem(const tjs_uint8 *mem) {
 // Compressed segment cache related
 //---------------------------------------------------------------------------
 #define TVP_SEGCACHE_ONE_LIMIT (1024 * 1024) // max size limit for each segment
-#define TVP_SEGCACHE_TOTAL_LIMIT (1024 * 1024) // total segment cache size
+#define TVP_SEGCACHE_TOTAL_LIMIT (256 * 1024 * 1024) // total segment cache size
 tjs_uint TVPSegmentCacheLimit = TVP_SEGCACHE_TOTAL_LIMIT;
 
 //---------------------------------------------------------------------------

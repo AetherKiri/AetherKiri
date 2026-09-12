@@ -59,6 +59,8 @@ const GameMetadata = preload("res://scripts/game_metadata.gd")
 const CoverIndex = preload("res://scripts/cover_index.gd")
 const VNDBCoverResolver = preload("res://scripts/vndb_cover_resolver.gd")
 const GameInputMapping = preload("res://scripts/game_input_mapping.gd")
+const SiglusJoypadInput = preload("res://scripts/siglus_joypad_input.gd")
+const SiglusPlatformDialogs = preload("res://scripts/siglus_platform_dialogs.gd")
 const GameVirtualControls = preload("res://scripts/game_virtual_controls.gd")
 const DiagnosticSession = preload("res://scripts/diagnostic_session.gd")
 const DiagnosticLocalization = preload("res://scripts/diagnostic_localization.gd")
@@ -1562,6 +1564,7 @@ const POINTER_MOD_CANCEL := 1 << 30
 const KEY_MOD_CONTROL := 0x04
 const RUNTIME_KIRIKIRI := "kirikiri"
 const RUNTIME_ONSCRIPTER := "onscripter"
+const RUNTIME_SIGLUS := "siglus"
 const RUNTIME_MINORI := "minori"
 const BETA_PROVIDER_RUNTIME_IDS := ["artemis", "catsystem2", "rfvp", "wa2"]
 const RUNTIME_RFVP := "rfvp"
@@ -1574,6 +1577,10 @@ const ONSCRIPTER_SCRIPT_MARKERS := [
     "nscript.dat",
     "onscript.nt2",
     "onscript.nt3",
+]
+const SIGLUS_SCRIPT_MARKERS := [
+    "Gameexe.ini",
+    "gameexe.ini",
 ]
 const SHELL_SCROLL_DRAG_THRESHOLD := 4.0
 const SHELL_SCROLL_BUTTON_DRAG_THRESHOLD := 28.0
@@ -2075,6 +2082,9 @@ const HOME_PHONE_BREAKPOINT := 520.0
 const DETAIL_COMPACT_BREAKPOINT := 960.0
 
 var color_bg := Color(0.055, 0.059, 0.071, 1.0)
+var siglus_joypad := SiglusJoypadInput.new()
+var siglus_native_cursor_visible := true
+var siglus_pointer_inside_window := false
 var color_game_bg := Color(0, 0, 0, 1)
 var color_card := Color(0.098, 0.102, 0.118, 1.0)
 var color_card_alt := Color(0.132, 0.137, 0.157, 1.0)
@@ -9978,6 +9988,9 @@ func _game_runtime_kind(path: String) -> String:
     )
     if runtime_kind != RUNTIME_KIRIKIRI:
         return runtime_kind
+    for marker in SIGLUS_SCRIPT_MARKERS:
+        if FileAccess.file_exists(root.path_join(marker)):
+            return RUNTIME_SIGLUS
     if player != null and player.has_method("probe_runtime") \
             and int(player.probe_runtime(RUNTIME_MINORI, root)) > 0:
         return RUNTIME_MINORI
@@ -10662,12 +10675,15 @@ func _start_selected_game_after_iap() -> void:
         _deny_runtime_beta_launch()
 
 func _runtime_requires_beta_access(runtime_kind: String) -> bool:
-    # ONS, Minori, and RFVP support follow the same Apple release policy as
+    # ONS, Siglus, Minori, and RFVP support follow the same Apple release policy as
     # Artemis: unrestricted in Debug and Android builds, and gated by an
     # active coffee entitlement in iOS and macOS distribution builds.
-    return runtime_kind == RUNTIME_ONSCRIPTER \
-        or runtime_kind == RUNTIME_MINORI \
-        or runtime_kind == RUNTIME_RFVP
+    return runtime_kind in [
+        RUNTIME_ONSCRIPTER,
+        RUNTIME_SIGLUS,
+        RUNTIME_MINORI,
+        RUNTIME_RFVP,
+    ]
 
 func _beta_access_enforcement_enabled(platform_name: String = "") -> bool:
     var effective_platform := platform_name if not platform_name.is_empty() else OS.get_name()
@@ -10849,6 +10865,14 @@ func _return_to_library_after_runtime_exit() -> void:
     runtime_exit_cleanup_pending = false
 
 func _ready() -> void:
+    get_window().mouse_entered.connect(_on_siglus_window_mouse_entered)
+    get_window().mouse_exited.connect(_on_siglus_window_mouse_exited)
+    siglus_pointer_inside_window = get_window().get_visible_rect().has_point(get_window().get_mouse_position())
+    siglus_joypad.load_config()
+    Input.joy_connection_changed.connect(func(device: int, connected: bool):
+        if not connected:
+            _send_siglus_joypad_events(siglus_joypad.release_device(device))
+    )
     var vndb_resolver := VNDBCoverResolver.new()
     vndb_resolver.name = "VNDBCoverResolver"
     add_child(vndb_resolver)
@@ -11251,7 +11275,12 @@ func _create_runtime_player(runtime_kind: String = RUNTIME_KIRIKIRI) -> bool:
 
 func _switch_runtime_player(runtime_kind: String) -> bool:
     var normalized := runtime_kind
-    if normalized not in [RUNTIME_ONSCRIPTER, RUNTIME_MINORI, RUNTIME_RFVP]:
+    if normalized not in [
+        RUNTIME_ONSCRIPTER,
+        RUNTIME_SIGLUS,
+        RUNTIME_MINORI,
+        RUNTIME_RFVP,
+    ]:
         normalized = RUNTIME_KIRIKIRI
     if player != null and current_player_runtime_kind == normalized:
         return true
@@ -11280,6 +11309,7 @@ func _switch_runtime_player(runtime_kind: String) -> bool:
     _append_log("Runtime selected: %s" % (
         {
             RUNTIME_ONSCRIPTER: "OnscripterYuri",
+            RUNTIME_SIGLUS: "SiglusEngine",
             RUNTIME_MINORI: "MinoriRust",
             RUNTIME_RFVP: "rfvp",
         }.get(normalized, "KiriKiri")
@@ -11298,6 +11328,75 @@ func _parse_platform_form(argument: String) -> Dictionary:
 
 func _on_runtime_platform_request(operation: String, argument: String) -> void:
     if player == null:
+        return
+    if operation == "siglus_open_target":
+        var target := String(_parse_platform_form(argument).get("target", ""))
+        if not target.is_empty():
+            OS.shell_open(target)
+        return
+    if operation == "siglus_window_state":
+        if not _is_touch_platform():
+            var fields := _parse_platform_form(argument)
+            var fullscreen := int(fields.get("mode", "0")) != 0
+            DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN if fullscreen else DisplayServer.WINDOW_MODE_WINDOWED)
+            if not fullscreen:
+                DisplayServer.window_set_size(Vector2i(maxi(1, int(fields.get("width", "1280"))), maxi(1, int(fields.get("height", "720")))))
+        return
+    if operation == "siglus_cursor_visible":
+        if not _is_touch_platform() and game_running:
+            var show_cursor := String(_parse_platform_form(argument).get("visible", "1")) == "1"
+            siglus_native_cursor_visible = show_cursor
+            _update_siglus_cursor_mode()
+            _log_input_diagnostic_line("siglus_pointer cursor_visible=%s" % str(show_cursor))
+        return
+    if operation == "siglus_mouse_warp":
+        var fields := _parse_platform_form(argument)
+        var can_warp := _can_apply_siglus_mouse_warp(get_window().has_focus())
+        if can_warp:
+            var game_size := Vector2(maxi(1, int(fields.get("width", "1"))), maxi(1, int(fields.get("height", "1"))))
+            var game_position := Vector2(float(fields.get("x", "0")), float(fields.get("y", "0")))
+            var viewport_position := _map_surface_point_to_viewport(game_position * _game_input_surface_size() / game_size)
+            # warp_mouse applies the window/stretch transform itself. Screen
+            # pixels here would apply HiDPI/content scaling a second time.
+            viewport.get_viewport().warp_mouse(viewport_position)
+        _log_input_diagnostic_line("siglus_pointer warp_applied=%s request=%s" % [str(can_warp), argument])
+        return
+    if operation == "siglus_capture_file":
+        var fields := _parse_platform_form(argument)
+        var save := String(fields.get("save", "0")) == "1"
+        var extension := String(fields.get("extension", "bmp"))
+        var request_id := String(fields.get("id", ""))
+        var dialog := _create_file_dialog(
+            String(fields.get("title", "Capture")),
+            FileDialog.FILE_MODE_SAVE_FILE if save else FileDialog.FILE_MODE_OPEN_FILE,
+            PackedStringArray(["*.%s ; %s" % [extension, extension.to_upper()]])
+        )
+        var initial_path := String(fields.get("path", ""))
+        dialog.current_dir = initial_path.get_base_dir()
+        dialog.current_file = initial_path.get_file()
+        dialog.file_selected.connect(func(path: String):
+            if player != null:
+                player.submit_platform_response("siglus_capture_file", "id=%s&path=%s" % [request_id, path.uri_encode()])
+        )
+        dialog.canceled.connect(func():
+            if player != null:
+                player.submit_platform_response("siglus_capture_file", "id=%s&path=" % request_id)
+        )
+        add_child(dialog)
+        dialog.popup_centered(Vector2i(900, 640))
+        return
+    if operation in ["siglus_tweet", "siglus_joypad_config"]:
+        var fields := _parse_platform_form(argument)
+        var request_id := String(fields.get("id", ""))
+        _send_siglus_joypad_events(siglus_joypad.release_all())
+        var done := func():
+            if player != null:
+                player.submit_platform_response(operation, "id=%s" % request_id)
+        if operation == "siglus_tweet":
+            var preview: Image = viewport.texture.get_image() if viewport != null and viewport.texture != null else null
+            SiglusPlatformDialogs.tweet(self, fields, done, preview)
+        else:
+            SiglusPlatformDialogs.joypad(self, siglus_joypad, done)
         return
     if operation == "minori_select":
         _show_minori_select(argument)
@@ -11525,7 +11624,12 @@ func _ensure_player_initialized() -> bool:
         return false
 
     var runtime_id := "auto"
-    if current_player_runtime_kind in [RUNTIME_ONSCRIPTER, RUNTIME_MINORI, RUNTIME_RFVP]:
+    if current_player_runtime_kind in [
+        RUNTIME_ONSCRIPTER,
+        RUNTIME_SIGLUS,
+        RUNTIME_MINORI,
+        RUNTIME_RFVP,
+    ]:
         runtime_id = current_player_runtime_kind
     var runtime_result := int(player.set_engine_option("runtime", runtime_id))
     if runtime_result != ENGINE_RESULT_OK:
@@ -11540,6 +11644,7 @@ func _ensure_player_initialized() -> bool:
     _append_log("%s engine initialized." % (
         {
             RUNTIME_ONSCRIPTER: "OnscripterYuri",
+            RUNTIME_SIGLUS: "SiglusEngine",
             RUNTIME_MINORI: "MinoriRust",
             RUNTIME_RFVP: "rfvp",
         }.get(current_player_runtime_kind, "AetherKiri")
@@ -13021,6 +13126,7 @@ func _process(delta: float) -> void:
     _poll_native_translation_model_file_picker()
     _fit_full_rects()
     _sync_game_virtual_controls()
+    _update_siglus_cursor_mode()
     _process_iap(delta)
     _update_advanced_tool_timeouts()
     _flush_log_view_if_needed(delta)
@@ -13598,7 +13704,14 @@ func _notification(what: int) -> void:
         return
     if player == null:
         return
+    if what == NOTIFICATION_OS_IME_UPDATE and game_text_input_active:
+        if player.has_method("send_ime_preedit"):
+            var selection := DisplayServer.ime_get_selection()
+            player.send_ime_preedit(DisplayServer.ime_get_text(), selection.x, selection.y)
+        return
     if what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+        if active_runtime_kind == RUNTIME_SIGLUS:
+            Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
         if diagnostic_session != null:
             diagnostic_session.record("godot", "lifecycle", "info", "application_paused", 0, {"notification": what})
         if video_playing:
@@ -13635,7 +13748,7 @@ func _notification(what: int) -> void:
 func _pause_game_for_lifecycle(reason: String) -> void:
     game_text_input_suspended = true
     _deactivate_game_text_input()
-    if not _is_touch_platform():
+    if not _is_touch_platform() and active_runtime_kind != RUNTIME_SIGLUS:
         return
     if app_lifecycle_paused or not game_running or cached_startup_state != STARTUP_SUCCEEDED:
         return
@@ -13654,7 +13767,7 @@ func _pause_game_for_lifecycle(reason: String) -> void:
 
 func _resume_game_for_lifecycle(reason: String) -> void:
     game_text_input_suspended = false
-    if not _is_touch_platform():
+    if not _is_touch_platform() and active_runtime_kind != RUNTIME_SIGLUS:
         return
     if not app_lifecycle_paused:
         return
@@ -14165,7 +14278,14 @@ func _capture_main_view(frame_stats: Dictionary) -> void:
         var visible := int(screenshot_stats.get("visible", 0))
         get_tree().quit(0 if visible > 0 else 2)
 
+func _send_siglus_joypad_events(events: Array) -> void:
+    if player == null or active_runtime_kind != RUNTIME_SIGLUS:
+        return
+    for event in events:
+        player.send_key_event(bool(event[1]), int(event[0]), 0, 0)
+
 func _clear_game_input_capture() -> void:
+    _send_siglus_joypad_events(siglus_joypad.release_all())
     if game_virtual_controls != null:
         game_virtual_controls.set_enabled(false)
     _deactivate_game_text_input()
@@ -15064,6 +15184,10 @@ func _input(event: InputEvent) -> void:
     # modal. Leave their events unhandled so LineEdit/Button GUI dispatch owns
     # them, and never pass the same event through to the game.
     if modal_layer != null and modal_layer.visible:
+        return
+    if (event is InputEventJoypadButton or event is InputEventJoypadMotion) and active_runtime_kind == RUNTIME_SIGLUS and _can_forward_game_input():
+        _send_siglus_joypad_events(siglus_joypad.translate(event))
+        get_viewport().set_input_as_handled()
         return
     # KAG [edit] controls own their focus inside the rendered game; Godot does
     # not mirror that focus onto the TextureRect. Forward keyboard input here,
@@ -16184,7 +16308,56 @@ func _sync_game_text_input_state() -> void:
     game_text_input_attention_position = attention_position
     game_text_input_reopen_requested = false
 
+func _on_siglus_window_mouse_entered() -> void:
+    siglus_pointer_inside_window = true
+    _update_siglus_cursor_mode()
+
+func _on_siglus_window_mouse_exited() -> void:
+    siglus_pointer_inside_window = false
+    _update_siglus_cursor_mode()
+
+func _siglus_cursor_mouse_mode(window_focused: bool) -> int:
+    # On macOS HIDDEN hides the system cursor, not just a sprite in this
+    # window. A software game cursor must never hide the desktop pointer
+    # after it leaves the game or while another window/dialog owns focus.
+    if (
+        not siglus_native_cursor_visible
+        and _can_apply_siglus_mouse_warp(window_focused)
+    ):
+        return Input.MOUSE_MODE_HIDDEN
+    return Input.MOUSE_MODE_VISIBLE
+
+func _update_siglus_cursor_mode() -> void:
+    if active_runtime_kind != RUNTIME_SIGLUS or not game_running or _is_touch_platform():
+        return
+    var mode := _siglus_cursor_mouse_mode(get_window().has_focus())
+    if Input.mouse_mode != mode:
+        Input.mouse_mode = mode
+
+func _can_apply_siglus_mouse_warp(window_focused: bool) -> bool:
+    # A script may request a warp just as focus changes or a dialog opens.
+    # Never move the user's desktop pointer on behalf of a background game.
+    return (
+        not _is_touch_platform()
+        and window_focused
+        and siglus_pointer_inside_window
+        and not app_lifecycle_paused
+        and active_runtime_kind == RUNTIME_SIGLUS
+        and viewport != null
+        and _can_forward_game_input()
+    )
+
+func _map_surface_point_to_viewport(point: Vector2) -> Vector2:
+    if viewport == null:
+        return point
+    return viewport.get_global_transform_with_canvas() * _map_surface_point_to_local(point)
+
 func _map_surface_point_to_screen(point: Vector2) -> Vector2:
+    if viewport == null:
+        return point
+    return viewport.get_screen_transform() * _map_surface_point_to_local(point)
+
+func _map_surface_point_to_local(point: Vector2) -> Vector2:
     if viewport == null:
         return point
     var local_point := point
@@ -16206,7 +16379,7 @@ func _map_surface_point_to_screen(point: Vector2) -> Vector2:
         var drawn_size := texture_size * scale
         var offset := (panel_size - drawn_size) * 0.5
         local_point = offset + texture_point * scale
-    return viewport.get_screen_transform() * local_point
+    return local_point
 
 func _map_viewport_point(pos: Vector2, clamp_to_bounds: bool = false) -> Vector2:
     if viewport.texture == null:

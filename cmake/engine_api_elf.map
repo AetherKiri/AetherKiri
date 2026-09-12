@@ -1,6 +1,7 @@
 {
     global:
         engine_*;
+        AetherInternalGetSiglusEmoteBackendV1;
         JNI_OnLoad;
         Java_org_github_krkr2_aetherkiri_EngineBridge_*;
         _Z14krkr_GetJNIEnvv;

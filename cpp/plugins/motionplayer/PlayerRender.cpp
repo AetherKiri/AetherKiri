@@ -8759,6 +8759,12 @@ namespace motion {
             }
             return false;
         }
+        const void *motionRenderTarget = nullptr;
+        if(auto *targetImage = renderLayer->GetMainImage()) {
+            motionRenderTarget = targetImage->GetTexture();
+        }
+        TVPGodotGpuMotionRenderTargetScope gpuMotionTarget(
+            motionRenderTarget);
         // A selector hover can call renderToLayer directly from the input
         // event, before Window::UpdateContent has opened its outer batch.  If
         // this scope is restricted to E-mote, every PSB button draw is
@@ -11238,7 +11244,7 @@ namespace motion {
                     layerBytes(entry.unionMaskLayer);
             };
             constexpr std::size_t kCommandOutputCacheLimitBytes =
-                96u * 1024u * 1024u;
+                256u * 1024u * 1024u;
             auto totalBytes = [&]() {
                 std::size_t result = 0;
                 for(const auto &entry : cache) {

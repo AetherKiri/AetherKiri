@@ -81,6 +81,12 @@ struct RenderTimingStats {
 };
 
 std::unordered_map<std::string, RenderTimingStats> g_render_timing_stats;
+// Set only while a render operation is executing.  This is intentionally
+// thread-local: the software renderer may inspect a texture recursively, and
+// readback diagnostics must identify the operation that caused the boundary
+// without adding synchronization to the hot path.
+thread_local const char *g_render_operation_name = nullptr;
+thread_local const void *g_motion_render_target = nullptr;
 uint64_t g_upload_count = 0;
 uint64_t g_upload_success_count = 0;
 uint64_t g_upload_bytes = 0;
@@ -102,6 +108,14 @@ bool RenderTimingEnabled() {
             return true;
         }
         return DetailedRenderStats();
+    }();
+    return enabled;
+}
+
+bool TraceGpuReadback() {
+    static const bool enabled = []() {
+        const char *value = std::getenv("AETHERKIRI_GODOT_READBACK_TRACE");
+        return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
     }();
     return enabled;
 }
@@ -135,6 +149,102 @@ private:
     bool enabled_ = false;
     std::string name_;
     std::chrono::steady_clock::time_point start_;
+};
+
+class ScopedSlowRenderTrace final {
+public:
+    ScopedSlowRenderTrace(const char *kind, const std::string &method,
+                          const tTVPRect &rect, int triangles = 0,
+                          const GodotTexture2D *dst = nullptr,
+                          const GodotTexture2D *src = nullptr)
+        : kind_(kind != nullptr ? kind : "unknown"), method_(method),
+          rect_(rect), triangles_(triangles), enabled_(Enabled()),
+          dst_(Snapshot(dst)), src_(Snapshot(src)),
+          start_(enabled_ ? std::chrono::steady_clock::now()
+                          : std::chrono::steady_clock::time_point()) {}
+
+    ~ScopedSlowRenderTrace() {
+        if (!enabled_) return;
+        const double elapsed = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - start_).count();
+        if (elapsed < ThresholdMs()) return;
+        std::fprintf(
+            stderr,
+            "godot slow render kind=%s method=%s elapsed_ms=%.3f "
+            "rect=(%d,%d,%d,%d) triangles=%d "
+            "dst=%p[%dx%d cpu_comp=%d cpu_pref=%d cpu=%d gpu_pending=%d readback=%d] "
+            "src=%p[%dx%d cpu_comp=%d cpu_pref=%d cpu=%d gpu_pending=%d readback=%d]\n",
+            kind_.c_str(), method_.empty() ? "(null)" : method_.c_str(),
+            elapsed, rect_.left, rect_.top, rect_.right, rect_.bottom,
+            triangles_, dst_.pointer, dst_.width, dst_.height,
+            dst_.cpu_composite, dst_.prefers_cpu, dst_.has_cpu,
+            dst_.gpu_pending, dst_.requires_readback, src_.pointer,
+            src_.width, src_.height, src_.cpu_composite, src_.prefers_cpu,
+            src_.has_cpu, src_.gpu_pending, src_.requires_readback);
+    }
+
+private:
+    struct TextureSnapshot {
+        const void *pointer = nullptr;
+        int width = 0;
+        int height = 0;
+        int cpu_composite = 0;
+        int prefers_cpu = 0;
+        int has_cpu = 0;
+        int gpu_pending = 0;
+        int requires_readback = 0;
+    };
+
+    static TextureSnapshot Snapshot(const GodotTexture2D *texture) {
+        TextureSnapshot snapshot;
+        if (texture == nullptr) return snapshot;
+        snapshot.pointer = texture;
+        snapshot.width = texture->GetWidth();
+        snapshot.height = texture->GetHeight();
+        snapshot.cpu_composite = texture->IsCpuCompositeTarget() ? 1 : 0;
+        snapshot.prefers_cpu = texture->PrefersCpuOperations() ? 1 : 0;
+        snapshot.has_cpu = texture->HasCurrentCpuPixels() ? 1 : 0;
+        snapshot.gpu_pending = texture->HasPendingGpuWrites() ? 1 : 0;
+        snapshot.requires_readback = texture->RequiresGpuReadback() ? 1 : 0;
+        return snapshot;
+    }
+
+    static bool Enabled() {
+        const char *value = std::getenv("AETHERKIRI_GODOT_SLOW_OP_TRACE");
+        return value != nullptr && value[0] != '\0' &&
+               std::strcmp(value, "0") != 0;
+    }
+
+    static double ThresholdMs() {
+        const char *value = std::getenv("AETHERKIRI_GODOT_SLOW_OP_MS");
+        if (value == nullptr || value[0] == '\0') return 10.0;
+        char *end = nullptr;
+        const double parsed = std::strtod(value, &end);
+        return end != value && std::isfinite(parsed) && parsed > 0.0
+            ? parsed
+            : 10.0;
+    }
+
+    std::string kind_;
+    std::string method_;
+    tTVPRect rect_;
+    int triangles_ = 0;
+    TextureSnapshot dst_;
+    TextureSnapshot src_;
+    bool enabled_ = false;
+    std::chrono::steady_clock::time_point start_;
+};
+
+class ScopedRenderOperation final {
+public:
+    explicit ScopedRenderOperation(const char *name)
+        : previous_(g_render_operation_name) {
+        g_render_operation_name = name;
+    }
+    ~ScopedRenderOperation() { g_render_operation_name = previous_; }
+
+private:
+    const char *previous_ = nullptr;
 };
 
 class ScopedUploadTiming final {
@@ -226,6 +336,7 @@ bool IsGpuRectFastPathEnabled(const char *name) {
                std::strcmp(name, "AlphaBlend") == 0 ||
                std::strcmp(name, "AlphaBlend_a") == 0 ||
                std::strcmp(name, "AlphaBlend_d") == 0 ||
+               std::strcmp(name, "ConstAlphaBlend") == 0 ||
                std::strcmp(name, "ConstAlphaBlend_d") == 0 ||
                std::strcmp(name, "ConstAlphaBlend_SD") == 0 ||
                std::strcmp(name, "ConstAlphaBlend_SD_d") == 0 ||
@@ -327,6 +438,70 @@ bool ShouldUseGpuRectFastPath(const tTVPRect &rect, const char *name,
            (src3 != nullptr && src3->RequiresGpuReadback());
 }
 
+bool IsFullTextureRect(const tTVPRect &rc, int width, int height);
+
+// A GPU-backed composition surface can be touched by a long sequence of
+// blends before the layer manager asks for its CPU bitmap.  Keeping the
+// sequence on the GPU looks attractive, but every later software operation
+// then has to synchronously download the whole 1920x1080 image.  On Metal
+// that download is the dominant source of the visible 50--150 ms spikes.
+// Desktop therefore switches a pending destination to the software side at
+// the next destination-reading blend. Android leaves compatible operations on
+// the ordered GPU queue to avoid paying that readback during the provider tick;
+// the `AETHERKIRI_GODOT_CPU_STAGING=1` override restores the desktop policy.
+bool ReadsExistingDestination(const char *name, const tTVPRect &rect,
+                              const GodotTexture2D *dst) {
+    if (name == nullptr || dst == nullptr) return false;
+    if (std::strcmp(name, "FillARGB") == 0 ||
+        std::strcmp(name, "FillMask") == 0 ||
+        std::strcmp(name, "RemoveConstOpacity") == 0) {
+        return false;
+    }
+    if (std::strcmp(name, "Copy") == 0 ||
+        std::strcmp(name, "CopyOpaqueImage") == 0) {
+        return !IsFullTextureRect(rect, dst->GetWidth(), dst->GetHeight());
+    }
+    return std::strcmp(name, "AlphaToAdditiveAlpha") != 0 &&
+           std::strcmp(name, "AdditiveAlphaToAlpha") != 0;
+}
+
+bool CpuStagingOnGpuReadback() {
+    static const bool enabled = []() {
+        const char *value = std::getenv("AETHERKIRI_GODOT_CPU_STAGING");
+        if (value != nullptr && value[0] != '\0') {
+            return std::strcmp(value, "0") != 0;
+        }
+        // Keep every platform on the ordered GPU path whenever the blend
+        // operation has a bridge implementation. Promoting the destination
+        // to the CPU compositor forces a full GPU->CPU readback in the
+        // middle of a provider tick, which is the source of the large
+        // animation and story-mode frame spikes. Unsupported/aliasing
+        // operations still fall back to the exact software path below. The
+        // environment override remains available for older drivers that need
+        // the conservative staging policy.
+        return false;
+    }();
+    return enabled;
+}
+
+bool GpuCopyIntoCpuTargetEnabled() {
+    static const bool enabled = []() {
+        const char *value = std::getenv("AETHERKIRI_GODOT_GPU_CPU_COPY");
+        // A replacement-style Copy can stay on the GPU and publish its
+        // pixels through an asynchronous readback. Keep an escape hatch for
+        // older drivers whose async texture_get_data path is unreliable.
+        // Keep the historical CPU-copy path as the default.  A CPU-preferred
+        // destination already owns a readable shadow; routing a tiny Copy
+        // through the GPU first uploads the entire destination and immediately
+        // schedules a full-texture readback, producing ~100 ms stalls on the
+        // 1920x1440 layer surface.  Drivers that benefit from the asynchronous
+        // path can still opt in explicitly with AETHERKIRI_GODOT_GPU_CPU_COPY=1.
+        return value != nullptr && value[0] != '\0' &&
+               std::strcmp(value, "0") != 0;
+    }();
+    return enabled;
+}
+
 bool IsOpaqueAlphaBlendCopyEnabled() {
     static const bool enabled = []() {
         const char *value = std::getenv("AETHERKIRI_GODOT_GPU_OPAQUE_COPY");
@@ -334,6 +509,8 @@ bool IsOpaqueAlphaBlendCopyEnabled() {
     }();
     return enabled;
 }
+
+
 
 bool IsGpuCopyTrianglesEnabled() {
     static const bool enabled = []() {
@@ -525,7 +702,17 @@ GodotTexture2D::GodotTexture2D(const void *pixel, int pitch, unsigned int w,
       pitch_(pitch > 0 ? pitch : static_cast<int>(w) * BytesPerPixel(format)),
       discard_unwritten_on_partial_update_(
           (create_flags & RENDER_CREATE_TEXTURE_FLAG_NO_COMPRESS) != 0) {
-    pixels_.resize(static_cast<size_t>(pitch_) * h);
+    // Image loads arrive with a complete CPU bitmap. Keep that immutable
+    // shadow after the first GPU upload: the layer manager may later route a
+    // blend through the software path, and downloading the same Metal image
+    // again for every sentence change creates a 10-30 ms hitch per source.
+    // Blank render targets still use the old discardable path.
+    retain_cpu_shadow_ = pixel != nullptr;
+    // Layer construction/resize often replaces a blank bitmap before it is
+    // ever painted. Materialize RGBA zeroes only on CPU access; a GPU target
+    // can be cleared by create_rgba without allocating a staging bitmap.
+    if (pixel != nullptr || format_ != TVPTextureFormat::RGBA)
+        pixels_.resize(static_cast<size_t>(pitch_) * h);
     if (pixel != nullptr) {
         const int src_pitch = pitch > 0 ? pitch : pitch_;
         const auto *src = static_cast<const uint8_t *>(pixel);
@@ -542,7 +729,10 @@ GodotTexture2D::GodotTexture2D(const void *pixel, int pitch, unsigned int w,
     cpu_pixels_known_zero_ = pixel == nullptr;
 }
 
-GodotTexture2D::~GodotTexture2D() { ReleaseGpuHandle(); }
+GodotTexture2D::~GodotTexture2D() {
+    CancelPendingGpuReadback();
+    ReleaseGpuHandle();
+}
 
 void GodotTexture2D::EnsureCpuStorage() {
     const size_t required = static_cast<size_t>(pitch_) * Height;
@@ -554,6 +744,94 @@ void GodotTexture2D::EnsureCpuStorage() {
 void GodotTexture2D::DiscardCpuStorage() {
     if (pixels_.empty()) return;
     std::vector<uint8_t>().swap(pixels_);
+}
+
+void GodotTexture2D::CancelPendingGpuReadback() {
+    if (pending_cpu_readback_ != 0) {
+        DiscardGpuReadback(pending_cpu_readback_);
+        pending_cpu_readback_ = 0;
+    }
+    pending_cpu_readback_pixels_.clear();
+}
+
+bool GodotTexture2D::BeginCpuReadback() {
+    if (pending_cpu_readback_ != 0) return true;
+    if (format_ != TVPTextureFormat::RGBA || gpu_handle_ == 0 ||
+        !gpu_dirty_ || cpu_dirty_) {
+        return false;
+    }
+    const size_t required = static_cast<size_t>(pitch_) * Height;
+    if (required == 0) return false;
+    const uint64_t request = BeginGpuReadback();
+    if (request == 0) return false;
+    try {
+        pending_cpu_readback_pixels_.resize(required);
+    } catch (...) {
+        DiscardGpuReadback(request);
+        return false;
+    }
+    pending_cpu_readback_ = request;
+    if (TraceGpuReadback()) {
+        std::fprintf(
+            stderr,
+            "godot readback async tex=%p op=%s size=%dx%d bytes=%zu\n",
+            static_cast<const void *>(this),
+            g_render_operation_name != nullptr && *g_render_operation_name != '\0'
+                ? g_render_operation_name
+                : "(outside-op)",
+            Width, Height, required);
+    }
+    return true;
+}
+
+bool GodotTexture2D::CompletePendingGpuReadback() {
+    if (pending_cpu_readback_ == 0) return false;
+    bool ready = false;
+    const bool success = PollGpuReadback(
+        pending_cpu_readback_, pending_cpu_readback_pixels_.data(),
+        pending_cpu_readback_pixels_.size(), static_cast<uint32_t>(pitch_),
+        &ready);
+    if (!ready) return false;
+    pending_cpu_readback_ = 0;
+    if (!success) {
+        pending_cpu_readback_pixels_.clear();
+        return false;
+    }
+    pixels_.swap(pending_cpu_readback_pixels_);
+    pending_cpu_readback_pixels_.clear();
+    gpu_dirty_ = false;
+    cpu_dirty_ = false;
+    cpu_pixels_known_zero_ = false;
+    return true;
+}
+
+bool GodotTexture2D::CopyCpuSnapshotFrom(GodotTexture2D &source) {
+    if (format_ == TVPTextureFormat::RGBA && format_ == source.format_ &&
+        source.cpu_pixels_known_zero_ && !source.HasPendingGpuWrites()) {
+        // The newly-created destination is already all zeroes, including any
+        // grown border. An unmaterialized blank is not a GPU-only snapshot.
+        return true;
+    }
+    if (Width != source.Width || Height != source.Height ||
+        pitch_ != source.pitch_ || format_ != TVPTextureFormat::RGBA ||
+        format_ != source.format_ ||
+        !source.HasCurrentCpuPixels()) return false;
+    source.ExpectCpuAccess();
+    // The destination of a copy-on-write clone is still unallocated. Copy
+    // directly instead of zero-filling it, overwriting those zeroes, then
+    // scanning every alpha byte to rediscover the source's opacity state.
+    pixels_ = source.pixels_;
+    retain_cpu_shadow_ = true;
+    if (source.opacity_known_) {
+        opacity_known_ = true;
+        opaque_ = source.opaque_;
+    } else {
+        // The sampler uses known transparency when selecting alpha-aware
+        // minification. Preserve Update's discovery for modified bitmaps.
+        SetOpacityFromPixels(pixels_.data(), pitch_);
+    }
+    MarkCpuDirty();
+    return true;
 }
 
 void GodotTexture2D::SetOpacityFromPixels(const void *pixel, int pitch) {
@@ -722,7 +1000,7 @@ void GodotTexture2D::ReleaseGpuHandle() {
 }
 
 void GodotTexture2D::EnsureCpuReadable() {
-    ScopedRenderTiming cpu_read_timing("EnsureCpuReadable");
+    ExpectCpuAccess();
     if (cpu_dirty_) {
         EnsureCpuStorage();
         return;
@@ -732,7 +1010,29 @@ void GodotTexture2D::EnsureCpuReadable() {
         return;
     }
     if (!gpu_dirty_ && !pixels_.empty()) return;
+    if (pending_cpu_readback_ != 0) {
+        if (CompletePendingGpuReadback()) return;
+        // The async request is still in flight.  Drop it before using the
+        // synchronous bridge so the same frame never owns two readbacks for
+        // one texture.
+        CancelPendingGpuReadback();
+    }
+    // A scanline accessor reaches this function for every row.  Only time an
+    // actual GPU readback, not the already-resident CPU fast path.
+    ScopedRenderTiming cpu_read_timing("EnsureCpuReadable");
     EnsureCpuStorage();
+    if (TraceGpuReadback()) {
+        std::fprintf(
+            stderr,
+            "godot readback begin tex=%p op=%s size=%dx%d bytes=%zu "
+            "retain=%d gpu_dirty=%d cpu_dirty=%d\n",
+            static_cast<const void *>(this),
+            g_render_operation_name != nullptr && *g_render_operation_name != '\0'
+                ? g_render_operation_name
+                : "(outside-op)",
+            Width, Height, pixels_.size(), retain_cpu_shadow_ ? 1 : 0,
+            gpu_dirty_ ? 1 : 0, cpu_dirty_ ? 1 : 0);
+    }
     const auto *bridge = TVPGodotGpuBridgeGet();
     if (format_ == TVPTextureFormat::Gray && bridge != nullptr &&
         bridge->read_rgba != nullptr) {
@@ -779,6 +1079,7 @@ void *GodotTexture2D::GetScanLineForWrite(tjs_uint l) {
 
 void *GodotTexture2D::GetScanLineForWriteUninitialized(tjs_uint l) {
     if (l >= static_cast<tjs_uint>(Height)) return nullptr;
+    ExpectCpuAccess();
     EnsureCpuStorage();
     if (pixels_.empty()) return nullptr;
     retain_cpu_shadow_ = true;
@@ -814,6 +1115,10 @@ void GodotTexture2D::Update(const void *pixel, TVPTextureFormat::e format,
                                  static_cast<const uint8_t *>(pixel), src_pitch,
                                  new_bpp, rc);
     if (!copied) return;
+    // Decoded TLG/PIMG data is often written into a texture created as a
+    // blank render target. Keep that CPU result just like constructor-provided
+    // image data so a later software blend does not force a Metal readback.
+    retain_cpu_shadow_ = true;
     if (full_rect) {
         SetOpacityFromPixels(pixels_.data(), pitch_);
     } else {
@@ -864,7 +1169,10 @@ void GodotTexture2D::SetSize(unsigned int w, unsigned int h) {
     Width = static_cast<tjs_int>(w);
     Height = static_cast<tjs_int>(h);
     pitch_ = static_cast<int>(w) * BytesPerPixel(format_);
-    pixels_.assign(static_cast<size_t>(pitch_) * h, 0);
+    if (format_ == TVPTextureFormat::RGBA)
+        pixels_.clear();
+    else
+        pixels_.assign(static_cast<size_t>(pitch_) * h, 0);
     MarkTransparentKnown();
     MarkCpuDirty();
     cpu_pixels_known_zero_ = true;
@@ -875,6 +1183,7 @@ bool GodotTexture2D::ClearGpu(uint32_t rgba, const tTVPRect &rc) {
     const auto *bridge = TVPGodotGpuBridgeGet();
     if (bridge == nullptr || bridge->clear_rgba == nullptr) return false;
     if (!bridge->clear_rgba(gpu_handle_, rgba, &rc)) return false;
+    CancelPendingGpuReadback();
     gpu_dirty_ = true;
     cpu_dirty_ = false;
     if (IsFullTextureRect(rc, Width, Height)) {
@@ -896,6 +1205,7 @@ bool GodotTexture2D::CopyGpuFrom(GodotTexture2D *src, const tTVPRect &dst_rc,
     if (!bridge->copy_rect(gpu_handle_, src->gpu_handle_, &dst_rc, &src_rc)) {
         return false;
     }
+    CancelPendingGpuReadback();
     gpu_dirty_ = true;
     cpu_dirty_ = false;
     if (IsFullTextureRect(dst_rc, Width, Height) &&
@@ -923,6 +1233,7 @@ bool GodotTexture2D::CopyTrianglesGpuFrom(GodotTexture2D *src,
                                 &clip_rc, dst_points, src_points)) {
         return false;
     }
+    CancelPendingGpuReadback();
     gpu_dirty_ = true;
     cpu_dirty_ = false;
     MarkOpacityUnknown();
@@ -970,6 +1281,7 @@ bool GodotTexture2D::DrawTrianglesGpuFrom(GodotTexture2D *src,
                                normalizedOpacity, blend_mode)) {
         return false;
     }
+    CancelPendingGpuReadback();
     gpu_dirty_ = true;
     cpu_dirty_ = false;
     MarkOpacityUnknown();
@@ -994,6 +1306,7 @@ bool GodotTexture2D::DrawExternalTrianglesGpuFrom(
            dst_points, src_points, normalizedOpacity, blend_mode)) {
         return false;
     }
+    CancelPendingGpuReadback();
     gpu_dirty_ = true;
     cpu_dirty_ = false;
     MarkOpacityUnknown();
@@ -1027,6 +1340,7 @@ bool GodotTexture2D::DrawMaskedTrianglesGpuFrom(
            blend_mode, use_mask_alpha)) {
         return false;
     }
+    CancelPendingGpuReadback();
     gpu_dirty_ = true;
     cpu_dirty_ = false;
     MarkOpacityUnknown();
@@ -1053,6 +1367,7 @@ bool GodotTexture2D::BlendGpuFrom(GodotTexture2D *src, const tTVPRect &dst_rc,
                             mode, opacity, color)) {
         return false;
     }
+    CancelPendingGpuReadback();
     gpu_dirty_ = true;
     cpu_dirty_ = false;
     MarkOpacityUnknown();
@@ -1075,6 +1390,7 @@ bool GodotTexture2D::BlendGpuFrom2(GodotTexture2D *src1, GodotTexture2D *src2,
                              color)) {
         return false;
     }
+    CancelPendingGpuReadback();
     gpu_dirty_ = true;
     cpu_dirty_ = false;
     MarkOpacityUnknown();
@@ -1099,6 +1415,7 @@ bool GodotTexture2D::BlendGpuFrom3(
            opacity, color)) {
         return false;
     }
+    CancelPendingGpuReadback();
     gpu_dirty_ = true;
     cpu_dirty_ = false;
     MarkOpacityUnknown();
@@ -1117,13 +1434,15 @@ bool GodotTexture2D::UploadCpuToGpu(bool flush_pending_gpu_writes) {
         }
         return true;
     }
-    if (format_ != TVPTextureFormat::RGBA || pixels_.empty()) {
+    if (format_ != TVPTextureFormat::RGBA ||
+        (pixels_.empty() && !cpu_pixels_known_zero_)) {
         return false;
     }
     const auto *bridge = TVPGodotGpuBridgeGet();
     if (bridge == nullptr) return false;
     if (gpu_handle_ == 0) {
-        CreateGpuHandle(pixels_.data(), pitch_);
+        CreateGpuHandle(cpu_pixels_known_zero_ ? nullptr : pixels_.data(),
+                        pitch_);
         if (gpu_handle_ != 0) upload_timing.Succeeded();
         return gpu_handle_ != 0;
     }
@@ -1159,6 +1478,7 @@ bool GodotTexture2D::UpdateGpuRgba(const void *pixels,
             return false;
         }
     }
+    CancelPendingGpuReadback();
     gpu_dirty_ = true;
     cpu_dirty_ = false;
     DiscardCpuStorage();
@@ -1202,19 +1522,34 @@ iTVPTexture2D *GodotRenderManager::CreateTexture2D(unsigned int neww,
     auto *ret = new GodotTexture2D(nullptr, 0, neww, newh,
                                   tex != nullptr ? tex->GetFormat()
                                                  : TVPTextureFormat::RGBA);
+    // Preserve the layer-manager marker across copy-on-write clones.  The
+    // manager's composition surface is deliberately kept on the software
+    // path so its readback-visible bitmap remains authoritative; losing the
+    // marker here silently routes the next blend through the GPU path and
+    // reintroduces alpha-rounding differences for transparent glyph layers.
+    if (tex != nullptr && tex->IsCpuCompositeTarget()) {
+        ret->SetCpuCompositeTarget(true);
+    }
     if (tex != nullptr) {
         const tTVPRect copy_rc(0, 0,
                                std::min<tjs_int>(neww, tex->GetWidth()),
                                std::min<tjs_int>(newh, tex->GetHeight()));
         if (!copy_rc.is_empty()) {
-            // Copy-on-write and grow-only motion scratch layers arrive here
-            // while their newest pixels still live exclusively on the GPU.
-            // Reading scan line zero would synchronously download the entire
-            // Metal texture before uploading it into the replacement texture.
-            // Keep that clone on the ordered GPU queue whenever both textures
-            // use this backend.
+            // Clone where the current pixels already reside. Uploading a CPU
+            // bitmap just to clone it forces the next software operation to
+            // synchronously read it back (notably during glyph-layer resizing).
+            // GPU-only motion surfaces still clone on the ordered GPU queue;
+            // CPU composition targets will need CPU pixels in either case.
             auto *godot_src = dynamic_cast<GodotTexture2D *>(tex);
+            if (godot_src != nullptr && godot_src->PrefersCpuOperations()) {
+                ret->ExpectCpuAccess();
+            }
+            if (godot_src != nullptr && ret->CopyCpuSnapshotFrom(*godot_src)) {
+                return ret;
+            }
             if (godot_src != nullptr &&
+                !godot_src->IsCpuCompositeTarget() &&
+                !godot_src->HasCurrentCpuPixels() &&
                 ret->EnsureGpuHandle() && godot_src->EnsureGpuHandle() &&
                 godot_src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
                 ret->CopyGpuFrom(godot_src, copy_rc, copy_rc)) {
@@ -1299,9 +1634,12 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         godot_method != nullptr ? godot_method->Delegate() : method;
     const std::string method_name =
         method != nullptr ? method->GetName() : std::string();
+    ScopedRenderOperation render_operation(method_name.c_str());
     ScopedRenderTiming render_timing(method_name.empty() ? "(null)" : method_name);
 
     auto *dst = dynamic_cast<GodotTexture2D *>(tar);
+    const bool motion_target_active =
+        TVPGodotGpuMotionRenderTargetActive(dst);
     auto *src = textures.size() == 1
         ? dynamic_cast<GodotTexture2D *>(textures[0].first)
         : nullptr;
@@ -1320,6 +1658,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
     auto *src3_3 = textures.size() == 3
         ? dynamic_cast<GodotTexture2D *>(textures[2].first)
         : nullptr;
+    ScopedSlowRenderTrace slow_trace("rect", method_name, rctar, 0, dst, src);
     const bool nearest_scaled = textures.size() == 1 &&
         !RectAbsSizeMatches(rctar, textures[0].second) &&
         (stretch_type_ & stTypeMask) == stNearest;
@@ -1330,9 +1669,51 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
     // Metal/Vulkan do not define a read-only image and writable storage image
     // bound to the same resource.  Keep this one semantic boundary on the
     // software renderer; regular layer textures retain their GPU fast paths.
-    if (dst != nullptr && dst->IsCpuCompositeTarget()) {
+    // If this destination was already modified by the GPU, do not append one
+    // more GPU blend to a surface that the layer manager will immediately read
+    // back. Promote it to the same CPU-composition boundary used by the draw
+    // buffer.  This is deliberately limited to operations that read the
+    // existing destination; a full replacement/clear can remain GPU-native.
+    const bool cpu_staging_transition =
+        !motion_target_active && CpuStagingOnGpuReadback() && dst != nullptr &&
+        dst->RequiresGpuReadback() &&
+        // BoxBlurAlpha already has an alias-safe GPU implementation. Keep
+        // the surface GPU-resident for this read/modify/write operation and
+        // let the next CPU boundary perform one readback if it is needed.
+        method_name != "BoxBlurAlpha" &&
+        ReadsExistingDestination(method_name.c_str(), rctar, dst);
+    const bool gpu_copy_cpu_destination =
+        !motion_target_active && GpuCopyIntoCpuTargetEnabled() &&
+        method_name == "Copy" && dst != nullptr && src != nullptr &&
+        src != dst && dst->PrefersCpuOperations() &&
+        !dst->IsCpuCompositeTarget() &&
+        src->HasPendingGpuWrites() && !nearest_scaled &&
+        IsGpuRectFastPathEnabled("Copy") &&
+        RectBoundsInsideTexture(rctar, dst) &&
+        RectBoundsInsideTexture(textures[0].second, src) &&
+        !RectNeedsAlphaAreaDownsample(rctar, textures[0].second, src) &&
+        (RectAbsSizeMatches(rctar, textures[0].second) ||
+         IsGpuCopyTrianglesEnabled());
+    // A CPU-preferred layer already has a valid shadow buffer.  Unless the
+    // experimental GPU-copy/readback path is explicitly enabled, keep small
+    // replacement copies on that shadow instead of uploading the whole layer
+    // merely to copy a glyph-sized rectangle into it.
+    const bool cpu_resident_copy =
+        !motion_target_active && !gpu_copy_cpu_destination &&
+        method_name == "Copy" && dst != nullptr && src != nullptr &&
+        !dst->IsCpuCompositeTarget() && dst->PrefersCpuOperations();
+    if (cpu_staging_transition) {
+        dst->ExpectCpuAccess();
+        dst->SetCpuCompositeTarget(true);
+    }
+    if (dst != nullptr && !motion_target_active &&
+        !gpu_copy_cpu_destination &&
+        (dst->IsCpuCompositeTarget() || cpu_staging_transition ||
+         cpu_resident_copy)) {
         if (method_name == "Copy") {
-            CountCopyFallbackReason("cpu_composite_target");
+            CountCopyFallbackReason(dst->IsCpuCompositeTarget()
+                                        ? "cpu_composite_target"
+                                        : "cpu_resident_target");
         }
         CountMethodFallback(method);
         SoftwareDelegate()->OperateRect(delegate_method, tar, reftar, rctar,
@@ -1418,7 +1799,6 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         RectAbsSizeMatches(rctar, textures[0].second) &&
         RectBoundsInsideTexture(textures[0].second, src) &&
         dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
-        src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
         dst->BlendGpuFrom(
             src, rctar, textures[0].second,
             TVP_GODOT_GPU_BLEND_BOX_BLUR_ALPHA,
@@ -1446,6 +1826,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
             src_rc.get_height() == rctar.get_height() &&
             dst->CopyGpuFrom(src, rctar, src_rc)) {
             CountGpuFastPath(method_name);
+            if (gpu_copy_cpu_destination) dst->BeginCpuReadback();
             return;
         }
         if(nearest_scaled) {
@@ -1478,6 +1859,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
             };
             if (dst->CopyTrianglesGpuFrom(src, 2, rctar, dst_pt, src_pt)) {
                 CountGpuFastPath(method_name);
+                if (gpu_copy_cpu_destination) dst->BeginCpuReadback();
                 return;
             }
         }
@@ -1516,6 +1898,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         };
         if (dst->CopyTrianglesGpuFrom(src, 2, rctar, dst_pt, src_pt)) {
             CountGpuFastPath(method_name);
+            if (gpu_copy_cpu_destination) dst->BeginCpuReadback();
             return;
         }
     }
@@ -1610,6 +1993,20 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
         dst->BlendGpuFrom(src, rctar, textures[0].second,
                           TVP_GODOT_GPU_BLEND_ALPHA_D,
+                          godot_method != nullptr ? godot_method->Opacity() : 255,
+                          0)) {
+        CountGpuFastPath(method_name);
+        return;
+    }
+
+    if (method_name == "ConstAlphaBlend" && dst != nullptr && src != nullptr &&
+        src != dst && IsGpuRectFastPathEnabled("ConstAlphaBlend") &&
+        ShouldUseGpuRectFastPath(rctar, method_name.c_str(), dst, src) &&
+        RectBoundsInsideTexture(textures[0].second, src) &&
+        dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
+        src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
+        dst->BlendGpuFrom(src, rctar, textures[0].second,
+                          TVP_GODOT_GPU_BLEND_CONST_ALPHA,
                           godot_method != nullptr ? godot_method->Opacity() : 255,
                           0)) {
         CountGpuFastPath(method_name);
@@ -1936,12 +2333,21 @@ void GodotRenderManager::OperateTriangles(iTVPRenderMethod *method, int nTriangl
     ++draw_count_;
     const std::string method_name =
         method != nullptr ? method->GetName() : std::string();
+    ScopedRenderOperation render_operation(method_name.c_str());
+    ScopedRenderTiming triangle_timing(
+        method_name.empty() ? "Triangles:(null)" :
+                              "Triangles:" + method_name);
     auto *godot_method = dynamic_cast<GodotRenderMethod *>(method);
     auto *dst = dynamic_cast<GodotTexture2D *>(target);
+    const bool motion_target_active =
+        TVPGodotGpuMotionRenderTargetActive(dst);
     auto *src = textures.size() == 1
         ? dynamic_cast<GodotTexture2D *>(textures[0].first)
         : nullptr;
-    if (dst != nullptr && dst->IsCpuCompositeTarget()) {
+    ScopedSlowRenderTrace slow_trace("triangles", method_name, rcclip,
+                                     nTriangles, dst, src);
+    if (dst != nullptr && !motion_target_active &&
+        dst->IsCpuCompositeTarget()) {
         CountMethodFallback(method);
         SoftwareDelegate()->OperateTriangles(
             godot_method != nullptr ? godot_method->Delegate() : method,
@@ -2443,4 +2849,22 @@ void TVPForceRegisterGodotRenderManager() {}
 
 void TVPSetGodotRenderManagerGpuFastPathEnabled(bool enabled) {
     g_gpu_fastpath_enabled.store(enabled, std::memory_order_relaxed);
+}
+
+TVPGodotGpuMotionRenderTargetScope::TVPGodotGpuMotionRenderTargetScope(
+    const void *target) {
+    if (target == nullptr) return;
+    previous_ = g_motion_render_target;
+    g_motion_render_target = target;
+    active_ = true;
+}
+
+TVPGodotGpuMotionRenderTargetScope::~TVPGodotGpuMotionRenderTargetScope() noexcept {
+    if (active_) {
+        g_motion_render_target = previous_;
+    }
+}
+
+bool TVPGodotGpuMotionRenderTargetActive(const void *target) {
+    return target != nullptr && g_motion_render_target == target;
 }

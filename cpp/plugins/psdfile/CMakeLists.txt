@@ -30,3 +30,13 @@ target_sources(${PROJECT_NAME} PRIVATE
 target_include_directories(${PROJECT_NAME} PRIVATE
     "${AETHERKIRI_PSDPARSE_ROOT}")
 target_link_libraries(${PROJECT_NAME} PRIVATE krkr2plugin psdparse)
+
+# PSD metadata/layer decoding is used by stand-image updates. Keep Debug
+# symbols while optimizing both the adapter and the pure C++ parser; no pixel
+# format or compositing path is changed.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT MSVC)
+    target_compile_options(${PROJECT_NAME} PRIVATE -O2)
+    if(TARGET psdparse)
+        target_compile_options(psdparse PRIVATE -O2)
+    endif()
+endif()

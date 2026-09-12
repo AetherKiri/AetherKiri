@@ -300,6 +300,16 @@ combine_ios_static_extension() {
         "$CMAKE_BUILD_DIR/cpp/external/libbpg/liblibbpg.a"
     )
 
+    local siglus_runtime_lib="$CMAKE_BUILD_DIR/bridge/siglus_runtime/libaether_siglus_runtime.a"
+    if [[ -f "$siglus_runtime_lib" ]]; then
+        libs+=("$siglus_runtime_lib")
+    fi
+    while IFS= read -r siglus_vm_lib; do
+        if [[ -n "$siglus_vm_lib" && -f "$siglus_vm_lib" ]]; then
+            libs+=("$siglus_vm_lib")
+        fi
+    done < <(find "$CMAKE_BUILD_DIR/siglus-rs-target" -name 'libsiglus_scene_vm.a' 2>/dev/null || true)
+
     if [[ "$triplet" == "x64-ios-simulator" ]]; then
         godot_cpp_arch="x86_64"
         rfvp_rust_target="x86_64-apple-ios"
