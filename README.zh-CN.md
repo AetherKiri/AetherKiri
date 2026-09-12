@@ -79,7 +79,7 @@ Godot App Shell
 | `cpp/plugins/` | 内置 native 插件实现和兼容 stub。 |
 | `packages/AetherInternal/` | 可选的私有 E-mote package submodule；公开版本不依赖它也能构建。 |
 | `packages/OnscripterYuri/` | 公开的 OnscripterYuri git submodule。 |
-| `packages/siglus_rs/` | 公开的 siglus_rs（Rust 版 SiglusEngine）git submodule。保持只读；AetherKiri 侧改动全部位于 `bridge/siglus_runtime/overlay/`。 |
+| `packages/AetherSiglus/` | 公开的 siglus_rs（Rust 版 SiglusEngine）git submodule。保持只读；AetherKiri 侧改动全部位于 `bridge/siglus_runtime/overlay/`。 |
 | `packages/tjs2Decompiler/` | 可选的 Rust TJS2 字节码反汇编/分析辅助工具；不链接进运行时构建。 |
 | `demos/aetherkiri-kag3/` | AetherKiri 内置 KAG3 Demo 的完整源码。 |
 | `tests/profiles/` | 单游戏 probe profile。提交到仓库的 profile 不能包含机器本地路径。 |

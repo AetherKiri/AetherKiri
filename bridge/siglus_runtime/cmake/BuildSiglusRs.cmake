@@ -1,4 +1,4 @@
-# BuildSiglusRs.cmake — builds the packages/siglus_rs workspace into a Rust
+# BuildSiglusRs.cmake — builds the packages/AetherSiglus workspace into a Rust
 # static library consumable by the AetherKiri bridges.
 #
 # The public entry point is aetherkiri_add_siglus_rs(<imported-target>), which:
@@ -126,12 +126,12 @@ function(aetherkiri_add_siglus_rs imported_target)
         set(rust_profile_flag "--release")
     endif()
 
-    set(SIGLUS_RS_ROOT "${CMAKE_SOURCE_DIR}/packages/siglus_rs")
+    set(SIGLUS_RS_ROOT "${CMAKE_SOURCE_DIR}/packages/AetherSiglus")
     set(SIGLUS_RS_MANIFEST "${SIGLUS_RS_ROOT}/crates/siglus_scene_vm/Cargo.toml")
     if(NOT EXISTS "${SIGLUS_RS_MANIFEST}")
         message(FATAL_ERROR
             "siglus_rs submodule is unavailable. Run "
-            "`git submodule update --init packages/siglus_rs`.")
+            "`git submodule update --init packages/AetherSiglus`.")
     endif()
 
     # The submodule stays pristine: sources are copied into the build tree,

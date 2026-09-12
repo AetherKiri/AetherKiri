@@ -91,7 +91,7 @@ runtimes unrestricted for compatibility development and testing.
 | `cpp/plugins/` | Bundled native plugin implementations and compatibility stubs. |
 | `packages/AetherInternal/` | Optional private E-mote package submodule; public builds work without it. |
 | `packages/OnscripterYuri/` | Public OnscripterYuri git submodule. |
-| `packages/siglus_rs/` | Public siglus_rs (Rust SiglusEngine) git submodule. Kept pristine; AetherKiri-specific changes live in `bridge/siglus_runtime/overlay/`. |
+| `packages/AetherSiglus/` | Public siglus_rs (Rust SiglusEngine) git submodule. Kept pristine; AetherKiri-specific changes live in `bridge/siglus_runtime/overlay/`. |
 | `packages/tjs2Decompiler/` | Optional Rust helper for disassembling and analyzing compiled TJS2 bytecode; it is not linked into runtime builds. |
 | `demos/aetherkiri-kag3/` | Source tree for the built-in AetherKiri KAG3 demo. |
 | `tests/profiles/` | Per-game probe profiles. Committed profiles must not contain machine-local game paths. |

@@ -6,11 +6,11 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(BuildSiglusRs)
 
 set(SIGLUS_RS_ROOT
-    "${CMAKE_SOURCE_DIR}/packages/siglus_rs")
+    "${CMAKE_SOURCE_DIR}/packages/AetherSiglus")
 if(NOT EXISTS "${SIGLUS_RS_ROOT}/crates/siglus_scene_vm/Cargo.toml")
     message(FATAL_ERROR
         "siglus_rs submodule is unavailable. Run "
-        "`git submodule update --init packages/siglus_rs`.")
+        "`git submodule update --init packages/AetherSiglus`.")
 endif()
 
 aetherkiri_add_siglus_rs(siglus_scene_vm_rs)
