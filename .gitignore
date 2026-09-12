@@ -24,6 +24,7 @@ vcpkg_installed/
 .aetherkiri-cache/
 *.lock
 !package-lock.json
+!bridge/rfvp_runtime/Cargo.lock
 node_modules/
 .vite/
 /stats_server
@@ -55,6 +56,7 @@ apps/godot_app/.godot
 plugin_trace.log
 __pycache__/
 *.pyc
+
 # Godot Android Gradle build template (generated from export templates)
 apps/godot_app/android/
 build-linux/

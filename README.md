@@ -35,8 +35,8 @@ AetherKiri is a multi-runtime visual-novel platform inside a Godot 4.7
 application shell. A single `AetherRuntimePlayer` hosts multiple native
 runtimes behind a versioned provider interface, while Godot owns the product
 UI, final-frame presentation, input, settings, export presets, and platform
-packaging. The runtime dispatcher selects KiriRuntime, OnsRuntime, or optional
-A Runtime from each game's markers and capabilities.
+packaging. The runtime dispatcher selects KiriRuntime, OnsRuntime, optional
+A Runtime, or C Runtime (CatSystem2) from each game's markers and capabilities.
 
 The default product renderer is **Godot Native**: engine frames are rendered
 through Godot-owned `RenderingDevice` resources. **GPU Bridge** remains an
@@ -51,7 +51,12 @@ Godot App Shell
       -> KiriRuntime -> KiriKiri2 Core / Plugins
       -> OnsRuntime -> OnscripterYuri
       -> A Runtime
+      -> C Runtime -> CatSystem2
 ```
+
+In distributed builds, OnsRuntime, A Runtime, and C Runtime are beta features
+that require an active 30-day coffee entitlement. Debug builds keep these
+runtimes unrestricted for compatibility development and testing.
 
 ## Highlights
 
@@ -86,7 +91,7 @@ Godot App Shell
 | `cpp/plugins/` | Bundled native plugin implementations and compatibility stubs. |
 | `packages/AetherInternal/` | Optional private E-mote package submodule; public builds work without it. |
 | `packages/OnscripterYuri/` | Public OnscripterYuri git submodule. |
-| `packages/siglus_rs/` | Public siglus_rs (Rust SiglusEngine) git submodule. Kept pristine; AetherKiri-specific changes live in `bridge/siglus_runtime/overlay/`. |
+| `packages/AetherSiglus/` | Public siglus_rs (Rust SiglusEngine) git submodule. Kept pristine; AetherKiri-specific changes live in `bridge/siglus_runtime/overlay/`. |
 | `packages/tjs2Decompiler/` | Optional Rust helper for disassembling and analyzing compiled TJS2 bytecode; it is not linked into runtime builds. |
 | `demos/aetherkiri-kag3/` | Source tree for the built-in AetherKiri KAG3 demo. |
 | `tests/profiles/` | Per-game probe profiles. Committed profiles must not contain machine-local game paths. |
@@ -137,7 +142,7 @@ iOS and Android export presets reference the generated PNG sizes under
 
 | Platform | Minimum version | Notes |
 | --- | --- | --- |
-| macOS | macOS 13.0 (Ventura) | The Godot app export is universal, but the current native build triplet is `arm64`; Intel support needs an `x86_64` native build. |
+| macOS | macOS 13.0 (Ventura) | Internal E-mote builds use the official SDK's `x86_64` driver and run under Rosetta on Apple Silicon. |
 | iOS / iPadOS | iOS / iPadOS 16.0 | `arm64` devices; `arm64` and `x86_64` simulator builds are available for development. |
 | Android | Android 8.0 (API 26) | The product export currently packages `arm64-v8a` only. |
 | Web | No OS version floor | Requires a browser with WebAssembly SIMD, WebAssembly threads, and `SharedArrayBuffer`, served with cross-origin isolation (COOP/COEP). |
@@ -148,6 +153,7 @@ iOS and Android export presets reference the generated PNG sizes under
 
 - CMake 3.28+
 - Ninja
+- NASM (required by the native FFmpeg dependency)
 - Rust toolchain (rustup) with the `aarch64-linux-android` target installed
   (`rustup target add aarch64-linux-android`) for the bundled Siglus runtime;
   iOS/Web Siglus builds additionally need their respective targets. Builds
@@ -164,6 +170,9 @@ iOS and Android export presets reference the generated PNG sizes under
 - Godot Web GDExtension/dlink export templates installed as
   `web_dlink_debug.zip` and `web_dlink_release.zip`.
 - Node.js and npm for the TypeScript/Vite local Web server.
+- The official E-mote SDK for internal Artemis and CatSystem2 E-mote builds.
+  Install it before configuring or testing an internal build with
+  `packages/AetherInternal/tools/install_emote_sdk.sh`.
 
 ### Linux
 
@@ -214,9 +223,14 @@ implementations can initialize the optional package before building:
 
 ```bash
 git submodule update --init packages/AetherInternal
+packages/AetherInternal/tools/install_emote_sdk.sh
 ```
 
-CMake enables it automatically when present. Use
+CMake enables it automatically when present. The installer verifies the SDK
+and writes only Git-ignored files under the private package; do not commit
+those generated headers or archives. On macOS, the official driver is
+`x86_64`-only, so the normal internal command builds that architecture and the
+app runs under Rosetta on Apple Silicon. Use
 `-DAETHERKIRI_ENABLE_INTERNAL=OFF` to test the public fallback, or
 `-DAETHERKIRI_INTERNAL_DIR=/absolute/path/to/AetherInternal` to use a separate
 checkout. Trusted runs of the `Build` GitHub Actions workflow use the
@@ -224,9 +238,12 @@ checkout. Trusted runs of the `Build` GitHub Actions workflow use the
 private submodule recursively. Fork and Dependabot pull requests cannot access
 repository secrets, so those untrusted runs use the public fallback.
 
-The internal package extends the existing public `motionplayer` and
-`krkr2plugin` targets; it does not replace either target or copy their public
-source trees. For E-mote, it registers a small versioned controller extension.
+The internal package extends the existing public `motionplayer`, runtime, and
+`krkr2plugin` targets; it does not replace those targets or copy their public
+source trees. KiriRuntime, Artemis, and CatSystem2 share the official GPU
+E-mote SDK bridge; supported mobile targets retain native shared GPU frames,
+while macOS uses the SDK's asynchronous transfer path across the OpenGL and
+MoltenVK boundary.
 For native Live2D, it contributes the Cubism SDK, `.l2d` loader, motion player,
 and renderer while the public repository keeps the script-compatible fallback
 and generic GPU bridge. Both configurations run the same public tests. A

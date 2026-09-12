@@ -1,5 +1,19 @@
 extends RefCounted
 
+# Some providers consume native frame coordinates; others map a requested
+# presentation surface back into their logical frame themselves.
+static func input_surface_size(
+    runtime_kind: String,
+    content_size: Vector2,
+    requested_surface: Vector2
+) -> Vector2:
+    if runtime_kind in ["minori", "onscripter", "rfvp"]:
+        return content_size
+    if requested_surface.x > 0.0 and requested_surface.y > 0.0:
+        return requested_surface
+    return content_size
+
+
 # The frame texture defines the engine's pointer coordinate space. A runtime
 # may accept a requested surface size before open and then replace it with the
 # game's native size while booting, so the requested size must not be used to
@@ -123,3 +137,15 @@ static func stable_tap_point(
     if up_point.distance_to(down_point) < maxf(0.0, drag_threshold):
         return down_point
     return up_point
+
+
+# CatSystem2's FeScript buttons activate on POINTER_UP. Once the mobile host
+# has classified a direct touch as a drag, that release must only end the
+# physical contact; letting it complete a left click can advance dialogue or
+# activate the control now under the finger. Artemis owns richer layer-drag
+# semantics internally, so keep its existing release path unchanged.
+static func touch_drag_release_is_cancelled(
+    runtime_kind: String,
+    dragged: bool
+) -> bool:
+    return dragged and runtime_kind.strip_edges().to_lower() == "catsystem2"

@@ -273,6 +273,7 @@ combine_ios_static_extension() {
     local cubism_core_lib="$cubism_package_root/third_party/cubism/Core/lib/ios/Release-iphoneos/libLive2DCubismCore.a"
     local godot_cpp_arch="arm64"
     local godot_cpp_lib=""
+    local rfvp_rust_target="aarch64-apple-ios"
     local libs=(
         "$CMAKE_BUILD_DIR/bridge/godot_extension/libaether_kiri_godot.a"
         "$CMAKE_BUILD_DIR/bridge/onscripter_runtime/libaether_onscripter_runtime.a"
@@ -311,8 +312,10 @@ combine_ios_static_extension() {
 
     if [[ "$triplet" == "x64-ios-simulator" ]]; then
         godot_cpp_arch="x86_64"
+        rfvp_rust_target="x86_64-apple-ios"
         cubism_core_lib="$cubism_package_root/third_party/cubism/Core/lib/ios/Release-iphonesimulator-x86_64/libLive2DCubismCore.a"
     elif [[ "$triplet" == "arm64-ios-simulator" ]]; then
+        rfvp_rust_target="aarch64-apple-ios-sim"
         cubism_core_lib="$cubism_package_root/third_party/cubism/Core/lib/ios/Release-iphonesimulator-arm64/libLive2DCubismCore.a"
     fi
     godot_cpp_lib="$(resolve_ios_godot_cpp_lib "$vcpkg_triplet_root" "$godot_cpp_arch" "$BUILD_TYPE_LOWER" || true)"
@@ -323,6 +326,12 @@ combine_ios_static_extension() {
     fi
     libs=("$godot_cpp_lib" "${libs[@]}")
     libs+=("$cubism_core_lib")
+    if [[ -f "$CMAKE_BUILD_DIR/bridge/rfvp_runtime/libaether_rfvp_runtime.a" ]]; then
+        libs+=(
+            "$CMAKE_BUILD_DIR/bridge/rfvp_runtime/libaether_rfvp_runtime.a"
+            "$CMAKE_BUILD_DIR/bridge/rfvp_runtime/prepared/target/$rfvp_rust_target/$BUILD_TYPE_LOWER/librfvp.a"
+        )
+    fi
 
     while IFS= read -r lib; do
         libs+=("$lib")
@@ -599,7 +608,14 @@ cmake_config_args=(
     -D "AETHERKIRI_ENABLE_CODE_OBFUSCATION=${AETHERKIRI_ENABLE_CODE_OBFUSCATION:-OFF}"
     -D "AETHERKIRI_OBFUSCATOR_PLUGIN=${AETHERKIRI_OBFUSCATOR_PLUGIN:-}"
     -D "AETHERKIRI_OBFUSCATION_BUILD_ID=${AETHERKIRI_OBFUSCATION_BUILD_ID:-local}"
+    -D "AETHERKIRI_ENABLE_RFVP=${AETHERKIRI_ENABLE_RFVP:-OFF}"
 )
+if [[ -n "${RFVP_CARGO:-}" ]]; then
+    cmake_config_args+=(-D "RFVP_CARGO=$RFVP_CARGO")
+fi
+if [[ -n "${RFVP_RUSTC:-}" ]]; then
+    cmake_config_args+=(-D "RFVP_RUSTC=$RFVP_RUSTC")
+fi
 if [[ "${SKIP_VCPKG_INSTALL:-}" == "1" ]]; then
     if [[ ! -d "$VCPKG_ROOT/installed/$VCPKG_TRIPLET_DIR" ]]; then
         echo "Error: SKIP_VCPKG_INSTALL=1 but prebuilt vcpkg triplet is missing: $VCPKG_ROOT/installed/$VCPKG_TRIPLET_DIR" >&2

@@ -278,6 +278,7 @@ const UI_TEXT := {
         "iap.coffee.active_until": "内测功能有效期至：%s",
         "iap.coffee.inactive": "内测功能当前未启用",
         "iap.coffee.purchase_success": "感谢支持！内测功能有效期至：%s",
+        "iap.runtime_unavailable": "此视觉小说兼容正在测试中，请等待后续支持",
         "support.coffee.title": "请作者喝一杯咖啡",
         "support.coffee.desc": "打开支付宝支持作者，不影响游戏导入或启动",
         "support.coffee.open": "打开支付宝",
@@ -335,6 +336,7 @@ const UI_TEXT := {
         "detail.launch_entry": "启动入口：%s",
         "detail.default_launch_entry": "游戏目录（自动检测）",
         "detail.set_launch_file": "切换启动文件",
+        "detail.rfvp_encoding": "脚本编码（rfvp）",
         "detail.reset_launch_file": "恢复目录自动检测",
         "detail.set_cover": "设置封面",
         "detail.delete_cover": "删除封面",
@@ -380,7 +382,7 @@ const UI_TEXT := {
         "message.android_storage_permission_required": "需要允许 Aether 访问文件系统后才能导入或启动外部游戏。请在系统弹窗或权限设置中授予文件访问权限，然后再试。",
         "message.android_video_storage_permission_required": "需要允许 Aether 访问文件系统后才能导入视频。请在系统弹窗或权限设置中授予文件访问权限，然后再试。",
         "message.path_missing": "游戏路径不存在",
-        "message.launch_file_unsupported": "启动文件只支持 EXE 或 XP3",
+        "message.launch_file_unsupported": "启动文件只支持 EXE、XP3 或 HCB",
         "message.launch_file_outside_game": "启动文件必须位于当前游戏目录内",
         "message.launch_file_missing": "启动文件不存在：%s",
         "message.cover_file_missing": "无法读取所选封面图片：%s",
@@ -561,6 +563,7 @@ const UI_TEXT := {
         "iap.coffee.active_until": "測試功能有效期限至：%s",
         "iap.coffee.inactive": "測試功能目前尚未啟用",
         "iap.coffee.purchase_success": "感謝支持！測試功能有效期限至：%s",
+        "iap.runtime_unavailable": "此視覺小說的相容支援仍在測試中，請等待後續支援",
         "support.coffee.title": "請作者喝一杯咖啡",
         "support.coffee.desc": "開啟支付寶支持作者，不影響遊戲匯入或啟動",
         "support.coffee.open": "開啟支付寶",
@@ -618,6 +621,7 @@ const UI_TEXT := {
         "detail.launch_entry": "啟動入口：%s",
         "detail.default_launch_entry": "遊戲目錄（自動偵測）",
         "detail.set_launch_file": "切換啟動檔案",
+        "detail.rfvp_encoding": "腳本編碼（rfvp）",
         "detail.reset_launch_file": "恢復目錄自動偵測",
         "detail.set_cover": "設定封面",
         "detail.rename": "重新命名",
@@ -661,7 +665,7 @@ const UI_TEXT := {
         "message.android_storage_permission_required": "需要允許 Aether 存取檔案系統後才能匯入或啟動外部遊戲。請在系統彈窗或權限設定中授予檔案存取權限，然後再試。",
         "message.android_video_storage_permission_required": "需要允許 Aether 存取檔案系統後才能匯入影片。請在系統彈窗或權限設定中授予檔案存取權限，然後再試。",
         "message.path_missing": "遊戲路徑不存在",
-        "message.launch_file_unsupported": "啟動檔案僅支援 EXE 或 XP3",
+        "message.launch_file_unsupported": "啟動檔案僅支援 EXE、XP3 或 HCB",
         "message.launch_file_outside_game": "啟動檔案必須位於目前遊戲目錄內",
         "message.launch_file_missing": "啟動檔案不存在：%s",
         "message.cover_file_missing": "無法讀取所選封面圖片：%s",
@@ -842,6 +846,7 @@ const UI_TEXT := {
         "iap.coffee.active_until": "Beta feature access expires: %s",
         "iap.coffee.inactive": "Beta feature access is not active",
         "iap.coffee.purchase_success": "Thank you! Beta feature access expires: %s",
+        "iap.runtime_unavailable": "Compatibility for this visual novel is still being tested. Please wait for a future update.",
         "support.coffee.title": "Buy the Author a Coffee",
         "support.coffee.desc": "Open Alipay to support the author; game import and launch are unaffected",
         "support.coffee.open": "Open Alipay",
@@ -899,6 +904,7 @@ const UI_TEXT := {
         "detail.launch_entry": "Launch entry: %s",
         "detail.default_launch_entry": "Game folder (auto-detect)",
         "detail.set_launch_file": "Change Launch File",
+        "detail.rfvp_encoding": "Script encoding (rfvp)",
         "detail.reset_launch_file": "Restore Folder Auto-detect",
         "detail.set_cover": "Set Cover",
         "detail.delete_cover": "Delete Cover",
@@ -944,7 +950,7 @@ const UI_TEXT := {
         "message.android_storage_permission_required": "Allow Aether to access the file system before importing or launching external games. Grant file access in the system prompt or permission settings, then try again.",
         "message.android_video_storage_permission_required": "Allow Aether to access the file system before importing videos. Grant file access in the system prompt or permission settings, then try again.",
         "message.path_missing": "Game path does not exist",
-        "message.launch_file_unsupported": "The launch file must be an EXE or XP3 file",
+        "message.launch_file_unsupported": "The launch file must be an EXE, XP3 or HCB file",
         "message.launch_file_outside_game": "The launch file must be inside this game folder",
         "message.launch_file_missing": "Launch file does not exist: %s",
         "message.cover_file_missing": "Could not read the selected cover image: %s",
@@ -1125,6 +1131,7 @@ const UI_TEXT := {
         "iap.coffee.active_until": "ベータ機能の有効期限：%s",
         "iap.coffee.inactive": "ベータ機能は現在有効ではありません",
         "iap.coffee.purchase_success": "ご支援ありがとうございます！ベータ機能の有効期限：%s",
+        "iap.runtime_unavailable": "このビジュアルノベルの互換対応はテスト中です。今後の対応をお待ちください。",
         "support.coffee.title": "作者にコーヒーを一杯贈る",
         "support.coffee.desc": "Alipay を開いて作者を支援します。ゲームの読み込みや起動には影響しません",
         "support.coffee.open": "Alipay を開く",
@@ -1182,6 +1189,7 @@ const UI_TEXT := {
         "detail.launch_entry": "起動エントリ：%s",
         "detail.default_launch_entry": "ゲームフォルダー（自動検出）",
         "detail.set_launch_file": "起動ファイルを変更",
+        "detail.rfvp_encoding": "スクリプトの文字コード（rfvp）",
         "detail.reset_launch_file": "フォルダーの自動検出に戻す",
         "detail.set_cover": "カバーを設定",
         "detail.rename": "名前を変更",
@@ -1225,7 +1233,7 @@ const UI_TEXT := {
         "message.android_storage_permission_required": "外部ゲームのインポートまたは起動には、Aether にファイルシステムへのアクセスを許可する必要があります。システムの権限ダイアログまたは設定でファイルアクセスを許可してから、もう一度お試しください。",
         "message.android_video_storage_permission_required": "動画をインポートするには、Aether にファイルシステムへのアクセスを許可する必要があります。システムの権限ダイアログまたは設定でファイルアクセスを許可してから、もう一度お試しください。",
         "message.path_missing": "ゲームパスが存在しません",
-        "message.launch_file_unsupported": "起動ファイルは EXE または XP3 のみ対応しています",
+        "message.launch_file_unsupported": "起動ファイルは EXE、XP3 または HCB のみ対応しています",
         "message.launch_file_outside_game": "起動ファイルは現在のゲームフォルダー内にある必要があります",
         "message.launch_file_missing": "起動ファイルが存在しません：%s",
         "message.cover_file_missing": "選択したカバー画像を読み込めません：%s",
@@ -1406,6 +1414,7 @@ const UI_TEXT := {
         "iap.coffee.active_until": "베타 기능 만료일: %s",
         "iap.coffee.inactive": "베타 기능이 현재 활성화되어 있지 않습니다",
         "iap.coffee.purchase_success": "후원해 주셔서 감사합니다! 베타 기능 만료일: %s",
+        "iap.runtime_unavailable": "이 비주얼 노벨의 호환성은 아직 테스트 중입니다. 추후 지원을 기다려 주세요.",
         "support.coffee.title": "작가에게 커피 한 잔 사주기",
         "support.coffee.desc": "Alipay를 열어 작가를 후원합니다. 게임 가져오기나 실행에는 영향을 주지 않습니다",
         "support.coffee.open": "Alipay 열기",
@@ -1463,6 +1472,7 @@ const UI_TEXT := {
         "detail.launch_entry": "실행 진입점: %s",
         "detail.default_launch_entry": "게임 폴더(자동 감지)",
         "detail.set_launch_file": "실행 파일 변경",
+        "detail.rfvp_encoding": "스크립트 인코딩 (rfvp)",
         "detail.reset_launch_file": "폴더 자동 감지 복원",
         "detail.set_cover": "표지 설정",
         "detail.rename": "이름 변경",
@@ -1506,7 +1516,7 @@ const UI_TEXT := {
         "message.android_storage_permission_required": "외부 게임을 가져오거나 실행하려면 Aether의 파일 시스템 접근을 허용해야 합니다. 시스템 권한 창 또는 권한 설정에서 파일 접근 권한을 허용한 뒤 다시 시도하세요.",
         "message.android_video_storage_permission_required": "비디오를 가져오려면 Aether의 파일 시스템 접근을 허용해야 합니다. 시스템 권한 창 또는 권한 설정에서 파일 접근 권한을 허용한 뒤 다시 시도하세요.",
         "message.path_missing": "게임 경로가 존재하지 않습니다",
-        "message.launch_file_unsupported": "실행 파일은 EXE 또는 XP3만 지원합니다",
+        "message.launch_file_unsupported": "실행 파일은 EXE, XP3 또는 HCB만 지원합니다",
         "message.launch_file_outside_game": "실행 파일은 현재 게임 폴더 안에 있어야 합니다",
         "message.launch_file_missing": "실행 파일이 존재하지 않습니다: %s",
         "message.cover_file_missing": "선택한 표지 이미지를 읽을 수 없습니다: %s",
@@ -1554,6 +1564,8 @@ const RUNTIME_KIRIKIRI := "kirikiri"
 const RUNTIME_ONSCRIPTER := "onscripter"
 const RUNTIME_SIGLUS := "siglus"
 const RUNTIME_MINORI := "minori"
+const BETA_PROVIDER_RUNTIME_IDS := ["artemis", "catsystem2", "rfvp", "wa2"]
+const RUNTIME_RFVP := "rfvp"
 const RUNTIME_PLAYER_CLASS := "AetherRuntimePlayer"
 const ONSCRIPTER_SCRIPT_MARKERS := [
     "0.txt",
@@ -3704,6 +3716,13 @@ func _apply_engine_options() -> void:
     var onscripter_encoding := OS.get_environment("AETHERKIRI_ONS_ENCODING").strip_edges()
     if not onscripter_encoding.is_empty():
         player.set_engine_option("onscripter_encoding", onscripter_encoding)
+    if current_player_runtime_kind == RUNTIME_RFVP:
+        player.set_engine_option("rfvp_encoding", GameLaunchEntry.rfvp_encoding(
+            selected_game, OS.get_environment("AETHERKIRI_RFVP_ENCODING")
+        ))
+        var rfvp_renderer := OS.get_environment("AETHERKIRI_RFVP_RENDERER").strip_edges().to_lower()
+        if not rfvp_renderer.is_empty():
+            player.set_engine_option("rfvp_renderer", rfvp_renderer)
 
 func _apply_frame_enhancement_settings() -> void:
     if player == null or not player.has_method("set_frame_enhancement_enabled"):
@@ -7603,6 +7622,24 @@ func _detail_information_panel(game: Dictionary) -> PanelContainer:
     info.add_child(_detail_line(ICON_LIBRARY, _game_type_label(String(game.get("type", "Directory")))))
     info.add_child(_detail_separator())
     info.add_child(_detail_line(ICON_PLAY, _t("detail.launch_entry", [_game_launch_entry_label(game)])))
+    if _game_runtime_kind(String(game.get("path", ""))) == RUNTIME_RFVP:
+        info.add_child(_detail_separator())
+        var row := _detail_line(ICON_PAGE, _t("detail.rfvp_encoding"))
+        var encoding := OptionButton.new()
+        encoding.name = "RfvpEncoding"
+        encoding.custom_minimum_size = Vector2(140, 40)
+        ui_widgets.secondary_button(encoding)
+        for label in ["Shift-JIS", "GBK", "UTF-8"]:
+            encoding.add_item(label)
+        encoding.select(GameLaunchEntry.RFVP_ENCODINGS.find(GameLaunchEntry.rfvp_encoding(game)))
+        var library_path := String(game.get("path", ""))
+        encoding.item_selected.connect(func(index: int):
+            _update_game(library_path, {
+                GameLaunchEntry.RFVP_ENCODING_FIELD: GameLaunchEntry.RFVP_ENCODINGS[index]
+            })
+        )
+        row.add_child(encoding)
+        info.add_child(row)
     return info_panel
 
 func _detail_remove_button(game: Dictionary) -> Button:
@@ -8426,7 +8463,7 @@ func _show_launch_file_godot_dialog(library_path: String) -> void:
     var dialog := _create_file_dialog(
         _t("dialog.choose_launch_file"),
         FileDialog.FILE_MODE_OPEN_FILE,
-        PackedStringArray(["*.exe,*.EXE,*.xp3,*.XP3;Visual novel launch file"])
+        PackedStringArray(["*.exe,*.EXE,*.xp3,*.XP3,*.hcb,*.HCB;Visual novel launch file"])
     )
     if DirAccess.dir_exists_absolute(library_path):
         dialog.current_dir = library_path
@@ -9829,12 +9866,22 @@ func _path_exists(path: String) -> bool:
     return DirAccess.dir_exists_absolute(candidate) or FileAccess.file_exists(candidate)
 
 func _resolve_game_path(path: String) -> String:
-    var normalized := path.strip_edges()
-    if normalized.is_empty():
-        return normalized
+    # Native file pickers return authoritative filesystem paths.  A trailing
+    # space is a valid filename character on POSIX (and occurs in real game
+    # folders), so try the exact value before treating surrounding whitespace
+    # as accidental user input.
+    var normalized := path
+    if normalized.is_empty() or normalized.strip_edges().is_empty():
+        return ""
     if OS.get_name() == "Android":
         normalized = _android_external_storage_path_from_tree_uri(normalized)
-    if _path_exists(normalized) or OS.get_name() != "iOS":
+    if _path_exists(normalized):
+        return normalized
+
+    var trimmed := normalized.strip_edges()
+    if trimmed != normalized and _path_exists(trimmed):
+        return trimmed
+    if OS.get_name() != "iOS":
         return normalized
 
     var current_root := ProjectSettings.globalize_path("user://Games")
@@ -9932,6 +9979,9 @@ func _game_runtime_kind(path: String) -> String:
     )
     if runtime_kind != RUNTIME_KIRIKIRI:
         return runtime_kind
+    for marker in SIGLUS_SCRIPT_MARKERS:
+        if FileAccess.file_exists(root.path_join(marker)):
+            return RUNTIME_SIGLUS
     if player != null and player.has_method("probe_runtime") \
             and int(player.probe_runtime(RUNTIME_MINORI, root)) > 0:
         return RUNTIME_MINORI
@@ -9956,7 +10006,9 @@ func _backfill_game_metadata(games: Array[Dictionary]) -> bool:
                 if String(game.get("name", "")).is_empty():
                     game["name"] = title
                 changed = true
-        for key in ["titleCandidates", "metadataSignals", "launchFile"]:
+        if GameLaunchEntry.backfill(game, metadata):
+            changed = true
+        for key in ["titleCandidates", "metadataSignals"]:
             var value = metadata.get(key, null)
             if value != null and JSON.stringify(game.get(key, null)) != JSON.stringify(value):
                 game[key] = value
@@ -10571,7 +10623,7 @@ func _start_selected_game_after_iap() -> void:
         return
     var selected_runtime_kind := _game_runtime_kind(library_path)
     # Development artifacts and Android releases do not use the Apple-only
-    # beta entitlement flow.
+    # beta entitlement flow. Keep provider beta access enabled for both paths.
     if not _beta_access_enforcement_enabled():
         if (
             selected_runtime_kind == RUNTIME_KIRIKIRI
@@ -10579,6 +10631,8 @@ func _start_selected_game_after_iap() -> void:
             and not _switch_runtime_player(RUNTIME_KIRIKIRI)
         ):
             return
+        if player.has_method("set_engine_option"):
+            player.set_engine_option("beta_runtime_allowed", "1")
         _start_selected_game_after_entitlements()
         return
 
@@ -10589,9 +10643,13 @@ func _start_selected_game_after_iap() -> void:
         and not _switch_runtime_player(RUNTIME_KIRIKIRI)
     ):
         return
+    if player.has_method("set_engine_option"):
+        # Reset a grant left on the reusable engine handle before every Release
+        # launch. A fresh verified coffee entitlement enables it again below.
+        player.set_engine_option("beta_runtime_allowed", "0")
     var requires_beta_access := (
         _runtime_requires_beta_access(selected_runtime_kind)
-        or _selected_game_uses_wa2()
+        or _selected_game_uses_beta_provider()
     )
     if not requires_beta_access:
         _start_selected_game_after_entitlements()
@@ -10608,24 +10666,33 @@ func _start_selected_game_after_iap() -> void:
         _deny_runtime_beta_launch()
 
 func _runtime_requires_beta_access(runtime_kind: String) -> bool:
-    # ONS and Artemis are generally available. Siglus and Minori remain gated
-    # by an active coffee entitlement in iOS and macOS distribution builds.
-    # Provider-backed runtimes such as WA2 are checked separately.
-    return runtime_kind in [RUNTIME_SIGLUS, RUNTIME_MINORI]
+    # ONS, Siglus, Minori, and RFVP support follow the same Apple release policy as
+    # Artemis: unrestricted in Debug and Android builds, and gated by an
+    # active coffee entitlement in iOS and macOS distribution builds.
+    return runtime_kind in [
+        RUNTIME_ONSCRIPTER,
+        RUNTIME_SIGLUS,
+        RUNTIME_MINORI,
+        RUNTIME_RFVP,
+    ]
 
 func _beta_access_enforcement_enabled(platform_name: String = "") -> bool:
     var effective_platform := platform_name if not platform_name.is_empty() else OS.get_name()
     return effective_platform in ["iOS", "macOS"] and not OS.is_debug_build()
 
-func _selected_game_uses_wa2() -> bool:
-    # WHITE ALBUM2 runs on the KiriKiri host through the compiled Wa2
-    # provider and retains the provider beta-access policy.
+func _provider_runtime_requires_beta_access(runtime_id: String) -> bool:
+    return BETA_PROVIDER_RUNTIME_IDS.has(runtime_id.strip_edges().to_lower())
+
+func _selected_game_uses_beta_provider() -> bool:
     if player == null or not player.has_method("probe_runtime"):
         return false
     var library_path := String(selected_game.get("path", "")).strip_edges()
     if library_path.is_empty():
         return false
-    return int(player.probe_runtime("wa2", library_path)) > 0
+    for runtime_id in BETA_PROVIDER_RUNTIME_IDS:
+        if int(player.probe_runtime(runtime_id, library_path)) > 0:
+            return true
+    return false
 
 func _complete_runtime_beta_check() -> void:
     iap_pending_beta_check_id = 0
@@ -10637,13 +10704,21 @@ func _complete_runtime_beta_check() -> void:
         _deny_runtime_beta_launch()
         return
     selected_game = pending_game
+    if (
+        _game_runtime_kind(String(selected_game.get("path", "")))
+        == RUNTIME_KIRIKIRI
+        and player.has_method("set_engine_option")
+    ):
+        player.set_engine_option("beta_runtime_allowed", "1")
     _start_selected_game_after_entitlements()
 
 func _deny_runtime_beta_launch() -> void:
     iap_pending_beta_check_id = 0
     iap_pending_beta_game.clear()
+    if player != null and player.has_method("set_engine_option"):
+        player.set_engine_option("beta_runtime_allowed", "0")
     _show_system_alert(
-        _t("iap.beta_runtime_unavailable"),
+        _t("iap.runtime_unavailable"),
         _t("alert.warning_title")
     )
 
@@ -10683,20 +10758,22 @@ func _start_selected_game_after_entitlements() -> void:
             _t("alert.warning_title")
         )
         return
-    var launch_path := GameLaunchEntry.resolve_for_runtime(
-        selected_game,
-        active_runtime_kind
-    )
+    var configured_launch_path := GameLaunchEntry.resolve(selected_game)
     if (
         not launch_uses_directory
         and not relative_launch_file.is_empty()
-        and not FileAccess.file_exists(launch_path)
+        and not FileAccess.file_exists(configured_launch_path)
     ):
         _show_system_alert(
             _t("message.launch_file_missing", [relative_launch_file]),
             _t("alert.warning_title")
         )
         return
+    var launch_path := GameLaunchEntry.resolve_for_runtime(
+        selected_game,
+        active_runtime_kind,
+        _selected_game_uses_beta_provider()
+    )
     _set_game_runtime_orientation(true)
     var played_game := _mark_game_played(library_path)
     if not played_game.is_empty():
@@ -11181,7 +11258,12 @@ func _create_runtime_player(runtime_kind: String = RUNTIME_KIRIKIRI) -> bool:
 
 func _switch_runtime_player(runtime_kind: String) -> bool:
     var normalized := runtime_kind
-    if normalized not in [RUNTIME_ONSCRIPTER, RUNTIME_SIGLUS, RUNTIME_MINORI]:
+    if normalized not in [
+        RUNTIME_ONSCRIPTER,
+        RUNTIME_SIGLUS,
+        RUNTIME_MINORI,
+        RUNTIME_RFVP,
+    ]:
         normalized = RUNTIME_KIRIKIRI
     if player != null and current_player_runtime_kind == normalized:
         return true
@@ -11208,13 +11290,12 @@ func _switch_runtime_player(runtime_kind: String) -> bool:
             diagnostic_session.finish()
         diagnostic_session.start(player, selected_backend)
     _append_log("Runtime selected: %s" % (
-        "OnscripterYuri"
-        if normalized == RUNTIME_ONSCRIPTER
-        else "SiglusEngine"
-        if normalized == RUNTIME_SIGLUS
-        else "MinoriRust"
-        if normalized == RUNTIME_MINORI
-        else "KiriKiri"
+        {
+            RUNTIME_ONSCRIPTER: "OnscripterYuri",
+            RUNTIME_SIGLUS: "SiglusEngine",
+            RUNTIME_MINORI: "MinoriRust",
+            RUNTIME_RFVP: "rfvp",
+        }.get(normalized, "KiriKiri")
     ))
     return true
 
@@ -11370,6 +11451,7 @@ func _build_runtime_dialog_content(
         runtime_dialog_input.custom_minimum_size = Vector2(0, 68)
         runtime_dialog_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
         runtime_dialog_input.add_theme_font_size_override("font_size", 25)
+        runtime_dialog_input.text = String(values.get("text", ""))
         var maximum_characters := int(
             String(values.get("maximum_characters", "0"))
         )
@@ -11384,14 +11466,20 @@ func _build_runtime_dialog_content(
     box.add_child(buttons)
 
     if yes_no:
-        var no := _pill_button("No")
+        var no_label := String(values.get("no_label", ""))
+        if no_label.is_empty():
+            no_label = _t("debug.value.no")
+        var no := _pill_button(no_label)
         no.custom_minimum_size = Vector2(150, 60)
         no.pressed.connect(
             _complete_runtime_dialog.bind(0, runtime_dialog_input)
         )
         buttons.add_child(no)
 
-    var ok := _pill_button("Yes" if yes_no else "OK")
+    var ok_label := String(values.get("yes_label" if yes_no else "ok_label", ""))
+    if ok_label.is_empty():
+        ok_label = _t("debug.value.yes") if yes_no else _t("dialog.ok")
+    var ok := _pill_button(ok_label)
     ok.custom_minimum_size = Vector2(150, 60)
     ok.pressed.connect(
         _complete_runtime_dialog.bind(1, runtime_dialog_input)
@@ -11404,6 +11492,7 @@ func _build_runtime_dialog_content(
                 _complete_runtime_dialog(1, runtime_dialog_input)
         )
         runtime_dialog_input.call_deferred("grab_focus")
+        runtime_dialog_input.call_deferred("select_all")
     else:
         ok.call_deferred("grab_focus")
 
@@ -11453,6 +11542,7 @@ func _ensure_player_initialized() -> bool:
         RUNTIME_ONSCRIPTER,
         RUNTIME_SIGLUS,
         RUNTIME_MINORI,
+        RUNTIME_RFVP,
     ]:
         runtime_id = current_player_runtime_kind
     var runtime_result := int(player.set_engine_option("runtime", runtime_id))
@@ -11465,14 +11555,14 @@ func _ensure_player_initialized() -> bool:
         player.destroy_engine()
         return false
 
-    var runtime_name := "AetherKiri"
-    if current_player_runtime_kind == RUNTIME_ONSCRIPTER:
-        runtime_name = "OnscripterYuri"
-    elif current_player_runtime_kind == RUNTIME_SIGLUS:
-        runtime_name = "SiglusEngine"
-    elif current_player_runtime_kind == RUNTIME_MINORI:
-        runtime_name = "MinoriRust"
-    _append_log("%s engine initialized." % runtime_name)
+    _append_log("%s engine initialized." % (
+        {
+            RUNTIME_ONSCRIPTER: "OnscripterYuri",
+            RUNTIME_SIGLUS: "SiglusEngine",
+            RUNTIME_MINORI: "MinoriRust",
+            RUNTIME_RFVP: "rfvp",
+        }.get(current_player_runtime_kind, "AetherKiri")
+    ))
     return true
 
 func _finish_ready_after_first_frame() -> void:
@@ -11867,7 +11957,14 @@ func _run_cli_script_probe() -> void:
         _refresh_known_games_for_auto_start()
         var game := _find_known_game_by_query(target_game_path)
         if not game.is_empty():
-            target_game_path = String(game.get("path", target_game_path))
+            var library_path := String(game.get("path", target_game_path))
+            if FileAccess.file_exists(library_path):
+                target_game_path = library_path
+            else:
+                var runtime_kind := String(game.get("engine", "")).strip_edges().to_lower()
+                if runtime_kind.is_empty():
+                    runtime_kind = _game_runtime_kind(library_path)
+                target_game_path = GameLaunchEntry.resolve_for_runtime(game, runtime_kind)
         else:
             target_game_path = _resolve_game_path(target_game_path)
     _write_probe_marker("cli_probe target requested=%s resolved=%s" % [requested_game_path, target_game_path])
@@ -13123,6 +13220,9 @@ func _process(delta: float) -> void:
                 current_surface_size.x,
                 current_surface_size.y,
             ]
+            var runtime_debug := String(player.get_plugin_debug_info())
+            if not runtime_debug.is_empty():
+                state_line += " runtime=%s" % runtime_debug
             print(state_line)
             _write_probe_marker(state_line)
             if perf_log_file != null:
@@ -13681,7 +13781,7 @@ func _renderer_summary(renderer: String) -> String:
 func _on_open_game() -> void:
     if not _require_legal_documents_for_media():
         return
-    var requested_path := game_path.text.strip_edges()
+    var requested_path := game_path.text
     var path := _resolve_game_path(requested_path)
     if path != requested_path:
         _write_probe_marker("open_game remapped_path=%s requested=%s" % [path, requested_path])
@@ -14011,12 +14111,11 @@ func _game_input_content_size() -> Vector2:
     return Vector2(maxi(1, last_texture_size.x), maxi(1, last_texture_size.y))
 
 func _game_input_surface_size() -> Vector2:
-    # ONS and Minori consume coordinates in their published content space.
-    if active_runtime_kind in [RUNTIME_ONSCRIPTER, RUNTIME_MINORI]:
-        return _game_input_content_size()
-    if current_surface_size.x > 0 and current_surface_size.y > 0:
-        return Vector2(current_surface_size)
-    return _game_input_content_size()
+    return GameInputMapping.input_surface_size(
+        active_runtime_kind,
+        _game_input_content_size(),
+        Vector2(current_surface_size)
+    )
 
 func _update_frame() -> void:
     if present_hold_frames > 0:
@@ -14126,13 +14225,66 @@ func _clear_game_input_capture() -> void:
     black_frame_last_log_msec = 0
 
 func _run_auto_probe() -> void:
+    var awaited_script := _runtime_string("AETHERKIRI_AUTO_PROBE_WAIT_RUNTIME_SCRIPT")
+    if not awaited_script.is_empty():
+        await _auto_probe_wait_for_runtime_script(awaited_script)
     await _auto_probe_wait_frames(_runtime_int("AETHERKIRI_AUTO_PROBE_WARMUP_FRAMES", 180))
     await _save_auto_probe_step(0, "startup")
     var step := 1
     for pos in auto_probe_clicks:
+        _send_probe_motion(pos)
+        await _auto_probe_wait_frames(2)
         _send_probe_click(pos)
-        await _auto_probe_wait_frames(_runtime_int("AETHERKIRI_AUTO_PROBE_AFTER_CLICK_FRAMES", 180))
+        var after_click_frames: int = max(1, _runtime_int("AETHERKIRI_AUTO_PROBE_AFTER_CLICK_FRAMES", 180))
+        var post_click_move_frames: int = clampi(
+            _runtime_int("AETHERKIRI_AUTO_PROBE_POST_CLICK_MOVE_FRAMES", 0),
+            0,
+            after_click_frames - 1
+        )
+        if post_click_move_frames > 0:
+            await _auto_probe_wait_frames(post_click_move_frames)
+            _send_probe_motion(pos + Vector2(2.0, 0.0))
+            await _auto_probe_wait_frames(after_click_frames - post_click_move_frames)
+        else:
+            await _auto_probe_wait_frames(after_click_frames)
         await _save_auto_probe_step(step, "click_%d_%d" % [int(pos.x), int(pos.y)])
+        step += 1
+    var dialog_steps_spec := _runtime_string("AETHERKIRI_AUTO_PROBE_DIALOG_STEPS")
+    var dialog_steps = (
+        JSON.parse_string(dialog_steps_spec)
+        if not dialog_steps_spec.is_empty()
+        else []
+    )
+    if dialog_steps is Array:
+        for value in dialog_steps:
+            var dialog_step: Dictionary = value if value is Dictionary else {}
+            var dialog_result := int(dialog_step.get("result", 1))
+            var dialog_text := String(dialog_step.get("text", ""))
+            var after_dialog_frames := int(dialog_step.get(
+                "after_frames",
+                _runtime_int("AETHERKIRI_AUTO_PROBE_AFTER_DIALOG_FRAMES", 180)
+            ))
+            if not await _auto_probe_complete_runtime_dialog(
+                dialog_result, dialog_text, after_dialog_frames
+            ):
+                break
+            await _save_auto_probe_step(step, "dialog_%d" % dialog_result)
+            step += 1
+    var post_dialog_clicks := _parse_click_points(
+        _runtime_string("AETHERKIRI_AUTO_PROBE_POST_DIALOG_CLICKS")
+    )
+    for pos in post_dialog_clicks:
+        _send_probe_motion(pos)
+        await _auto_probe_wait_frames(2)
+        _send_probe_click(pos)
+        await _auto_probe_wait_frames(max(
+            1,
+            _runtime_int("AETHERKIRI_AUTO_PROBE_AFTER_CLICK_FRAMES", 180)
+        ))
+        await _save_auto_probe_step(step, "post_dialog_click_%d_%d" % [
+            int(pos.x),
+            int(pos.y),
+        ])
         step += 1
     auto_probe_done = true
     auto_probe_running = false
@@ -14220,6 +14372,12 @@ func _can_write_probe_files() -> bool:
     return not cli_probe_script.is_empty() or _runtime_flag("AETHERKIRI_IOS_FILE_LOG")
 
 func _send_startup_probe_mouse_click(pos: Vector2) -> bool:
+    var motion := InputEventMouseMotion.new()
+    motion.position = pos
+    motion.global_position = pos
+    motion.relative = Vector2(1.0, 0.0)
+    _handle_game_pointer_event(motion)
+
     var down := InputEventMouseButton.new()
     down.button_index = MOUSE_BUTTON_LEFT
     down.pressed = true
@@ -14262,6 +14420,44 @@ func _auto_probe_wait_frames(frames: int) -> void:
     for i in range(max(1, frames)):
         await get_tree().process_frame
 
+func _auto_probe_wait_for_runtime_script(script_name: String) -> void:
+    var frame_budget: int = max(1, _runtime_int("AETHERKIRI_AUTO_PROBE_WAIT_RUNTIME_FRAMES", 3600))
+    var required_objects: int = max(0, _runtime_int("AETHERKIRI_AUTO_PROBE_WAIT_RUNTIME_OBJECTS", 0))
+    for i in range(frame_budget):
+        var state = JSON.parse_string(player.get_plugin_debug_info())
+        if state is Dictionary and String(state.get("vmScript", "")) == script_name and int(state.get("fesObjects", 0)) >= required_objects:
+            _write_probe_marker("auto_wait_runtime matched script=%s objects=%d frame=%d" % [
+                script_name,
+                int(state.get("fesObjects", 0)),
+                i,
+            ])
+            return
+        await get_tree().process_frame
+    _write_probe_marker("auto_wait_runtime timeout script=%s frames=%d" % [script_name, frame_budget])
+
+func _auto_probe_complete_runtime_dialog(
+    result: int, text: String, after_frames: int
+) -> bool:
+    var frame_budget: int = max(
+        1, _runtime_int("AETHERKIRI_AUTO_PROBE_DIALOG_WAIT_FRAMES", 1800)
+    )
+    for i in range(frame_budget):
+        if modal_layer != null and bool(
+            modal_layer.get_meta("runtime_platform_dialog", false)
+        ):
+            var input := runtime_dialog_input
+            if input != null and is_instance_valid(input):
+                input.text = text
+            _write_probe_marker(
+                "auto_dialog result=%d text=%s frame=%d" % [result, text, i]
+            )
+            _complete_runtime_dialog(result, input)
+            await _auto_probe_wait_frames(max(1, after_frames))
+            return true
+        await get_tree().process_frame
+    _write_probe_marker("auto_dialog timeout frames=%d" % frame_budget)
+    return false
+
 func _save_auto_probe_step(index: int, label: String) -> void:
     await get_tree().process_frame
     await get_tree().process_frame
@@ -14301,6 +14497,38 @@ func _save_auto_probe_step(index: int, label: String) -> void:
         perf_log_file.flush()
 
 func _send_probe_click(window_pos: Vector2) -> void:
+    if _runtime_flag("AETHERKIRI_AUTO_PROBE_DISPATCH_INPUT"):
+        var motion := InputEventMouseMotion.new()
+        motion.position = window_pos
+        motion.global_position = window_pos
+        motion.relative = Vector2(1.0, 0.0)
+        Input.parse_input_event(motion)
+
+        var down := InputEventMouseButton.new()
+        down.button_index = MOUSE_BUTTON_LEFT
+        down.pressed = true
+        down.position = window_pos
+        down.global_position = window_pos
+        Input.parse_input_event(down)
+
+        var up := InputEventMouseButton.new()
+        up.button_index = MOUSE_BUTTON_LEFT
+        up.pressed = false
+        up.position = window_pos
+        up.global_position = window_pos
+        Input.parse_input_event(up)
+        _write_probe_marker("auto_click window=%s route=input_dispatch" % window_pos)
+        return
+    if _runtime_flag("AETHERKIRI_AUTO_PROBE_ROUTE_GAME_INPUT"):
+        if not _can_forward_game_input():
+            _write_probe_marker("auto_click_blocked window=%s route=game_input" % window_pos)
+            return
+        var forwarded := _send_startup_probe_mouse_click(window_pos)
+        _write_probe_marker("auto_click window=%s route=game_input forwarded=%s" % [
+            window_pos,
+            str(forwarded),
+        ])
+        return
     var mapped := _map_probe_window_point(window_pos)
     if mapped.x < 0.0 or mapped.y < 0.0:
         _write_probe_marker("auto_click_skipped window=%s mapped=%s" % [window_pos, mapped])
@@ -14313,6 +14541,21 @@ func _send_probe_click(window_pos: Vector2) -> void:
     player.send_pointer_event(POINTER_UP, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
     _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
     _write_probe_marker("auto_click window=%s mapped=%s" % [window_pos, mapped])
+
+func _send_probe_motion(window_pos: Vector2) -> void:
+    var motion := InputEventMouseMotion.new()
+    motion.position = window_pos
+    motion.global_position = window_pos
+    motion.relative = Vector2(2.0, 0.0)
+    if _runtime_flag("AETHERKIRI_AUTO_PROBE_DISPATCH_INPUT"):
+        Input.parse_input_event(motion)
+    elif _runtime_flag("AETHERKIRI_AUTO_PROBE_ROUTE_GAME_INPUT"):
+        _handle_game_pointer_event(motion)
+    else:
+        var mapped := _map_probe_window_point(window_pos)
+        if mapped.x >= 0.0 and mapped.y >= 0.0:
+            player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, 2.0, 0.0, 0)
+    _write_probe_marker("auto_motion window=%s" % window_pos)
 
 func _map_probe_window_point(pos: Vector2) -> Vector2:
     var panel_size := Vector2(
@@ -15364,11 +15607,27 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
                 mapped,
                 _touch_drag_distance_threshold()
             )
+        var touch_was_dragged := dragging_touch_points.has(pointer_id)
         active_touch_points.erase(pointer_id)
         touch_down_points.erase(pointer_id)
         dragging_touch_points.erase(pointer_id)
         last_forwarded_touch_move_msec_by_id.erase(pointer_id)
-        _send_game_pointer_event(POINTER_UP, _touch_engine_pointer_id(pointer_id), mapped.x, mapped.y, 0.0, 0.0, 0)
+        var release_modifiers := 0
+        if GameInputMapping.touch_drag_release_is_cancelled(
+            active_runtime_kind,
+            touch_was_dragged
+        ):
+            release_modifiers = POINTER_MOD_CANCEL
+        _send_game_pointer_event(
+            POINTER_UP,
+            _touch_engine_pointer_id(pointer_id),
+            mapped.x,
+            mapped.y,
+            0.0,
+            0.0,
+            0,
+            release_modifiers
+        )
         last_forwarded_touch_up_msec = Time.get_ticks_msec()
         _apply_touch_action_cooldown()
         _arm_black_frame_guard()

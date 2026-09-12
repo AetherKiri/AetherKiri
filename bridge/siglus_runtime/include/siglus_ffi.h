@@ -6,7 +6,7 @@
 
 /*
  * C ABI contract between bridge/siglus_runtime (C++) and the siglus_rs
- * "aether host" (Rust, applied to packages/siglus_rs sources at build time
+ * "aether host" (Rust, applied to packages/AetherSiglus sources at build time
  * from bridge/siglus_runtime/overlay/files/aether_host.rs).
  *
  * The Rust side is headless: frames render offscreen via wgpu and are read

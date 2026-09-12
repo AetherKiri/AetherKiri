@@ -44,6 +44,10 @@
     "godot-cpp",
     "jxrlib",
     "libarchive",
+    {
+      "name": "libb2",
+      "platform": "osx"
+    },
     "libxml2",
     {
       "name": "libgdiplus",
@@ -79,6 +83,7 @@
     },
     "oniguruma",
     "openal-soft",
+    "openssl",
     {
       "name": "opencv4",
       "default-features": false,

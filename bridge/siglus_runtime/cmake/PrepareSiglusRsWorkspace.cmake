@@ -1,5 +1,5 @@
 # PrepareSiglusRsWorkspace.cmake — build-time source overlay for the
-# packages/siglus_rs submodule (run in cmake -P script mode).
+# packages/AetherSiglus submodule (run in cmake -P script mode).
 #
 # The submodule stays untouched. Instead, a pristine copy is materialized in
 # the build tree ("workspace"), the files from overlay/files/ are dropped in,
@@ -134,7 +134,7 @@ foreach(patch IN LISTS overlay_patches)
     if(NOT check_result EQUAL 0)
         message(FATAL_ERROR
             "siglus_rs overlay patch '${patch_name}' no longer applies to "
-            "packages/siglus_rs. The submodule was probably updated; rebase "
+            "packages/AetherSiglus. The submodule was probably updated; rebase "
             "the patch series in bridge/siglus_runtime/overlay/. Git said:\n"
             "${check_output}")
     endif()

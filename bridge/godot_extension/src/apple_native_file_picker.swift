@@ -327,6 +327,7 @@ private final class AetherNativeLaunchFilePicker: NSObject, @unchecked Sendable 
             panel.allowedContentTypes = [
                 UTType(filenameExtension: "exe"),
                 UTType(filenameExtension: "xp3"),
+                UTType(filenameExtension: "hcb"),
             ].compactMap { $0 }
         case .coverImage:
             panel.allowedContentTypes = [

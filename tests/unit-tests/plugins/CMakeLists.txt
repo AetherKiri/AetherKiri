@@ -16,6 +16,7 @@ add_executable(motionplayer-dll
     godot-runtime-timing.cpp
     krkrgles-aliases.cpp
     kag-load-contract.cpp
+    decode-arena.cpp
     render-simd.cpp
     script-compatibility.cpp
     project-storage.cpp
@@ -33,6 +34,7 @@ target_link_libraries(motionplayer-dll
 
 target_include_directories(motionplayer-dll PRIVATE
     "${TEST_CONFIG_DIR}"
+    "${CMAKE_SOURCE_DIR}/cpp/core/visual"
     "${CMAKE_SOURCE_DIR}/cpp/plugins"
 )
 
