@@ -175,6 +175,12 @@ if(TARGET aether_onscripter_runtime)
     target_compile_definitions(aether_kiri_godot PRIVATE
         AETHERKIRI_WITH_ONSCRIPTER=1)
 endif()
+if(TARGET aether_siglus_runtime)
+    target_link_libraries(aether_kiri_godot PRIVATE
+        aether_siglus_runtime)
+    target_compile_definitions(aether_kiri_godot PRIVATE
+        AETHERKIRI_WITH_SIGLUS=1)
+endif()
 if(TARGET aether_minori_runtime)
     target_link_libraries(aether_kiri_godot PRIVATE
         aether_minori_runtime)

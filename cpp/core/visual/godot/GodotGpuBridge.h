@@ -7,8 +7,21 @@ struct tTVPRect;
 struct tTVPPointD;
 
 // Texture synchronization on the producer side and queue execution in the
-// Godot bridge must agree on the unset environment-variable behavior.
+// Godot bridge must agree on the unset environment-variable behavior. Android
+// uses a separate Godot render thread and a Vulkan/GL driver queue; draining
+// every operation immediately from the producer makes engine_tick wait on
+// that queue and turns a burst of layer updates into a long main-thread frame.
+// Keep desktop's historical immediate behavior, while Android batches the
+// same ordered operations until the render-thread callback. This is shared by
+// the KRKR, Artemis, CatSystem2 and RFVP provider renderers, so the policy is
+// applied consistently when any of those providers is linked. The environment
+// variable AETHERKIRI_GODOT_DEFER_GPU_DRAIN=0 remains an escape hatch for
+// drivers that need the old synchronization policy.
+#if defined(__ANDROID__)
+constexpr bool TVP_GODOT_DEFER_GPU_DRAIN_DEFAULT = true;
+#else
 constexpr bool TVP_GODOT_DEFER_GPU_DRAIN_DEFAULT = false;
+#endif
 
 struct TVPGodotGpuBridgeCallbacks {
     uint64_t (*create_rgba)(uint32_t width, uint32_t height,
@@ -169,6 +182,9 @@ enum TVPGodotGpuBlendMode : uint32_t {
     TVP_GODOT_GPU_BLEND_ALPHA_TO_ADDITIVE_ALPHA = 29,
     // Convert additive/premultiplied-alpha RGB to straight-alpha RGB in place.
     TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA_TO_ALPHA = 30,
+    // Blend source RGB into destination RGB with a constant opacity while
+    // preserving the destination alpha channel.
+    TVP_GODOT_GPU_BLEND_CONST_ALPHA = 31,
     // draw_triangles is shared by Cubism (whose low bits describe Cubism
     // colour/alpha modes) and KiriKiri (whose low bits are the modes above).
     // Tag the latter so AlphaBlend/AlphaBlend_d are not mistaken for Cubism
