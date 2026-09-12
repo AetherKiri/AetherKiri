@@ -10022,7 +10022,6 @@ func _backfill_game_metadata(games: Array[Dictionary]) -> bool:
                 game[key] = value
                 changed = true
     return changed
->>>>>>> refs/rewritten/onto
 
 func _backfill_default_game_covers(games: Array[Dictionary]) -> bool:
     var changed := false
