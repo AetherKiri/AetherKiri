@@ -28,6 +28,16 @@ func _init() -> void:
         "structural Artemis signal"
     )
 
+    var archived_artemis_root := fixture_root.path_join("archived_artemis")
+    DirAccess.make_dir_recursive_absolute(archived_artemis_root)
+    _write(archived_artemis_root.path_join("root.pfs"), "pf fixture")
+    var archived_artemis := GameMetadata.inspect(archived_artemis_root)
+    _expect_equal(String(archived_artemis.engine), "artemis", "archived Artemis detection")
+    _expect_true(
+        Array(archived_artemis.signals).has("artemis-pfs-archive"),
+        "archived Artemis signal"
+    )
+
     var kirikiri_root := fixture_root.path_join("kirikiri")
     DirAccess.make_dir_recursive_absolute(kirikiri_root)
     _write(kirikiri_root.path_join("game.exe"), "launcher")
