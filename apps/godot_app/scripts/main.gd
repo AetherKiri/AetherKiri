@@ -1578,6 +1578,10 @@ const ONSCRIPTER_SCRIPT_MARKERS := [
     "onscript.nt2",
     "onscript.nt3",
 ]
+const SIGLUS_SCRIPT_MARKERS := [
+    "Gameexe.ini",
+    "gameexe.ini",
+]
 const SHELL_SCROLL_DRAG_THRESHOLD := 4.0
 const SHELL_SCROLL_BUTTON_DRAG_THRESHOLD := 28.0
 const SHELL_SCROLL_SLIDER_AXIS_THRESHOLD := 10.0
