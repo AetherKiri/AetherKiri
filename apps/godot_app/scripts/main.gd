@@ -9978,9 +9978,14 @@ func _game_runtime_kind(path: String) -> String:
     )
     if runtime_kind != RUNTIME_KIRIKIRI:
         return runtime_kind
-    if player != null and player.has_method("probe_runtime") \
-            and int(player.probe_runtime(RUNTIME_MINORI, root)) > 0:
-        return RUNTIME_MINORI
+    if player != null and player.has_method("probe_runtime"):
+        # Metadata can only inspect loose files.  Provider probing also sees
+        # manifests stored inside an archive (notably Artemis system.ini in
+        # root.pfs), and must run before falling back to the legacy host.
+        if int(player.probe_runtime("artemis", root)) > 0:
+            return "artemis"
+        if int(player.probe_runtime(RUNTIME_MINORI, root)) > 0:
+            return RUNTIME_MINORI
     return runtime_kind
 
 func _backfill_game_metadata(games: Array[Dictionary]) -> bool:

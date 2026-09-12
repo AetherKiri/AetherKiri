@@ -46,6 +46,14 @@ static func inspect(path: String) -> Dictionary:
         var save_path := _value_after(ini, "SAVEPATH")
         if not save_path.is_empty():
             candidates.append(save_path.replace("\\\\", "/").get_file())
+    elif _has_extension(files, "pfs") and not _has_extension(files, "xp3"):
+        # A number of Artemis releases keep system.ini inside root.pfs rather
+        # than beside the archive.  There is no loose marker for the metadata
+        # scanner to read, but PF archives are an engine-specific container;
+        # classify the directory as Artemis so the launcher passes the game
+        # root to the provider instead of handing Untei.exe to KiriKiri.
+        result.engine = RUNTIME_ARTEMIS
+        result.signals.append("artemis-pfs-archive")
     elif files.has("gameexe.dat"):
         result.engine = RUNTIME_SIGLUS
         result.signals.append("siglus-gameexe")
