@@ -652,6 +652,12 @@ jobs:
       - name: Verify native ARM runner
         run: test "$(uname -m)" = arm64
 
+      - name: Select Xcode 16.2 for C++20 ranges
+        run: |
+          test -d /Applications/Xcode_16.2.app
+          sudo xcode-select --switch /Applications/Xcode_16.2.app
+          xcodebuild -version
+
       - name: Checkout Repository
         uses: actions/checkout@v6
         with:
