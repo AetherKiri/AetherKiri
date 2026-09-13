@@ -640,15 +640,24 @@ jobs:
 
   macos:
     name: Build macOS App
-    runs-on: macos-latest
+    runs-on: macos-14
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       GODOT_RELEASE: 4.7-stable
       GODOT_TEMPLATE_VERSION: 4.7.stable
-      AETHERKIRI_MACOS_ARCH: x86_64
+      AETHERKIRI_MACOS_ARCH: arm64
 
     steps:
+      - name: Verify native ARM runner
+        run: test "$(uname -m)" = arm64
+
+      - name: Select Xcode 16.2 for C++20 ranges
+        run: |
+          test -d /Applications/Xcode_16.2.app
+          sudo xcode-select --switch /Applications/Xcode_16.2.app
+          xcodebuild -version
+
       - name: Checkout Repository
         uses: actions/checkout@v6
         with:
@@ -659,26 +668,26 @@ jobs:
       - name: Set up Rust for Minori
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-apple-darwin
+          targets: aarch64-apple-darwin
 
       - name: Resolve private runtime dependency cache
         id: private-runtime-cache-key
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
         run: |
           key="$(packages/AetherInternal/tools/prepare_ci_dependencies.sh \
-            --platform apple --print-cache-key)"
+            --platform macos --print-cache-key)"
           echo "key=$key" >> "$GITHUB_OUTPUT"
 
       - name: Restore private runtime dependencies
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
         uses: actions/cache@v5
         with:
-          path: packages/AetherInternal/.ci-cache/runtime-dependencies/apple
+          path: packages/AetherInternal/.ci-cache/runtime-dependencies/macos
           key: ${{ runner.os }}-${{ steps.private-runtime-cache-key.outputs.key }}
 
       - name: Initialize private runtime dependencies
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
-        run: packages/AetherInternal/tools/prepare_ci_dependencies.sh --platform apple
+        run: packages/AetherInternal/tools/prepare_ci_dependencies.sh --platform macos
 
       - name: Initialize public runtime packages
         if: env.AETHERKIRI_WITH_INTERNAL != 'true'
@@ -731,7 +740,7 @@ jobs:
           brew install cmake ninja pkg-config autoconf automake autoconf-archive libtool gettext coreutils bison nasm ccache mono
           echo "$(brew --prefix gettext)/bin" >> $GITHUB_PATH
           echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
-          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          rustup target add aarch64-apple-darwin
 
       - name: Install Godot export tools
         run: |
@@ -828,24 +837,24 @@ jobs:
           AETHERKIRI_SMOKE_GAME: ${{ github.workspace }}/tests/fixtures/onscripter_smoke
         run: |
           set -euo pipefail
-          arch -x86_64 "$GODOT_BIN" --headless \
+          "$GODOT_BIN" --headless \
             --path apps/godot_app \
             --script res://scripts/smoke_test.gd
 
       - name: Run complete public and integrated private unit tests
         run: |
           set -euo pipefail
-          test_build_dir="${GITHUB_WORKSPACE}/out/macos-x64/ci-tests"
+          test_build_dir="${GITHUB_WORKSPACE}/out/macos/ci-tests"
           configure_log="${RUNNER_TEMP}/aetherkiri-test-configure.log"
 
-          cmake --preset "MacOS x64 Debug Config" --fresh \
+          cmake --preset "MacOS Debug Config" --fresh \
             -B "$test_build_dir" \
             -D ENABLE_TESTS=ON \
             -D BUILD_TOOLS=OFF \
             -D BUILD_ENGINE_API=OFF \
             -D BUILD_GODOT_EXTENSION=OFF \
             -D VCPKG_MANIFEST_INSTALL=OFF \
-            -D VCPKG_INSTALLED_DIR="${GITHUB_WORKSPACE}/out/macos-x64/debug/vcpkg_installed" \
+            -D VCPKG_INSTALLED_DIR="${GITHUB_WORKSPACE}/out/macos/debug/vcpkg_installed" \
             -D CMAKE_C_COMPILER_LAUNCHER=ccache \
             -D CMAKE_CXX_COMPILER_LAUNCHER=ccache \
             2>&1 | tee "$configure_log"
@@ -868,9 +877,14 @@ jobs:
         run: |
           set -euo pipefail
           for build_type in release debug; do
-            APP_PATH="out/godot/macos-x64/${build_type}/Aether.app"
+            APP_PATH="out/godot/macos/${build_type}/Aether.app"
             if [[ ! -d "$APP_PATH" ]]; then
               echo "Built Godot ${build_type} .app bundle not found: $APP_PATH" >&2
+              exit 1
+            fi
+            app_architectures="$(lipo -archs "$APP_PATH/Contents/MacOS/Aether")"
+            if [[ "$app_architectures" != "arm64" ]]; then
+              echo "Built Godot ${build_type} macOS app is not arm64-only: $app_architectures" >&2
               exit 1
             fi
             codesign --verify --deep --strict --verbose=2 "$APP_PATH"
@@ -916,7 +930,7 @@ jobs:
           AETHER_APPLE_TEAM_ID: 3JL7FE9XQT
         run: |
           .github/scripts/package-macos-app-store.sh \
-            out/godot/macos-x64/release/Aether.app \
+            out/godot/macos/release/Aether.app \
             out/godot/macos/app-store
 
       - name: Upload Release App
@@ -924,7 +938,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: macos-release-app
-          path: out/godot/macos-x64/release/
+          path: out/godot/macos/release/
           retention-days: 7
 
       - name: Upload Mac App Store installer
