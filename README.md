@@ -142,7 +142,7 @@ iOS and Android export presets reference the generated PNG sizes under
 
 | Platform | Minimum version | Notes |
 | --- | --- | --- |
-| macOS | macOS 13.0 (Ventura) | Internal E-mote builds use the official SDK's `x86_64` driver and run under Rosetta on Apple Silicon. |
+| macOS | macOS 13.0 (Ventura) | Internal E-mote builds use the bundled official SDK's native `arm64` driver. |
 | iOS / iPadOS | iOS / iPadOS 16.0 | `arm64` devices; `arm64` and `x86_64` simulator builds are available for development. |
 | Android | Android 8.0 (API 26) | The product export currently packages `arm64-v8a` only. |
 | Web | No OS version floor | Requires a browser with WebAssembly SIMD, WebAssembly threads, and `SharedArrayBuffer`, served with cross-origin isolation (COOP/COEP). |
@@ -227,10 +227,10 @@ packages/AetherInternal/tools/install_emote_sdk.sh
 ```
 
 CMake enables it automatically when present. The installer verifies the SDK
-and writes only Git-ignored files under the private package; do not commit
-those generated headers or archives. On macOS, the official driver is
-`x86_64`-only, so the normal internal command builds that architecture and the
-app runs under Rosetta on Apple Silicon. Use
+and writes generated headers and libraries under the private package; the
+tracked macOS ARM archive remains part of that package. On macOS, the normal
+internal command builds the native `arm64` configuration and uses the
+bundled SDK archive. Use
 `-DAETHERKIRI_ENABLE_INTERNAL=OFF` to test the public fallback, or
 `-DAETHERKIRI_INTERNAL_DIR=/absolute/path/to/AetherInternal` to use a separate
 checkout. Trusted runs of the `Build` GitHub Actions workflow use the

@@ -127,7 +127,7 @@ iOS 和 Android 导出配置会引用 `apps/godot_app/assets/icons/` 下的生�
 
 | 平台 | 最低版本 | 说明 |
 | --- | --- | --- |
-| macOS | macOS 13.0（Ventura） | 内部 E-mote 构建使用官方 SDK 的 `x86_64` 驱动，在 Apple Silicon 上通过 Rosetta 运行。 |
+| macOS | macOS 13.0（Ventura） | 内部 E-mote 构建使用私包内官方 SDK 的原生 `arm64` 驱动。 |
 | iOS / iPadOS | iOS / iPadOS 16.0 | 真机为 `arm64`；开发环境可构建 `arm64` 和 `x86_64` 模拟器版本。 |
 | Android | Android 8.0（API 26） | 当前产品导出只打包 `arm64-v8a`。 |
 | Web | 不限定操作系统版本 | 浏览器必须支持 WebAssembly SIMD、WebAssembly threads 和 `SharedArrayBuffer`，并通过配置了跨源隔离（COOP/COEP）的 HTTP 服务访问。 |
@@ -183,10 +183,9 @@ git submodule update --init packages/AetherInternal
 packages/AetherInternal/tools/install_emote_sdk.sh
 ```
 
-CMake 检测到 package 后会自动启用。安装脚本会校验 SDK，并且只在私有
-package 内生成被 Git 忽略的文件；不要提交这些头文件或静态库。macOS 官方
-驱动仅提供 `x86_64`，因此常规内部构建会生成该架构，并在 Apple Silicon 上
-通过 Rosetta 运行。使用
+CMake 检测到 package 后会自动启用。安装脚本会校验 SDK，并且在私有 package
+内生成被 Git 忽略的头文件和静态库；macOS ARM SDK 压缩包随私包一起提交。
+macOS 常规内部构建使用原生 `arm64` 配置和该压缩包。使用
 `-DAETHERKIRI_ENABLE_INTERNAL=OFF` 可强制验证公开 fallback；也可通过
 `-DAETHERKIRI_INTERNAL_DIR=/absolute/path/to/AetherInternal` 指定独立检出目录。
 GitHub Actions 的 `Build` workflow 会在可信运行中使用仓库 Secret
