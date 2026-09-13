@@ -1566,7 +1566,7 @@ const RUNTIME_KIRIKIRI := "kirikiri"
 const RUNTIME_ONSCRIPTER := "onscripter"
 const RUNTIME_SIGLUS := "siglus"
 const RUNTIME_MINORI := "minori"
-const BETA_PROVIDER_RUNTIME_IDS := ["artemis", "catsystem2", "rfvp", "wa2"]
+const BETA_PROVIDER_RUNTIME_IDS := ["catsystem2", "rfvp", "wa2"]
 const RUNTIME_RFVP := "rfvp"
 const RUNTIME_PLAYER_CLASS := "AetherRuntimePlayer"
 const ONSCRIPTER_SCRIPT_MARKERS := [
@@ -9994,7 +9994,10 @@ func _game_runtime_kind(path: String) -> String:
     if player != null and player.has_method("probe_runtime"):
         # Metadata can only inspect loose files.  Provider probing also sees
         # manifests stored inside an archive (notably Artemis system.ini in
-        # root.pfs), and must run before falling back to the legacy host.
+        # root.pfs), or CatSystem2's packed IRISPCK data, and must run before
+        # falling back to the legacy host.
+        if int(player.probe_runtime("catsystem2", root)) > 0:
+            return "catsystem2"
         if int(player.probe_runtime("artemis", root)) > 0:
             return "artemis"
         if int(player.probe_runtime(RUNTIME_MINORI, root)) > 0:
@@ -10680,11 +10683,11 @@ func _start_selected_game_after_iap() -> void:
         _deny_runtime_beta_launch()
 
 func _runtime_requires_beta_access(runtime_kind: String) -> bool:
-    # ONS, Siglus, Minori, and RFVP support follow the same Apple release policy as
-    # Artemis: unrestricted in Debug and Android builds, and gated by an
-    # active coffee entitlement in iOS and macOS distribution builds.
+    # CatSystem2, Siglus, Minori, and RFVP remain gated by an active coffee
+    # entitlement in iOS and macOS distribution builds. Artemis and Onscripter
+    # are released runtimes and must remain available without beta access.
     return runtime_kind in [
-        RUNTIME_ONSCRIPTER,
+        "catsystem2",
         RUNTIME_SIGLUS,
         RUNTIME_MINORI,
         RUNTIME_RFVP,
@@ -10718,11 +10721,13 @@ func _complete_runtime_beta_check() -> void:
         _deny_runtime_beta_launch()
         return
     selected_game = pending_game
-    if (
-        _game_runtime_kind(String(selected_game.get("path", "")))
-        == RUNTIME_KIRIKIRI
-        and player.has_method("set_engine_option")
-    ):
+    # The entitlement check above authorizes provider-backed beta runtimes as
+    # well as the legacy KiriKiri host.  The dispatch layer defaults this flag
+    # to false in Release builds, so every successful check must explicitly
+    # enable it before reopening the selected game.  Restricting this to the
+    # KiriKiri host left Artemis games blocked with "requires active beta
+    # access" even after StoreKit had verified the entitlement.
+    if player.has_method("set_engine_option"):
         player.set_engine_option("beta_runtime_allowed", "1")
     _start_selected_game_after_entitlements()
 
