@@ -7,7 +7,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_TYPE="${1:-debug}"
 BUILD_TYPE_LOWER="$(echo "$BUILD_TYPE" | tr '[:upper:]' '[:lower:]')"
 BUILD_TYPE_CAP="$(echo "${BUILD_TYPE_LOWER:0:1}" | tr '[:lower:]' '[:upper:]')${BUILD_TYPE_LOWER:1}"
-MACOS_ARCH="${AETHERKIRI_MACOS_ARCH:-x86_64}"
+MACOS_ARCH="${AETHERKIRI_MACOS_ARCH:-arm64}"
 
 if [[ "$BUILD_TYPE_LOWER" != "debug" && "$BUILD_TYPE_LOWER" != "release" ]]; then
     echo "Error: Invalid build type '$BUILD_TYPE'. Use 'debug' or 'release'." >&2
