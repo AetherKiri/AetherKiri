@@ -35,10 +35,10 @@ func _initialize() -> void:
     assert(not app._begin_iap_checked_access("game", games[1], "detail"))
     assert(app.iap_pending_launch.is_empty())
     assert(not app.modal_layer.visible)
-    assert(app._runtime_requires_beta_access(app.RUNTIME_ONSCRIPTER))
+    assert(not app._runtime_requires_beta_access(app.RUNTIME_ONSCRIPTER))
     assert(app._runtime_requires_beta_access(app.RUNTIME_MINORI))
     assert(not app._runtime_requires_beta_access(app.RUNTIME_KIRIKIRI))
-    assert(app._provider_runtime_requires_beta_access("artemis"))
+    assert(not app._provider_runtime_requires_beta_access("artemis"))
     assert(app._provider_runtime_requires_beta_access("catsystem2"))
     assert(not app._provider_runtime_requires_beta_access("fake"))
     var probe_player := BetaProbePlayer.new()
@@ -46,6 +46,7 @@ func _initialize() -> void:
     app.player = probe_player
     app.selected_game = {"path": "/games/catsystem2"}
     assert(app._selected_game_uses_beta_provider())
+    assert(app._game_runtime_kind("/games/catsystem2") == "catsystem2")
     probe_player.scores = {"fake": 120}
     assert(not app._selected_game_uses_beta_provider())
     assert(not app._beta_access_enforcement_enabled("Android"))
