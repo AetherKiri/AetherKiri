@@ -118,6 +118,7 @@ jobs:
           git submodule update --init --depth 1 packages/OnscripterYuri
           git -c submodule.packages/psdfile.url=https://github.com/AetherKiri/psdfile.git \
             submodule update --init --recursive --depth 1 packages/psdfile
+          git submodule update --init --depth 1 packages/AetherSiglus
 
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''
@@ -395,6 +396,7 @@ jobs:
           git submodule update --init --depth 1 packages/OnscripterYuri
           git -c submodule.packages/psdfile.url=https://github.com/AetherKiri/psdfile.git \
             submodule update --init --recursive --depth 1 packages/psdfile
+          git submodule update --init --depth 1 packages/AetherSiglus
 
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''
@@ -684,6 +686,7 @@ jobs:
           git submodule update --init --depth 1 packages/OnscripterYuri
           git -c submodule.packages/psdfile.url=https://github.com/AetherKiri/psdfile.git \
             submodule update --init --recursive --depth 1 packages/psdfile
+          git submodule update --init --depth 1 packages/AetherSiglus
 
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''
@@ -969,6 +972,7 @@ jobs:
           git submodule update --init --depth 1 packages/OnscripterYuri
           git -c submodule.packages/psdfile.url=https://github.com/AetherKiri/psdfile.git \
             submodule update --init --recursive --depth 1 packages/psdfile
+          git submodule update --init --depth 1 packages/AetherSiglus
 
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''
