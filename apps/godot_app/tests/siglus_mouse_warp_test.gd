@@ -60,7 +60,12 @@ func _run() -> void:
     assert(app._siglus_pointer_session_active(true))
     assert(app._can_apply_siglus_mouse_warp(true) == (OS.get_name() != "macOS"))
     app.siglus_native_cursor_visible = false
-    assert(app._siglus_cursor_mouse_mode(true) == Input.MOUSE_MODE_HIDDEN)
+    var active_cursor_mode := (
+        Input.MOUSE_MODE_VISIBLE
+        if OS.get_name() == "macOS"
+        else Input.MOUSE_MODE_HIDDEN
+    )
+    assert(app._siglus_cursor_mouse_mode(true) == active_cursor_mode)
     assert(app._siglus_cursor_mouse_mode(false) == Input.MOUSE_MODE_VISIBLE)
     app.siglus_pointer_inside_window = false
     assert(not app._can_apply_siglus_mouse_warp(true))

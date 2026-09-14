@@ -16331,9 +16331,11 @@ func _on_siglus_window_mouse_exited() -> void:
     _update_siglus_cursor_mode()
 
 func _siglus_cursor_mouse_mode(window_focused: bool) -> int:
-    # On macOS HIDDEN hides the system cursor, not just a sprite in this
-    # window. A software game cursor must never hide the desktop pointer
-    # after it leaves the game or while another window/dialog owns focus.
+    # macOS can keep a hidden cursor invisible after it crosses this window's
+    # boundary, so retain the native pointer there. The rendered Siglus cursor
+    # remains aligned with it and continues to drive game hover state.
+    if OS.get_name() == "macOS":
+        return Input.MOUSE_MODE_VISIBLE
     if (
         not siglus_native_cursor_visible
         and _siglus_pointer_session_active(window_focused)
