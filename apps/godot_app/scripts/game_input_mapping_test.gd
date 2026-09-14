@@ -24,11 +24,11 @@ func _initialize() -> void:
         _fail("frame coordinate was rescaled to the stale surface")
         return
 
-    # RFVP, ONScripter, and Minori consume native content coordinates rather
-    # than the presentation surface. Using the shell surface moves clicks out
-    # of the logical frame and makes controls appear unresponsive.
+    # RFVP, ONScripter, Minori, and Siglus consume native content coordinates
+    # rather than the presentation surface. Using the shell surface moves
+    # clicks out of the logical frame and makes controls appear unresponsive.
     var native_frame := Vector2(1024, 640)
-    for runtime_kind in ["minori", "onscripter", "rfvp"]:
+    for runtime_kind in ["minori", "onscripter", "rfvp", "siglus"]:
         var input_surface := GameInputMapping.input_surface_size(
             runtime_kind, native_frame, requested_surface
         )

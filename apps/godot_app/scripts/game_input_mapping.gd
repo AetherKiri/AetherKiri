@@ -7,7 +7,7 @@ static func input_surface_size(
     content_size: Vector2,
     requested_surface: Vector2
 ) -> Vector2:
-    if runtime_kind in ["minori", "onscripter", "rfvp"]:
+    if runtime_kind in ["minori", "onscripter", "rfvp", "siglus"]:
         return content_size
     if requested_surface.x > 0.0 and requested_surface.y > 0.0:
         return requested_surface

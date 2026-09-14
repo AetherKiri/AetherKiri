@@ -106,6 +106,8 @@ namespace aetherkiri::siglus {
             int32_t ime_length = 0;
             uint32_t pending_width = kDefaultSurfaceWidth;
             uint32_t pending_height = kDefaultSurfaceHeight;
+            uint32_t native_width = 0;
+            uint32_t native_height = 0;
 
             // Latest decoded frame served to the host.
             std::vector<uint8_t> frame_rgba;
@@ -277,6 +279,8 @@ namespace aetherkiri::siglus {
                 siglus_ak_close(instance->ak);
                 instance->opened = false;
             }
+            instance->native_width = 0;
+            instance->native_height = 0;
             // The create descriptor carries no surface geometry; start at the
             // engine's default and follow set_surface_size calls.
             const int32_t result = siglus_ak_open(
@@ -291,6 +295,38 @@ namespace aetherkiri::siglus {
                             .c_str());
                 return Fail(instance->error, result, instance->ak,
                             "siglus_ak_open");
+            }
+
+            // Siglus' renderer treats a resize as a logical screen resize.
+            // Rendering a native 1280x720 game on the shell's 1920x1080
+            // presentation surface therefore leaves the game in the upper-left
+            // with transparent/black padding and moves pointer coordinates out
+            // of its logical canvas. Keep the runtime at the Gameexe size and
+            // let Aether's TextureRect/enhancement path perform presentation
+            // scaling.
+            uint32_t native_width = 0;
+            uint32_t native_height = 0;
+            const int32_t screen_size_result = siglus_ak_game_screen_size(
+                instance->ak, &native_width, &native_height);
+            if(screen_size_result >= 0 && native_width > 0 && native_height > 0) {
+                const int32_t resize_result = siglus_ak_resize(
+                    instance->ak, native_width, native_height);
+                if(resize_result < 0) {
+                    const engine_result_t failure = Fail(
+                        instance->error, resize_result, instance->ak,
+                        "siglus native surface resize");
+                    siglus_ak_close(instance->ak);
+                    return failure;
+                }
+                instance->native_width = native_width;
+                instance->native_height = native_height;
+                LogHost(instance, ENGINE_RUNTIME_LOG_INFO,
+                        (std::string("siglus native surface ") +
+                         std::to_string(native_width) + "x" +
+                         std::to_string(native_height) + " (requested " +
+                         std::to_string(instance->pending_width) + "x" +
+                         std::to_string(instance->pending_height) + ")")
+                            .c_str());
             }
             instance->opened = true;
             instance->paused = false;
@@ -366,7 +402,14 @@ namespace aetherkiri::siglus {
             if(!instance->opened) {
                 return ENGINE_RESULT_OK;
             }
-            return OkOr(instance->error, siglus_ak_resize(instance->ak, width, height),
+            // Once known, native geometry remains the runtime's logical input
+            // and render space. The Aether presentation layer owns resizing.
+            const uint32_t render_width =
+                instance->native_width > 0 ? instance->native_width : width;
+            const uint32_t render_height =
+                instance->native_height > 0 ? instance->native_height : height;
+            return OkOr(instance->error, siglus_ak_resize(
+                            instance->ak, render_width, render_height),
                         instance->ak, "siglus_ak_resize");
         }
 
