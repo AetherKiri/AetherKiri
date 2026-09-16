@@ -439,8 +439,7 @@ TEST_CASE("Beta runtime providers require active coffee access") {
   REQUIRE(engine_register_runtime_provider(&kRfvpGateProvider) ==
           ENGINE_RESULT_OK);
 
-  const std::array<std::array<const char*, 2>, 3> runtimes{{
-      {{"artemis", "Artemis runtime requires active beta access"}},
+  const std::array<std::array<const char*, 2>, 2> runtimes{{
       {{"catsystem2", "CatSystem2 runtime requires active beta access"}},
       {{"rfvp", "RFVP runtime requires active beta access"}},
   }};
@@ -484,6 +483,18 @@ TEST_CASE("Beta runtime providers require active coffee access") {
     REQUIRE(engine_open_game(handle.value, ".artemis-debug-gate-test",
                              "first.iet") == ENGINE_RESULT_OK);
   }
+
+  // Artemis is a released provider and must stay available in Release builds
+  // without a coffee entitlement or beta_runtime_allowed override.
+  Handle artemis_handle;
+  engine_option_t artemis_runtime_option{};
+  artemis_runtime_option.key_utf8 = "runtime";
+  artemis_runtime_option.value_utf8 = "artemis";
+  REQUIRE(engine_set_option(artemis_handle.value, &artemis_runtime_option) ==
+          ENGINE_RESULT_OK);
+  REQUIRE(engine_open_game(artemis_handle.value, ".artemis-debug-gate-test",
+                           "first.iet") == ENGINE_RESULT_OK);
+
 }
 
 TEST_CASE("versioned runtime provider is selected and routed end to end") {

@@ -123,6 +123,12 @@ static func diagnostic_root_for_platform(platform: String, documents_dir: String
 static func diagnostic_root_dir() -> String:
     var documents_dir := ""
     if OS.get_name() == "iOS":
+        # On iOS Godot may report SYSTEM_DIR_DOCUMENTS as a relative path
+        # under the read-only app bundle (for example "./Aether").  user://
+        # is backed by the app's writable Documents container, which is also
+        # where the rest of the app stores its diagnostic sidecars.
+        documents_dir = OS.get_user_data_dir()
+    elif OS.get_name() == "Android":
         documents_dir = OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS)
     return diagnostic_root_for_platform(OS.get_name(), documents_dir)
 
