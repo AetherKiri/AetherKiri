@@ -216,10 +216,15 @@ function(aetherkiri_add_siglus_rs imported_target)
                 endif()
                 if(NOT "${siglus_cc_name}" STREQUAL "")
                     string(REPLACE "-" "_" siglus_triple_us "${rust_triple}")
+                    string(TOUPPER "${siglus_triple_us}" siglus_cargo_target)
                     list(APPEND SIGLUS_PATH_PREFIX
                         "CC_${siglus_triple_us}=${siglus_ndk_bin}/${siglus_cc_name}"
                         "CXX_${siglus_triple_us}=${siglus_ndk_bin}/${siglus_cxx_name}"
-                        "AR_${siglus_triple_us}=${siglus_ndk_bin}/llvm-ar")
+                        "AR_${siglus_triple_us}=${siglus_ndk_bin}/llvm-ar"
+                        # Cargo otherwise falls back to the host `cc` when a
+                        # Rust dependency also emits a cdylib, which cannot
+                        # resolve Android system libraries such as log/unwind.
+                        "CARGO_TARGET_${siglus_cargo_target}_LINKER=${siglus_ndk_bin}/${siglus_cc_name}")
                 endif()
             else()
                 message(WARNING
