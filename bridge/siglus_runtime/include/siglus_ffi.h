@@ -71,6 +71,11 @@ void siglus_ak_destroy(void *handle);
 
 int32_t siglus_ak_resize(void *handle, uint32_t width, uint32_t height);
 
+/* Returns the game-native Gameexe SCREEN_SIZE. Embedded presentation hosts
+ * keep the offscreen renderer at this size and upscale the resulting frame. */
+int32_t siglus_ak_game_screen_size(void *handle, uint32_t *out_width,
+                                   uint32_t *out_height);
+
 /* Advances simulation + renders one offscreen frame. Returns SIGLUS_AK_OK,
  * SIGLUS_AK_EXIT_REQUESTED when the engine asked to quit, or negative. */
 int32_t siglus_ak_step(void *handle, uint32_t dt_ms);

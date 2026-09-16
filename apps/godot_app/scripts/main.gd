@@ -4128,17 +4128,19 @@ func _layout_game_viewport(window_size: Vector2) -> void:
             max(1.0, float(viewport.texture.get_height()))
         )
 
-    var scale := minf(window_size.x / tex_size.x, window_size.y / tex_size.y)
+    var scale := minf(
+        window_size.x / tex_size.x,
+        window_size.y / tex_size.y
+    )
     scale = minf(scale, _max_game_view_scale())
     if scale <= 0.0:
         scale = 1.0
-    var draw_size := Vector2(
-        floor(tex_size.x * scale),
-        floor(tex_size.y * scale)
-    )
-    viewport.position = ((window_size - draw_size) * 0.5).floor()
+    # Keep subpixel dimensions here. Flooring both axes can expose a final
+    # black row or column at fractional desktop scale factors.
+    var draw_size := tex_size * scale
+    viewport.position = (window_size - draw_size) * 0.5
     viewport.size = draw_size
-    viewport.custom_minimum_size = draw_size
+    viewport.custom_minimum_size = Vector2.ZERO
 
 func _max_game_view_scale() -> float:
     var value := OS.get_environment("AETHERKIRI_GAME_VIEW_MAX_SCALE").strip_edges()
@@ -13707,6 +13709,13 @@ func _log_input_trace(delta: float, tick_ms: float, update_ms: float) -> void:
     input_trace_present_holds = 0
 
 func _notification(what: int) -> void:
+    if what == NOTIFICATION_WM_MOUSE_ENTER:
+        _on_siglus_window_mouse_entered()
+    elif what == NOTIFICATION_WM_MOUSE_EXIT:
+        # Window.mouse_exited is not consistently delivered while macOS is
+        # hiding a software-cursor game's native pointer. Restore it at the
+        # main-loop boundary as well so the cursor remains usable outside.
+        _on_siglus_window_mouse_exited()
     if what == NOTIFICATION_RESIZED:
         _fit_full_rects()
         _queue_settings_relayout_after_resize()
@@ -16327,12 +16336,14 @@ func _on_siglus_window_mouse_exited() -> void:
     _update_siglus_cursor_mode()
 
 func _siglus_cursor_mouse_mode(window_focused: bool) -> int:
-    # On macOS HIDDEN hides the system cursor, not just a sprite in this
-    # window. A software game cursor must never hide the desktop pointer
-    # after it leaves the game or while another window/dialog owns focus.
+    # macOS can keep a hidden cursor invisible after it crosses this window's
+    # boundary, so retain the native pointer there. The rendered Siglus cursor
+    # remains aligned with it and continues to drive game hover state.
+    if OS.get_name() == "macOS":
+        return Input.MOUSE_MODE_VISIBLE
     if (
         not siglus_native_cursor_visible
-        and _can_apply_siglus_mouse_warp(window_focused)
+        and _siglus_pointer_session_active(window_focused)
     ):
         return Input.MOUSE_MODE_HIDDEN
     return Input.MOUSE_MODE_VISIBLE
@@ -16345,6 +16356,12 @@ func _update_siglus_cursor_mode() -> void:
         Input.mouse_mode = mode
 
 func _can_apply_siglus_mouse_warp(window_focused: bool) -> bool:
+    # Script mouse.set_pos updates Siglus' internal pointer before this host
+    # request is emitted. Applying it to the macOS system cursor can repeatedly
+    # pull the user's pointer back into the game window.
+    return OS.get_name() != "macOS" and _siglus_pointer_session_active(window_focused)
+
+func _siglus_pointer_session_active(window_focused: bool) -> bool:
     # A script may request a warp just as focus changes or a dialog opens.
     # Never move the user's desktop pointer on behalf of a background game.
     return (
