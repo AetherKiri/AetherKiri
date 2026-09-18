@@ -120,7 +120,6 @@ jobs:
           test -n "$android_apk"
           test -n "$ios_unsigned_ipa"
           test -d "$download_dir/macos-release-app"
-          test -d "$download_dir/web-release-export"
 
           cp "$android_apk" "$asset_dir/AetherKiri-${tag}-android.apk"
           cp "$ios_unsigned_ipa" "$asset_dir/AetherKiri-${tag}-ios-unsigned.ipa"
@@ -134,10 +133,6 @@ jobs:
           (
             cd "$download_dir/macos-release-app"
             zip -qry "$asset_dir/AetherKiri-${tag}-macos.zip" .
-          )
-          (
-            cd "$download_dir/web-release-export"
-            zip -qry "$asset_dir/AetherKiri-${tag}-web.zip" .
           )
 
           rm -rf "$download_dir"
