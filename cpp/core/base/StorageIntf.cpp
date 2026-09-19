@@ -26,6 +26,7 @@
 #include "tjsArray.h"
 #include "SysInitIntf.h"
 #include "XP3Archive.h"
+#include "XP3ArchiveHxv4Decoder.h"
 #include "TickCount.h"
 #include "ncbind.hpp"
 #include "UtilStreams.h"
@@ -1440,6 +1441,7 @@ extern ttstr TVPChopStorageExt(const ttstr &name) {
 // remain effectively constant-time. The table nodes already dominate memory
 // at that scale; the larger bucket array adds only a few MiB.
 #define TVP_AUTO_PATH_HASH_SIZE 65536
+std::recursive_mutex TVPAutoPathMutex;
 std::vector<ttstr> TVPAutoPathList;
 tTJSHashCache<ttstr, ttstr> TVPAutoPathCache(TVP_DEFAULT_AUTOPATH_CACHE_NUM);
 tTJSHashTable<ttstr, ttstr, tTJSHashFunc<ttstr>, TVP_AUTO_PATH_HASH_SIZE>
@@ -1448,12 +1450,16 @@ bool AutoPathTableInit = false;
 
 //---------------------------------------------------------------------------
 static void TVPInvalidateAutoPathTable() {
+    std::lock_guard<std::recursive_mutex> lock(TVPAutoPathMutex);
     TVPAutoPathTable.Clear();
     AutoPathTableInit = false;
 }
 
 //---------------------------------------------------------------------------
-static void TVPClearAutoPathSearchCache() { TVPAutoPathCache.Clear(); }
+static void TVPClearAutoPathSearchCache() { 
+    std::lock_guard<std::recursive_mutex> lock(TVPAutoPathMutex);
+    TVPAutoPathCache.Clear(); 
+}
 
 //---------------------------------------------------------------------------
 static void TVPClearAutoPathCache() {
@@ -1520,6 +1526,7 @@ static ttstr TVPFindExactArchiveAutoPath(const ttstr &normalized) {
     // Auto paths use Kirikiri's last-added-path-wins ordering.  Preserve it
     // while restricting candidates to the directory explicitly requested by
     // the script.
+    std::lock_guard<std::recursive_mutex> lock(TVPAutoPathMutex);
     for(auto it = TVPAutoPathList.rbegin(); it != TVPAutoPathList.rend();
         ++it) {
         if(!TVPArchiveAutoPathMatches(*it, relativeDirectory))
@@ -1617,6 +1624,7 @@ ttstr TVPFindLegacySaveThumbnail(const ttstr &name) {
 
 //---------------------------------------------------------------------------
 void TVPAddAutoPath(const ttstr &name) {
+    std::lock_guard<std::recursive_mutex> lock(TVPAutoPathMutex);
     tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
 
     ttstr fixedName = FixMissingPathDelimiter(name);
@@ -1661,6 +1669,7 @@ void TVPAddAutoPath(const ttstr &name) {
 
 //---------------------------------------------------------------------------
 void TVPRemoveAutoPath(const ttstr &name) {
+    std::lock_guard<std::recursive_mutex> lock(TVPAutoPathMutex);
     tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
 
     ttstr fixedName = FixMissingPathDelimiter(name);
@@ -1676,6 +1685,7 @@ void TVPRemoveAutoPath(const ttstr &name) {
 
 //---------------------------------------------------------------------------
 static tjs_uint TVPRebuildAutoPathTable() {
+    std::lock_guard<std::recursive_mutex> lock(TVPAutoPathMutex);
     // rebuild auto path table
     if(AutoPathTableInit)
         return 0;
@@ -1982,6 +1992,46 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
         return found;
     }
 
+    // --- Hxv4 Fallback ---
+    // If not found in the AutoPathTable due to kanji obfuscation, iterate
+    // through mounted archives from newest to oldest (matching table priority)
+    // and query the Hxv4 decoder mapping.
+    std::lock_guard<std::recursive_mutex> lock(TVPAutoPathMutex);
+    for(auto it = TVPAutoPathList.rbegin(); it != TVPAutoPathList.rend(); ++it) {
+        const ttstr &path = *it;
+        const tjs_char *sharp_pos = TJS_strchr(path.c_str(), TVPArchiveDelimiter);
+        if(sharp_pos) {
+            ttstr arcname(path, (int)(sharp_pos - path.c_str()));
+            tTVPArchive *arc = nullptr;
+            try {
+                arc = TVPArchiveCache.Get(arcname);
+            } catch(...) {
+                continue;
+            }
+            if(arc) {
+                bool found_in_hxv4 = false;
+                if(auto xp3_arc = dynamic_cast<tTVPXP3Archive*>(arc)) {
+                    if(XP3ArchiveHxv4Decoder::GetFileHashByName(xp3_arc, storagename) != 0) {
+                        found_in_hxv4 = true;
+                    }
+                }
+                arc->Release();
+                
+                if(found_in_hxv4) {
+                    ttstr found = path + storagename;
+                    TVPAutoPathCache.Add(name, found);
+                    if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
+                        spdlog::info(
+                            "StorageTrace hxv4-fallback request={} short={} base={} found={}",
+                            name.AsStdString(), storagename.AsStdString(),
+                            path.AsStdString(), found.AsStdString());
+                    }
+                    return found;
+                }
+            }
+        }
+    }
+
     // Older E-mote scene scripts can route through AffineSourceMotion even
     // though the package only contains the DirectX-exported PSB. Those
     // scripts probe the logical, unprefixed name first and, when compiled to
@@ -2051,6 +2101,7 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
 
     // not found
     TVPAutoPathCache.Add(name, TVP_AUTOPATH_CACHE_MISS_MARKER);
+    spdlog::info("[FILE_MISS_TRACE] Game requested file but not found: {}", name.AsStdString());
     if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
         spdlog::info("StorageTrace miss request={} short={}",
                      name.AsStdString(), storagename.AsStdString());
@@ -2124,6 +2175,7 @@ bool TVPIsExistentStorage(const ttstr &name) {
 //---------------------------------------------------------------------------
 // TVPCreateStream
 //---------------------------------------------------------------------------
+
 static tTJSBinaryStream *_TVPCreateStream(const ttstr &_name,
                                           tjs_uint32 flags) {
     if(std::getenv("AETHERKIRI_STORAGE_TRACE") != nullptr &&
@@ -2132,12 +2184,34 @@ static tTJSBinaryStream *_TVPCreateStream(const ttstr &_name,
         spdlog::info("StorageTrace create-stream afterstory request={} flags={}",
                      _name.AsStdString(), flags);
 
+    //ttstr logMsg = TJS_W("[TRACE_LOAD] TVPCreateStream: ") + _name;
+    //TVPAddImportantLog(logMsg.c_str());
+    //spdlog::default_logger()->flush();
+
     if(std::getenv("AETHERKIRI_STORAGE_TRACE") != nullptr &&
        _name.AsStdString().find("langselect_auto.func") != std::string::npos)
         spdlog::info("StorageTrace create-stream request={} flags={}",
                      _name.AsStdString(), flags);
 
     ttstr name;
+    
+    // Dynamically feed every requested file to Hxv4 so it gets captured in hxv4.log!
+    // Hxv4 Crawler Hook: Execute only when start.ks is requested
+    // This ensures all plugin/archive mounts are already processed by startup scripts!
+    /*
+    static bool crawler_executed = false;
+    if (!crawler_executed && basename == TJS_W("start.ks")) {
+        crawler_executed = true;
+        ttstr appPath = TVPGetAppPath();
+        TVPGetLocalName(appPath);
+        
+        // We need to declare the function since it's from another file
+        XP3ArchiveHxv4Decoder::ExecuteHxv4Crawler(TVPGetPlacedPath(TJS_W("startup.tjs")), appPath);
+        
+        TVPAddImportantLog(TJS_W("Hxv4 Snowball Crawler started in background thread at start.ks!"));
+        // std::exit(0) is removed because it's running in background!
+    }
+    */
 
     tjs_uint32 access = flags & TJS_BS_ACCESS_MASK;
     if(access == TJS_BS_WRITE || access == TJS_BS_APPEND ||
@@ -2305,7 +2379,10 @@ void TVPClearStorageCaches() {
 
 void TVPResetAutoPathsForGameSession() {
     tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
-    TVPAutoPathList.clear();
+    {
+        std::lock_guard<std::recursive_mutex> lock(TVPAutoPathMutex);
+        TVPAutoPathList.clear();
+    }
     TVPClearXP3SegmentCache();
     TVPClearAutoPathCache();
 }
