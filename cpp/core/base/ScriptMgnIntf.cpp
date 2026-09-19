@@ -16,6 +16,7 @@
 #include "tjsArray.h"
 #include "ScriptMgnIntf.h"
 #include "StorageIntf.h"
+#include "XP3ArchiveHxv4Decoder.h"
 #include "DebugIntf.h"
 #include "WindowIntf.h"
 #include "LayerIntf.h"
@@ -4010,6 +4011,10 @@ static void TVPLogStartupScriptError(const char *stage,
     spdlog::default_logger()->flush();
 }
 
+namespace XP3ArchiveHxv4Decoder {
+    extern void ExecuteHxv4Scanner();
+}
+
 void TVPExecuteStartupScript() {
     // The engine library can open more than one game in the same host
     // process.  Do not let a previous game's Storages.setTextEncoding()
@@ -4062,8 +4067,17 @@ void TVPExecuteStartupScript() {
 
     // execute "startup.tjs"
     try {
-
         ttstr place(TVPSearchPlacedPath(TVPStartupScriptName));
+        
+        /*
+        * Hxv4 Scanner:
+        * Its purpose is to read (!scnlist.txt) synchronously
+        * and extract all string references and PSB files from the SCN data
+        * into hxv4.log. This is useful for ensuring that all dynamic assets are detected.
+        * Temporarily disabled because it is not necessary to dump the entire game at this time
+        */
+        // XP3ArchiveHxv4Decoder::ExecuteHxv4Scanner();
+
         spdlog::info("Loading startup script: {}", place.AsStdString());
 #if defined(__ANDROID__)
         __android_log_print(ANDROID_LOG_INFO, "krkr2",

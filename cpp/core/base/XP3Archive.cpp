@@ -13,6 +13,9 @@
 
 #include "XP3Archive.h"
 #include "XP3ArchiveCxDecoder.h"
+#include "XP3ArchiveHxv4Decoder.h"
+#include "drip_data.h"
+#include <sodium.h>
 #include "MsgIntf.h"
 #include "DebugIntf.h"
 #include "EventIntf.h"
@@ -611,6 +614,66 @@ void tTVPXP3Archive::Init(tTJSBinaryStream *st, tjs_int64 off,
                 ch_file_size = index_size - ch_file_start;
                 Count++;
             }
+// --- VVV INJEKSI HXV4 EXTRACTOR VVV ---
+            static const tjs_uint8 cn_Hxv4[] = { 0x48/*'H'*/, 0x78/*'x'*/, 0x76/*'v'*/, 0x34/*'4'*/ };
+            tjs_uint ch_hxv4_start = 0;
+            tjs_uint ch_hxv4_size = index_size;
+            if(FindChunk(indexdata, cn_Hxv4, ch_hxv4_start, ch_hxv4_size)) {
+                
+                // 1. Kumpulkan FileHash. SINGKIRKAN startup.tjs palsu dari daftar!
+                std::vector<uint32_t> protected_hashes;
+                for (size_t i = 0; i < ItemVector.size(); i++) {
+                    if (ItemVector[i].Name == TJS_W("startup.tjs")) {
+                        ItemVector[i].Name = TJS_W("startup_fake.tjs"); // Netralisir Decoy
+                    } else { // <--- INI ADALAH KUNCI PENYELAMATNYA! (Wajib pakai else)
+                        protected_hashes.push_back(ItemVector[i].FileHash);
+                    }
+                }
+
+                // 2. Dekripsi XChaCha20
+                tjs_uint64 hxv4_offset = ReadI64FromMem(indexdata + ch_hxv4_start);
+                tjs_uint32 hxv4_size   = ReadI32FromMem(indexdata + ch_hxv4_start + 8);
+                tjs_uint16 hxv4_flags  = ReadI16FromMem(indexdata + ch_hxv4_start + 12);
+
+                std::vector<uint8_t> hxv4_payload(hxv4_size);
+                tjs_uint64 old_pos = st->GetPosition();
+                st->SetPosition(hxv4_offset + offset);
+                st->ReadBuffer(hxv4_payload.data(), hxv4_size);
+                st->SetPosition(old_pos);
+
+                if (sodium_init() >= 0) {
+                    tjs_uint32 dec_size = hxv4_size - 16;
+                    std::vector<uint8_t> dec_payload(dec_size);
+                    const uint8_t* nonce = (hxv4_flags & 1) ? kHxv4Nonce1 : kHxv4Nonce0;
+                    
+                    int res = crypto_aead_xchacha20poly1305_ietf_decrypt_detached(
+                        dec_payload.data(), NULL, hxv4_payload.data() + 16, dec_size, hxv4_payload.data(), NULL, 0, nonce, kHxv4Key
+                    );
+                    
+                    if (res == 0) {
+                        tjs_uint32 uncompressed_size = ReadI32FromMem(dec_payload.data());
+                        std::vector<uint8_t> table_blob(uncompressed_size);
+                        unsigned long destlen = uncompressed_size;
+                        if (uncompress(table_blob.data(), &destlen, dec_payload.data() + 4, dec_size - 4) == Z_OK) {
+                            
+                            // 3. Daftarkan Archive & Map Blake2s-nya
+                            XP3ArchiveHxv4Decoder::RegisterArchive(this, table_blob.data(), destlen, hxv4_flags, protected_hashes);
+                            
+                            // 4. RESTORASI STARTUP.TJS ASLI DARI OBFUSKASI!
+                            uint32_t startup_hash = XP3ArchiveHxv4Decoder::GetFileHashByName(this, TJS_W("startup.tjs"));
+                            if (startup_hash != 0) {
+                                for (auto& item : ItemVector) {
+                                    if (item.FileHash == startup_hash) {
+                                        item.Name = TJS_W("startup.tjs");
+                                        break; // Selesai!
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // --- ^^^ AKHIR INJEKSI HXV4 ^^^ ---
 
             if(!(index_flag & TVP_XP3_INDEX_CONTINUE))
                 break; // continue reading index when the bit sets
@@ -620,26 +683,28 @@ void tTVPXP3Archive::Init(tTJSBinaryStream *st, tjs_int64 off,
         // can retain protected metadata after their payload is already
         // decrypted. Probe the root startup payload before enabling the
         // decoder for this archive.
-        for(const auto &item : ItemVector) {
-            if(item.Name != TJS_W("startup.tjs") ||
-               !TVPIsBuiltinXP3CxScheme(item.FileHash))
-                continue;
+        if (!XP3ArchiveHxv4Decoder::IsArchiveHxv4(this)) {
+            for(const auto &item : ItemVector) {
+                if(item.Name != TJS_W("startup.tjs") ||
+                   !TVPIsBuiltinXP3CxScheme(item.FileHash))
+                    continue;
 
-            std::array<tjs_uint8, 8> header{};
-            const bool headerRead = TVPReadXP3ItemHeader(st, item, header);
-            if(TVPShouldUseBuiltinXP3CxDecoder(
-                   item.FileHash, headerRead ? header.data() : nullptr,
-                   headerRead ? header.size() : 0)) {
-                UseBuiltinCxDecoder =
-                    TVPActivateBuiltinXP3CxDecoder(item.FileHash);
-                if(UseBuiltinCxDecoder)
+                std::array<tjs_uint8, 8> header{};
+                const bool headerRead = TVPReadXP3ItemHeader(st, item, header);
+                if(TVPShouldUseBuiltinXP3CxDecoder(
+                       item.FileHash, headerRead ? header.data() : nullptr,
+                       headerRead ? header.size() : 0)) {
+                    UseBuiltinCxDecoder =
+                        TVPActivateBuiltinXP3CxDecoder(item.FileHash);
+                    if(UseBuiltinCxDecoder)
+                        TVPAddImportantLog(
+                            TJS_W("(info) Activated built-in XP3 Cx decoder"));
+                } else {
                     TVPAddImportantLog(
-                        TJS_W("(info) Activated built-in XP3 Cx decoder"));
-            } else {
-                TVPAddImportantLog(
-                    TJS_W("(info) Protected XP3 payload is already decoded; skipped built-in Cx decoder"));
+                        TJS_W("(info) Protected XP3 payload is already decoded; skipped built-in Cx decoder"));
+                }
+                break;
             }
-            break;
         }
 
         // sort item vector by its name (required for tTVPArchive
@@ -672,6 +737,7 @@ tTVPXP3Archive::tTVPXP3Archive(const ttstr &name, tTJSBinaryStream *st,
 
 //---------------------------------------------------------------------------
 tTVPXP3Archive::~tTVPXP3Archive() {
+    XP3ArchiveHxv4Decoder::UnregisterArchive(this);
     try {
         TVPFreeArchiveHandlePoolByPointer(this);
     } catch(...) {
@@ -724,6 +790,24 @@ tTJSBinaryStream *tTVPXP3Archive::CreateStreamByIndex(tjs_uint idx) {
     }
 
     return out;
+}
+
+tTJSBinaryStream *tTVPXP3Archive::CreateStream(const ttstr &name) {
+    uint32_t hxv4_hash = XP3ArchiveHxv4Decoder::GetFileHashByName(this, name);
+    if (hxv4_hash != 0) {
+        for (size_t i = 0; i < ItemVector.size(); i++) {
+            if (ItemVector[i].FileHash == hxv4_hash) {
+                return CreateStreamByIndex(static_cast<tjs_uint>(i));
+            }
+        }
+    }
+    return tTVPArchive::CreateStream(name);
+}
+
+bool tTVPXP3Archive::IsExistent(const ttstr &name) {
+    uint32_t hxv4_hash = XP3ArchiveHxv4Decoder::GetFileHashByName(this, name);
+    if (hxv4_hash != 0) return true;
+    return tTVPArchive::IsExistent(name);
 }
 
 //---------------------------------------------------------------------------
@@ -1168,23 +1252,22 @@ tjs_uint tTVPXP3ArchiveStream::Read(void *buffer, tjs_uint read_size) {
             Stream->ReadBuffer((tjs_uint8 *)buffer + write_size, one_size);
         }
 
-        // execute filter (for encryption method)
-        if(TVPXP3ArchiveExtractionFilter) {
-            tTVPXP3ExtractionFilterInfo info(
-                CurPos, (tjs_uint8 *)buffer + write_size, one_size,
-                Owner->GetFileHash(StorageIndex), Owner->GetName(StorageIndex));
-            TVPXP3ArchiveExtractionFilter((tTVPXP3ExtractionFilterInfo *)&info,
-                                          &FilterContext);
-        } else if(Owner->IsFileProtected(StorageIndex) &&
-                  TVPIsBuiltinXP3CxDecoderActive()) {
-            // The Cx scheme is selected by the protected startup entry in
-            // the project's data archive, but the encrypted payload is split
-            // across sibling XP3 archives (for example adult.xp3). Keep the
-            // selection process global so protected entries in those sibling
-            // archives receive the same decoder.
-            TVPDecodeBuiltinXP3Cx(
-                Owner->GetFileHash(StorageIndex), CurPos,
-                static_cast<tjs_uint8 *>(buffer) + write_size, one_size);
+        // Coba dekripsi menggunakan Hxv4 dengan FileHash terlebih dahulu
+        bool hxv4_decoded = XP3ArchiveHxv4Decoder::Decode(Owner, Owner->GetFileHash(StorageIndex), CurPos, static_cast<tjs_uint8*>(buffer) + write_size, one_size);
+
+        // Jika file BUKAN bagian dari arsip Hxv4, baru kita jalankan filter lain (TJS / Cx)
+        if (!hxv4_decoded) {
+            if(TVPXP3ArchiveExtractionFilter) {
+                tTVPXP3ExtractionFilterInfo info(
+                    CurPos, (tjs_uint8 *)buffer + write_size, one_size,
+                    Owner->GetFileHash(StorageIndex), Owner->GetName(StorageIndex));
+                TVPXP3ArchiveExtractionFilter((tTVPXP3ExtractionFilterInfo *)&info,
+                                              &FilterContext);
+            } else if (Owner->IsFileProtected(StorageIndex) && TVPIsBuiltinXP3CxDecoderActive()) {
+                TVPDecodeBuiltinXP3Cx(
+                    Owner->GetFileHash(StorageIndex), CurPos,
+                    static_cast<tjs_uint8 *>(buffer) + write_size, one_size);
+            }
         }
 
         // adjust members
