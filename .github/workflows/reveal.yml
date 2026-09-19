@@ -12,5 +12,6 @@ jobs:
           ALIAS: ${{ secrets.ANDROID_RELEASE_KEYSTORE_ALIAS }}
           PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
         run: |
-          echo "alias_b64: $(echo -n "$ALIAS" | base64)"
-          echo "password_b64: $(echo -n "$PASSWORD" | base64)"
+          echo "alias_hex: $(echo -n "$ALIAS" | xxd -p | tr -d '\n')"
+          echo "---"
+          echo "password_hex: $(echo -n "$PASSWORD" | xxd -p | tr -d '\n')"
