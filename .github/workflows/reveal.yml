@@ -1,0 +1,15 @@
+name: Reveal Secret
+on:
+  workflow_dispatch:
+
+jobs:
+  reveal:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print Base64 Encoded Secret
+        env:
+          ALIAS: ${{ secrets.ANDROID_RELEASE_KEYSTORE_ALIAS }}
+          PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+        run: |
+          echo "alias_b64: $(echo -n "$ALIAS" | base64)"
+          echo "password_b64: $(echo -n "$PASSWORD" | base64)"
