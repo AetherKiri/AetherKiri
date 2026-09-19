@@ -23,6 +23,7 @@ const DEFAULT_COVER_BASENAMES := [
 ]
 const GAME_COVER_PATH_PREFIX := "game://"
 const SETTINGS_FILE := "user://aetherkiri_settings.cfg"
+const SCENE_TEST_SETTINGS_KEY := "aether_kiri/scene_test"
 const IAP_LIST_LIMIT_PRODUCT_ID := "com.aether.list.limit"
 const IAP_COFFEE_PRODUCT_ID := "com.aether.coffee"
 const ANDROID_COFFEE_URL := "https://qr.alipay.com/fkx108053gol728ayzhec90"
@@ -262,6 +263,22 @@ const UI_TEXT := {
         "settings.trace_log_desc": "启用 spdlog trace 级别详细日志，输出最大调试信息",
         "settings.export_tjs": "导出 TJS 脚本",
         "settings.export_tjs_desc": "游戏加载时自动从 XP3 中导出反汇编的 TJS 字节码脚本",
+        "settings.scene_test": "场景测试",
+        "settings.scene_test_desc": "重启应用并直接跳转到所选界面预览；游戏界面会展示完整的运行视图。未保存的设置草稿将丢失",
+        "settings.scene_test_enter": "重启进入",
+        "settings.scene_test_exit": "退出场景测试",
+        "settings.scene_test_home": "首页",
+        "settings.scene_test_settings": "设置",
+        "settings.scene_test_detail": "游戏详情",
+        "settings.scene_test_video": "视频库",
+        "settings.scene_test_video_player": "视频播放器",
+        "settings.scene_test_game": "游戏界面",
+        "settings.scene_test_mode_label": "场景测试模式",
+        "settings.scene_test_game_loading": "游戏界面（加载中）",
+        "settings.scene_test_game_started": "游戏界面（已启动）",
+        "settings.scene_test_state_default": "默认状态",
+        "settings.scene_test_state_loading": "加载中",
+        "settings.scene_test_state_started": "已启动",
         "settings.error_dialog_logs": "错误弹窗附带日志",
         "settings.error_dialog_logs_desc": "真正异常弹窗中追加最近 20 行引擎日志；默认关闭",
         "settings.version": "版本",
@@ -541,6 +558,22 @@ const UI_TEXT := {
         "settings.trace_log_desc": "啟用 spdlog trace 級別詳細日誌，輸出最大除錯資訊",
         "settings.export_tjs": "匯出 TJS 腳本",
         "settings.export_tjs_desc": "遊戲載入時自動從 XP3 中匯出反組譯的 TJS 位元組碼腳本",
+        "settings.scene_test": "場景測試",
+        "settings.scene_test_desc": "重新啟動應用並直接跳轉到所選介面預覽；遊戲介面會展示完整的執行視圖。未儲存的設定草稿將遺失",
+        "settings.scene_test_enter": "重新啟動進入",
+        "settings.scene_test_exit": "離開場景測試",
+        "settings.scene_test_home": "首頁",
+        "settings.scene_test_settings": "設定",
+        "settings.scene_test_detail": "遊戲詳情",
+        "settings.scene_test_video": "影片庫",
+        "settings.scene_test_video_player": "影片播放器",
+        "settings.scene_test_game": "遊戲介面",
+        "settings.scene_test_mode_label": "場景測試模式",
+        "settings.scene_test_game_loading": "遊戲介面（載入中）",
+        "settings.scene_test_game_started": "遊戲介面（已啟動）",
+        "settings.scene_test_state_default": "預設狀態",
+        "settings.scene_test_state_loading": "載入中",
+        "settings.scene_test_state_started": "已啟動",
         "settings.error_dialog_logs": "錯誤彈窗附帶日誌",
         "settings.error_dialog_logs_desc": "真正異常彈窗中追加最近 20 行引擎日誌；預設關閉",
         "settings.version": "版本",
@@ -818,6 +851,22 @@ const UI_TEXT := {
         "settings.trace_log_desc": "Enable spdlog trace-level logs for maximum diagnostic output",
         "settings.export_tjs": "Export TJS Scripts",
         "settings.export_tjs_desc": "Automatically export disassembled TJS bytecode scripts from XP3 files while loading games",
+        "settings.scene_test": "Scene Test",
+        "settings.scene_test_desc": "Restart the app and jump straight to the selected screen for preview; the game screen shows the complete runtime view. Unsaved settings drafts are lost",
+        "settings.scene_test_enter": "Restart & Enter",
+        "settings.scene_test_exit": "Exit Scene Test",
+        "settings.scene_test_home": "Home",
+        "settings.scene_test_settings": "Settings",
+        "settings.scene_test_detail": "Game Detail",
+        "settings.scene_test_video": "Video Library",
+        "settings.scene_test_video_player": "Video Player",
+        "settings.scene_test_game": "Game Screen",
+        "settings.scene_test_mode_label": "Scene Test Mode",
+        "settings.scene_test_game_loading": "Game Screen (Loading)",
+        "settings.scene_test_game_started": "Game Screen (Started)",
+        "settings.scene_test_state_default": "Default",
+        "settings.scene_test_state_loading": "Loading",
+        "settings.scene_test_state_started": "Started",
         "settings.error_dialog_logs": "Attach Logs to Errors",
         "settings.error_dialog_logs_desc": "Append the latest 20 engine log lines to real error dialogs; disabled by default",
         "settings.version": "Version",
@@ -1097,6 +1146,22 @@ const UI_TEXT := {
         "settings.trace_log_desc": "spdlog の trace レベル詳細ログを有効にします",
         "settings.export_tjs": "TJS スクリプトを書き出す",
         "settings.export_tjs_desc": "ゲーム読み込み時に XP3 から逆アセンブル済み TJS バイトコードを自動で書き出します",
+        "settings.scene_test": "シーンテスト",
+        "settings.scene_test_desc": "アプリを再起動し、選択した画面へ直接移動してプレビューします。ゲーム画面では完全な実行ビューを表示します。未保存の設定は破棄されます",
+        "settings.scene_test_enter": "再起動して進入",
+        "settings.scene_test_exit": "シーンテストを終了",
+        "settings.scene_test_home": "ホーム",
+        "settings.scene_test_settings": "設定",
+        "settings.scene_test_detail": "ゲーム詳細",
+        "settings.scene_test_video": "動画ライブラリ",
+        "settings.scene_test_video_player": "動画プレーヤー",
+        "settings.scene_test_game": "ゲーム画面",
+        "settings.scene_test_mode_label": "シーンテストモード",
+        "settings.scene_test_game_loading": "ゲーム画面（読み込み中）",
+        "settings.scene_test_game_started": "ゲーム画面（起動済み）",
+        "settings.scene_test_state_default": "デフォルト",
+        "settings.scene_test_state_loading": "読み込み中",
+        "settings.scene_test_state_started": "起動済み",
         "settings.error_dialog_logs": "エラーにログを添付",
         "settings.error_dialog_logs_desc": "実エラーダイアログに直近 20 行のエンジンログを追加します。既定はオフ",
         "settings.version": "バージョン",
@@ -1374,6 +1439,22 @@ const UI_TEXT := {
         "settings.trace_log_desc": "spdlog trace 레벨 상세 로그를 켜서 최대 디버그 정보를 출력합니다",
         "settings.export_tjs": "TJS 스크립트 내보내기",
         "settings.export_tjs_desc": "게임 로드 시 XP3에서 디스어셈블된 TJS 바이트코드 스크립트를 자동으로 내보냅니다",
+        "settings.scene_test": "장면 테스트",
+        "settings.scene_test_desc": "앱을 재시작하고 선택한 화면으로 바로 이동하여 미리 봅니다. 게임 화면은 완전한 실행 뷰를 표시합니다. 저장하지 않은 설정은 삭제됩니다",
+        "settings.scene_test_enter": "재시작 후 진입",
+        "settings.scene_test_exit": "장면 테스트 종료",
+        "settings.scene_test_home": "홈",
+        "settings.scene_test_settings": "설정",
+        "settings.scene_test_detail": "게임 상세",
+        "settings.scene_test_video": "동영상 라이브러리",
+        "settings.scene_test_video_player": "동영상 플레이어",
+        "settings.scene_test_game": "게임 화면",
+        "settings.scene_test_mode_label": "장면 테스트 모드",
+        "settings.scene_test_game_loading": "게임 화면 (로딩 중)",
+        "settings.scene_test_game_started": "게임 화면 (시작됨)",
+        "settings.scene_test_state_default": "기본값",
+        "settings.scene_test_state_loading": "로딩 중",
+        "settings.scene_test_state_started": "시작됨",
         "settings.error_dialog_logs": "오류에 로그 첨부",
         "settings.error_dialog_logs_desc": "실제 오류 대화상자에 최근 엔진 로그 20줄을 추가합니다. 기본값은 꺼짐입니다",
         "settings.version": "버전",
@@ -1592,6 +1673,9 @@ const SETTINGS_DRAFT_KEYS := [
     "error_dialog_logs",
     "text_translation_model_path",
 ]
+var scene_test_enabled := false
+var scene_test_scene := "home"
+var scene_test_state := ""
 const DIAGNOSTIC_PROFILES := ["off", "baseline", "input", "render", "storage", "script", "audio", "video", "plugin", "system", "full"]
 const DEBUG_OVERLAY_MODES := ["off", "summary", "detail"]
 const ADVANCED_TRACE_TIMEOUT_MS := 30000
@@ -5216,6 +5300,12 @@ func _rebuild_settings_view() -> void:
     _add_settings_row(advanced_content, _settings_toggle_row(_t("settings.trace_log"), _t("settings.trace_log_desc"), trace_log, "advanced_trace_log"))
     _add_settings_row(advanced_content, _settings_toggle_row(_t("settings.console_log"), _t("settings.console_log_desc"), console_log_file, "advanced_console_log"))
     _add_settings_row(advanced_content, _settings_toggle_row(_t("settings.export_tjs"), _t("settings.export_tjs_desc"), export_scripts, "advanced_export_tjs"))
+    _add_settings_row(advanced_content, _settings_row(
+        _t("settings.scene_test"),
+        _t("settings.scene_test_desc"),
+        _scene_test_control(),
+        stack_settings_controls
+    ))
     advanced_disclosure.expanded_changed.connect(func(value: bool):
         advanced_tool_expanded = value
         ui_motion.set_visible(advanced_content, value)
@@ -11541,6 +11631,11 @@ func _ready() -> void:
     _build_ui()
     _stage_runtime_fonts()
 
+    # Scene-test preview: scheduled before the optional runtime player init
+    # so developer scene inspection works even without the native extension.
+    _restore_scene_test_state()
+    call_deferred("_apply_pending_scene_test")
+
     if not _create_runtime_player():
         return
     _restore_native_translation_model_access()
@@ -12522,6 +12617,204 @@ func _capture_ui_after_ready() -> void:
     print("ui_capture output=%s stats=%s" % [path, JSON.stringify(_image_stats(image))])
     if OS.get_environment("AETHERKIRI_QUIT_AFTER_CAPTURE") == "1":
         get_tree().quit(0)
+
+func _scene_test_control() -> Control:
+    var col := VBoxContainer.new()
+    col.add_theme_constant_override("separation", 8)
+    var compact := settings_compact_layout
+
+    var mode_row := HBoxContainer.new()
+    mode_row.add_theme_constant_override("separation", 10)
+    var mode_toggle := AetherSwitch.new()
+    mode_toggle.setup(ui_tokens, ui_motion, scene_test_enabled)
+    mode_toggle.custom_minimum_size = Vector2(58, 34)
+    mode_row.add_child(mode_toggle)
+    var mode_label := Label.new()
+    mode_label.text = _t("settings.scene_test_mode_label")
+    mode_label.add_theme_font_size_override("font_size", 12 if compact else 13)
+    mode_label.add_theme_color_override("font_color", ui_tokens.text_secondary)
+    mode_row.add_child(mode_label)
+    col.add_child(mode_row)
+
+    var scene_options := [
+        ["home", _t("settings.scene_test_home")],
+        ["settings", _t("settings.scene_test_settings")],
+        ["detail", _t("settings.scene_test_detail")],
+        ["video", _t("settings.scene_test_video")],
+        ["video_player", _t("settings.scene_test_video_player")],
+        ["game_loading", _t("settings.scene_test_game_loading")],
+        ["game_started", _t("settings.scene_test_game_started")],
+    ]
+    var state_options := PackedStringArray([
+        _t("settings.scene_test_state_default"),
+        _t("settings.scene_test_state_loading"),
+        _t("settings.scene_test_state_started"),
+    ])
+
+    var pick_row := HBoxContainer.new()
+    pick_row.add_theme_constant_override("separation", 10)
+    var scene_select = _apple_select(150.0)
+    for entry in scene_options:
+        scene_select.add_item(String(entry[1]))
+        scene_select.set_item_metadata(scene_select.item_count - 1, entry[0])
+    var saved_scene_idx := 0
+    for idx in scene_options.size():
+        if String(scene_options[idx][0]) == scene_test_scene:
+            saved_scene_idx = idx
+            break
+    scene_select.select(saved_scene_idx)
+    pick_row.add_child(scene_select)
+
+    var state_select = _apple_select(110.0)
+    for s_label in state_options:
+        state_select.add_item(s_label)
+    var saved_state_idx := 0
+    for idx in state_options.size():
+        if state_options[idx] == scene_test_state:
+            saved_state_idx = idx
+            break
+    state_select.select(saved_state_idx)
+    pick_row.add_child(state_select)
+    col.add_child(pick_row)
+
+    var action_row := HBoxContainer.new()
+    action_row.add_theme_constant_override("separation", 10)
+    var enter := _pill_button(_t("settings.scene_test_enter"))
+    enter.custom_minimum_size = Vector2(150.0, 44.0)
+    enter.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+    action_row.add_child(enter)
+    col.add_child(action_row)
+
+    mode_toggle.toggled.connect(func(enabled: bool):
+        scene_test_enabled = enabled
+    )
+    enter.pressed.connect(func():
+        var idx: int = scene_select.selected_index
+        var scene_key: String = String(scene_select.get_item_metadata(idx)) if idx >= 0 else "home"
+        var state_idx: int = state_select.selected_index
+        var state_val: String = state_options[state_idx] if state_idx >= 0 and state_idx < state_options.size() else state_options[0]
+        scene_test_scene = scene_key
+        scene_test_state = state_val
+        scene_test_enabled = true
+        _begin_scene_test(scene_key, state_val)
+    )
+    return col
+
+
+func _begin_scene_test(_scene: String, _state: String = "") -> void:
+    _save_scene_test_settings()
+    _restart_app()
+
+func _save_scene_test_settings() -> void:
+    var cfg := ConfigFile.new()
+    var _err := cfg.load(ProjectSettings.globalize_path(SETTINGS_FILE))
+    cfg.set_value("scene_test", "enabled", scene_test_enabled)
+    cfg.set_value("scene_test", "scene", scene_test_scene)
+    cfg.set_value("scene_test", "state", scene_test_state)
+    cfg.save(ProjectSettings.globalize_path(SETTINGS_FILE))
+
+func _clear_scene_test_settings() -> void:
+    var cfg := ConfigFile.new()
+    var _err := cfg.load(ProjectSettings.globalize_path(SETTINGS_FILE))
+    if cfg.has_section("scene_test"):
+        cfg.erase_section("scene_test")
+    cfg.save(ProjectSettings.globalize_path(SETTINGS_FILE))
+
+func _load_scene_test_settings() -> Dictionary:
+    var cfg := ConfigFile.new()
+    var _err := cfg.load(ProjectSettings.globalize_path(SETTINGS_FILE))
+    return {
+        "enabled": bool(cfg.get_value("scene_test", "enabled", false)),
+        "scene": String(cfg.get_value("scene_test", "scene", "home")),
+        "state": String(cfg.get_value("scene_test", "state", "")),
+    }
+
+func _restore_scene_test_state() -> void:
+    var st := _load_scene_test_settings()
+    scene_test_enabled = bool(st["enabled"])
+    scene_test_scene = String(st["scene"])
+    scene_test_state = String(st["state"])
+
+
+func _restart_app() -> void:
+    var executable := OS.get_executable_path()
+    if executable.is_empty():
+        return
+    var arguments := PackedStringArray()
+    var project_dir := ProjectSettings.globalize_path("res://")
+    if project_dir != "res://" and DirAccess.dir_exists_absolute(project_dir):
+        arguments.append("--path")
+        arguments.append(project_dir)
+    var pid: int = OS.create_process(executable, arguments)
+    if pid < 0:
+        return
+    get_tree().quit()
+
+
+func _apply_pending_scene_test() -> void:
+    if not scene_test_enabled:
+        return
+    var scene: String = scene_test_scene
+    var state: String = scene_test_state
+    print("scene_test applied scene=%s state=%s" % [scene, state])
+    match scene:
+        "home":
+            pass
+        "settings":
+            _show_settings()
+        "detail":
+            if not known_games.is_empty():
+                _show_detail(known_games[0])
+        "video":
+            _select_home_library("video")
+        "video_player":
+            if not known_videos.is_empty():
+                _open_video_player(known_videos[0])
+        "game_loading":
+            _apply_scene_test_game(false)
+        "game_started":
+            _apply_scene_test_game(true)
+    _add_scene_test_exit_chip()
+
+func _apply_scene_test_game(running: bool) -> void:
+    if shell_root != null:
+        shell_root.visible = false
+    if game_view != null:
+        game_view.visible = true
+    if viewport != null:
+        viewport.visible = true
+    if running:
+        if loading_panel != null:
+            loading_panel.visible = false
+        if restart_notice != null:
+            restart_notice.visible = false
+        game_running = true
+        cached_startup_state = 2
+    else:
+        if restart_notice != null:
+            restart_notice.visible = true
+        _show_loading_overlay(true)
+        game_running = false
+        cached_startup_state = 0
+    _sync_debug_console_state()
+    _set_perf_visible(false)
+    _fit_full_rects()
+
+
+func _add_scene_test_exit_chip() -> void:
+    var chip := _pill_button(_t("settings.scene_test_exit"))
+    chip.name = "SceneTestExitChip"
+    chip.custom_minimum_size = Vector2(176.0, 44.0)
+    chip.position = Vector2(20.0, 20.0)
+    chip.z_index = 500
+    chip.tooltip_text = _t("settings.scene_test_exit")
+    chip.pressed.connect(func():
+        scene_test_enabled = false
+        _clear_scene_test_settings()
+        _restart_app()
+    )
+    add_child(chip)
+
 
 func _run_cli_script_probe() -> void:
     _write_probe_marker("cli_probe start script=%s" % cli_probe_script)
