@@ -614,23 +614,23 @@ void tTVPXP3Archive::Init(tTJSBinaryStream *st, tjs_int64 off,
                 ch_file_size = index_size - ch_file_start;
                 Count++;
             }
-// --- VVV INJEKSI HXV4 EXTRACTOR VVV ---
+            // --- HXV4 EXTRACTOR ---
             static const tjs_uint8 cn_Hxv4[] = { 0x48/*'H'*/, 0x78/*'x'*/, 0x76/*'v'*/, 0x34/*'4'*/ };
             tjs_uint ch_hxv4_start = 0;
             tjs_uint ch_hxv4_size = index_size;
             if(FindChunk(indexdata, cn_Hxv4, ch_hxv4_start, ch_hxv4_size)) {
                 
-                // 1. Kumpulkan FileHash. SINGKIRKAN startup.tjs palsu dari daftar!
+                // Collect FileHash. FILTER OUT the fake startup.tjs from the list!
                 std::vector<uint32_t> protected_hashes;
                 for (size_t i = 0; i < ItemVector.size(); i++) {
                     if (ItemVector[i].Name == TJS_W("startup.tjs")) {
-                        ItemVector[i].Name = TJS_W("startup_fake.tjs"); // Netralisir Decoy
-                    } else { // <--- INI ADALAH KUNCI PENYELAMATNYA! (Wajib pakai else)
+                        ItemVector[i].Name = TJS_W("startup_fake.tjs"); // Neutralize Decoy
+                    } else {
                         protected_hashes.push_back(ItemVector[i].FileHash);
                     }
                 }
 
-                // 2. Dekripsi XChaCha20
+                // Decrypt XChaCha20
                 tjs_uint64 hxv4_offset = ReadI64FromMem(indexdata + ch_hxv4_start);
                 tjs_uint32 hxv4_size   = ReadI32FromMem(indexdata + ch_hxv4_start + 8);
                 tjs_uint16 hxv4_flags  = ReadI16FromMem(indexdata + ch_hxv4_start + 12);
@@ -656,16 +656,16 @@ void tTVPXP3Archive::Init(tTJSBinaryStream *st, tjs_int64 off,
                         unsigned long destlen = uncompressed_size;
                         if (uncompress(table_blob.data(), &destlen, dec_payload.data() + 4, dec_size - 4) == Z_OK) {
                             
-                            // 3. Daftarkan Archive & Map Blake2s-nya
+                        
                             XP3ArchiveHxv4Decoder::RegisterArchive(this, table_blob.data(), destlen, hxv4_flags, protected_hashes);
                             
-                            // 4. RESTORASI STARTUP.TJS ASLI DARI OBFUSKASI!
+                           
                             uint32_t startup_hash = XP3ArchiveHxv4Decoder::GetFileHashByName(this, TJS_W("startup.tjs"));
                             if (startup_hash != 0) {
                                 for (auto& item : ItemVector) {
                                     if (item.FileHash == startup_hash) {
                                         item.Name = TJS_W("startup.tjs");
-                                        break; // Selesai!
+                                        break; 
                                     }
                                 }
                             }
@@ -673,7 +673,7 @@ void tTVPXP3Archive::Init(tTJSBinaryStream *st, tjs_int64 off,
                     }
                 }
             }
-            // --- ^^^ AKHIR INJEKSI HXV4 ^^^ ---
+            // --- END HXV4 EXTRACTOR ---
 
             if(!(index_flag & TVP_XP3_INDEX_CONTINUE))
                 break; // continue reading index when the bit sets
