@@ -1,16 +1,16 @@
 extends Node
 
-const PRESS_SCALE := Vector2(0.972, 0.972)
-const TACTILE_PRESS_SCALE := Vector2(0.955, 0.955)
-const HOVER_SCALE := Vector2(1.010, 1.010)
+const PRESS_SCALE := Vector2(0.950, 0.950)
+const TACTILE_PRESS_SCALE := Vector2(0.935, 0.935)
+const HOVER_SCALE := Vector2(1.018, 1.018)
 const REST_SCALE := Vector2.ONE
 const ENTER_OFFSET := Vector2(0, 10)
 const ENTER_DURATION := 0.24
 const ROUTE_EXIT_DURATION := 0.18
 const ROUTE_ENTER_DELAY := 0.075
-const PRESS_RESPONSE := 0.16
+const PRESS_RESPONSE := 0.10
 const RELEASE_RESPONSE := 0.24
-const HOVER_RESPONSE := 0.26
+const HOVER_RESPONSE := 0.20
 const SPRING_STEP := 1.0 / 120.0
 const HERO_DURATION := 0.34
 const HERO_MIN_ARC := 20.0
@@ -131,7 +131,7 @@ func bind_tactile(control: Control) -> void:
     if control == null:
         return
     control.set_meta("aether_press_scale", TACTILE_PRESS_SCALE)
-    control.set_meta("aether_release_damping", 0.82)
+    control.set_meta("aether_release_damping", 0.66)
     bind_pressable(control)
 
 func cancel_press(control: Control) -> void:
@@ -188,6 +188,8 @@ func route_transition(
     outgoing: Control,
     incoming: Control,
     lift: bool = true,
+    horizontal: bool = false,
+    direction: float = 1.0,
     finished: Callable = Callable()
 ) -> void:
     if incoming == null or not is_instance_valid(incoming):
@@ -201,7 +203,9 @@ func route_transition(
     incoming.set_meta("aether_route_rest_position", incoming_rest)
     incoming.visible = true
     incoming.modulate.a = 0.0
-    incoming.position = incoming_rest if reduced_motion or not lift else incoming_rest + Vector2(0, 14)
+    var enter_offset := Vector2(64.0 * direction, 0.0) if horizontal else Vector2(0.0, 26.0)
+    var exit_offset := Vector2(-48.0 * direction, 0.0) if horizontal else Vector2(0.0, -14.0)
+    incoming.position = incoming_rest if reduced_motion or not lift else incoming_rest + enter_offset
     var outgoing_rest := Vector2.ZERO
     if outgoing != null and is_instance_valid(outgoing) and outgoing != incoming:
         outgoing_rest = outgoing.get_meta("aether_route_rest_position", outgoing.position)
@@ -216,10 +220,10 @@ func route_transition(
     active_tweens[incoming_key] = tween
     if has_outgoing:
         active_tweens[outgoing_key] = tween
-        tween.tween_property(outgoing, "modulate:a", 0.0, ROUTE_EXIT_DURATION).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+        tween.tween_property(outgoing, "modulate:a", 0.0, 0.22).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
         if not reduced_motion and lift:
-            tween.tween_property(outgoing, "position", outgoing_rest + Vector2(0, -6), ROUTE_EXIT_DURATION).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
-    var enter_duration := 0.12 if reduced_motion else ENTER_DURATION
+            tween.tween_property(outgoing, "position", outgoing_rest + exit_offset, 0.22).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+    var enter_duration := 0.14 if reduced_motion else 0.30
     var enter_delay := 0.0 if reduced_motion else ROUTE_ENTER_DELAY
     tween.tween_property(incoming, "modulate:a", 1.0, enter_duration).set_delay(enter_delay).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
     if not reduced_motion and lift:
@@ -402,6 +406,49 @@ func reveal(control: Control, delay: float = 0.0) -> void:
     if not reduced_motion:
         tween.tween_property(control, "scale", REST_SCALE, duration).set_delay(delay).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
     tween.chain().tween_callback(func(): _finish_tween_key(reveal_key))
+
+func spring_reveal(control: Control, delay: float = 0.0) -> void:
+    # Livelier cascade step: fade-in paired with an under-damped scale spring
+    # so each row pops past rest and wobbles back into place.
+    if control == null or not is_instance_valid(control):
+        return
+    _stop_tweens(control)
+    active_springs.erase(_motion_key(control, "scale"))
+    _update_pivot(control)
+    control.modulate.a = 0.0
+    control.scale = REST_SCALE if reduced_motion else Vector2(0.93, 0.93)
+    var reveal_key := _tween_key(control, "reveal")
+    var tween := control.create_tween()
+    active_tweens[reveal_key] = tween
+    var duration := 0.10 if reduced_motion else 0.16
+    tween.tween_property(control, "modulate:a", 1.0, duration).set_delay(delay).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+    tween.tween_callback(func(): _finish_tween_key(reveal_key))
+    if reduced_motion:
+        control.scale = REST_SCALE
+        return
+    var control_ref: WeakRef = weakref(control)
+    var tree := control.get_tree() if control.is_inside_tree() else null
+    if tree == null:
+        spring_property(control, "scale", REST_SCALE, 0.34, 0.58)
+        return
+    tree.create_timer(delay).timeout.connect(
+        func():
+            var current_control: Variant = control_ref.get_ref()
+            if current_control != null and is_instance_valid(current_control):
+                spring_property(current_control, "scale", REST_SCALE, 0.34, 0.58),
+        CONNECT_ONE_SHOT
+    )
+
+func cascade_children(parent: Node, step: float = 0.045, base_delay: float = 0.0, max_items: int = 14) -> void:
+    if parent == null or not is_instance_valid(parent):
+        return
+    var index := 0
+    for child in parent.get_children():
+        if index >= max_items:
+            break
+        if child is Control and is_instance_valid(child) and not child.is_queued_for_deletion():
+            reveal(child, base_delay + step * float(index))
+            index += 1
 
 func set_visible(control: Control, show: bool) -> void:
     if control == null or not is_instance_valid(control):
