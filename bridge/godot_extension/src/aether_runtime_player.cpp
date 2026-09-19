@@ -2195,23 +2195,6 @@ uint remove_const_opacity(uint d, uint strength) {
     return (d & 0x00ffffffu) | (a << 24);
 }
 
-uint alpha_to_additive_alpha(uint c) {
-    uint alpha = (c >> 24) & 0xffu;
-    uint r = ((c & 0xffu) * alpha) >> 8;
-    uint g = (((c >> 8) & 0xffu) * alpha) >> 8;
-    uint b = (((c >> 16) & 0xffu) * alpha) >> 8;
-    return (c & 0xff000000u) | r | (g << 8) | (b << 16);
-}
-
-uint additive_alpha_to_alpha(uint c) {
-    uint alpha = (c >> 24) & 0xffu;
-    if (alpha == 0u) return c & 0xff000000u;
-    uint r = min((c & 0xffu) * 255u / alpha, 255u);
-    uint g = min(((c >> 8) & 0xffu) * 255u / alpha, 255u);
-    uint b = min(((c >> 16) & 0xffu) * 255u / alpha, 255u);
-    return (c & 0xff000000u) | r | (g << 8) | (b << 16);
-}
-
 int reflect101_index(int value, int extent) {
     if (extent <= 1) return 0;
     int period = (extent - 1) * 2;
@@ -2312,10 +2295,6 @@ void main() {
         out_color = additive_alpha_blend_a(d, s, opa);
         } else if (pc.rect1.z == 8) {
         out_color = remove_const_opacity(d, opa);
-        } else if (pc.rect1.z == 29) {
-        out_color = alpha_to_additive_alpha(s);
-        } else if (pc.rect1.z == 30) {
-        out_color = additive_alpha_to_alpha(s);
         }
         }
     }
