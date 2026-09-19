@@ -134,7 +134,7 @@ func setup(tokens) -> void:
     menu_button = _create_action_button("MenuButton", "Menu")
     keyboard_button = _create_action_button("KeyboardButton", "Keyboard")
     virtual_controls_button = _create_action_button(
-        "VirtualControlsButton", "Controls"
+        "VirtualControlsButton", "Control Pad"
     )
     menu_button.pressed.connect(_toggle_menu)
     keyboard_button.pressed.connect(_request_keyboard)
@@ -932,15 +932,19 @@ func _layout_menu_options(diameter: float, gap: float) -> void:
     virtual_controls_button.size = option_size
 
 func _apply_menu_option_style(button: Button) -> void:
+    button.add_theme_font_size_override("font_size", 13)
+    button.add_theme_color_override("font_color", _tokens.text_primary)
+    button.add_theme_color_override("font_hover_color", _tokens.text_primary)
+    button.add_theme_color_override("font_pressed_color", _tokens.background)
     for state in ["normal", "hover", "pressed"]:
-        var fill := Color(0.08, 0.08, 0.09, 0.82)
+        var fill := Color(_tokens.background_raised.r, _tokens.background_raised.g, _tokens.background_raised.b, 0.94)
         if state == "hover":
-            fill = Color(0.16, 0.16, 0.17, 0.9)
+            fill = _tokens.background_raised.lightened(0.08)
         elif state == "pressed":
-            fill = Color(_tokens.accent.r, _tokens.accent.g, _tokens.accent.b, 0.9)
+            fill = _tokens.accent
         button.add_theme_stylebox_override(
             state,
-            _button_style(fill, REFERENCE_BORDER, false, 2)
+            _button_style(fill, _tokens.separator, false, 10)
         )
 
 func _apply_input_mode_style(button: Button) -> void:

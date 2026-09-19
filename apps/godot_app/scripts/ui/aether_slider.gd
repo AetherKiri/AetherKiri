@@ -1,9 +1,9 @@
 extends HSlider
 
-const CONTROL_SIZE := Vector2(220.0, 40.0)
-const KNOB_SIZE := 18
-const TRACK_THIN := 3.0
-const TRACK_THICK := 6.5
+const CONTROL_SIZE := Vector2(260.0, 42.0)
+const KNOB_SIZE := 22
+const TRACK_THIN := 5.0
+const TRACK_THICK := 8.0
 const THICKNESS_DURATION := 0.22
 
 var tokens
@@ -20,6 +20,7 @@ func setup(design_tokens, initial_value: float) -> void:
     size_flags_vertical = Control.SIZE_SHRINK_CENTER
     focus_mode = Control.FOCUS_ALL
     mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+    mouse_filter = Control.MOUSE_FILTER_STOP
     mouse_force_pass_scroll_events = false
     value = clampf(initial_value, min_value, max_value)
 
@@ -60,6 +61,37 @@ func setup(design_tokens, initial_value: float) -> void:
         if not scrubbing:
             _animate_thickness(0.0)
     )
+    gui_input.connect(_on_slider_gui_input)
+
+func _on_slider_gui_input(event: InputEvent) -> void:
+    # Own the complete rail, including both end caps. This prevents the
+    # settings ScrollContainer from stealing a tap at 0% or 100%.
+    var pointer := Vector2.ZERO
+    var pressed := false
+    if event is InputEventMouseButton:
+        var mouse := event as InputEventMouseButton
+        if mouse.button_index != MOUSE_BUTTON_LEFT:
+            return
+        pointer = mouse.position
+        pressed = mouse.pressed
+    elif event is InputEventScreenTouch:
+        var touch := event as InputEventScreenTouch
+        pointer = touch.position
+        pressed = touch.pressed
+    elif event is InputEventScreenDrag:
+        pointer = (event as InputEventScreenDrag).position
+        pressed = true
+    else:
+        return
+    if not pressed and not scrubbing:
+        return
+    var usable_width := maxf(1.0, size.x - float(KNOB_SIZE))
+    var local_x := clampf(pointer.x - float(KNOB_SIZE) * 0.5, 0.0, usable_width)
+    var ratio := local_x / usable_width
+    set_value_no_signal(lerpf(min_value, max_value, ratio))
+    value_changed.emit(value)
+    scrubbing = pressed
+    accept_event()
 
 func _animate_thickness(target: float) -> void:
     if thickness_tween != null and thickness_tween.is_valid():

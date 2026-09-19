@@ -84,6 +84,22 @@ func _gui_input(event: InputEvent) -> void:
             else:
                 _layout_indicator(true)
             accept_event()
+    elif event is InputEventScreenTouch:
+        var touch := event as InputEventScreenTouch
+        if touch.pressed:
+            drag_active = true
+            accept_event()
+            _drag_to(touch.position.x)
+            _select(_index_at_x(touch.position.x), true)
+        elif drag_active:
+            drag_active = false
+            _select(_index_at_x(touch.position.x), true)
+            _end_drag()
+            accept_event()
+    elif event is InputEventScreenDrag and drag_active:
+        _drag_to((event as InputEventScreenDrag).position.x)
+        _select(_index_at_x((event as InputEventScreenDrag).position.x), false)
+        accept_event()
     elif event is InputEventMouseMotion and drag_active:
         _drag_to(event.position.x)
         accept_event()
@@ -101,7 +117,9 @@ func _index_at_x(x: float) -> int:
     var segment_width := available_width / float(buttons.size())
     if segment_width <= 0.0:
         return -1
-    return clampi(int((x - TRACK_INSET) / segment_width), 0, buttons.size() - 1)
+    # Include the rounded track's edge caps. Godot can report a point just
+    # outside the inner row when the pointer lands on the visual end pixel.
+    return clampi(int(floor((clampf(x, 0.0, size.x) - TRACK_INSET) / segment_width)), 0, buttons.size() - 1)
 
 func _drag_to(x: float) -> void:
     if buttons.is_empty() or size.x <= 0.0:
