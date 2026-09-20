@@ -6351,6 +6351,8 @@ void tTJSNI_BaseLayer::CompleteDeferredImageLoad(
     DeallocateProvinceImage();
     _evictedImageName = name;
     _evictedColorKey = colorkey;
+    _evictedImageWidth = bitmap->GetWidth();
+    _evictedImageHeight = bitmap->GetHeight();
     AssignMainImageWithUpdate(bitmap);
 }
 
@@ -6759,7 +6761,9 @@ iTJSDispatch2 *tTJSNI_BaseLayer::LoadImages(const ttstr &name,
 
     if(TVPLayerIsImmutableRepeatedImage(name) && MainImage &&
        !_bitmapEvicted && name == _evictedImageName &&
-       colorkey == _evictedColorKey) {
+       colorkey == _evictedColorKey &&
+       MainImage->GetWidth() == _evictedImageWidth &&
+       MainImage->GetHeight() == _evictedImageHeight) {
         return nullptr;
     }
 
@@ -7020,6 +7024,8 @@ iTJSDispatch2 *tTJSNI_BaseLayer::LoadImages(const ttstr &name,
 
     _evictedImageName = name;
     _evictedColorKey = colorkey;
+    _evictedImageWidth = MainImage->GetWidth();
+    _evictedImageHeight = MainImage->GetHeight();
     try {
 
         InternalSetImageSize(MainImage->GetWidth(), MainImage->GetHeight());
