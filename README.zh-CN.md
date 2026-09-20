@@ -74,10 +74,12 @@ Godot App Shell
 | `bridge/godot_extension/` | Godot 原生宿主库入口。 |
 | `bridge/engine_api/` | 宿主层驱动 C++ 引擎的 C ABI。 |
 | `bridge/onscripter_runtime/` | OnscripterYuri 无窗口宿主、帧读取和输入桥接。 |
+| `bridge/siglus_runtime/` | Siglus 运行时 provider，以及应用到 pristine siglus_rs 源码的构建期 overlay（补丁 + FFI 文件），见 `bridge/siglus_runtime/overlay/`。 |
 | `cpp/core/` | KiriKiri2 运行时、视觉系统、音频、存储、VM 和插件支持。 |
 | `cpp/plugins/` | 内置 native 插件实现和兼容 stub。 |
 | `packages/AetherInternal/` | 可选的私有 E-mote package submodule；公开版本不依赖它也能构建。 |
 | `packages/OnscripterYuri/` | 公开的 OnscripterYuri git submodule。 |
+| `packages/AetherSiglus/` | 公开的 siglus_rs（Rust 版 SiglusEngine）git submodule。保持只读；AetherKiri 侧改动全部位于 `bridge/siglus_runtime/overlay/`。 |
 | `packages/tjs2Decompiler/` | 可选的 Rust TJS2 字节码反汇编/分析辅助工具；不链接进运行时构建。 |
 | `demos/aetherkiri-kag3/` | AetherKiri 内置 KAG3 Demo 的完整源码。 |
 | `tests/profiles/` | 单游戏 probe profile。提交到仓库的 profile 不能包含机器本地路径。 |
@@ -125,9 +127,9 @@ iOS 和 Android 导出配置会引用 `apps/godot_app/assets/icons/` 下的生�
 
 | 平台 | 最低版本 | 说明 |
 | --- | --- | --- |
-| macOS | macOS 13.0（Ventura） | 内部 E-mote 构建使用官方 SDK 的 `x86_64` 驱动，在 Apple Silicon 上通过 Rosetta 运行。 |
+| macOS | macOS 13.0（Ventura） | 内部 E-mote 构建使用私包内官方 SDK 的原生 `arm64` 驱动。 |
 | iOS / iPadOS | iOS / iPadOS 16.0 | 真机为 `arm64`；开发环境可构建 `arm64` 和 `x86_64` 模拟器版本。 |
-| Android | Android 7.0（API 24） | 当前产品导出只打包 `arm64-v8a`。 |
+| Android | Android 8.0（API 26） | 当前产品导出只打包 `arm64-v8a`。 |
 | Web | 不限定操作系统版本 | 浏览器必须支持 WebAssembly SIMD、WebAssembly threads 和 `SharedArrayBuffer`，并通过配置了跨源隔离（COOP/COEP）的 HTTP 服务访问。 |
 | Linux | 需要自行编译 | 没有官方预编译产品包，需要在本地编译 `x86_64` 导出。 |
 | Windows | 需要自行编译 | 没有官方预编译产品包，需要在本地编译 native 目标。 |
@@ -137,6 +139,10 @@ iOS 和 Android 导出配置会引用 `apps/godot_app/assets/icons/` 下的生�
 - CMake 3.28+
 - Ninja
 - NASM（native FFmpeg 依赖需要）
+- Rust 工具链（rustup），并安装 `aarch64-linux-android` target
+  （`rustup target add aarch64-linux-android`），用于内置 Siglus 运行时；
+  iOS/Web 的 Siglus 构建还需要对应 target。找不到 Rust 工具链时构建会自动
+  降级为“禁用 Siglus”。
 - vcpkg，位于 `.devtools/vcpkg` 或通过 `VCPKG_ROOT` 指定
 - Godot 位于 `/Applications/Godot.app`，或通过 `GODOT_BIN=/path/to/Godot` 指定
 - macOS/iOS 导出需要 Xcode
@@ -177,10 +183,9 @@ git submodule update --init packages/AetherInternal
 packages/AetherInternal/tools/install_emote_sdk.sh
 ```
 
-CMake 检测到 package 后会自动启用。安装脚本会校验 SDK，并且只在私有
-package 内生成被 Git 忽略的文件；不要提交这些头文件或静态库。macOS 官方
-驱动仅提供 `x86_64`，因此常规内部构建会生成该架构，并在 Apple Silicon 上
-通过 Rosetta 运行。使用
+CMake 检测到 package 后会自动启用。安装脚本会校验 SDK，并且在私有 package
+内生成被 Git 忽略的头文件和静态库；macOS ARM SDK 压缩包随私包一起提交。
+macOS 常规内部构建使用原生 `arm64` 配置和该压缩包。使用
 `-DAETHERKIRI_ENABLE_INTERNAL=OFF` 可强制验证公开 fallback；也可通过
 `-DAETHERKIRI_INTERNAL_DIR=/absolute/path/to/AetherInternal` 指定独立检出目录。
 GitHub Actions 的 `Build` workflow 会在可信运行中使用仓库 Secret

@@ -4,6 +4,15 @@ project(tjs2)
 add_library(${PROJECT_NAME} STATIC)
 target_compile_definitions(${PROJECT_NAME} PRIVATE $<$<CONFIG:Debug>:_DEBUG>)
 
+# The compatibility build is still used for interactive profiling.  Keep the
+# debugger information and legacy null-this guard, but optimize the bytecode
+# interpreter in Debug as well: script-heavy scene transitions otherwise spend
+# most of their time in unoptimized dispatch code and create avoidable frame
+# spikes.  Release/RelWithDebInfo keep their existing flags.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT MSVC)
+    target_compile_options(${PROJECT_NAME} PRIVATE -O2)
+endif()
+
 # TJS2 engine legacy code relies on if(!this) null checks inside member functions.
 # This is UB in C++ and modern compilers (GCC/Clang -O2+) will optimize these away.
 # This flag prevents that optimization, ensuring null-this checks remain effective.

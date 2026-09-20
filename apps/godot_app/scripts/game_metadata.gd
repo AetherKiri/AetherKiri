@@ -28,7 +28,14 @@ static func inspect(path: String) -> Dictionary:
         result.engine = RUNTIME_RFVP
         result.signals.append("fvp-hcb")
         result.launchFile = hcb
-    elif files.has("nscript.dat") or files.has("0.txt") or _has_prefix(files, "onscript.nt"):
+    elif (
+        files.has("0.txt")
+        or files.has("00.txt")
+        or files.has("nscr_sec.dat")
+        or files.has("nscript.___")
+        or files.has("nscript.dat")
+        or _has_prefix(files, "onscript.nt")
+    ):
         result.engine = RUNTIME_ONSCRIPTER
         result.signals.append("onscript-marker")
     elif files.has("system.ini") and _is_artemis_package(
@@ -46,9 +53,21 @@ static func inspect(path: String) -> Dictionary:
         var save_path := _value_after(ini, "SAVEPATH")
         if not save_path.is_empty():
             candidates.append(save_path.replace("\\\\", "/").get_file())
-    elif files.has("gameexe.dat"):
+    elif _has_extension(files, "pfs") and not _has_extension(files, "xp3"):
+        # A number of Artemis releases keep system.ini inside root.pfs rather
+        # than beside the archive.  There is no loose marker for the metadata
+        # scanner to read, but PF archives are an engine-specific container;
+        # classify the directory as Artemis so the launcher passes the game
+        # root to the provider instead of handing Untei.exe to KiriKiri.
+        result.engine = RUNTIME_ARTEMIS
+        result.signals.append("artemis-pfs-archive")
+    elif (
+        files.has("gameexe.ini")
+        or files.has("gameexe.dat")
+        or files.has("scene.pck")
+    ):
         result.engine = RUNTIME_SIGLUS
-        result.signals.append("siglus-gameexe")
+        result.signals.append("siglus-marker")
     else:
         result.signals.append("kirikiri-xp3-or-default")
 

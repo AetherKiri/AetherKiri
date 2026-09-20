@@ -16,4 +16,4 @@ void AetherAppleReleasePixelBuffer(void *pixel_buffer);
 // caller. A true result proves that every command buffer submitted before the
 // previous marker has completed, so a second graphics API can safely rewrite
 // retired IOSurface storage without reading pixels back through the CPU.
-bool AetherApplePollMetalCommandQueue(uint64_t metal_command_queue);
+bool AetherApplePollMetalCommandQueue(uint64_t command_queue, bool native_metal);

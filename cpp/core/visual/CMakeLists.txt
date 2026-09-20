@@ -153,6 +153,20 @@ target_link_libraries(${PROJECT_NAME} PRIVATE PNG::PNG)
 find_package(ZLIB REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE ZLIB::ZLIB)
 
+if(NOT WIN32)
+    # Keep Debug symbols/assertions in the engine while using the optimized
+    # codec archives. Image decoding is on the script thread for legacy KAG
+    # paths, and the vcpkg Debug PNG/JPEG/Zlib builds dominate long frames.
+    foreach(_codec_target PNG::PNG ZLIB::ZLIB Freetype::Freetype
+                           libjpeg-turbo::turbojpeg
+                           libjpeg-turbo::turbojpeg-static)
+        if(TARGET ${_codec_target})
+            set_property(TARGET ${_codec_target} PROPERTY
+                         MAP_IMPORTED_CONFIG_DEBUG Release)
+        endif()
+    endforeach()
+endif()
+
 # Highway SIMD optimization module
 add_subdirectory(simd)
 target_link_libraries(${PROJECT_NAME} PRIVATE tvpgl_simd)

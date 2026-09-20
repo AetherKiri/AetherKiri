@@ -138,6 +138,15 @@ if(ANDROID)
         src/android_external_texture.cpp)
     target_link_libraries(aether_kiri_godot PRIVATE
         android vulkan ${CMAKE_DL_LIBS})
+    if(TARGET aether_minori_runtime AND TARGET aether_siglus_runtime)
+        # Minori and Siglus are independently-built Rust static libraries.
+        # Each archive carries the Rust runtime objects it needs, so lld sees
+        # duplicate std/alloc symbols when both providers are pulled into the
+        # Android extension. They are built by the same toolchain; keep one
+        # definition at the final shared-library link.
+        target_link_options(aether_kiri_godot PRIVATE
+            "-Wl,--allow-multiple-definition")
+    endif()
 endif()
 
 target_compile_features(aether_kiri_godot PRIVATE cxx_std_17)
@@ -174,6 +183,12 @@ if(TARGET aether_onscripter_runtime)
         aether_onscripter_runtime)
     target_compile_definitions(aether_kiri_godot PRIVATE
         AETHERKIRI_WITH_ONSCRIPTER=1)
+endif()
+if(TARGET aether_siglus_runtime)
+    target_link_libraries(aether_kiri_godot PRIVATE
+        aether_siglus_runtime)
+    target_compile_definitions(aether_kiri_godot PRIVATE
+        AETHERKIRI_WITH_SIGLUS=1)
 endif()
 if(TARGET aether_minori_runtime)
     target_link_libraries(aether_kiri_godot PRIVATE

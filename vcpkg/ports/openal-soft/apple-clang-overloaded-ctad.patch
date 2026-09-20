@@ -1,0 +1,11 @@
+diff --git a/al/event.cpp b/al/event.cpp
+index 0000000..0000000 100644
+--- a/al/event.cpp
++++ b/al/event.cpp
+@@ -41,4 +41,6 @@ namespace {
+ template<typename... Ts>
+ struct overloaded : Ts... { using Ts::operator()...; };
++template<typename... Ts>
++overloaded(Ts...) -> overloaded<Ts...>;
+ 
+ auto EventThread(gsl::not_null<al::Context*> const context) -> void
