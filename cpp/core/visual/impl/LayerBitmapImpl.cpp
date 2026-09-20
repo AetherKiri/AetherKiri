@@ -825,6 +825,9 @@ struct tTVPDrawTextData {
 
 static iTVPTexture2D *_CharacterTexture = nullptr,
                      *_CharacterTextureRGBA = nullptr;
+// Scratch bitmap backing the text batch blit above; kept alive between
+// batches so a full backlog repaint stops reallocating one per batch.
+static tTVPBitmap *TextBatchScratchBitmap = nullptr;
 
 static tjs_int TVPTextScratchTextureMinSize() {
     const char *value = std::getenv("AETHERKIRI_TEXT_SCRATCH_TEXTURE_MIN_SIZE");
@@ -1888,7 +1891,27 @@ void tTVPNativeBaseBitmap::FlushPendingTextDraws() {
 
                 const tjs_int batch_w = batch_rect.get_width();
                 const tjs_int batch_h = batch_rect.get_height();
-                tTVPBitmap *tmp = new tTVPBitmap(batch_w, batch_h, 32);
+                // Glyph batches are flushed in a loop, and the backlog repaint
+                // runs thousands of them per frame. Reuse one scratch bitmap
+                // instead of allocating (and freeing) a multi-megabyte bitmap
+                // per batch; it grows but never shrinks, matching the cached
+                // scratch texture below.
+                if(TextBatchScratchBitmap == nullptr ||
+                   static_cast<tjs_int>(TextBatchScratchBitmap->GetWidth()) <
+                       batch_w ||
+                   static_cast<tjs_int>(TextBatchScratchBitmap->GetHeight()) <
+                       batch_h) {
+                    if(TextBatchScratchBitmap) {
+                        TextBatchScratchBitmap->Release();
+                        TextBatchScratchBitmap = nullptr;
+                    }
+                    TextBatchScratchBitmap = new tTVPBitmap(
+                        std::max(batch_w, TVPTextScratchTextureMinSize()),
+                        std::max(batch_h, TVPTextScratchTextureMinSize()), 32);
+                }
+                tTVPBitmap *tmp = TextBatchScratchBitmap;
+                if(tmp == nullptr)
+                    return false;
                 tjs_int dpitch = tmp->GetPitch();
                 tjs_uint8 *bits =
                     const_cast<tjs_uint8 *>(
@@ -1947,7 +1970,6 @@ void tTVPNativeBaseBitmap::FlushPendingTextDraws() {
                         tmp->GetBits(), TVPTextureFormat::RGBA, dpitch,
                         tTVPRect(0, 0, batch_w, batch_h));
                 }
-                tmp->Release();
                 if(!_CharacterTextureRGBA)
                     return false;
 
