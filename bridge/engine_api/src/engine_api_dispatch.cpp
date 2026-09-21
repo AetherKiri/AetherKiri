@@ -71,6 +71,10 @@ extern "C" void AetherInternalRegisterArtemisRuntime(void);
 extern "C" void AetherInternalRegisterWa2Runtime(void);
 #endif
 
+#if defined(AETHERKIRI_PRIVATE_SOFTPAL)
+extern "C" void AetherSoftPalRegisterRuntime(void);
+#endif
+
 namespace {
 
 using aetherkiri::engine_api::StartupThread;
@@ -564,6 +568,9 @@ engine_result_t engine_create(const engine_create_desc_t* desc,
 #endif
 #if defined(AETHERKIRI_INTERNAL_WA2) && defined(AETHERKIRI_ENABLE_WA2_RUNTIME)
   AetherInternalRegisterWa2Runtime();
+#endif
+#if defined(AETHERKIRI_PRIVATE_SOFTPAL)
+  AetherSoftPalRegisterRuntime();
 #endif
   if (desc->struct_size < sizeof(engine_create_desc_t)) {
     return ThreadError(ENGINE_RESULT_INVALID_ARGUMENT,

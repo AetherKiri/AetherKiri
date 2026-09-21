@@ -10700,6 +10700,8 @@ func _game_runtime_kind(path: String) -> String:
         # before falling back to the legacy KiriKiri host.
         if int(player.probe_runtime(RUNTIME_CATSYSTEM2, root)) > 0:
             return RUNTIME_CATSYSTEM2
+        if int(player.probe_runtime("softpal", root)) > 0:
+            return "softpal"
         if int(player.probe_runtime(RUNTIME_MINORI, root)) > 0:
             return RUNTIME_MINORI
     return runtime_kind

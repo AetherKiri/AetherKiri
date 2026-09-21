@@ -97,6 +97,11 @@ set(AETHERKIRI_OBFUSCATION_BUILD_ID "local" CACHE STRING
     "non-secret identifier mixed into deterministic obfuscation output")
 option(AETHERKIRI_ENABLE_INTERNAL
        "enable optional private AetherInternal packages when available" ON)
+option(AETHERKIRI_ENABLE_SOFTPAL_RUNTIME
+       "enable the optional native SoftPal runtime provider" OFF)
+set(AETHERKIRI_SOFTPAL_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/packages/AetherSoftPal"
+    CACHE PATH "path to an AetherSoftPal package checkout")
 set(AETHERKIRI_MOTIONPLAYER_BACKEND_API_VERSION 4)
 set(AETHERKIRI_LIVE2D_HOST_API_VERSION 1)
 set(AETHERKIRI_FRAME_EFFECT_HOST_API_VERSION 2)
@@ -147,6 +152,15 @@ if(AETHERKIRI_INTERNAL_ENABLED)
     message(STATUS "AetherInternal E-mote/Live2D package: enabled")
 else()
     message(STATUS "AetherInternal package: unavailable; using public fallbacks")
+endif()
+
+if(AETHERKIRI_ENABLE_SOFTPAL_RUNTIME)
+    set(AetherSoftPal_DIR "${AETHERKIRI_SOFTPAL_DIR}/cmake")
+    find_package(AetherSoftPal CONFIG REQUIRED NO_DEFAULT_PATH)
+    if(NOT AETHERSOFTPAL_PACKAGE_API_VERSION EQUAL 1 OR
+       NOT COMMAND aethersoftpal_extend_engine_api)
+        message(FATAL_ERROR "AetherSoftPal package API is incompatible")
+    endif()
 endif()
 
 set(CMAKE_C_STANDARD 17)

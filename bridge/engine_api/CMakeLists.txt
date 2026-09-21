@@ -81,6 +81,11 @@ if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_artemis)
     aetherinternal_extend_artemis(engine_api)
 endif()
 
+if(AETHERKIRI_ENABLE_SOFTPAL_RUNTIME AND
+   COMMAND aethersoftpal_extend_engine_api)
+    aethersoftpal_extend_engine_api(engine_api)
+endif()
+
 if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_wa2)
     aetherinternal_extend_wa2(engine_api)
 endif()

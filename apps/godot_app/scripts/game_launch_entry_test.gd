@@ -63,6 +63,14 @@ func _init() -> void:
     _expect_equal(
         GameLaunchEntry.resolve_for_runtime(
             {"path": root, GameLaunchEntry.FIELD: "开始游戏.exe"},
+            "softpal"
+        ),
+        root,
+        "SoftPal directory launch path"
+    )
+    _expect_equal(
+        GameLaunchEntry.resolve_for_runtime(
+            {"path": root, GameLaunchEntry.FIELD: "开始游戏.exe"},
             "kirikiri"
         ),
         exe_path,
