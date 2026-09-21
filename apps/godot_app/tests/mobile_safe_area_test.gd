@@ -102,6 +102,23 @@ func _initialize() -> void:
     assert(not bool(landscape_detail["compact"]))
     assert(bool(landscape_detail["phone_landscape"]))
     assert(float(landscape_detail["content_width"]) > float(portrait_detail["content_width"]))
+
+    var compact_detail := app._build_compact_detail({
+        "path": "/missing/detail-test",
+        "type": "Directory",
+        "title": "测试游戏",
+    })
+    root.add_child(compact_detail)
+    compact_detail.size = Vector2(390, 420)
+    await process_frame
+    await process_frame
+    var detail_summary := compact_detail.get_child(0) as HBoxContainer
+    var detail_cover_column := detail_summary.get_child(0) as Control
+    var detail_primary := detail_summary.get_child(1) as Control
+    assert(is_equal_approx(detail_cover_column.custom_minimum_size.x, 112.0))
+    assert(detail_primary.position.x < 160.0)
+    compact_detail.free()
+
     assert(app._home_card_minimum_size(true) == Vector2(app.HOME_TILE_MIN_WIDTH, app.HOME_ROW_HEIGHT))
     assert(app._home_card_minimum_size(false) == Vector2(app.HOME_TILE_MIN_WIDTH, app.HOME_TILE_HEIGHT))
 
