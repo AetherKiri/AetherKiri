@@ -17,6 +17,3 @@
 [submodule "packages/AetherSiglus"]
 	path = packages/AetherSiglus
 	url = https://github.com/AetherKiri/siglus_rs.git
-[submodule "packages/AetherSoftPal"]
-	path = packages/AetherSoftPal
-	url = git@github.com:AetherKiri/AetherSoftPal.git
