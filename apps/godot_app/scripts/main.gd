@@ -1614,6 +1614,7 @@ const KEY_MOD_CONTROL := 0x04
 const RUNTIME_KIRIKIRI := "kirikiri"
 const RUNTIME_ONSCRIPTER := "onscripter"
 const RUNTIME_MINORI := "minori"
+const RUNTIME_CATSYSTEM2 := "catsystem2"
 const RUNTIME_PLAYER_CLASS := "AetherRuntimePlayer"
 const ONSCRIPTER_SCRIPT_MARKERS := [
     "0.txt",
@@ -10662,9 +10663,14 @@ func _game_runtime_kind(path: String) -> String:
     )
     if runtime_kind != RUNTIME_KIRIKIRI:
         return runtime_kind
-    if player != null and player.has_method("probe_runtime") \
-            and int(player.probe_runtime(RUNTIME_MINORI, root)) > 0:
-        return RUNTIME_MINORI
+    if player != null and player.has_method("probe_runtime"):
+        # Packed CatSystem2 titles may not expose the loose markers used by
+        # GameMetadata. Let the registered provider inspect the game root
+        # before falling back to the legacy KiriKiri host.
+        if int(player.probe_runtime(RUNTIME_CATSYSTEM2, root)) > 0:
+            return RUNTIME_CATSYSTEM2
+        if int(player.probe_runtime(RUNTIME_MINORI, root)) > 0:
+            return RUNTIME_MINORI
     return runtime_kind
 
 func _backfill_game_metadata(games: Array[Dictionary]) -> bool:

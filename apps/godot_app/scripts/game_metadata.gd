@@ -6,6 +6,7 @@ const RUNTIME_ONSCRIPTER := "onscripter"
 const RUNTIME_RFVP := "rfvp"
 const RUNTIME_ARTEMIS := "artemis"
 const RUNTIME_SIGLUS := "siglus"
+const RUNTIME_CATSYSTEM2 := "catsystem2"
 
 static func inspect(path: String) -> Dictionary:
     var root := path
@@ -38,6 +39,13 @@ static func inspect(path: String) -> Dictionary:
     ):
         result.engine = RUNTIME_ONSCRIPTER
         result.signals.append("onscript-marker")
+    elif _is_catsystem2_package(files):
+        # CatSystem2 titles commonly ship a Windows launcher beside loose or
+        # packed INT resources.  Keep the directory as the launch path so the
+        # provider can mount those resources instead of sending cs2.exe to
+        # the legacy KiriKiri storage layer.
+        result.engine = RUNTIME_CATSYSTEM2
+        result.signals.append("catsystem2-marker")
     elif files.has("system.ini") and _is_artemis_package(
         files,
         _read_text(root.path_join("system.ini"))
@@ -198,6 +206,18 @@ static func _is_artemis_package(files: PackedStringArray, ini: String) -> bool:
         return true
     var boot := _value_after(ini, "BOOT").replace("\\", "/")
     return _has_extension(files, "pfs") and boot.to_lower().ends_with(".iet")
+
+static func _is_catsystem2_package(files: PackedStringArray) -> bool:
+    var has_int := _has_extension(files, "int")
+    var has_cs2_executable := files.has("cs2.exe")
+    var has_cs2_config := files.has("cs2confx.dll")
+    var has_boot_descriptor := files.has("boot.dfn")
+    var has_kcs_script := files.has("kcs.int")
+    if has_cs2_executable and (has_int or has_boot_descriptor):
+        return true
+    if has_cs2_config and has_boot_descriptor and has_kcs_script:
+        return true
+    return has_boot_descriptor and has_kcs_script and has_int
 
 static func _read_text(path: String) -> String:
     var file := FileAccess.open(path, FileAccess.READ)

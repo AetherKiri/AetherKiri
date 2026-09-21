@@ -38,6 +38,20 @@ func _init() -> void:
         "archived Artemis signal"
     )
 
+    var catsystem2_root := fixture_root.path_join("amakano2plus")
+    DirAccess.make_dir_recursive_absolute(catsystem2_root)
+    _write(catsystem2_root.path_join("cs2.exe"), "launcher")
+    _write(catsystem2_root.path_join("cs2confx.dll"), "config")
+    _write(catsystem2_root.path_join("boot.dfn"), "boot cs2.exe")
+    _write(catsystem2_root.path_join("kcs.int"), "packed script")
+    var catsystem2 := GameMetadata.inspect(catsystem2_root)
+    _expect_equal(String(catsystem2.engine), "catsystem2", "CatSystem2 marker detection")
+    _expect_equal(String(catsystem2.launchFile), "", "CatSystem2 keeps directory launch")
+    _expect_true(
+        Array(catsystem2.signals).has("catsystem2-marker"),
+        "CatSystem2 signal"
+    )
+
     var kirikiri_root := fixture_root.path_join("kirikiri")
     DirAccess.make_dir_recursive_absolute(kirikiri_root)
     _write(kirikiri_root.path_join("game.exe"), "launcher")
