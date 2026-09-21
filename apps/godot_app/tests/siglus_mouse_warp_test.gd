@@ -54,7 +54,7 @@ func _run() -> void:
     root.add_child(scaled_viewport)
     surface.reparent(scaled_viewport, false)
     _assert_point(app._map_surface_point_to_viewport(Vector2(640.0, 360.0)), Vector2(440.0, 330.0))
-    var stretched := scaled_viewport.get_final_transform() * app._map_surface_point_to_viewport(Vector2(640.0, 360.0))
+    var stretched: Vector2 = scaled_viewport.get_final_transform() * app._map_surface_point_to_viewport(Vector2(640.0, 360.0))
     _assert_point(stretched, Vector2(880.0, 660.0))
 
     assert(app._siglus_pointer_session_active(true))
