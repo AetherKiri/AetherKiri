@@ -240,6 +240,8 @@ std::unordered_map<uint64_t, std::vector<GodotGpuTexturePoolEntry>>
     g_gpu_texture_pool;
 uint64_t g_gpu_texture_pool_bytes = 0;
 size_t g_gpu_texture_pool_entries = 0;
+// Cleared during teardown so pooled surfaces are released instead of kept.
+std::atomic<bool> g_gpu_texture_pool_enabled{true};
 
 uint64_t GpuTexturePoolLimitBytes() {
     static const uint64_t limit = []() {
@@ -261,6 +263,7 @@ uint64_t GpuTexturePoolKey(uint32_t width, uint32_t height) {
 // Keeps a released surface for reuse.  Returns false when the pool is full, in
 // which case the caller has to release the RID as usual.
 bool RetireGpuTextureToPool(const RID &rid, uint32_t width, uint32_t height) {
+    if(!g_gpu_texture_pool_enabled.load(std::memory_order_relaxed)) return false;
     const uint64_t limit = GpuTexturePoolLimitBytes();
     if(limit == 0 || !rid.is_valid() || width == 0 || height == 0) {
         return false;
@@ -285,6 +288,7 @@ bool RetireGpuTextureToPool(const RID &rid, uint32_t width, uint32_t height) {
 
 RID TakeGpuTextureFromPool(uint32_t width, uint32_t height) {
     if(width == 0 || height == 0) return RID();
+    if(!g_gpu_texture_pool_enabled.load(std::memory_order_relaxed)) return RID();
     std::lock_guard<std::mutex> lock(g_gpu_texture_pool_mutex);
     auto it = g_gpu_texture_pool.find(GpuTexturePoolKey(width, height));
     if(it == g_gpu_texture_pool.end() || it->second.empty()) return RID();
@@ -296,6 +300,26 @@ RID TakeGpuTextureFromPool(uint32_t width, uint32_t height) {
         g_gpu_texture_pool_bytes > bytes ? g_gpu_texture_pool_bytes - bytes : 0;
     if(g_gpu_texture_pool_entries > 0) --g_gpu_texture_pool_entries;
     return rid;
+}
+
+// Drops every recycled surface.  Called while the runtime shuts down so the
+// RenderingDevice does not report pooled textures as leaked RIDs.
+void ReleaseGpuTexturePool(RenderingDevice *rd) {
+    g_gpu_texture_pool_enabled.store(false, std::memory_order_relaxed);
+    std::vector<GodotGpuTexturePoolEntry> entries;
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_texture_pool_mutex);
+        for(auto &item : g_gpu_texture_pool) {
+            for(auto &entry : item.second) entries.push_back(entry);
+        }
+        g_gpu_texture_pool.clear();
+        g_gpu_texture_pool_bytes = 0;
+        g_gpu_texture_pool_entries = 0;
+    }
+    if(rd == nullptr) return;
+    for(const auto &entry : entries) {
+        if(entry.rid.is_valid()) rd->free_rid(entry.rid);
+    }
 }
 
 struct GodotGpuOp {
@@ -9031,6 +9055,7 @@ void ReleaseGodotGpuPipeline() {
 }
 
 void ReleaseRemainingGodotGpuTextures() {
+    ReleaseGpuTexturePool(MainRenderingDevice());
     {
         std::lock_guard<std::mutex> lock(g_gpu_readbacks_mutex);
         g_gpu_readbacks.clear();
