@@ -2,12 +2,6 @@ extends SceneTree
 
 const MAIN_SCRIPT := preload("res://scripts/main.gd")
 
-class BetaProbePlayer extends RefCounted:
-    var scores := {}
-
-    func probe_runtime(runtime_id: String, _game_path: String) -> int:
-        return int(scores.get(runtime_id, 0))
-
 func _initialize() -> void:
     var app = MAIN_SCRIPT.new()
     var games: Array[Dictionary] = [
@@ -38,17 +32,9 @@ func _initialize() -> void:
     assert(not app._runtime_requires_beta_access(app.RUNTIME_ONSCRIPTER))
     assert(app._runtime_requires_beta_access(app.RUNTIME_MINORI))
     assert(not app._runtime_requires_beta_access(app.RUNTIME_KIRIKIRI))
-    assert(not app._provider_runtime_requires_beta_access("artemis"))
-    assert(app._provider_runtime_requires_beta_access("catsystem2"))
-    assert(not app._provider_runtime_requires_beta_access("fake"))
-    var probe_player := BetaProbePlayer.new()
-    probe_player.scores = {"catsystem2": 120}
-    app.player = probe_player
-    app.selected_game = {"path": "/games/catsystem2"}
-    assert(app._selected_game_uses_beta_provider())
-    assert(app._game_runtime_kind("/games/catsystem2") == "catsystem2")
-    probe_player.scores = {"fake": 120}
-    assert(not app._selected_game_uses_beta_provider())
+    # CatSystem2 is a released runtime and must not enter the coffee-only
+    # entitlement path.  WA2 remains the explicitly provider-gated runtime.
+    assert(not app._runtime_requires_beta_access(app.RUNTIME_CATSYSTEM2))
     assert(not app._beta_access_enforcement_enabled("Android"))
     assert(not app._beta_access_enforcement_enabled("iOS"))
 

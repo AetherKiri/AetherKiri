@@ -4535,7 +4535,10 @@ func _layout_shell_safe_area_fills(window_size: Vector2, safe_rect: Rect2) -> vo
     var top_inset := maxf(0.0, safe_rect.position.y)
     var compact_shell := AetherDisplayScale.use_compact_shell(safe_rect.size)
     shell_safe_top_fill.visible = OS.get_name() == "iOS" and compact_shell and top_inset > 0.0
-    shell_safe_top_fill.color = ui_tokens.background
+    # The compact header uses the sidebar material.  Keep the status-bar
+    # extension on that same surface so the native time/battery region and the
+    # first app row read as one continuous header on iPhone.
+    shell_safe_top_fill.color = ui_tokens.sidebar_material
     if shell_safe_top_fill.visible:
         # shell_root starts at the safe-area origin. Extending this
         # non-interactive fill upward colors the status-bar region without
@@ -8189,7 +8192,10 @@ func _build_compact_detail(game: Dictionary) -> Control:
     summary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     summary.add_theme_constant_override("separation", 16)
     body.add_child(summary)
-    summary.add_child(_detail_cover_with_action(game, Vector2(112, 158)))
+    # The action row is wider than the portrait cover.  Let it overflow below
+    # the cover without making the summary column that wide; otherwise the
+    # title starts hundreds of points away from the cover on iPhone.
+    summary.add_child(_detail_cover_with_action(game, Vector2(112, 158), true))
 
     var primary := VBoxContainer.new()
     primary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -8226,17 +8232,16 @@ func _detail_cover(game: Dictionary, cover_size: Vector2) -> PanelContainer:
         cover.add_child(icon)
     return cover
 
-func _detail_cover_with_action(game: Dictionary, cover_size: Vector2) -> VBoxContainer:
-    var column := VBoxContainer.new()
-    column.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-    column.add_theme_constant_override("separation", 6)
-    column.add_child(_detail_cover(game, cover_size))
+func _detail_cover_with_action(
+    game: Dictionary,
+    cover_size: Vector2,
+    constrain_portrait_width: bool = false
+) -> Control:
     var cover_path := _resolve_cover_path(game)
     var has_cover := not cover_path.is_empty() and FileAccess.file_exists(cover_path)
     var actions := HBoxContainer.new()
     actions.alignment = BoxContainer.ALIGNMENT_CENTER
     actions.add_theme_constant_override("separation", 6)
-    column.add_child(actions)
     var action := _pill_button(_t("detail.set_cover"), ICON_PAGE)
     action.custom_minimum_size = Vector2(128, 40)
     action.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
@@ -8249,6 +8254,32 @@ func _detail_cover_with_action(game: Dictionary, cover_size: Vector2) -> VBoxCon
         clear.custom_minimum_size = Vector2(112, 40)
         clear.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
         actions.add_child(clear)
+
+    if constrain_portrait_width:
+        # A plain Control keeps the cover column's minimum width fixed.  The
+        # action row is laid out manually and may extend to the right below
+        # the cover, where it cannot push the identity column away.
+        var compact_column := Control.new()
+        compact_column.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+        compact_column.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+        compact_column.custom_minimum_size = Vector2(cover_size.x, cover_size.y + 46.0)
+
+        var compact_cover := _detail_cover(game, cover_size)
+        compact_cover.position = Vector2.ZERO
+        compact_cover.size = cover_size
+        compact_column.add_child(compact_cover)
+
+        var action_width := maxf(cover_size.x, actions.get_combined_minimum_size().x)
+        actions.position = Vector2(0.0, cover_size.y + 6.0)
+        actions.size = Vector2(action_width, 40.0)
+        compact_column.add_child(actions)
+        return compact_column
+
+    var column := VBoxContainer.new()
+    column.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+    column.add_theme_constant_override("separation", 6)
+    column.add_child(_detail_cover(game, cover_size))
+    column.add_child(actions)
     return column
 
 func _detail_identity(game: Dictionary, compact: bool) -> VBoxContainer:
