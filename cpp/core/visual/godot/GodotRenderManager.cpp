@@ -30,6 +30,11 @@ int BytesPerPixel(TVPTextureFormat::e format) {
     }
 }
 
+// Region uploads use short-lived staging textures in the Godot bridge.  Keep
+// small surfaces on whole-surface uploads: they are cheap to upload and this
+// avoids reusing staging storage before a queued GPU copy has consumed it.
+constexpr uint64_t kPartialUploadMinPixels = 32u * 1024u;
+
 bool CopyRect(uint8_t *dst, int dst_pitch, int dst_width, int dst_height,
               const uint8_t *src, int src_pitch, int bytes_per_pixel,
               const tTVPRect &rc) {
@@ -965,10 +970,13 @@ bool GodotTexture2D::EnsureGpuHandle() {
             return false;
         }
         // Text composition rewrites the same scratch surface once per glyph
-        // batch; pushing only the region the script touched keeps the backlog
-        // repaint from uploading the whole multi-megabyte bitmap each time.
+        // batch; for larger surfaces, pushing only the region the script
+        // touched keeps the backlog repaint from uploading the whole bitmap.
         tTVPRect upload_rect(0, 0, Width, Height);
-        if(format_ == TVPTextureFormat::RGBA) {
+        const bool allow_partial_upload =
+            static_cast<uint64_t>(Width) * static_cast<uint64_t>(Height) >=
+            kPartialUploadMinPixels;
+        if(format_ == TVPTextureFormat::RGBA && allow_partial_upload) {
             tTVPRect dirty_rect;
             if(CpuDirtyRegion(dirty_rect)) {
                 if(dirty_rect.left < 0) dirty_rect.left = 0;
@@ -1487,16 +1495,18 @@ bool GodotTexture2D::UploadCpuToGpu(bool flush_pending_gpu_writes) {
         return gpu_handle_ != 0;
     }
     if (bridge->update_rgba == nullptr) return false;
-    // Only the region the script actually touched has to reach the GPU.  The
-    // bridge packs a sub-rectangle into a pooled staging surface and blits it
-    // in place, so a glyph batch no longer re-uploads the whole bitmap: text
-    // layers and scratch bitmaps rewrite a small run inside a multi-megabyte
-    // surface, and the full-surface transfer used to dominate the backlog
-    // repaint stall and its transient graphics footprint.
+    // For larger surfaces, only the region the script actually touched has to
+    // reach the GPU.  The bridge packs a sub-rectangle into a pooled staging
+    // surface and blits it in place, so a glyph batch no longer re-uploads the
+    // whole bitmap.  Small surfaces stay on the cheap, ordered full upload
+    // path because their staging copy can otherwise be recycled too early.
     tTVPRect upload_rect;
     tTVPRect full_rect(0, 0, Width, Height);
     const tTVPRect *rect = &full_rect;
-    if(CpuDirtyRegion(upload_rect)) {
+    const bool allow_partial_upload =
+        static_cast<uint64_t>(Width) * static_cast<uint64_t>(Height) >=
+        kPartialUploadMinPixels;
+    if(allow_partial_upload && CpuDirtyRegion(upload_rect)) {
         if(upload_rect.left < 0) upload_rect.left = 0;
         if(upload_rect.top < 0) upload_rect.top = 0;
         if(upload_rect.right > Width) upload_rect.right = Width;
