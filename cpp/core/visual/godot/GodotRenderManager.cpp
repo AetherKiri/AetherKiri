@@ -964,13 +964,27 @@ bool GodotTexture2D::EnsureGpuHandle() {
         } else if(format_ != TVPTextureFormat::RGBA) {
             return false;
         }
-        const tTVPRect full_rect(0, 0, Width, Height);
-        if (!bridge->update_rgba(gpu_handle_, upload_pixels,
-                                 upload_pitch, &full_rect)) {
+        // Text composition rewrites the same scratch surface once per glyph
+        // batch; pushing only the region the script touched keeps the backlog
+        // repaint from uploading the whole multi-megabyte bitmap each time.
+        tTVPRect upload_rect(0, 0, Width, Height);
+        if(format_ == TVPTextureFormat::RGBA) {
+            tTVPRect dirty_rect;
+            if(CpuDirtyRegion(dirty_rect)) {
+                if(dirty_rect.left < 0) dirty_rect.left = 0;
+                if(dirty_rect.top < 0) dirty_rect.top = 0;
+                if(dirty_rect.right > Width) dirty_rect.right = Width;
+                if(dirty_rect.bottom > Height) dirty_rect.bottom = Height;
+                if(!dirty_rect.is_empty()) upload_rect = dirty_rect;
+            }
+        }
+        if (!bridge->update_rgba(gpu_handle_, upload_pixels, upload_pitch,
+                                 &upload_rect)) {
             return false;
         }
         gpu_dirty_ = false;
         cpu_dirty_ = false;
+        ClearCpuDirtyRegion();
         if(!retain_cpu_shadow_) DiscardCpuStorage();
         upload_timing.Succeeded();
     }
@@ -1473,11 +1487,12 @@ bool GodotTexture2D::UploadCpuToGpu(bool flush_pending_gpu_writes) {
         return gpu_handle_ != 0;
     }
     if (bridge->update_rgba == nullptr) return false;
-    // The bridge transfers whole surfaces (RenderingDevice::texture_update has
-    // no sub-rectangle form), so the dirty tracking is only used to skip the
-    // upload entirely when nothing changed.  Handing the bridge a partial rect
-    // makes it reject the call, which turns every caller into a software
-    // fallback, so a touched region always uploads the full surface here.
+    // Only the region the script actually touched has to reach the GPU.  The
+    // bridge packs a sub-rectangle into a pooled staging surface and blits it
+    // in place, so a glyph batch no longer re-uploads the whole bitmap: text
+    // layers and scratch bitmaps rewrite a small run inside a multi-megabyte
+    // surface, and the full-surface transfer used to dominate the backlog
+    // repaint stall and its transient graphics footprint.
     tTVPRect upload_rect;
     tTVPRect full_rect(0, 0, Width, Height);
     const tTVPRect *rect = &full_rect;
@@ -1493,6 +1508,7 @@ bool GodotTexture2D::UploadCpuToGpu(bool flush_pending_gpu_writes) {
             upload_timing.Succeeded();
             return true;
         }
+        rect = &upload_rect;
     }
     if (!bridge->update_rgba(gpu_handle_, pixels_.data(),
                              static_cast<uint32_t>(pitch_), rect)) {
