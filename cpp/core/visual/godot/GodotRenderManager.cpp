@@ -1473,10 +1473,11 @@ bool GodotTexture2D::UploadCpuToGpu(bool flush_pending_gpu_writes) {
         return gpu_handle_ != 0;
     }
     if (bridge->update_rgba == nullptr) return false;
-    // Only the region the script actually touched has to reach the GPU.  Text
-    // layers and scratch bitmaps rewrite a small glyph batch inside a
-    // multi-megabyte bitmap, so uploading the whole texture dominated both the
-    // backlog repaint stall and the resulting memory traffic.
+    // The bridge transfers whole surfaces (RenderingDevice::texture_update has
+    // no sub-rectangle form), so the dirty tracking is only used to skip the
+    // upload entirely when nothing changed.  Handing the bridge a partial rect
+    // makes it reject the call, which turns every caller into a software
+    // fallback, so a touched region always uploads the full surface here.
     tTVPRect upload_rect;
     tTVPRect full_rect(0, 0, Width, Height);
     const tTVPRect *rect = &full_rect;
@@ -1492,7 +1493,6 @@ bool GodotTexture2D::UploadCpuToGpu(bool flush_pending_gpu_writes) {
             upload_timing.Succeeded();
             return true;
         }
-        rect = &upload_rect;
     }
     if (!bridge->update_rgba(gpu_handle_, pixels_.data(),
                              static_cast<uint32_t>(pitch_), rect)) {
@@ -1594,9 +1594,24 @@ iTVPTexture2D *GodotRenderManager::CreateTexture2D(unsigned int neww,
             if (godot_src != nullptr && ret->CopyCpuSnapshotFrom(*godot_src)) {
                 return ret;
             }
+            // Large copy-on-write clones are produced by scripted layer
+            // resizes, and the KAG backlog repaints resize their text surfaces
+            // on every repaint.  Materializing a full-size CPU buffer for each
+            // of those copies costs a multi-megabyte allocation, a memset and
+            // a second upload of the same pixels; when the source already owns
+            // them on the GPU, blit there instead and let a later software
+            // access download the surface on demand.
+            constexpr uint64_t kGpuCloneMinPixels = 256u * 1024u;
+            const bool large_surface =
+                static_cast<uint64_t>(neww) * newh >= kGpuCloneMinPixels;
+            // Copy-on-write clones of GPU-only sources (image-cache textures
+            // that a script is about to draw into, for example) must not force
+            // a synchronous GPU->CPU readback just to hand the pixels back to
+            // the GPU later: blit on the ordered GPU queue instead and let the
+            // next real CPU access download the surface on demand.
             if (godot_src != nullptr &&
                 !godot_src->IsCpuCompositeTarget() &&
-                !godot_src->HasCurrentCpuPixels() &&
+                (large_surface || !godot_src->HasCurrentCpuPixels()) &&
                 ret->EnsureGpuHandle() && godot_src->EnsureGpuHandle() &&
                 godot_src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
                 ret->CopyGpuFrom(godot_src, copy_rc, copy_rc)) {

@@ -215,6 +215,89 @@ std::atomic<uint64_t> g_gpu_textures_created{0};
 std::atomic<uint64_t> g_gpu_textures_released{0};
 std::atomic<uint64_t> g_gpu_texture_bytes_created{0};
 std::atomic<uint64_t> g_gpu_texture_bytes_released{0};
+
+// Retired RGBA surfaces are recycled by size instead of being handed back to
+// the RenderingDevice on every release.  Scripted layer resizes (the KAG
+// backlog repaints rebuild their text surfaces on every repaint, plus the
+// per-line layer resizes while reading) create and drop same-size surfaces
+// hundreds of times per second; letting the driver allocate and free each one
+// grows its transient allocation pool until macOS reports gigabytes of
+// graphics memory for the process.
+//
+// A surface only enters the pool from the GPU queue's Release step, so no
+// queued operation can still be sampling it when it is handed out again.
+// Only the driver resource is kept: the engine-side Texture2DRD wrapper is
+// re-created on hand-out because the retired record may have been re-pointed
+// at a replacement RID in the meantime.
+struct GodotGpuTexturePoolEntry {
+    RID rid;
+    uint32_t width = 0;
+    uint32_t height = 0;
+};
+
+std::mutex g_gpu_texture_pool_mutex;
+std::unordered_map<uint64_t, std::vector<GodotGpuTexturePoolEntry>>
+    g_gpu_texture_pool;
+uint64_t g_gpu_texture_pool_bytes = 0;
+size_t g_gpu_texture_pool_entries = 0;
+
+uint64_t GpuTexturePoolLimitBytes() {
+    static const uint64_t limit = []() {
+        constexpr uint64_t kDefaultLimit = 64ull * 1024ull * 1024ull;
+        const char *value = std::getenv("AETHERKIRI_GPU_TEXTURE_POOL_MB");
+        if (value == nullptr || value[0] == '\0') return kDefaultLimit;
+        char *end = nullptr;
+        const long parsed = std::strtol(value, &end, 10);
+        if (end == value || parsed < 0) return kDefaultLimit;
+        return static_cast<uint64_t>(parsed) * 1024ull * 1024ull;
+    }();
+    return limit;
+}
+
+uint64_t GpuTexturePoolKey(uint32_t width, uint32_t height) {
+    return (static_cast<uint64_t>(width) << 32u) | height;
+}
+
+// Keeps a released surface for reuse.  Returns false when the pool is full, in
+// which case the caller has to release the RID as usual.
+bool RetireGpuTextureToPool(const RID &rid, uint32_t width, uint32_t height) {
+    const uint64_t limit = GpuTexturePoolLimitBytes();
+    if(limit == 0 || !rid.is_valid() || width == 0 || height == 0) {
+        return false;
+    }
+    const uint64_t bytes =
+        static_cast<uint64_t>(width) * height * 4u;
+    if(bytes == 0 || bytes > limit) return false;
+    std::lock_guard<std::mutex> lock(g_gpu_texture_pool_mutex);
+    if(g_gpu_texture_pool_bytes + bytes > limit ||
+       g_gpu_texture_pool_entries >= 64) {
+        return false;
+    }
+    GodotGpuTexturePoolEntry entry;
+    entry.rid = rid;
+    entry.width = width;
+    entry.height = height;
+    g_gpu_texture_pool[GpuTexturePoolKey(width, height)].push_back(entry);
+    g_gpu_texture_pool_bytes += bytes;
+    ++g_gpu_texture_pool_entries;
+    return true;
+}
+
+RID TakeGpuTextureFromPool(uint32_t width, uint32_t height) {
+    if(width == 0 || height == 0) return RID();
+    std::lock_guard<std::mutex> lock(g_gpu_texture_pool_mutex);
+    auto it = g_gpu_texture_pool.find(GpuTexturePoolKey(width, height));
+    if(it == g_gpu_texture_pool.end() || it->second.empty()) return RID();
+    const RID rid = it->second.back().rid;
+    it->second.pop_back();
+    if(it->second.empty()) g_gpu_texture_pool.erase(it);
+    const uint64_t bytes = static_cast<uint64_t>(width) * height * 4u;
+    g_gpu_texture_pool_bytes =
+        g_gpu_texture_pool_bytes > bytes ? g_gpu_texture_pool_bytes - bytes : 0;
+    if(g_gpu_texture_pool_entries > 0) --g_gpu_texture_pool_entries;
+    return rid;
+}
+
 struct GodotGpuOp {
     enum class Type {
         Update,
@@ -271,6 +354,10 @@ struct GodotGpuOp {
     uint32_t native_height = 0;
     uint64_t imported_texture = 0;
     uint64_t queue_sequence = 0;
+    // Set for Release ops whose surface may be recycled by the texture pool.
+    RID pool_rid;
+    uint32_t pool_width = 0;
+    uint32_t pool_height = 0;
     // Timestamp assigned when the operation enters the bridge queue.  This is
     // intentionally separate from profile_enqueued_at, which is also used to
     // measure the CPU packing interval for texture updates.
@@ -5778,6 +5865,14 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
             InvalidateLive2DFramebuffer(rd, op->dst);
             InvalidateGodotGpuUniformSetsForResource(rd, op->dst);
 #if defined(__APPLE__)
+            if (op->dst.is_valid() &&
+                (op->native_resource == nullptr) &&
+                (op->native_image == nullptr) &&
+                RetireGpuTextureToPool(op->dst, op->pool_width,
+                                       op->pool_height)) {
+                // Kept for reuse by a later same-size surface.
+                return true;
+            }
             if (op->dst.is_valid()) rd->free_rid(op->dst);
 #if !defined(IOS_ENABLED)
             AetherAppleReleaseVulkanTexture(op->native_resource);
@@ -7278,17 +7373,36 @@ uint64_t BridgeCreateRgba(uint32_t width, uint32_t height, const void *pixels,
         initial_data.push_back(
             PackRgbaBytes(pixels, width, height, stride_bytes));
     }
-    RID rid = rd->texture_create(MakeRgbaTextureFormat(width, height), view,
+    // A surface retired at this exact size can be initialized in place instead
+    // of asking the driver for a new allocation, which is what keeps the
+    // per-frame layer resizes from inflating the process graphics footprint.
+    RID rid = TakeGpuTextureFromPool(width, height);
+    if (rid.is_valid()) {
+        if (use_device_clear) {
+            if (rd->texture_clear(rid, Color(0.0, 0.0, 0.0, 0.0), 0, 1, 0,
+                                  1) != OK) {
+                rd->free_rid(rid);
+                rid = RID();
+            }
+        } else if (rd->texture_update(rid, 0, initial_data) != OK) {
+            rd->free_rid(rid);
+            rid = RID();
+        }
+    } else {
+        rid = rd->texture_create(MakeRgbaTextureFormat(width, height), view,
                                  initial_data);
-    // RenderingDevice accepts an empty initial-data array, but its contents
-    // are undefined. Fresh KiriKiri render targets require transparent black,
-    // so establish the same state with a device-side clear. This avoids
-    // allocating, zeroing and uploading a width*height*4 staging array for
-    // large PSD/transition scratch textures.
-    if (rid.is_valid() && use_device_clear &&
-        rd->texture_clear(rid, Color(0.0, 0.0, 0.0, 0.0), 0, 1, 0, 1) != OK) {
-        rd->free_rid(rid);
-        rid = RID();
+        // RenderingDevice accepts an empty initial-data array, but its
+        // contents are undefined. Fresh KiriKiri render targets require
+        // transparent black, so establish the same state with a device-side
+        // clear. This avoids allocating, zeroing and uploading a
+        // width*height*4 staging array for large PSD/transition scratch
+        // textures.
+        if (rid.is_valid() && use_device_clear &&
+            rd->texture_clear(rid, Color(0.0, 0.0, 0.0, 0.0), 0, 1, 0,
+                              1) != OK) {
+            rd->free_rid(rid);
+            rid = RID();
+        }
     }
     const double create_ms = std::chrono::duration<double, std::milli>(
                                  std::chrono::steady_clock::now() -
@@ -7445,6 +7559,11 @@ void BridgeReleaseTexture(uint64_t texture) {
         op->native_resource = record.apple_vulkan_external_texture != nullptr
             ? record.apple_vulkan_external_texture
             : record.android_external_texture;
+        // Surfaces without an external backing can be recycled by size; the
+        // pool rejects anything that still owns native handles.
+        op->pool_rid = record.rid;
+        op->pool_width = record.width;
+        op->pool_height = record.height;
         // Texture operations are consumed in queue order. Waiting here turns
         // every short-lived E-mote scratch layer into a render-thread round
         // trip; enqueue the release after its last use instead.
@@ -7498,11 +7617,22 @@ bool BridgeUpdateRgba(uint64_t texture, const void *pixels,
         view.instantiate();
         TypedArray<PackedByteArray> initial_data;
         initial_data.push_back(data);
-        RID replacement = rd != nullptr
-            ? rd->texture_create(
-                  MakeRgbaTextureFormat(record.width, record.height), view,
-                  initial_data)
-            : RID();
+        // The replacement surface can come from the pool as well: these
+        // versioned uploads retire their predecessor every time, so a pool hit
+        // keeps the driver from allocating a new texture per full-surface
+        // upload.
+        RID replacement = TakeGpuTextureFromPool(record.width, record.height);
+        if (replacement.is_valid()) {
+            if (rd->texture_update(replacement, 0, initial_data) != OK) {
+                rd->free_rid(replacement);
+                replacement = RID();
+            }
+        }
+        if (!replacement.is_valid() && rd != nullptr) {
+            replacement = rd->texture_create(
+                MakeRgbaTextureFormat(record.width, record.height), view,
+                initial_data);
+        }
         if (replacement.is_valid()) {
             bool replaced = false;
             {
@@ -7523,6 +7653,9 @@ bool BridgeUpdateRgba(uint64_t texture, const void *pixels,
                 auto release = std::make_shared<GodotGpuOp>();
                 release->type = GodotGpuOp::Type::Release;
                 release->dst = record.rid;
+                release->pool_rid = record.rid;
+                release->pool_width = record.width;
+                release->pool_height = record.height;
                 const bool result = RunGodotGpuOpAsync(release);
                 const double bridge_ms =
                     std::chrono::duration<double, std::milli>(

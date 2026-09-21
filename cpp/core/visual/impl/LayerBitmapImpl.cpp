@@ -843,6 +843,26 @@ static tjs_int TVPTextScratchTextureMinSize() {
     return static_cast<tjs_int>(parsed);
 }
 
+// Glyph batches are rewritten from (0,0) on every flush, and the backlog
+// repaint runs thousands of them per frame; hand out one shared scratch
+// bitmap (growing as needed) instead of allocating a multi-megabyte bitmap
+// per batch.  Text composition is driven from the layer/script thread, which
+// is also the only caller of the two batch flushers below.
+static tTVPBitmap *AcquireTextBatchScratchBitmap(tjs_int w, tjs_int h) {
+    if(TextBatchScratchBitmap == nullptr ||
+       static_cast<tjs_int>(TextBatchScratchBitmap->GetWidth()) < w ||
+       static_cast<tjs_int>(TextBatchScratchBitmap->GetHeight()) < h) {
+        if(TextBatchScratchBitmap) {
+            TextBatchScratchBitmap->Release();
+            TextBatchScratchBitmap = nullptr;
+        }
+        TextBatchScratchBitmap =
+            new tTVPBitmap(std::max(w, TVPTextScratchTextureMinSize()),
+                           std::max(h, TVPTextScratchTextureMinSize()), 32);
+    }
+    return TextBatchScratchBitmap;
+}
+
 static inline tjs_uint8 TVPCombineTextScratchAlpha(tjs_uint8 dst,
                                                    tjs_uint8 src) {
     tjs_uint32 out = dst + src - ((static_cast<tjs_uint32>(dst) * src) >> 8);
@@ -1891,25 +1911,11 @@ void tTVPNativeBaseBitmap::FlushPendingTextDraws() {
 
                 const tjs_int batch_w = batch_rect.get_width();
                 const tjs_int batch_h = batch_rect.get_height();
-                // Glyph batches are flushed in a loop, and the backlog repaint
-                // runs thousands of them per frame. Reuse one scratch bitmap
-                // instead of allocating (and freeing) a multi-megabyte bitmap
-                // per batch; it grows but never shrinks, matching the cached
-                // scratch texture below.
-                if(TextBatchScratchBitmap == nullptr ||
-                   static_cast<tjs_int>(TextBatchScratchBitmap->GetWidth()) <
-                       batch_w ||
-                   static_cast<tjs_int>(TextBatchScratchBitmap->GetHeight()) <
-                       batch_h) {
-                    if(TextBatchScratchBitmap) {
-                        TextBatchScratchBitmap->Release();
-                        TextBatchScratchBitmap = nullptr;
-                    }
-                    TextBatchScratchBitmap = new tTVPBitmap(
-                        std::max(batch_w, TVPTextScratchTextureMinSize()),
-                        std::max(batch_h, TVPTextScratchTextureMinSize()), 32);
-                }
-                tTVPBitmap *tmp = TextBatchScratchBitmap;
+                // Reuse one scratch bitmap instead of allocating (and freeing)
+                // a multi-megabyte bitmap per batch; it grows but never
+                // shrinks, matching the cached scratch texture below.
+                tTVPBitmap *tmp =
+                    AcquireTextBatchScratchBitmap(batch_w, batch_h);
                 if(tmp == nullptr)
                     return false;
                 tjs_int dpitch = tmp->GetPitch();
@@ -2279,7 +2285,13 @@ void tTVPNativeBaseBitmap::DrawTextMultiple(
 
             const tjs_int batch_w = batch_rect.get_width();
             const tjs_int batch_h = batch_rect.get_height();
-            tTVPBitmap *tmp = new tTVPBitmap(batch_w, batch_h, 32);
+            // Same shared scratch buffer as the deferred flush: the immediate
+            // draw path issues one batch per text call, so a per-batch
+            // allocation dominated backlog repaints here as well.
+            tTVPBitmap *tmp =
+                AcquireTextBatchScratchBitmap(batch_w, batch_h);
+            if(tmp == nullptr)
+                return false;
             tjs_int dpitch = tmp->GetPitch();
             tjs_uint8 *bits =
                 const_cast<tjs_uint8 *>(
@@ -2337,7 +2349,9 @@ void tTVPNativeBaseBitmap::DrawTextMultiple(
                     tmp->GetBits(), TVPTextureFormat::RGBA, dpitch,
                     tTVPRect(0, 0, batch_w, batch_h));
             }
-            tmp->Release();
+            // The scratch bitmap is owned by the shared pool above and is
+            // rewritten from (0,0) by the next batch, so it is not released
+            // here.
 
             if(!_CharacterTextureRGBA)
                 return false;
