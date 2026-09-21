@@ -102,6 +102,8 @@ struct DispatchHandle {
   bool has_surface_size = false;
   engine_runtime_host_v1_t host{};
   engine_runtime_fragment_shader_host_v1_t fragment_shader_host{};
+  engine_runtime_media_host_v1_t media_host{};
+  std::unordered_set<engine_media_handle_t> provider_media_handles;
   StartupThread startup_thread;
   uint32_t startup_state = ENGINE_STARTUP_STATE_IDLE;
   std::deque<std::string> startup_logs;
@@ -353,6 +355,112 @@ uint64_t HostMonotonicTimeMicros(void*) {
                                    .count());
 }
 
+engine_result_t HostMediaOpen(void* user_data, const char* path,
+                              engine_media_handle_t* out_media) {
+  auto* handle = static_cast<DispatchHandle*>(user_data);
+  if (handle == nullptr || path == nullptr || path[0] == '\0' ||
+      out_media == nullptr) {
+    return ENGINE_RESULT_INVALID_ARGUMENT;
+  }
+  *out_media = nullptr;
+  std::lock_guard<std::recursive_mutex> guard(handle->mutex);
+  engine_media_handle_t media = nullptr;
+  const auto result = engine_legacy_media_open(handle->legacy, path, &media);
+  SetLegacyError(handle, result, "runtime media host failed to open media");
+  if (result != ENGINE_RESULT_OK) return result;
+  if (media == nullptr) {
+    return ThreadError(ENGINE_RESULT_INTERNAL_ERROR,
+                       "runtime media host returned an empty handle");
+  }
+  handle->provider_media_handles.insert(media);
+  *out_media = media;
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t HostMediaDestroy(void* user_data, engine_media_handle_t media) {
+  auto* handle = static_cast<DispatchHandle*>(user_data);
+  if (handle == nullptr) return ENGINE_RESULT_INVALID_ARGUMENT;
+  if (media == nullptr) return ENGINE_RESULT_OK;
+  std::lock_guard<std::recursive_mutex> guard(handle->mutex);
+  if (handle->provider_media_handles.erase(media) == 0)
+    return ENGINE_RESULT_INVALID_ARGUMENT;
+  const auto result = engine_legacy_media_destroy(media);
+  SetLegacyError(handle, result, "runtime media host failed to close media");
+  return result;
+}
+
+template <typename Callback>
+engine_result_t HostMediaCall(void* user_data, engine_media_handle_t media,
+                              const char* fallback, Callback&& callback) {
+  auto* handle = static_cast<DispatchHandle*>(user_data);
+  if (handle == nullptr || media == nullptr) return ENGINE_RESULT_INVALID_ARGUMENT;
+  std::lock_guard<std::recursive_mutex> guard(handle->mutex);
+  if (handle->provider_media_handles.count(media) == 0)
+    return ENGINE_RESULT_INVALID_ARGUMENT;
+  const auto result = callback(media);
+  SetLegacyError(handle, result, fallback);
+  return result;
+}
+
+engine_result_t HostMediaPlay(void* user_data, engine_media_handle_t media) {
+  return HostMediaCall(user_data, media, "runtime media host failed to play media",
+                       engine_legacy_media_play);
+}
+
+engine_result_t HostMediaPause(void* user_data, engine_media_handle_t media) {
+  return HostMediaCall(user_data, media, "runtime media host failed to pause media",
+                       engine_legacy_media_pause);
+}
+
+engine_result_t HostMediaSeek(void* user_data, engine_media_handle_t media,
+                              int64_t position_ms) {
+  return HostMediaCall(user_data, media, "runtime media host failed to seek media",
+      [position_ms](engine_media_handle_t value) {
+        return engine_legacy_media_seek(value, position_ms);
+      });
+}
+
+engine_result_t HostMediaSetRate(void* user_data, engine_media_handle_t media,
+                                 double rate) {
+  return HostMediaCall(user_data, media,
+      "runtime media host failed to set playback rate",
+      [rate](engine_media_handle_t value) {
+        return engine_legacy_media_set_rate(value, rate);
+      });
+}
+
+engine_result_t HostMediaSetVolume(void* user_data, engine_media_handle_t media,
+                                   double volume) {
+  return HostMediaCall(user_data, media,
+      "runtime media host failed to set volume",
+      [volume](engine_media_handle_t value) {
+        return engine_legacy_media_set_volume(value, volume);
+      });
+}
+
+engine_result_t HostMediaGetState(void* user_data, engine_media_handle_t media,
+                                  engine_media_state_t* out_state) {
+  if (out_state == nullptr) return ENGINE_RESULT_INVALID_ARGUMENT;
+  return HostMediaCall(user_data, media,
+      "runtime media host failed to read media state",
+      [out_state](engine_media_handle_t value) {
+        return engine_legacy_media_get_state(value, out_state);
+      });
+}
+
+engine_result_t HostMediaReadFrame(void* user_data, engine_media_handle_t media,
+                                   void* pixels, size_t size,
+                                   engine_frame_desc_t* out_frame) {
+  if (pixels == nullptr || out_frame == nullptr)
+    return ENGINE_RESULT_INVALID_ARGUMENT;
+  return HostMediaCall(user_data, media,
+      "runtime media host failed to read video frame",
+      [pixels, size, out_frame](engine_media_handle_t value) {
+        return engine_legacy_media_read_frame_rgba(value, pixels, size,
+                                                   out_frame);
+      });
+}
+
 void HostPlatformRequest(void* user_data, const char* operation,
                          const char* argument) {
   auto* handle = static_cast<DispatchHandle*>(user_data);
@@ -491,7 +599,19 @@ engine_result_t Route(engine_handle_t public_handle, const char* operation,
     return legacy_call(handle->legacy);
   }
   result = provider_call(handle);
-  if (result == ENGINE_RESULT_NOT_SUPPORTED) return Unsupported(handle, operation);
+  if (result == ENGINE_RESULT_NOT_SUPPORTED) {
+    // A provider can expose an operation and still report that a particular
+    // script request is unsupported. Preserve its diagnostic in that case;
+    // the generic "does not implement" message is only correct when the
+    // provider did not supply a more specific error.
+    const char* provider_error = nullptr;
+    if (PROVIDER_HAS(handle->provider, get_last_error)) {
+      provider_error = handle->provider->get_last_error(handle->runtime);
+    }
+    if (provider_error == nullptr || provider_error[0] == '\0') {
+      return Unsupported(handle, operation);
+    }
+  }
   SetProviderError(handle, result, operation);
   return result;
 }
@@ -610,6 +730,19 @@ engine_result_t engine_create(const engine_create_desc_t* desc,
   if (handle->fragment_shader_host.execute != nullptr) {
     handle->host.reserved_ptr[0] = &handle->fragment_shader_host;
   }
+  handle->media_host.struct_size = sizeof(handle->media_host);
+  handle->media_host.api_version = ENGINE_RUNTIME_MEDIA_HOST_API_VERSION;
+  handle->media_host.user_data = handle;
+  handle->media_host.open = HostMediaOpen;
+  handle->media_host.destroy = HostMediaDestroy;
+  handle->media_host.play = HostMediaPlay;
+  handle->media_host.pause = HostMediaPause;
+  handle->media_host.seek = HostMediaSeek;
+  handle->media_host.set_rate = HostMediaSetRate;
+  handle->media_host.set_volume = HostMediaSetVolume;
+  handle->media_host.get_state = HostMediaGetState;
+  handle->media_host.read_frame_rgba = HostMediaReadFrame;
+  handle->host.reserved_ptr[1] = &handle->media_host;
 
   const auto legacy_result = engine_legacy_create(desc, &handle->legacy);
   if (legacy_result != ENGINE_RESULT_OK) {
@@ -733,6 +866,10 @@ engine_result_t engine_destroy(engine_handle_t public_handle) {
     handle->provider->destroy(handle->runtime);
     handle->runtime = nullptr;
   }
+  for (const auto media : handle->provider_media_handles) {
+    engine_legacy_media_destroy(media);
+  }
+  handle->provider_media_handles.clear();
   for (const auto media : owned_media) {
     engine_legacy_media_destroy(media);
   }
@@ -829,6 +966,14 @@ engine_result_t engine_media_set_rate(engine_media_handle_t media,
                     [&](engine_media_handle_t legacy) {
                       return engine_legacy_media_set_rate(legacy,
                                                           playback_rate);
+                    });
+}
+
+engine_result_t engine_media_set_volume(engine_media_handle_t media,
+                                        double volume) {
+  return RouteMedia(media, "legacy media player failed to set volume",
+                    [&](engine_media_handle_t legacy) {
+                      return engine_legacy_media_set_volume(legacy, volume);
                     });
 }
 
