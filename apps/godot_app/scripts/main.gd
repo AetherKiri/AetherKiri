@@ -4171,6 +4171,9 @@ func _apply_engine_options() -> void:
     player.set_engine_option("console_log_file", "1" if console_log_file else "0")
     player.set_engine_option("trace_log", "1" if effective_trace_log else "0")
     player.set_engine_option("input_trace", "1" if effective_input_trace else "0")
+    player.set_engine_option(
+        "runtime_arguments", "\n".join(OS.get_cmdline_user_args())
+    )
     if player.has_method("is_text_translation_available") and player.is_text_translation_available():
         _restore_native_translation_model_access()
         player.set_engine_option(
