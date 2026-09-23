@@ -182,3 +182,32 @@ TEST_CASE("a synthetic double-click cannot cross the active gesture target",
     runtime.manager->PrimaryDoubleClick(300, 200);
     CHECK(runtime.value(TJS_W("doubles")) == 1);
 }
+
+TEST_CASE("a save/load command button does not activate an unselected slot",
+          "[input][save-load][gesture]") {
+    PointerRuntime runtime;
+    runtime.run(TJS_W(
+        "class SaveLoadCurrent {\n"
+        "  function propget(name) { return void; }\n"
+        "  function onDefaultSelect(index) { global.selectedSlots++; }\n"
+        "}\n"
+        "class SaveLoadCommand extends Layer {\n"
+        "  function SaveLoadCommand(window, parent) {\n"
+        "    super.Layer(window, parent);\n"
+        "    setSize(640, 480); hitThreshold = 0; name = 'to_load';\n"
+        "  }\n"
+        "}\n"
+        "var selectedSlots = 0;\n"
+        "var commandButton = new SaveLoadCommand(window, primary);\n"
+        "commandButton.visible = true;\n"
+        "commandButton.Current = new SaveLoadCurrent();\n"));
+
+    // The dialog mode buttons of the FileStore save/load UI are switches, not
+    // "confirm the selected slot" commands.  With no selection recorded the
+    // engine must not invent one from the default grid index.
+    runtime.down();
+    runtime.clickAndUp();
+    CHECK(runtime.value(TJS_W("selectedSlots")) == 0);
+
+    runtime.run(TJS_W("invalidate commandButton;"));
+}

@@ -1580,6 +1580,11 @@ static thread_local tTJSNI_BaseLayer *TVPLayerEventSource = nullptr;
 static thread_local tTJSNI_BaseLayer *TVPLayerRecentEventSource = nullptr;
 static thread_local bool TVPCafeStellaSyntheticClickActive = false;
 static thread_local tjs_int TVPLayerLastSaveLoadItemIndex = 0;
+// The index above starts at 0 so that a game which never reports an item
+// still behaves like "first slot".  The save/load command fallback must be
+// able to tell that default apart from a real selection, otherwise a bottom
+// mode button such as `to_load` would activate slot 0 of the grid.
+static thread_local bool TVPLayerHasSaveLoadItemIndex = false;
 
 struct tTVPLayerMouseUpContext {
     bool Active = false;
@@ -1606,6 +1611,7 @@ void TVPResetLayerStateForHostSession() {
     TVPLayerRecentEventSource = nullptr;
     TVPCafeStellaSyntheticClickActive = false;
     TVPLayerLastSaveLoadItemIndex = 0;
+    TVPLayerHasSaveLoadItemIndex = false;
     TVPLayerCurrentMouseUp = {};
 }
 
@@ -2643,6 +2649,7 @@ static bool TVPInvokeCafeStellaSaveLoadGridItem(tTJSNI_BaseLayer *layer,
         return false;
     }
     TVPLayerLastSaveLoadItemIndex = item_index;
+    TVPLayerHasSaveLoadItemIndex = true;
 
     iTJSDispatch2 *source_owner = TVPLayerEventSource->GetOwnerNoAddRef();
     if(!source_owner)
@@ -6351,6 +6358,8 @@ void tTJSNI_BaseLayer::CompleteDeferredImageLoad(
     DeallocateProvinceImage();
     _evictedImageName = name;
     _evictedColorKey = colorkey;
+    _evictedImageWidth = bitmap->GetWidth();
+    _evictedImageHeight = bitmap->GetHeight();
     AssignMainImageWithUpdate(bitmap);
 }
 
@@ -6759,7 +6768,9 @@ iTJSDispatch2 *tTJSNI_BaseLayer::LoadImages(const ttstr &name,
 
     if(TVPLayerIsImmutableRepeatedImage(name) && MainImage &&
        !_bitmapEvicted && name == _evictedImageName &&
-       colorkey == _evictedColorKey) {
+       colorkey == _evictedColorKey &&
+       MainImage->GetWidth() == _evictedImageWidth &&
+       MainImage->GetHeight() == _evictedImageHeight) {
         return nullptr;
     }
 
@@ -7020,6 +7031,8 @@ iTJSDispatch2 *tTJSNI_BaseLayer::LoadImages(const ttstr &name,
 
     _evictedImageName = name;
     _evictedColorKey = colorkey;
+    _evictedImageWidth = MainImage->GetWidth();
+    _evictedImageHeight = MainImage->GetHeight();
     try {
 
         InternalSetImageSize(MainImage->GetWidth(), MainImage->GetHeight());
@@ -8084,6 +8097,17 @@ void tTJSNI_BaseLayer::FireButtonClick() {
                 } catch(...) {
                 }
             }
+            // Without a script-side selection and without an item the engine
+            // actually saw, activating "the selected slot" would invent one.
+            // Command buttons such as `to_load`/`to_save` are mode switches in
+            // those dialogs, so leave the gesture to the layer's own handler.
+            if(!TVPLayerHasSaveLoadItemIndex) {
+                if(TVPLayerInputTraceEnabled()) {
+                    spdlog::info("LayerIntf FireButtonClick current selected layer={} selection=<unknown>",
+                                 GetName().AsStdString());
+                }
+                return -1;
+            }
             const tjs_int visible_index = TVPLayerLastSaveLoadItemIndex;
             const tjs_int data_index =
                 TVPGetCafeStellaSaveLoadDataIndex(this, this, visible_index);
@@ -8101,6 +8125,13 @@ void tTJSNI_BaseLayer::FireButtonClick() {
                 return false;
 
             const tjs_int selected_index = get_current_selected_index();
+            if(selected_index < 0) {
+                if(TVPLayerInputTraceEnabled()) {
+                    spdlog::info("LayerIntf FireButtonClick current onDefaultSelect skipped layer={} reason=no-selection",
+                                 GetName().AsStdString());
+                }
+                return false;
+            }
             tTJSVariant result;
             if(TVPInvokeCafeStellaCurrentMethod(
                    this, this, selected_index, TJS_W("onDefaultSelect"),

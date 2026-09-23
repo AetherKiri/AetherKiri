@@ -97,6 +97,8 @@ public:
                          bool *ready) const;
     void DiscardGpuReadback(uint64_t request) const;
     bool EnsureGpuHandle();
+    void ResizeCpuStorage(size_t bytes, bool zero_fill = true);
+    void ReleaseCpuStorage();
     bool ClearGpu(uint32_t rgba, const tTVPRect &rc);
     bool CopyGpuFrom(GodotTexture2D *src, const tTVPRect &dst_rc,
                      const tTVPRect &src_rc);
@@ -147,6 +149,44 @@ public:
         cpu_dirty_ = true;
         gpu_dirty_ = false;
         cpu_pixels_known_zero_ = false;
+        cpu_dirty_full_ = true;
+        cpu_dirty_rect_.clear();
+    }
+    // Marks a bounded region of CPU pixels as newer than the GPU image so the
+    // upload can update only what the script actually touched.  An empty
+    // rectangle means "whole texture", which stays the safe default for the
+    // unconditional MarkCpuDirty() above.
+    void MarkCpuDirtyRect(const tTVPRect &rc) {
+        CancelPendingGpuReadback();
+        cpu_dirty_ = true;
+        gpu_dirty_ = false;
+        cpu_pixels_known_zero_ = false;
+        if(rc.is_empty()) {
+            cpu_dirty_full_ = true;
+            cpu_dirty_rect_.clear();
+            return;
+        }
+        // The pending region accumulates until it is actually uploaded or the
+        // CPU copy is resynchronized with the GPU, so an interleaved GPU-side
+        // draw can never drop an already-notified change.
+        if(cpu_dirty_full_)
+            return;
+        if(cpu_dirty_rect_.is_empty()) {
+            cpu_dirty_rect_ = rc;
+            return;
+        }
+        cpu_dirty_rect_.do_union(rc);
+    }
+    void ClearCpuDirtyRegion() {
+        cpu_dirty_full_ = false;
+        cpu_dirty_rect_.clear();
+    }
+    bool CpuDirtyRegionIsFull() const { return cpu_dirty_full_; }
+    bool CpuDirtyRegion(tTVPRect &out) const {
+        if(cpu_dirty_full_ || cpu_dirty_rect_.is_empty())
+            return false;
+        out = cpu_dirty_rect_;
+        return true;
     }
     void EnsureCpuReadable();
     // Starts a non-blocking readback for a texture that will soon cross back
@@ -160,7 +200,7 @@ private:
     bool CopyCpuSnapshotFrom(GodotTexture2D &source);
     void CreateGpuHandle(const void *pixel, int pitch);
     void ReleaseGpuHandle();
-    void EnsureCpuStorage();
+    void EnsureCpuStorage(bool zero_fill = true);
     void DiscardCpuStorage();
     void CancelPendingGpuReadback();
     bool CompletePendingGpuReadback();
@@ -188,6 +228,8 @@ private:
     // and clear the GPU image without packing and uploading a multi-megabyte
     // zero-filled staging buffer.
     bool cpu_pixels_known_zero_ = false;
+    bool cpu_dirty_full_ = true;
+    tTVPRect cpu_dirty_rect_{};
 };
 
 class GodotRenderManager final : public iTVPRenderManager {

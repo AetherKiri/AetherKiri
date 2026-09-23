@@ -254,14 +254,14 @@ engine_result_t CheckBetaRuntimeAccess(DispatchHandle* handle) {
     return ENGINE_RESULT_OK;
   }
   const std::string runtime_id = Normalize(handle->provider->runtime_id_utf8);
-  if ((runtime_id != "catsystem2" &&
-       runtime_id != "rfvp") ||
+  // CatSystem2 is a released runtime now.  Keep the entitlement gate only
+  // for RFVP; older hosts may still send beta_runtime_allowed, but it must not
+  // turn CatSystem2 launches back into a coffee-only feature.
+  if (runtime_id != "rfvp" ||
       handle->beta_runtime_allowed) {
     return ENGINE_RESULT_OK;
   }
-  handle->last_error = runtime_id == "catsystem2"
-                           ? "CatSystem2 runtime requires active beta access"
-                           : "RFVP runtime requires active beta access";
+  handle->last_error = "RFVP runtime requires active beta access";
   return ThreadError(ENGINE_RESULT_NOT_SUPPORTED, handle->last_error.c_str());
 }
 

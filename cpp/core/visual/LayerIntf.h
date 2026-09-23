@@ -445,6 +445,13 @@ public:
 protected:
     ttstr _evictedImageName;
     tjs_uint32 _evictedColorKey = 0;
+    // Main image dimensions captured when _evictedImageName was loaded.
+    // Compatibility code may resize/refill the same layer afterwards (for
+    // example the PackinOne UI loader draws button state art into the shared
+    // temporary layer), so a later reload of the same name must not be
+    // skipped unless the bitmap still has the loaded size.
+    tjs_uint _evictedImageWidth = 0;
+    tjs_uint _evictedImageHeight = 0;
     bool _bitmapEvicted = false;
     void EnsureBitmap();
     bool CanHaveImage; // whether the layer can have image
