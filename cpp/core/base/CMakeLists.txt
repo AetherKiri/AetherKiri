@@ -31,7 +31,6 @@ set(BASE_SOURCE_FILES
     ${BASE_PATH}/KAGParser.cpp
     ${BASE_PATH}/MsgIntf.cpp
     ${BASE_PATH}/XP3ArchiveHxv4Decoder.cpp
-    ${BASE_PATH}/SipHash.cpp
     ${BASE_PATH}/drip_data.cpp
 
     ${BASE_PATH}/impl/EventImpl.cpp
