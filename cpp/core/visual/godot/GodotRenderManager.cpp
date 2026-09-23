@@ -30,6 +30,11 @@ int BytesPerPixel(TVPTextureFormat::e format) {
     }
 }
 
+// Region uploads use short-lived staging textures in the Godot bridge.  Keep
+// small surfaces on whole-surface uploads: they are cheap to upload and this
+// avoids reusing staging storage before a queued GPU copy has consumed it.
+constexpr uint64_t kPartialUploadMinPixels = 32u * 1024u;
+
 bool CopyRect(uint8_t *dst, int dst_pitch, int dst_width, int dst_height,
               const uint8_t *src, int src_pitch, int bytes_per_pixel,
               const tTVPRect &rc) {
@@ -734,16 +739,34 @@ GodotTexture2D::~GodotTexture2D() {
     ReleaseGpuHandle();
 }
 
-void GodotTexture2D::EnsureCpuStorage() {
+void GodotTexture2D::EnsureCpuStorage(bool zero_fill) {
     const size_t required = static_cast<size_t>(pitch_) * Height;
     if (pixels_.size() != required) {
-        pixels_.assign(required, 0);
+        ResizeCpuStorage(required, zero_fill);
     }
 }
 
-void GodotTexture2D::DiscardCpuStorage() {
-    if (pixels_.empty()) return;
+void GodotTexture2D::ResizeCpuStorage(size_t bytes, bool zero_fill) {
+    if(pixels_.size() == bytes)
+        return;
+    if(zero_fill) {
+        pixels_.assign(bytes, 0);
+    } else {
+        // Scratch callers overwrite the whole region before it is uploaded;
+        // growing a vector only value-initializes the newly added tail and
+        // reuses the existing allocation.
+        pixels_.resize(bytes);
+    }
+}
+
+void GodotTexture2D::ReleaseCpuStorage() {
+    if(pixels_.empty())
+        return;
     std::vector<uint8_t>().swap(pixels_);
+}
+
+void GodotTexture2D::DiscardCpuStorage() {
+    ReleaseCpuStorage();
 }
 
 void GodotTexture2D::CancelPendingGpuReadback() {
@@ -908,6 +931,7 @@ void GodotTexture2D::CreateGpuHandle(const void *pixel, int pitch) {
     }
     gpu_dirty_ = false;
     cpu_dirty_ = false;
+    ClearCpuDirtyRegion();
     cpu_pixels_known_zero_ = false;
     if(format_ == TVPTextureFormat::RGBA && !retain_cpu_shadow_)
         DiscardCpuStorage();
@@ -945,13 +969,30 @@ bool GodotTexture2D::EnsureGpuHandle() {
         } else if(format_ != TVPTextureFormat::RGBA) {
             return false;
         }
-        const tTVPRect full_rect(0, 0, Width, Height);
-        if (!bridge->update_rgba(gpu_handle_, upload_pixels,
-                                 upload_pitch, &full_rect)) {
+        // Text composition rewrites the same scratch surface once per glyph
+        // batch; for larger surfaces, pushing only the region the script
+        // touched keeps the backlog repaint from uploading the whole bitmap.
+        tTVPRect upload_rect(0, 0, Width, Height);
+        const bool allow_partial_upload =
+            static_cast<uint64_t>(Width) * static_cast<uint64_t>(Height) >=
+            kPartialUploadMinPixels;
+        if(format_ == TVPTextureFormat::RGBA && allow_partial_upload) {
+            tTVPRect dirty_rect;
+            if(CpuDirtyRegion(dirty_rect)) {
+                if(dirty_rect.left < 0) dirty_rect.left = 0;
+                if(dirty_rect.top < 0) dirty_rect.top = 0;
+                if(dirty_rect.right > Width) dirty_rect.right = Width;
+                if(dirty_rect.bottom > Height) dirty_rect.bottom = Height;
+                if(!dirty_rect.is_empty()) upload_rect = dirty_rect;
+            }
+        }
+        if (!bridge->update_rgba(gpu_handle_, upload_pixels, upload_pitch,
+                                 &upload_rect)) {
             return false;
         }
         gpu_dirty_ = false;
         cpu_dirty_ = false;
+        ClearCpuDirtyRegion();
         if(!retain_cpu_shadow_) DiscardCpuStorage();
         upload_timing.Succeeded();
     }
@@ -1050,6 +1091,8 @@ void GodotTexture2D::EnsureCpuReadable() {
                 }
             }
             gpu_dirty_ = false;
+            cpu_dirty_ = false;
+            ClearCpuDirtyRegion();
             cpu_pixels_known_zero_ = false;
         }
         return;
@@ -1058,6 +1101,8 @@ void GodotTexture2D::EnsureCpuReadable() {
         bridge->read_rgba(gpu_handle_, pixels_.data(), pixels_.size(),
                           static_cast<uint32_t>(pitch_))) {
         gpu_dirty_ = false;
+        cpu_dirty_ = false;
+        ClearCpuDirtyRegion();
         cpu_pixels_known_zero_ = false;
     }
 }
@@ -1073,7 +1118,8 @@ void *GodotTexture2D::GetScanLineForWrite(tjs_uint l) {
     if (l >= static_cast<tjs_uint>(Height) || pixels_.empty()) return nullptr;
     retain_cpu_shadow_ = true;
     MarkOpacityUnknown();
-    MarkCpuDirty();
+    MarkCpuDirtyRect(tTVPRect(0, static_cast<tjs_int>(l), Width,
+                              static_cast<tjs_int>(l) + 1));
     return pixels_.data() + static_cast<size_t>(l) * pitch_;
 }
 
@@ -1084,7 +1130,8 @@ void *GodotTexture2D::GetScanLineForWriteUninitialized(tjs_uint l) {
     if (pixels_.empty()) return nullptr;
     retain_cpu_shadow_ = true;
     MarkOpacityUnknown();
-    MarkCpuDirty();
+    MarkCpuDirtyRect(tTVPRect(0, static_cast<tjs_int>(l), Width,
+                              static_cast<tjs_int>(l) + 1));
     return pixels_.data() + static_cast<size_t>(l) * pitch_;
 }
 
@@ -1096,7 +1143,7 @@ void GodotTexture2D::Update(const void *pixel, TVPTextureFormat::e format,
         ReleaseGpuHandle();
         format_ = format;
         pitch_ = Width * new_bpp;
-        pixels_.assign(static_cast<size_t>(pitch_) * Height, 0);
+        ResizeCpuStorage(static_cast<size_t>(pitch_) * Height);
     }
     const bool full_rect = IsFullTextureRect(rc, Width, Height);
     const bool replace_transient_scratch =
@@ -1105,10 +1152,11 @@ void GodotTexture2D::Update(const void *pixel, TVPTextureFormat::e format,
     if (!full_rect && !replace_transient_scratch) {
         EnsureCpuReadable();
     } else {
-        if (replace_transient_scratch) {
-            pixels_.clear();
-        }
-        EnsureCpuStorage();
+        // Transient scratch textures are fully rewritten from (0,0) on every
+        // batch, so the previous pixels are dead and the new region is filled
+        // by the copy below.  Keeping the buffer and skipping the zero fill
+        // removes a multi-megabyte memset plus a reallocation per text batch.
+        EnsureCpuStorage(/*zero_fill=*/!replace_transient_scratch);
     }
     const int src_pitch = pitch > 0 ? pitch : rc.get_width() * new_bpp;
     const bool copied = CopyRect(pixels_.data(), pitch_, Width, Height,
@@ -1124,7 +1172,7 @@ void GodotTexture2D::Update(const void *pixel, TVPTextureFormat::e format,
     } else {
         MarkOpacityUnknown();
     }
-    MarkCpuDirty();
+    MarkCpuDirtyRect(rc);
 }
 
 uint32_t GodotTexture2D::GetPoint(int x, int y) {
@@ -1161,7 +1209,7 @@ void GodotTexture2D::SetPoint(int x, int y, uint32_t clr) {
                     &clr, 4);
         MarkOpacityUnknown();
     }
-    MarkCpuDirty();
+    MarkCpuDirtyRect(tTVPRect(x, y, x + 1, y + 1));
 }
 
 void GodotTexture2D::SetSize(unsigned int w, unsigned int h) {
@@ -1172,7 +1220,7 @@ void GodotTexture2D::SetSize(unsigned int w, unsigned int h) {
     if (format_ == TVPTextureFormat::RGBA)
         pixels_.clear();
     else
-        pixels_.assign(static_cast<size_t>(pitch_) * h, 0);
+        ResizeCpuStorage(static_cast<size_t>(pitch_) * h);
     MarkTransparentKnown();
     MarkCpuDirty();
     cpu_pixels_known_zero_ = true;
@@ -1447,13 +1495,38 @@ bool GodotTexture2D::UploadCpuToGpu(bool flush_pending_gpu_writes) {
         return gpu_handle_ != 0;
     }
     if (bridge->update_rgba == nullptr) return false;
-    const tTVPRect full_rect(0, 0, Width, Height);
+    // For larger surfaces, only the region the script actually touched has to
+    // reach the GPU.  The bridge packs a sub-rectangle into a pooled staging
+    // surface and blits it in place, so a glyph batch no longer re-uploads the
+    // whole bitmap.  Small surfaces stay on the cheap, ordered full upload
+    // path because their staging copy can otherwise be recycled too early.
+    tTVPRect upload_rect;
+    tTVPRect full_rect(0, 0, Width, Height);
+    const tTVPRect *rect = &full_rect;
+    const bool allow_partial_upload =
+        static_cast<uint64_t>(Width) * static_cast<uint64_t>(Height) >=
+        kPartialUploadMinPixels;
+    if(allow_partial_upload && CpuDirtyRegion(upload_rect)) {
+        if(upload_rect.left < 0) upload_rect.left = 0;
+        if(upload_rect.top < 0) upload_rect.top = 0;
+        if(upload_rect.right > Width) upload_rect.right = Width;
+        if(upload_rect.bottom > Height) upload_rect.bottom = Height;
+        if(upload_rect.is_empty()) {
+            cpu_dirty_ = false;
+            ClearCpuDirtyRegion();
+            if(!retain_cpu_shadow_) DiscardCpuStorage();
+            upload_timing.Succeeded();
+            return true;
+        }
+        rect = &upload_rect;
+    }
     if (!bridge->update_rgba(gpu_handle_, pixels_.data(),
-                             static_cast<uint32_t>(pitch_), &full_rect)) {
+                             static_cast<uint32_t>(pitch_), rect)) {
         return false;
     }
     gpu_dirty_ = false;
     cpu_dirty_ = false;
+    ClearCpuDirtyRegion();
     if(!retain_cpu_shadow_) DiscardCpuStorage();
     upload_timing.Succeeded();
     return true;
@@ -1547,9 +1620,24 @@ iTVPTexture2D *GodotRenderManager::CreateTexture2D(unsigned int neww,
             if (godot_src != nullptr && ret->CopyCpuSnapshotFrom(*godot_src)) {
                 return ret;
             }
+            // Large copy-on-write clones are produced by scripted layer
+            // resizes, and the KAG backlog repaints resize their text surfaces
+            // on every repaint.  Materializing a full-size CPU buffer for each
+            // of those copies costs a multi-megabyte allocation, a memset and
+            // a second upload of the same pixels; when the source already owns
+            // them on the GPU, blit there instead and let a later software
+            // access download the surface on demand.
+            constexpr uint64_t kGpuCloneMinPixels = 256u * 1024u;
+            const bool large_surface =
+                static_cast<uint64_t>(neww) * newh >= kGpuCloneMinPixels;
+            // Copy-on-write clones of GPU-only sources (image-cache textures
+            // that a script is about to draw into, for example) must not force
+            // a synchronous GPU->CPU readback just to hand the pixels back to
+            // the GPU later: blit on the ordered GPU queue instead and let the
+            // next real CPU access download the surface on demand.
             if (godot_src != nullptr &&
                 !godot_src->IsCpuCompositeTarget() &&
-                !godot_src->HasCurrentCpuPixels() &&
+                (large_surface || !godot_src->HasCurrentCpuPixels()) &&
                 ret->EnsureGpuHandle() && godot_src->EnsureGpuHandle() &&
                 godot_src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
                 ret->CopyGpuFrom(godot_src, copy_rc, copy_rc)) {

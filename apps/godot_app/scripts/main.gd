@@ -23,11 +23,10 @@ const DEFAULT_COVER_BASENAMES := [
 ]
 const GAME_COVER_PATH_PREFIX := "game://"
 const SETTINGS_FILE := "user://aetherkiri_settings.cfg"
+const SCENE_TEST_SETTINGS_KEY := "aether_kiri/scene_test"
 const IAP_LIST_LIMIT_PRODUCT_ID := "com.aether.list.limit"
 const IAP_COFFEE_PRODUCT_ID := "com.aether.coffee"
 const ANDROID_COFFEE_URL := "https://qr.alipay.com/fkx108053gol728ayzhec90"
-const APP_SERVICE_FILING_NUMBER := "沪ICP备2026042398号-2A"
-const APP_SERVICE_FILING_URL := "https://beian.miit.gov.cn/#/Integrated/index"
 const IAP_POLL_INTERVAL_SEC := 0.12
 const IAP_DETAIL_AUTHORIZATION_TTL_MS := 30000
 const SECRET_UNLOCK_TAP_TARGET := 20
@@ -59,8 +58,6 @@ const GameMetadata = preload("res://scripts/game_metadata.gd")
 const CoverIndex = preload("res://scripts/cover_index.gd")
 const VNDBCoverResolver = preload("res://scripts/vndb_cover_resolver.gd")
 const GameInputMapping = preload("res://scripts/game_input_mapping.gd")
-const SiglusJoypadInput = preload("res://scripts/siglus_joypad_input.gd")
-const SiglusPlatformDialogs = preload("res://scripts/siglus_platform_dialogs.gd")
 const GameVirtualControls = preload("res://scripts/game_virtual_controls.gd")
 const DiagnosticSession = preload("res://scripts/diagnostic_session.gd")
 const DiagnosticLocalization = preload("res://scripts/diagnostic_localization.gd")
@@ -110,7 +107,9 @@ const LANGUAGE_MODES := [LANG_SYSTEM, LANG_ZH_HANS, LANG_ZH_HANT, LANG_EN, LANG_
 const STYLE_DARK := "dark"
 const STYLE_CLASSIC := "classic"
 const DEFAULT_STYLE_MODE := STYLE_CLASSIC
-const STYLE_MODES := [STYLE_DARK, STYLE_CLASSIC]
+const STYLE_WARM_DARK := "warm_dark"
+const STYLE_WARM_LIGHT := "warm_light"
+const STYLE_MODES := [STYLE_DARK, STYLE_CLASSIC, STYLE_WARM_DARK, STYLE_WARM_LIGHT]
 const IOS_UI_SCALE_MODES := ["compact", "comfortable", "standard"]
 const UI_TEXT := {
     LANG_ZH_HANS: {
@@ -138,8 +137,6 @@ const UI_TEXT := {
         "home.status": "视觉小说库",
         "nav.library": "视觉小说",
         "nav.videos": "视频库",
-        "nav.collapse_sidebar": "收起侧边栏",
-        "nav.expand_sidebar": "展开侧边栏",
         "home.empty_title": "尚未添加任何游戏",
         "home.game_count": "%d 个游戏",
         "video.video_count": "%d 个视频",
@@ -266,13 +263,27 @@ const UI_TEXT := {
         "settings.trace_log_desc": "启用 spdlog trace 级别详细日志，输出最大调试信息",
         "settings.export_tjs": "导出 TJS 脚本",
         "settings.export_tjs_desc": "游戏加载时自动从 XP3 中导出反汇编的 TJS 字节码脚本",
+        "settings.scene_test": "场景测试",
+        "settings.scene_test_desc": "重启应用并直接跳转到所选界面预览；游戏界面会展示完整的运行视图。未保存的设置草稿将丢失",
+        "settings.scene_test_enter": "重启进入",
+        "settings.scene_test_exit": "退出场景测试",
+        "settings.scene_test_home": "首页",
+        "settings.scene_test_settings": "设置",
+        "settings.scene_test_detail": "游戏详情",
+        "settings.scene_test_video": "视频库",
+        "settings.scene_test_video_player": "视频播放器",
+        "settings.scene_test_game": "游戏界面",
+        "settings.scene_test_mode_label": "场景测试模式",
+        "settings.scene_test_game_loading": "游戏界面（加载中）",
+        "settings.scene_test_game_started": "游戏界面（已启动）",
+        "settings.scene_test_state_default": "默认状态",
+        "settings.scene_test_state_loading": "加载中",
+        "settings.scene_test_state_started": "已启动",
         "settings.error_dialog_logs": "错误弹窗附带日志",
         "settings.error_dialog_logs_desc": "真正异常弹窗中追加最近 20 行引擎日志；默认关闭",
         "settings.version": "版本",
         "settings.author": "作者",
         "settings.email": "邮箱",
-        "settings.app_service_filing": "App服务备案号",
-        "settings.app_service_filing_open_failed": "无法打开备案信息网页，请稍后重试。",
         "iap.list_limit.title": "目录限制解锁",
         "iap.list_limit.desc": "永久解锁视觉小说库和视频库中的全部目录项目",
         "iap.coffee.title": "请作者喝一杯咖啡",
@@ -280,7 +291,6 @@ const UI_TEXT := {
         "iap.coffee.active_until": "内测功能有效期至：%s",
         "iap.coffee.inactive": "内测功能当前未启用",
         "iap.coffee.purchase_success": "感谢支持！内测功能有效期至：%s",
-        "iap.runtime_unavailable": "此视觉小说兼容正在测试中，请等待后续支持",
         "support.coffee.title": "请作者喝一杯咖啡",
         "support.coffee.desc": "打开支付宝支持作者，不影响游戏导入或启动",
         "support.coffee.open": "打开支付宝",
@@ -338,7 +348,6 @@ const UI_TEXT := {
         "detail.launch_entry": "启动入口：%s",
         "detail.default_launch_entry": "游戏目录（自动检测）",
         "detail.set_launch_file": "切换启动文件",
-        "detail.rfvp_encoding": "脚本编码（rfvp）",
         "detail.reset_launch_file": "恢复目录自动检测",
         "detail.set_cover": "设置封面",
         "detail.delete_cover": "删除封面",
@@ -384,7 +393,7 @@ const UI_TEXT := {
         "message.android_storage_permission_required": "需要允许 Aether 访问文件系统后才能导入或启动外部游戏。请在系统弹窗或权限设置中授予文件访问权限，然后再试。",
         "message.android_video_storage_permission_required": "需要允许 Aether 访问文件系统后才能导入视频。请在系统弹窗或权限设置中授予文件访问权限，然后再试。",
         "message.path_missing": "游戏路径不存在",
-        "message.launch_file_unsupported": "启动文件只支持 EXE、XP3 或 HCB",
+        "message.launch_file_unsupported": "启动文件只支持 EXE 或 XP3",
         "message.launch_file_outside_game": "启动文件必须位于当前游戏目录内",
         "message.launch_file_missing": "启动文件不存在：%s",
         "message.cover_file_missing": "无法读取所选封面图片：%s",
@@ -423,8 +432,6 @@ const UI_TEXT := {
         "home.status": "視覺小說庫",
         "nav.library": "視覺小說",
         "nav.videos": "影片庫",
-        "nav.collapse_sidebar": "收合側邊欄",
-        "nav.expand_sidebar": "展開側邊欄",
         "home.empty_title": "尚未加入任何遊戲",
         "home.game_count": "%d 個遊戲",
         "video.video_count": "%d 個影片",
@@ -551,13 +558,27 @@ const UI_TEXT := {
         "settings.trace_log_desc": "啟用 spdlog trace 級別詳細日誌，輸出最大除錯資訊",
         "settings.export_tjs": "匯出 TJS 腳本",
         "settings.export_tjs_desc": "遊戲載入時自動從 XP3 中匯出反組譯的 TJS 位元組碼腳本",
+        "settings.scene_test": "場景測試",
+        "settings.scene_test_desc": "重新啟動應用並直接跳轉到所選介面預覽；遊戲介面會展示完整的執行視圖。未儲存的設定草稿將遺失",
+        "settings.scene_test_enter": "重新啟動進入",
+        "settings.scene_test_exit": "離開場景測試",
+        "settings.scene_test_home": "首頁",
+        "settings.scene_test_settings": "設定",
+        "settings.scene_test_detail": "遊戲詳情",
+        "settings.scene_test_video": "影片庫",
+        "settings.scene_test_video_player": "影片播放器",
+        "settings.scene_test_game": "遊戲介面",
+        "settings.scene_test_mode_label": "場景測試模式",
+        "settings.scene_test_game_loading": "遊戲介面（載入中）",
+        "settings.scene_test_game_started": "遊戲介面（已啟動）",
+        "settings.scene_test_state_default": "預設狀態",
+        "settings.scene_test_state_loading": "載入中",
+        "settings.scene_test_state_started": "已啟動",
         "settings.error_dialog_logs": "錯誤彈窗附帶日誌",
         "settings.error_dialog_logs_desc": "真正異常彈窗中追加最近 20 行引擎日誌；預設關閉",
         "settings.version": "版本",
         "settings.author": "作者",
         "settings.email": "信箱",
-        "settings.app_service_filing": "App 服務備案號",
-        "settings.app_service_filing_open_failed": "無法開啟備案資訊網頁，請稍後再試。",
         "iap.list_limit.title": "解除目錄限制",
         "iap.list_limit.desc": "永久解鎖視覺小說庫與影片庫中的所有目錄項目",
         "iap.coffee.title": "請作者喝一杯咖啡",
@@ -565,7 +586,6 @@ const UI_TEXT := {
         "iap.coffee.active_until": "測試功能有效期限至：%s",
         "iap.coffee.inactive": "測試功能目前尚未啟用",
         "iap.coffee.purchase_success": "感謝支持！測試功能有效期限至：%s",
-        "iap.runtime_unavailable": "此視覺小說的相容支援仍在測試中，請等待後續支援",
         "support.coffee.title": "請作者喝一杯咖啡",
         "support.coffee.desc": "開啟支付寶支持作者，不影響遊戲匯入或啟動",
         "support.coffee.open": "開啟支付寶",
@@ -623,7 +643,6 @@ const UI_TEXT := {
         "detail.launch_entry": "啟動入口：%s",
         "detail.default_launch_entry": "遊戲目錄（自動偵測）",
         "detail.set_launch_file": "切換啟動檔案",
-        "detail.rfvp_encoding": "腳本編碼（rfvp）",
         "detail.reset_launch_file": "恢復目錄自動偵測",
         "detail.set_cover": "設定封面",
         "detail.rename": "重新命名",
@@ -667,7 +686,7 @@ const UI_TEXT := {
         "message.android_storage_permission_required": "需要允許 Aether 存取檔案系統後才能匯入或啟動外部遊戲。請在系統彈窗或權限設定中授予檔案存取權限，然後再試。",
         "message.android_video_storage_permission_required": "需要允許 Aether 存取檔案系統後才能匯入影片。請在系統彈窗或權限設定中授予檔案存取權限，然後再試。",
         "message.path_missing": "遊戲路徑不存在",
-        "message.launch_file_unsupported": "啟動檔案僅支援 EXE、XP3 或 HCB",
+        "message.launch_file_unsupported": "啟動檔案僅支援 EXE 或 XP3",
         "message.launch_file_outside_game": "啟動檔案必須位於目前遊戲目錄內",
         "message.launch_file_missing": "啟動檔案不存在：%s",
         "message.cover_file_missing": "無法讀取所選封面圖片：%s",
@@ -706,8 +725,6 @@ const UI_TEXT := {
         "home.status": "Visual Novel Library",
         "nav.library": "Visual Novels",
         "nav.videos": "Videos",
-        "nav.collapse_sidebar": "Collapse sidebar",
-        "nav.expand_sidebar": "Expand sidebar",
         "home.empty_title": "No games added yet",
         "home.game_count": "%d games",
         "video.video_count": "%d videos",
@@ -834,13 +851,27 @@ const UI_TEXT := {
         "settings.trace_log_desc": "Enable spdlog trace-level logs for maximum diagnostic output",
         "settings.export_tjs": "Export TJS Scripts",
         "settings.export_tjs_desc": "Automatically export disassembled TJS bytecode scripts from XP3 files while loading games",
+        "settings.scene_test": "Scene Test",
+        "settings.scene_test_desc": "Restart the app and jump straight to the selected screen for preview; the game screen shows the complete runtime view. Unsaved settings drafts are lost",
+        "settings.scene_test_enter": "Restart & Enter",
+        "settings.scene_test_exit": "Exit Scene Test",
+        "settings.scene_test_home": "Home",
+        "settings.scene_test_settings": "Settings",
+        "settings.scene_test_detail": "Game Detail",
+        "settings.scene_test_video": "Video Library",
+        "settings.scene_test_video_player": "Video Player",
+        "settings.scene_test_game": "Game Screen",
+        "settings.scene_test_mode_label": "Scene Test Mode",
+        "settings.scene_test_game_loading": "Game Screen (Loading)",
+        "settings.scene_test_game_started": "Game Screen (Started)",
+        "settings.scene_test_state_default": "Default",
+        "settings.scene_test_state_loading": "Loading",
+        "settings.scene_test_state_started": "Started",
         "settings.error_dialog_logs": "Attach Logs to Errors",
         "settings.error_dialog_logs_desc": "Append the latest 20 engine log lines to real error dialogs; disabled by default",
         "settings.version": "Version",
         "settings.author": "Author",
         "settings.email": "Email",
-        "settings.app_service_filing": "App Service Filing Number",
-        "settings.app_service_filing_open_failed": "Unable to open the filing page. Please try again later.",
         "iap.list_limit.title": "Unlock Library Limit",
         "iap.list_limit.desc": "Permanently unlock every item in the visual novel and video libraries",
         "iap.coffee.title": "Buy the Author a Coffee",
@@ -848,7 +879,6 @@ const UI_TEXT := {
         "iap.coffee.active_until": "Beta feature access expires: %s",
         "iap.coffee.inactive": "Beta feature access is not active",
         "iap.coffee.purchase_success": "Thank you! Beta feature access expires: %s",
-        "iap.runtime_unavailable": "Compatibility for this visual novel is still being tested. Please wait for a future update.",
         "support.coffee.title": "Buy the Author a Coffee",
         "support.coffee.desc": "Open Alipay to support the author; game import and launch are unaffected",
         "support.coffee.open": "Open Alipay",
@@ -906,7 +936,6 @@ const UI_TEXT := {
         "detail.launch_entry": "Launch entry: %s",
         "detail.default_launch_entry": "Game folder (auto-detect)",
         "detail.set_launch_file": "Change Launch File",
-        "detail.rfvp_encoding": "Script encoding (rfvp)",
         "detail.reset_launch_file": "Restore Folder Auto-detect",
         "detail.set_cover": "Set Cover",
         "detail.delete_cover": "Delete Cover",
@@ -952,7 +981,7 @@ const UI_TEXT := {
         "message.android_storage_permission_required": "Allow Aether to access the file system before importing or launching external games. Grant file access in the system prompt or permission settings, then try again.",
         "message.android_video_storage_permission_required": "Allow Aether to access the file system before importing videos. Grant file access in the system prompt or permission settings, then try again.",
         "message.path_missing": "Game path does not exist",
-        "message.launch_file_unsupported": "The launch file must be an EXE, XP3 or HCB file",
+        "message.launch_file_unsupported": "The launch file must be an EXE or XP3 file",
         "message.launch_file_outside_game": "The launch file must be inside this game folder",
         "message.launch_file_missing": "Launch file does not exist: %s",
         "message.cover_file_missing": "Could not read the selected cover image: %s",
@@ -991,8 +1020,6 @@ const UI_TEXT := {
         "home.status": "ビジュアルノベルライブラリ",
         "nav.library": "ビジュアルノベル",
         "nav.videos": "ビデオ",
-        "nav.collapse_sidebar": "サイドバーを折りたたむ",
-        "nav.expand_sidebar": "サイドバーを展開",
         "home.empty_title": "ゲームはまだ追加されていません",
         "home.game_count": "%d 本のゲーム",
         "video.video_count": "%d 本のビデオ",
@@ -1119,13 +1146,27 @@ const UI_TEXT := {
         "settings.trace_log_desc": "spdlog の trace レベル詳細ログを有効にします",
         "settings.export_tjs": "TJS スクリプトを書き出す",
         "settings.export_tjs_desc": "ゲーム読み込み時に XP3 から逆アセンブル済み TJS バイトコードを自動で書き出します",
+        "settings.scene_test": "シーンテスト",
+        "settings.scene_test_desc": "アプリを再起動し、選択した画面へ直接移動してプレビューします。ゲーム画面では完全な実行ビューを表示します。未保存の設定は破棄されます",
+        "settings.scene_test_enter": "再起動して進入",
+        "settings.scene_test_exit": "シーンテストを終了",
+        "settings.scene_test_home": "ホーム",
+        "settings.scene_test_settings": "設定",
+        "settings.scene_test_detail": "ゲーム詳細",
+        "settings.scene_test_video": "動画ライブラリ",
+        "settings.scene_test_video_player": "動画プレーヤー",
+        "settings.scene_test_game": "ゲーム画面",
+        "settings.scene_test_mode_label": "シーンテストモード",
+        "settings.scene_test_game_loading": "ゲーム画面（読み込み中）",
+        "settings.scene_test_game_started": "ゲーム画面（起動済み）",
+        "settings.scene_test_state_default": "デフォルト",
+        "settings.scene_test_state_loading": "読み込み中",
+        "settings.scene_test_state_started": "起動済み",
         "settings.error_dialog_logs": "エラーにログを添付",
         "settings.error_dialog_logs_desc": "実エラーダイアログに直近 20 行のエンジンログを追加します。既定はオフ",
         "settings.version": "バージョン",
         "settings.author": "作者",
         "settings.email": "メール",
-        "settings.app_service_filing": "アプリサービス届出番号",
-        "settings.app_service_filing_open_failed": "届出情報ページを開けませんでした。後でもう一度お試しください。",
         "iap.list_limit.title": "ライブラリ制限解除",
         "iap.list_limit.desc": "ビジュアルノベルと動画ライブラリのすべての項目を永久に解除します",
         "iap.coffee.title": "作者にコーヒーを一杯贈る",
@@ -1133,7 +1174,6 @@ const UI_TEXT := {
         "iap.coffee.active_until": "ベータ機能の有効期限：%s",
         "iap.coffee.inactive": "ベータ機能は現在有効ではありません",
         "iap.coffee.purchase_success": "ご支援ありがとうございます！ベータ機能の有効期限：%s",
-        "iap.runtime_unavailable": "このビジュアルノベルの互換対応はテスト中です。今後の対応をお待ちください。",
         "support.coffee.title": "作者にコーヒーを一杯贈る",
         "support.coffee.desc": "Alipay を開いて作者を支援します。ゲームの読み込みや起動には影響しません",
         "support.coffee.open": "Alipay を開く",
@@ -1191,7 +1231,6 @@ const UI_TEXT := {
         "detail.launch_entry": "起動エントリ：%s",
         "detail.default_launch_entry": "ゲームフォルダー（自動検出）",
         "detail.set_launch_file": "起動ファイルを変更",
-        "detail.rfvp_encoding": "スクリプトの文字コード（rfvp）",
         "detail.reset_launch_file": "フォルダーの自動検出に戻す",
         "detail.set_cover": "カバーを設定",
         "detail.rename": "名前を変更",
@@ -1235,7 +1274,7 @@ const UI_TEXT := {
         "message.android_storage_permission_required": "外部ゲームのインポートまたは起動には、Aether にファイルシステムへのアクセスを許可する必要があります。システムの権限ダイアログまたは設定でファイルアクセスを許可してから、もう一度お試しください。",
         "message.android_video_storage_permission_required": "動画をインポートするには、Aether にファイルシステムへのアクセスを許可する必要があります。システムの権限ダイアログまたは設定でファイルアクセスを許可してから、もう一度お試しください。",
         "message.path_missing": "ゲームパスが存在しません",
-        "message.launch_file_unsupported": "起動ファイルは EXE、XP3 または HCB のみ対応しています",
+        "message.launch_file_unsupported": "起動ファイルは EXE または XP3 のみ対応しています",
         "message.launch_file_outside_game": "起動ファイルは現在のゲームフォルダー内にある必要があります",
         "message.launch_file_missing": "起動ファイルが存在しません：%s",
         "message.cover_file_missing": "選択したカバー画像を読み込めません：%s",
@@ -1274,8 +1313,6 @@ const UI_TEXT := {
         "home.status": "비주얼 노벨 라이브러리",
         "nav.library": "비주얼 노벨",
         "nav.videos": "비디오",
-        "nav.collapse_sidebar": "사이드바 접기",
-        "nav.expand_sidebar": "사이드바 펼치기",
         "home.empty_title": "아직 추가된 게임이 없습니다",
         "home.game_count": "게임 %d개",
         "video.video_count": "비디오 %d개",
@@ -1402,13 +1439,27 @@ const UI_TEXT := {
         "settings.trace_log_desc": "spdlog trace 레벨 상세 로그를 켜서 최대 디버그 정보를 출력합니다",
         "settings.export_tjs": "TJS 스크립트 내보내기",
         "settings.export_tjs_desc": "게임 로드 시 XP3에서 디스어셈블된 TJS 바이트코드 스크립트를 자동으로 내보냅니다",
+        "settings.scene_test": "장면 테스트",
+        "settings.scene_test_desc": "앱을 재시작하고 선택한 화면으로 바로 이동하여 미리 봅니다. 게임 화면은 완전한 실행 뷰를 표시합니다. 저장하지 않은 설정은 삭제됩니다",
+        "settings.scene_test_enter": "재시작 후 진입",
+        "settings.scene_test_exit": "장면 테스트 종료",
+        "settings.scene_test_home": "홈",
+        "settings.scene_test_settings": "설정",
+        "settings.scene_test_detail": "게임 상세",
+        "settings.scene_test_video": "동영상 라이브러리",
+        "settings.scene_test_video_player": "동영상 플레이어",
+        "settings.scene_test_game": "게임 화면",
+        "settings.scene_test_mode_label": "장면 테스트 모드",
+        "settings.scene_test_game_loading": "게임 화면 (로딩 중)",
+        "settings.scene_test_game_started": "게임 화면 (시작됨)",
+        "settings.scene_test_state_default": "기본값",
+        "settings.scene_test_state_loading": "로딩 중",
+        "settings.scene_test_state_started": "시작됨",
         "settings.error_dialog_logs": "오류에 로그 첨부",
         "settings.error_dialog_logs_desc": "실제 오류 대화상자에 최근 엔진 로그 20줄을 추가합니다. 기본값은 꺼짐입니다",
         "settings.version": "버전",
         "settings.author": "작성자",
         "settings.email": "이메일",
-        "settings.app_service_filing": "앱 서비스 등록 번호",
-        "settings.app_service_filing_open_failed": "등록 정보 페이지를 열 수 없습니다. 나중에 다시 시도해 주세요.",
         "iap.list_limit.title": "라이브러리 제한 해제",
         "iap.list_limit.desc": "비주얼 노벨 및 동영상 라이브러리의 모든 항목을 영구적으로 해제합니다",
         "iap.coffee.title": "작가에게 커피 한 잔 사주기",
@@ -1416,7 +1467,6 @@ const UI_TEXT := {
         "iap.coffee.active_until": "베타 기능 만료일: %s",
         "iap.coffee.inactive": "베타 기능이 현재 활성화되어 있지 않습니다",
         "iap.coffee.purchase_success": "후원해 주셔서 감사합니다! 베타 기능 만료일: %s",
-        "iap.runtime_unavailable": "이 비주얼 노벨의 호환성은 아직 테스트 중입니다. 추후 지원을 기다려 주세요.",
         "support.coffee.title": "작가에게 커피 한 잔 사주기",
         "support.coffee.desc": "Alipay를 열어 작가를 후원합니다. 게임 가져오기나 실행에는 영향을 주지 않습니다",
         "support.coffee.open": "Alipay 열기",
@@ -1474,7 +1524,6 @@ const UI_TEXT := {
         "detail.launch_entry": "실행 진입점: %s",
         "detail.default_launch_entry": "게임 폴더(자동 감지)",
         "detail.set_launch_file": "실행 파일 변경",
-        "detail.rfvp_encoding": "스크립트 인코딩 (rfvp)",
         "detail.reset_launch_file": "폴더 자동 감지 복원",
         "detail.set_cover": "표지 설정",
         "detail.rename": "이름 변경",
@@ -1518,7 +1567,7 @@ const UI_TEXT := {
         "message.android_storage_permission_required": "외부 게임을 가져오거나 실행하려면 Aether의 파일 시스템 접근을 허용해야 합니다. 시스템 권한 창 또는 권한 설정에서 파일 접근 권한을 허용한 뒤 다시 시도하세요.",
         "message.android_video_storage_permission_required": "비디오를 가져오려면 Aether의 파일 시스템 접근을 허용해야 합니다. 시스템 권한 창 또는 권한 설정에서 파일 접근 권한을 허용한 뒤 다시 시도하세요.",
         "message.path_missing": "게임 경로가 존재하지 않습니다",
-        "message.launch_file_unsupported": "실행 파일은 EXE, XP3 또는 HCB만 지원합니다",
+        "message.launch_file_unsupported": "실행 파일은 EXE 또는 XP3만 지원합니다",
         "message.launch_file_outside_game": "실행 파일은 현재 게임 폴더 안에 있어야 합니다",
         "message.launch_file_missing": "실행 파일이 존재하지 않습니다: %s",
         "message.cover_file_missing": "선택한 표지 이미지를 읽을 수 없습니다: %s",
@@ -1564,10 +1613,8 @@ const POINTER_MOD_CANCEL := 1 << 30
 const KEY_MOD_CONTROL := 0x04
 const RUNTIME_KIRIKIRI := "kirikiri"
 const RUNTIME_ONSCRIPTER := "onscripter"
-const RUNTIME_SIGLUS := "siglus"
 const RUNTIME_MINORI := "minori"
-const BETA_PROVIDER_RUNTIME_IDS := ["catsystem2", "rfvp", "wa2"]
-const RUNTIME_RFVP := "rfvp"
+const RUNTIME_CATSYSTEM2 := "catsystem2"
 const RUNTIME_PLAYER_CLASS := "AetherRuntimePlayer"
 const ONSCRIPTER_SCRIPT_MARKERS := [
     "0.txt",
@@ -1577,10 +1624,6 @@ const ONSCRIPTER_SCRIPT_MARKERS := [
     "nscript.dat",
     "onscript.nt2",
     "onscript.nt3",
-]
-const SIGLUS_SCRIPT_MARKERS := [
-    "Gameexe.ini",
-    "gameexe.ini",
 ]
 const SHELL_SCROLL_DRAG_THRESHOLD := 4.0
 const SHELL_SCROLL_BUTTON_DRAG_THRESHOLD := 28.0
@@ -1601,6 +1644,12 @@ const SHELL_SCROLL_MOMENTUM_DISTANCE_FACTOR := 0.28
 const SHELL_SCROLL_MOMENTUM_MAX_DURATION := 0.85
 const SHELL_SCROLL_MOMENTUM_STALE_MSEC := 140
 const SHELL_SCROLL_MOUSE_KEY := -1
+const SHELL_SCROLL_MOMENTUM_FRICTION := 4.2
+const SHELL_SCROLL_MOMENTUM_MIN := 60.0
+const SHELL_SCROLL_OVERSCROLL_MAX := 56.0
+const SHELL_SCROLL_OVERSCROLL_STIFFNESS := 170.0
+const SHELL_SCROLL_OVERSCROLL_DAMPING := 13.0
+const SHELL_SCROLL_OVERSCROLL_RESISTANCE := 0.28
 const SETTINGS_DRAFT_KEYS := [
     "language",
     "style",
@@ -1625,6 +1674,9 @@ const SETTINGS_DRAFT_KEYS := [
     "error_dialog_logs",
     "text_translation_model_path",
 ]
+var scene_test_enabled := false
+var scene_test_scene := "home"
+var scene_test_state := ""
 const DIAGNOSTIC_PROFILES := ["off", "baseline", "input", "render", "storage", "script", "audio", "video", "plugin", "system", "full"]
 const DEBUG_OVERLAY_MODES := ["off", "summary", "detail"]
 const ADVANCED_TRACE_TIMEOUT_MS := 30000
@@ -1644,7 +1696,13 @@ var shell_safe_top_fill: ColorRect
 var shell_sidebar_backdrop: PanelContainer
 var shell_content: Control
 var shell_sidebar: PanelContainer
+var shell_nav_indicator: PanelContainer
+var scroll_feathers: Array[Control] = []
+var nav_pill_drag := {"active": false, "pill": null, "axis": 1}
+var nav_pill_touch_index := -1
+var nav_button_drag := {}
 var shell_compact_header: PanelContainer
+var shell_compact_indicator: PanelContainer
 var shell_route_label: Label
 var launch_transition_tween: Tween
 var shell_library_button: Button
@@ -1656,11 +1714,7 @@ var shell_compact_settings_button: Button
 var shell_sidebar_brand: HBoxContainer
 var shell_sidebar_brand_labels: VBoxContainer
 var shell_sidebar_version: Label
-var shell_sidebar_toggle: Button
-var shell_sidebar_collapsed := false
-var shell_sidebar_animating_expand := false
 var shell_sidebar_layout_width := 0.0
-var shell_sidebar_tween: Tween
 var shell_route := "library"
 var home_view: Control
 var settings_view: ScrollContainer
@@ -1753,7 +1807,7 @@ var advanced_expiry_msec := {}
 var diagnostic_env_originals := {}
 var language_mode := LANG_SYSTEM
 var active_language := LANG_ZH_HANS
-var style_mode := DEFAULT_STYLE_MODE
+var style_mode := STYLE_CLASSIC
 var display_title_font: FontVariation
 var ios_ui_scale_mode := "comfortable"
 var legal_accepted_version := ""
@@ -1786,6 +1840,7 @@ var android_storage_permission_request_deadline_msec := 0
 var android_storage_permission_request_last_probe_msec := 0
 var dirty_settings := false
 var settings_animate_next := true
+var settings_compact_layout := false
 var settings_draft := {}
 var settings_relayout_pending := false
 var settings_relayout_scroll_vertical := 0
@@ -1803,6 +1858,11 @@ var shell_scroll_drag_states := {}
 var shell_scroll_remainders := {}
 var shell_scroll_tweens := {}
 var shell_scroll_targets := {}
+var shell_scroll_momentum := {}
+var shell_scroll_overscroll := {}
+var scroll_flair_speed := 0.0
+var scroll_flair_dir := 1.0
+
 var mobile_edge_back_touch_index := -1
 var mobile_edge_back_start := Vector2.ZERO
 var mobile_edge_back_last := Vector2.ZERO
@@ -2072,19 +2132,18 @@ const MOBILE_EDGE_BACK_MIN_TRIGGER_DISTANCE := 64.0
 const PILL_ICON_SIZE := Vector2(24, 24)
 const PILL_ICON_VISUAL_OFFSET_Y := 2.0
 const SETTINGS_ACTION_BUTTON_SIZE := Vector2(150, 54)
-const HOME_TILE_MIN_WIDTH := 340.0
-const HOME_TILE_HEIGHT := 132.0
-const HOME_TILE_COVER_WIDTH := 108.0
-const HOME_ROW_HEIGHT := 112.0
-const HOME_ROW_COVER_WIDTH := 116.0
-const HOME_COMPACT_BREAKPOINT := 700.0
+const HOME_CARD_SIZE := Vector2(312, 272)
+const HOME_CARD_COVER_HEIGHT := 154.0
+const HOME_TILE_MIN_WIDTH := 380.0
+const HOME_TILE_HEIGHT := 148.0
+const HOME_TILE_COVER_WIDTH := 124.0
+const HOME_ROW_HEIGHT := 124.0
+const HOME_ROW_COVER_WIDTH := 120.0
+const HOME_COMPACT_BREAKPOINT := 760.0
 const HOME_PHONE_BREAKPOINT := 520.0
 const DETAIL_COMPACT_BREAKPOINT := 960.0
 
 var color_bg := Color(0.055, 0.059, 0.071, 1.0)
-var siglus_joypad := SiglusJoypadInput.new()
-var siglus_native_cursor_visible := true
-var siglus_pointer_inside_window := false
 var color_game_bg := Color(0, 0, 0, 1)
 var color_card := Color(0.098, 0.102, 0.118, 1.0)
 var color_card_alt := Color(0.132, 0.137, 0.157, 1.0)
@@ -2149,6 +2208,7 @@ func _apply_style_mode(update_theme: bool = true) -> void:
     color_danger = ui_tokens.danger
     color_success = ui_tokens.success
     color_line = ui_tokens.separator
+    _refresh_feather_colors()
 
     if update_theme:
         _apply_ui_font()
@@ -2208,8 +2268,12 @@ func _language_option_label(mode: String) -> String:
 
 func _style_option_label(mode: String) -> String:
     if mode == STYLE_CLASSIC:
-        return _t("style.classic")
-    return _t("style.dark")
+        return "Clean Light / 纯净浅色"
+    elif mode == STYLE_WARM_DARK:
+        return "Classic Warm / 原版暖黑"
+    elif mode == STYLE_WARM_LIGHT:
+        return "Classic Warm / 原版暖白"
+    return "Midnight Dark / 现代深邃"
 
 func _apply_language_mode() -> void:
     language_mode = _normalize_language_mode(language_mode)
@@ -2276,14 +2340,39 @@ func _apply_ui_font() -> void:
     ui_theme.set_color("font_color", "CheckButton", color_text)
     ui_theme.set_color("font_hover_color", "CheckButton", color_text)
     ui_theme.set_color("font_pressed_color", "CheckButton", color_text)
-    ui_theme.set_stylebox("normal", "OptionButton", _panel_style(8, color_card_alt, color_line, 1))
-    ui_theme.set_stylebox("hover", "OptionButton", _panel_style(8, color_card_hover, Color.TRANSPARENT, 0))
-    ui_theme.set_stylebox("pressed", "OptionButton", _panel_style(8, color_accent_dim, Color.TRANSPARENT, 0))
-    ui_theme.set_stylebox("focus", "OptionButton", _focus_outline(8))
-    ui_theme.set_stylebox("normal", "LineEdit", _panel_style(8, color_card_alt, color_line, 1))
-    ui_theme.set_stylebox("focus", "LineEdit", _panel_style(8, color_card_hover, color_line, 1))
-    ui_theme.set_stylebox("normal", "TextEdit", _panel_style(8, Color(0, 0, 0, 0.18), color_line, 1))
-    ui_theme.set_stylebox("focus", "TextEdit", _panel_style(8, Color(0, 0, 0, 0.24), color_line, 1))
+
+    # Unified default Button chrome: rounded 12, surface fill + hairline, no pill shapes.
+    var button_normal := _panel_style(12, ui_tokens.surface, ui_tokens.separator, 1)
+    button_normal.content_margin_top = 10
+    button_normal.content_margin_bottom = 10
+    var button_hover := _panel_style(12, ui_tokens.surface_hover, Color.TRANSPARENT, 0)
+    button_hover.content_margin_top = 10
+    button_hover.content_margin_bottom = 10
+    var button_pressed := _panel_style(12, ui_tokens.accent_fill, Color.TRANSPARENT, 0)
+    button_pressed.content_margin_top = 10
+    button_pressed.content_margin_bottom = 10
+    var button_disabled := _panel_style(12, Color(ui_tokens.surface_raised.r, ui_tokens.surface_raised.g, ui_tokens.surface_raised.b, 0.34), ui_tokens.separator, 1)
+    button_disabled.content_margin_top = 10
+    button_disabled.content_margin_bottom = 10
+    var button_focus := _panel_style(12, Color(0, 0, 0, 0), ui_tokens.accent, 2)
+    button_focus.draw_center = false
+    ui_theme.set_stylebox("normal", "Button", button_normal)
+    ui_theme.set_stylebox("hover", "Button", button_hover)
+    ui_theme.set_stylebox("pressed", "Button", button_pressed)
+    ui_theme.set_stylebox("disabled", "Button", button_disabled)
+    ui_theme.set_stylebox("focus", "Button", button_focus)
+    ui_theme.set_color("font_hover_color", "Button", color_text)
+    ui_theme.set_color("font_pressed_color", "Button", color_text)
+    ui_theme.set_color("font_focus_color", "Button", color_text)
+
+    ui_theme.set_stylebox("normal", "OptionButton", _panel_style(12, color_card_alt, color_line, 1))
+    ui_theme.set_stylebox("hover", "OptionButton", _panel_style(12, color_card_hover, Color.TRANSPARENT, 0))
+    ui_theme.set_stylebox("pressed", "OptionButton", _panel_style(12, color_accent_dim, Color.TRANSPARENT, 0))
+    ui_theme.set_stylebox("focus", "OptionButton", _focus_outline(12))
+    ui_theme.set_stylebox("normal", "LineEdit", _panel_style(12, color_card_alt, color_line, 1))
+    ui_theme.set_stylebox("focus", "LineEdit", _panel_style(12, color_card_hover, color_line, 1))
+    ui_theme.set_stylebox("normal", "TextEdit", _panel_style(12, Color(0, 0, 0, 0.18), color_line, 1))
+    ui_theme.set_stylebox("focus", "TextEdit", _panel_style(12, Color(0, 0, 0, 0.24), color_line, 1))
     ui_theme.set_stylebox("scroll", "VScrollBar", _scroll_track_style())
     ui_theme.set_stylebox("grabber", "VScrollBar", _scroll_thumb_style(color_muted.darkened(0.18)))
     ui_theme.set_stylebox("grabber_highlight", "VScrollBar", _scroll_thumb_style(color_muted))
@@ -2566,10 +2655,12 @@ func _build_video_view() -> void:
     video_timeline = HBoxContainer.new()
     video_timeline.add_theme_constant_override("separation", 14)
     video_controls_box.add_child(video_timeline)
-    video_progress_slider = HSlider.new()
+    video_progress_slider = AetherSlider.new()
+    video_progress_slider.name = "VideoProgressSlider"
     video_progress_slider.min_value = 0.0
     video_progress_slider.max_value = 1.0
     video_progress_slider.step = 0.1
+    video_progress_slider.setup(ui_tokens, 0.0)
     video_progress_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     video_progress_slider.drag_started.connect(func():
         active_video_scrubbing = true
@@ -2900,10 +2991,28 @@ func _build_shell_chrome() -> void:
     shell_sidebar.clip_contents = true
     shell_sidebar.add_theme_stylebox_override("panel", ui_tokens.sidebar_panel())
     shell_root.add_child(shell_sidebar)
+    # Spring-driven width animation moves the sidebar every frame; keep the
+    # content area, home layout and safe-area fills glued to the live size.
+
+    # Host keeps the spring selection indicator (drawn behind nav items) and the sidebar column
+    var sidebar_host := Control.new()
+    sidebar_host.name = "SidebarHost"
+    sidebar_host.set_anchors_preset(Control.PRESET_FULL_RECT)
+    sidebar_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    shell_sidebar.add_child(sidebar_host)
+
+    shell_nav_indicator = PanelContainer.new()
+    shell_nav_indicator.name = "NavIndicator"
+    shell_nav_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    shell_nav_indicator.visible = false
+    shell_nav_indicator.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.accent_fill, 6))
+    sidebar_host.add_child(shell_nav_indicator)
 
     var sidebar := VBoxContainer.new()
+    sidebar.set_anchors_preset(Control.PRESET_FULL_RECT)
     sidebar.add_theme_constant_override("separation", 10)
-    shell_sidebar.add_child(sidebar)
+    sidebar.mouse_filter = Control.MOUSE_FILTER_PASS
+    sidebar_host.add_child(sidebar)
 
     shell_sidebar_brand = HBoxContainer.new()
     shell_sidebar_brand.custom_minimum_size = Vector2(0, 62)
@@ -2937,22 +3046,12 @@ func _build_shell_chrome() -> void:
     sidebar.add_child(shell_video_button)
     shell_settings_button = _shell_nav_button(_t("settings.title"), ICON_SETTINGS, _show_settings)
     sidebar.add_child(shell_settings_button)
+    for nav_button in [shell_library_button, shell_video_button, shell_settings_button]:
+        ui_motion.bind_lift(nav_button)
 
     var flexible_space := Control.new()
     flexible_space.size_flags_vertical = Control.SIZE_EXPAND_FILL
     sidebar.add_child(flexible_space)
-
-    shell_sidebar_toggle = Button.new()
-    shell_sidebar_toggle.text = "☰"
-    shell_sidebar_toggle.tooltip_text = _t("nav.collapse_sidebar")
-    shell_sidebar_toggle.accessibility_name = shell_sidebar_toggle.tooltip_text
-    shell_sidebar_toggle.custom_minimum_size = Vector2(44, 44)
-    shell_sidebar_toggle.focus_mode = Control.FOCUS_ALL
-    shell_sidebar_toggle.pressed.connect(_toggle_sidebar)
-    shell_sidebar_toggle.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-    ui_widgets.toolbar_button(shell_sidebar_toggle)
-    shell_sidebar_toggle.add_theme_font_size_override("font_size", 23)
-    sidebar.add_child(shell_sidebar_toggle)
 
     shell_sidebar_version = Label.new()
     shell_sidebar_version.text = _application_version_text()
@@ -2970,12 +3069,27 @@ func _build_shell_chrome() -> void:
     shell_compact_header.add_theme_stylebox_override("panel", compact_header_style)
     shell_root.add_child(shell_compact_header)
 
+    # Host keeps the jelly nav indicator behind the compact header row
+    var compact_host := Control.new()
+    compact_host.name = "CompactHeaderHost"
+    compact_host.set_anchors_preset(Control.PRESET_FULL_RECT)
+    compact_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    shell_compact_header.add_child(compact_host)
+
+    shell_compact_indicator = PanelContainer.new()
+    shell_compact_indicator.name = "CompactNavIndicator"
+    shell_compact_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    shell_compact_indicator.visible = false
+    shell_compact_indicator.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.accent_fill, 6))
+    compact_host.add_child(shell_compact_indicator)
+
     var compact_margin := MarginContainer.new()
+    compact_margin.set_anchors_preset(Control.PRESET_FULL_RECT)
     compact_margin.add_theme_constant_override("margin_left", 18)
     compact_margin.add_theme_constant_override("margin_top", 10)
     compact_margin.add_theme_constant_override("margin_right", 12)
     compact_margin.add_theme_constant_override("margin_bottom", 10)
-    shell_compact_header.add_child(compact_margin)
+    compact_host.add_child(compact_margin)
     var compact_row := HBoxContainer.new()
     compact_row.add_theme_constant_override("separation", 10)
     compact_margin.add_child(compact_row)
@@ -2993,8 +3107,321 @@ func _build_shell_chrome() -> void:
     shell_compact_settings_button = _shell_compact_button(ICON_SETTINGS, _t("settings.title"), _show_settings)
     compact_row.add_child(shell_compact_settings_button)
 
+    # Both jelly nav pills are directly draggable along their axis
+    var sidebar_specs := [
+        {"button": shell_library_button, "action": _show_home, "route": "library"},
+        {"button": shell_video_button, "action": _show_video_library, "route": "videos"},
+        {"button": shell_settings_button, "action": _show_settings, "route": "settings"},
+    ]
+    _bind_nav_pill_drag(shell_nav_indicator, sidebar_specs, 1)
+    var compact_specs := [
+        {"button": shell_compact_library_button, "action": _show_home, "route": "library"},
+        {"button": shell_compact_video_button, "action": _show_video_library, "route": "videos"},
+        {"button": shell_compact_settings_button, "action": _show_settings, "route": "settings"},
+    ]
+    _bind_nav_pill_drag(shell_compact_indicator, compact_specs, 0)
+    # The pill is mostly covered by its nav buttons. Letting a horizontal
+    # (or vertical) drag start on a button itself is what makes the jelly
+    # pill feel responsive instead of only grabbable in the tiny gaps.
+    for spec in sidebar_specs:
+        _bind_nav_button_drag_proxy(spec["button"], shell_nav_indicator, sidebar_specs, 1)
+    for spec in compact_specs:
+        _bind_nav_button_drag_proxy(spec["button"], shell_compact_indicator, compact_specs, 0)
+
+    # Deterministic resync whenever the header/sidebar layout settles; the
+    # per-frame follow then keeps the pills locked onto the live button rects.
+    shell_content.resized.connect(func():
+        call_deferred("_update_nav_indicator", false)
+        call_deferred("_update_compact_indicator", false)
+    )
+    compact_margin.resized.connect(func(): call_deferred("_update_compact_indicator", false))
+    sidebar_host.resized.connect(func(): call_deferred("_update_nav_indicator", false))
+
+    # Keep pills and feathers aligned across window resize / device rotation
+    shell_content.resized.connect(func():
+        call_deferred("_update_nav_indicator", false)
+        call_deferred("_update_compact_indicator", false)
+    )
+
+    call_deferred("_create_scroll_feathers")
     _sync_shell_route(shell_route)
     _apply_sidebar_presentation(false)
+
+func _nav_pill_goal(pill: Control, buttons: Array, compact: bool) -> Variant:
+    var route_index: int = {"library": 0, "videos": 1, "settings": 2}.get(shell_route, -1)
+    if route_index < 0 or route_index >= buttons.size():
+        return null
+    var button: Button = buttons[route_index]
+    if button == null or not is_instance_valid(button) or button.size == Vector2.ZERO:
+        return null
+    var parent := pill.get_parent() as Control
+    if parent == null or parent.size == Vector2.ZERO:
+        return null
+    var parent_rect := parent.get_global_rect()
+    var button_rect := button.get_global_rect()
+    if button_rect.size == Vector2.ZERO:
+        return null
+    var target_size: Vector2
+    var target_pos: Vector2
+    if compact:
+        target_size = button_rect.size + Vector2(6.0, 6.0)
+        target_pos = button_rect.position - parent_rect.position - Vector2(3.0, 3.0)
+    else:
+        # Wrap the whole row content: the pill extends past the button rect on
+        # every side so the icon and label sit fully inside the highlight.
+        target_size = button_rect.size + Vector2(12.0, 6.0)
+        target_pos = button_rect.position - parent_rect.position - Vector2(6.0, 3.0)
+    return {"pos": target_pos, "size": target_size}
+
+func _follow_nav_pills() -> void:
+    # Live magnetic follow: pills chase the real button rects every frame so
+    # container sorting, font loading, resize or rotation can never leave them
+    # offset. Spring physics keep the chase smooth; it settles once aligned.
+    if nav_pill_drag.get("active", false) or ui_motion.reduced_motion:
+        return
+    if shell_nav_indicator != null and is_instance_valid(shell_nav_indicator) \
+            and shell_nav_indicator.visible and shell_sidebar != null and is_instance_valid(shell_sidebar) and shell_sidebar.visible:
+        var goal = _nav_pill_goal(shell_nav_indicator, [shell_library_button, shell_video_button, shell_settings_button], false)
+        if goal != null:
+            ui_motion.spring_property(shell_nav_indicator, "position", goal["pos"], 0.30, 1.0)
+            ui_motion.spring_property(shell_nav_indicator, "size", goal["size"], 0.18, 1.0)
+    if shell_compact_indicator != null and is_instance_valid(shell_compact_indicator) \
+            and shell_compact_indicator.visible and shell_compact_header != null and is_instance_valid(shell_compact_header) and shell_compact_header.visible:
+        var goal_compact = _nav_pill_goal(shell_compact_indicator, [shell_compact_library_button, shell_compact_video_button, shell_compact_settings_button], true)
+        if goal_compact != null:
+            ui_motion.spring_property(shell_compact_indicator, "position", goal_compact["pos"], 0.30, 1.0)
+            ui_motion.spring_property(shell_compact_indicator, "size", goal_compact["size"], 0.18, 1.0)
+
+func _bind_nav_pill_drag(pill: Control, specs: Array, axis: int) -> void:
+    if pill == null:
+        return
+    pill.mouse_filter = Control.MOUSE_FILTER_STOP
+    pill.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+    pill.gui_input.connect(func(event: InputEvent):
+        _on_nav_pill_input(pill, specs, axis, event)
+    )
+
+func _nav_pill_drag_target(pill: Control, specs: Array, axis: int, pointer_axis: float) -> float:
+    # Pure geometry: where the pill center should sit so it follows the
+    # pointer, clamped to the span between the first and last nav button.
+    var parent_control := pill.get_parent() as Control
+    if parent_control == null or specs.is_empty():
+        return pill.position[axis]
+    var parent_rect := parent_control.get_global_rect()
+    var lo: float = (specs[0]["button"] as Button).get_global_rect().get_center()[axis]
+    var hi: float = (specs[specs.size() - 1]["button"] as Button).get_global_rect().get_center()[axis]
+    var clamped_center := clampf(pointer_axis, lo, hi)
+    return clamped_center - parent_rect.position[axis] - pill.size[axis] * 0.5
+
+func _move_nav_pill(pill: Control, specs: Array, axis: int, pointer_axis: float) -> void:
+    var target := pill.position
+    target[axis] = _nav_pill_drag_target(pill, specs, axis, pointer_axis)
+    if ui_motion.reduced_motion:
+        pill.position = target
+        return
+    # Elastic finger-follow plus squash along the travel axis, exactly the
+    # select-menu highlight behaviour.
+    ui_motion.spring_property(pill, "position", target, 0.06, 1.0)
+    var stretch := Vector2(1.05, 0.93) if axis == 0 else Vector2(0.93, 1.05)
+    ui_motion.spring_property(pill, "scale", stretch, 0.10, 0.8)
+
+func _slide_pill_to_button(pill: Control, axis: int, target_button: Button) -> void:
+    # Hover preview: glide the pill onto the hovered row like the dropdown
+    # menu highlight does, without committing the route.
+    if pill == null or target_button == null or not is_instance_valid(target_button):
+        return
+    var host := pill.get_parent() as Control
+    if host == null or host.size == Vector2.ZERO:
+        return
+    var button_rect := target_button.get_global_rect()
+    var parent_rect := host.get_global_rect()
+    if button_rect.size == Vector2.ZERO:
+        return
+    pill.visible = true
+    var target_size: Vector2
+    var target_pos: Vector2
+    if axis == 0:
+        target_size = button_rect.size + Vector2(6.0, 6.0)
+        target_pos = button_rect.position - parent_rect.position - Vector2(3.0, 3.0)
+    else:
+        # Same wrap-around geometry as _nav_pill_goal's expanded branch.
+        target_size = button_rect.size + Vector2(12.0, 6.0)
+        target_pos = button_rect.position - parent_rect.position - Vector2(6.0, 3.0)
+    if ui_motion.reduced_motion:
+        pill.position = target_pos
+        pill.size = target_size
+        return
+    ui_motion.spring_property(pill, "position", target_pos, 0.30, 0.55)
+    ui_motion.spring_property(pill, "size", target_size, 0.24, 1.0)
+
+func _on_nav_pill_input(pill: Control, specs: Array, axis: int, event: InputEvent) -> void:
+    if event is InputEventScreenTouch:
+        var touch := event as InputEventScreenTouch
+        if touch.pressed:
+            nav_pill_drag = {"active": true, "pill": pill, "axis": axis}
+            nav_pill_touch_index = touch.index
+            ui_motion.active_springs.erase(ui_motion._motion_key(pill, "position"))
+            pill.accept_event()
+        elif nav_pill_drag.get("active", false) and nav_pill_drag.get("pill") == pill \
+                and touch.index == nav_pill_touch_index:
+            nav_pill_drag = {"active": false, "pill": null, "axis": axis}
+            nav_pill_touch_index = -1
+            _snap_nav_pill(pill, specs, axis)
+            pill.accept_event()
+        return
+    if event is InputEventScreenDrag:
+        var drag := event as InputEventScreenDrag
+        if nav_pill_drag.get("active", false) and nav_pill_drag.get("pill") == pill \
+                and drag.index == nav_pill_touch_index:
+            _move_nav_pill(pill, specs, axis, drag.position[axis])
+            pill.accept_event()
+        return
+    if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+        if event.pressed:
+            nav_pill_drag = {"active": true, "pill": pill, "axis": axis}
+            ui_motion.active_springs.erase(ui_motion._motion_key(pill, "position"))
+            pill.accept_event()
+        elif nav_pill_drag.get("active", false) and nav_pill_drag.get("pill") == pill:
+            nav_pill_drag = {"active": false, "pill": null, "axis": axis}
+            _snap_nav_pill(pill, specs, axis)
+            pill.accept_event()
+    elif event is InputEventMouseMotion and nav_pill_drag.get("active", false) and nav_pill_drag.get("pill") == pill:
+        _move_nav_pill(pill, specs, axis, pill.get_global_mouse_position()[axis])
+        pill.accept_event()
+
+func _bind_nav_button_drag_proxy(button: Button, pill: Control, specs: Array, axis: int) -> void:
+    # Dropdown-menu-like rail: hovering slides the pill onto the row, dragging
+    # carries it, and release (tap or drag) commits the nearest route.
+    if button == null:
+        return
+    button.mouse_entered.connect(func():
+        if nav_pill_drag.get("active", false) or nav_button_drag.get("active", false):
+            return
+        nav_pill_drag = {"active": true, "pill": pill, "axis": axis, "hover": true}
+        _slide_pill_to_button(pill, axis, button)
+    )
+    button.mouse_exited.connect(func():
+        if nav_button_drag.get("active", false):
+            return
+        if nav_pill_drag.get("active", false) and nav_pill_drag.get("pill") == pill \
+                and bool(nav_pill_drag.get("hover", false)):
+            nav_pill_drag = {"active": false, "pill": null, "axis": axis}
+            # Snap back to the committed route with the same jelly release.
+            _update_nav_indicator(true)
+            _update_compact_indicator(true)
+    )
+    button.gui_input.connect(func(event: InputEvent):
+        if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+            if event.pressed:
+                nav_button_drag = {
+                    "button": button,
+                    "pill": pill,
+                    "specs": specs,
+                    "axis": axis,
+                    "active": false,
+                    "start": event.global_position,
+                }
+            elif nav_button_drag.get("button") == button:
+                var consumed := bool(nav_button_drag.get("active", false))
+                nav_button_drag = {}
+                if nav_pill_drag.get("active", false) and nav_pill_drag.get("pill") == pill:
+                    nav_pill_drag = {"active": false, "pill": null, "axis": axis}
+                if not consumed:
+                    # Plain click: Button's own pressed signal commits the
+                    # route; still settle the pill with a jelly wobble.
+                    _update_nav_indicator(true)
+                    _update_compact_indicator(true)
+                    return
+                var released_over_button := false
+                for spec in specs:
+                    var spec_button := spec["button"] as Button
+                    if spec_button != null and spec_button.get_global_rect().has_point(event.global_position):
+                        released_over_button = true
+                        break
+                if not released_over_button:
+                    _snap_nav_pill(pill, specs, axis)
+        elif event is InputEventMouseMotion \
+                and nav_button_drag.get("button") == button \
+                and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+            if not bool(nav_button_drag.get("active", false)):
+                var start: Vector2 = nav_button_drag.get("start", event.global_position)
+                if event.global_position.distance_to(start) < 8.0:
+                    return
+                nav_button_drag["active"] = true
+                nav_pill_drag = {"active": true, "pill": pill, "axis": axis}
+                ui_motion.active_springs.erase(ui_motion._motion_key(pill, "position"))
+                ui_motion.cancel_press(button)
+            _move_nav_pill(pill, specs, axis, event.global_position[axis])
+            button.accept_event()
+    )
+
+func _snap_nav_pill(pill: Control, specs: Array, axis: int) -> void:
+    var pill_center: float = pill.get_global_rect().get_center()[axis]
+    var best: Dictionary = {}
+    var best_dist := INF
+    for spec in specs:
+        var btn: Button = spec["button"]
+        var dist: float = absf(btn.get_global_rect().get_center()[axis] - pill_center)
+        if dist < best_dist:
+            best_dist = dist
+            best = spec
+    if best.is_empty():
+        return
+    if String(best.get("route", "")) == shell_route:
+        _update_nav_indicator(false)
+        _update_compact_indicator(false)
+        # Same-route release after a drag: settle the squashed pill back to a
+        # round shape with the jelly release.
+        ui_motion.spring_property(pill, "scale", Vector2.ONE, 0.26, 0.55)
+        return
+    var action: Callable = best["action"]
+    if action.is_valid():
+        action.call()
+
+func _create_scroll_feathers() -> void:
+    for cfg in [[false, 26.0], [true, 34.0]]:
+        var strip := TextureRect.new()
+        strip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+        var grad := Gradient.new()
+        var c: Color = ui_tokens.background
+        grad.colors = PackedColorArray([Color(c.r, c.g, c.b, 1.0), Color(c.r, c.g, c.b, 0.0)])
+        var tex := GradientTexture2D.new()
+        tex.gradient = grad
+        if bool(cfg[0]):
+            tex.fill_from = Vector2(0, 1)
+            tex.fill_to = Vector2(0, 0)
+        else:
+            tex.fill_from = Vector2(0, 0)
+            tex.fill_to = Vector2(0, 1)
+        strip.texture = tex
+        strip.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+        strip.stretch_mode = TextureRect.STRETCH_SCALE
+        if bool(cfg[0]):
+            strip.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+            strip.offset_top = -float(cfg[1])
+        else:
+            strip.set_anchors_preset(Control.PRESET_TOP_WIDE)
+            strip.offset_bottom = float(cfg[1])
+        strip.set_meta("feather_gradient", grad)
+        shell_content.add_child(strip)
+        scroll_feathers.append(strip)
+    _sync_feather_visibility()
+
+func _sync_feather_visibility() -> void:
+    var visible := not game_running
+    for strip in scroll_feathers:
+        if strip != null and is_instance_valid(strip):
+            strip.visible = visible
+
+func _refresh_feather_colors() -> void:
+    for strip in scroll_feathers:
+        if strip == null or not is_instance_valid(strip):
+            continue
+        var grad: Gradient = strip.get_meta("feather_gradient")
+        if grad == null:
+            continue
+        var c: Color = ui_tokens.background
+        grad.colors = PackedColorArray([Color(c.r, c.g, c.b, 1.0), Color(c.r, c.g, c.b, 0.0)])
 
 func _shell_nav_button(text: String, icon_path: String, callback: Callable) -> Button:
     var button := Button.new()
@@ -3015,9 +3442,13 @@ func _shell_compact_button(icon_path: String, tooltip: String, callback: Callabl
     var button := Button.new()
     button.icon = _load_ui_icon(icon_path)
     button.expand_icon = true
+    # Icon-only square button: lock 44x44, centered glyph, so the jelly pill
+    # overlay and the icon always share the same visual center.
     button.custom_minimum_size = Vector2(44, 44)
     button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
     button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+    button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+    button.alignment = HORIZONTAL_ALIGNMENT_CENTER
     button.tooltip_text = tooltip
     button.add_theme_constant_override("icon_max_width", 22)
     button.focus_mode = Control.FOCUS_ALL
@@ -3034,133 +3465,170 @@ func _sync_shell_route(route: String) -> void:
     _apply_shell_compact_state(shell_compact_library_button, route == "library")
     _apply_shell_compact_state(shell_compact_video_button, route == "videos")
     _apply_shell_compact_state(shell_compact_settings_button, route == "settings")
+    call_deferred("_update_nav_indicator", true)
+    call_deferred("_update_compact_indicator", true)
+    if input_trace_enabled:
+        call_deferred("_write_ui_probe_snapshot", "route_%s" % route)
+
+func _update_nav_indicator(spring: bool) -> void:
+    if shell_nav_indicator == null or not is_instance_valid(shell_nav_indicator):
+        return
+    if shell_sidebar == null or not is_instance_valid(shell_sidebar) or not shell_sidebar.visible:
+        shell_nav_indicator.visible = false
+        return
+    var button: Button = null
+    match shell_route:
+        "library":
+            button = shell_library_button
+        "videos":
+            button = shell_video_button
+        "settings":
+            button = shell_settings_button
+        _:
+            button = null
+    if button == null or not is_instance_valid(button):
+        shell_nav_indicator.visible = false
+        return
+    var host := shell_nav_indicator.get_parent() as Control
+    if host == null or host.size.x <= 0.0 or button.size.y <= 0.0:
+        return
+    var goal = _nav_pill_goal(shell_nav_indicator, [shell_library_button, shell_video_button, shell_settings_button], false)
+    if goal == null:
+        return
+    var target_pos: Vector2 = goal["pos"]
+    var target_size: Vector2 = goal["size"]
+    var was_hidden := not shell_nav_indicator.visible
+    shell_nav_indicator.visible = true
+    if spring and not ui_motion.reduced_motion:
+        if was_hidden:
+            # First appearance: no cross-screen flight, just jelly in place
+            shell_nav_indicator.position = target_pos
+            shell_nav_indicator.size = target_size
+        else:
+            ui_motion.spring_property(shell_nav_indicator, "position", target_pos, 0.42, 0.55)
+            ui_motion.spring_property(shell_nav_indicator, "size", target_size, 0.30, 1.0)
+        _jelly_pill(shell_nav_indicator, false)
+    else:
+        ui_motion.active_springs.erase(ui_motion._motion_key(shell_nav_indicator, "position"))
+        ui_motion.active_springs.erase(ui_motion._motion_key(shell_nav_indicator, "size"))
+        shell_nav_indicator.position = target_pos
+        shell_nav_indicator.size = target_size
+        shell_nav_indicator.scale = Vector2.ONE
+
+func _jelly_pill(pill: Control, horizontal: bool = false) -> void:
+    if pill == null or not is_instance_valid(pill):
+        return
+    # Jelly deformation: stretch along the travel axis then wobble back to a
+    # round shape. The sidebar pill travels vertically, the compact header
+    # pill horizontally — stretching the wrong axis read as "no jelly".
+    ui_motion._update_pivot(pill)
+    var stretch := Vector2(1.06, 0.90) if horizontal else Vector2(0.90, 1.06)
+    ui_motion.spring_property(pill, "scale", stretch, 0.13, 0.68)
+    var tree := get_tree() if is_inside_tree() else null
+    if tree != null:
+        tree.create_timer(0.10).timeout.connect(
+            func():
+                if pill != null and is_instance_valid(pill):
+                    ui_motion.spring_property(pill, "scale", Vector2.ONE, 0.32, 0.55),
+            CONNECT_ONE_SHOT
+        )
+
+func _update_compact_indicator(spring: bool) -> void:
+    if shell_compact_indicator == null or not is_instance_valid(shell_compact_indicator):
+        return
+    if shell_compact_header == null or not is_instance_valid(shell_compact_header) or not shell_compact_header.visible:
+        shell_compact_indicator.visible = false
+        return
+    var button: Button = null
+    match shell_route:
+        "library":
+            button = shell_compact_library_button
+        "videos":
+            button = shell_compact_video_button
+        "settings":
+            button = shell_compact_settings_button
+        _:
+            button = null
+    if button == null or not is_instance_valid(button):
+        shell_compact_indicator.visible = false
+        return
+    var host := shell_compact_indicator.get_parent() as Control
+    if host == null or host.size == Vector2.ZERO:
+        return
+    var goal = _nav_pill_goal(shell_compact_indicator, [shell_compact_library_button, shell_compact_video_button, shell_compact_settings_button], true)
+    if goal == null:
+        return
+    var target_pos: Vector2 = goal["pos"]
+    var target_size: Vector2 = goal["size"]
+    var was_hidden := not shell_compact_indicator.visible
+    shell_compact_indicator.visible = true
+    if spring and not ui_motion.reduced_motion:
+        if was_hidden:
+            shell_compact_indicator.position = target_pos
+            shell_compact_indicator.size = target_size
+        else:
+            ui_motion.spring_property(shell_compact_indicator, "position", target_pos, 0.42, 0.55)
+            ui_motion.spring_property(shell_compact_indicator, "size", target_size, 0.30, 1.0)
+        _jelly_pill(shell_compact_indicator, true)
+    else:
+        ui_motion.active_springs.erase(ui_motion._motion_key(shell_compact_indicator, "position"))
+        ui_motion.active_springs.erase(ui_motion._motion_key(shell_compact_indicator, "size"))
+        shell_compact_indicator.position = target_pos
+        shell_compact_indicator.size = target_size
+        shell_compact_indicator.scale = Vector2.ONE
 
 func _apply_shell_nav_state(button: Button, selected: bool) -> void:
     if button == null:
         return
-    if shell_sidebar_collapsed or shell_sidebar_animating_expand:
-        button.custom_minimum_size = Vector2(44, 44)
-        button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-        ui_widgets.toolbar_button(button, selected)
-    else:
-        button.custom_minimum_size = Vector2(0, 48)
-        button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-        ui_widgets.navigation_button(button, selected)
+    button.custom_minimum_size = Vector2(0, 48)
+    button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    # Dropdown-menu-like rail: rows carry no button chrome at all; the sliding
+    # accent pill is the only selection surface (same language as the select
+    # menu highlight).
+    ui_widgets.ghost_nav_button(button, selected)
 
 func _apply_shell_compact_state(button: Button, selected: bool) -> void:
     if button == null:
         return
-    ui_widgets.toolbar_button(button, selected)
-
-func _toggle_sidebar() -> void:
-    if AetherDisplayScale.use_compact_shell(get_viewport_rect().size):
-        return
-    var expanding := shell_sidebar_collapsed
-    if shell_sidebar_tween != null and shell_sidebar_tween.is_valid():
-        shell_sidebar_tween.kill()
-    _reset_sidebar_item_modulates()
-    shell_sidebar_collapsed = not shell_sidebar_collapsed
-    shell_sidebar_animating_expand = expanding
-    var target_width: float = ui_tokens.SIDEBAR_COLLAPSED_WIDTH if shell_sidebar_collapsed else ui_tokens.SIDEBAR_WIDTH
-    if ui_motion.reduced_motion:
-        shell_sidebar_animating_expand = false
-        _apply_sidebar_width(target_width)
-        _apply_sidebar_presentation(false)
-        return
-    if expanding:
-        _apply_sidebar_presentation(false)
-        _animate_sidebar_width(target_width, true)
-        return
-    shell_sidebar_tween = shell_sidebar.create_tween().set_parallel(true)
-    for item in [shell_sidebar_brand_labels, shell_library_button, shell_video_button, shell_settings_button, shell_sidebar_version]:
-        shell_sidebar_tween.tween_property(item, "modulate:a", 0.0, 0.10).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
-    shell_sidebar_tween.chain().tween_callback(func():
-        _apply_sidebar_presentation(false)
-        _reset_sidebar_item_modulates()
-        _animate_sidebar_width(target_width, false)
-    )
-
-func _animate_sidebar_width(target_width: float, expanding: bool) -> void:
-    if ui_motion.reduced_motion:
-        shell_sidebar_animating_expand = false
-        _apply_sidebar_width(target_width)
-        _apply_sidebar_presentation(expanding)
-        return
-    shell_sidebar_tween = shell_sidebar.create_tween()
-    shell_sidebar_tween.tween_method(
-        _apply_sidebar_width,
-        shell_sidebar_layout_width,
-        target_width,
-        0.36
-    ).set_trans(Tween.TRANS_QUINT).set_ease(Tween.EASE_OUT)
-    shell_sidebar_tween.tween_callback(func():
-        shell_sidebar_animating_expand = false
-        _apply_sidebar_width(target_width)
-        _apply_sidebar_presentation(expanding)
-    )
-
-func _reset_sidebar_item_modulates() -> void:
-    for item in [shell_sidebar_brand_labels, shell_library_button, shell_video_button, shell_settings_button, shell_sidebar_version]:
-        if item != null and is_instance_valid(item):
-            item.modulate.a = 1.0
+    ui_widgets.ghost_nav_button(button, selected)
 
 func _apply_sidebar_presentation(animate_labels: bool) -> void:
     if shell_sidebar_brand_labels == null:
         return
-    var compact_visual := shell_sidebar_collapsed or shell_sidebar_animating_expand
-    shell_sidebar_brand.alignment = BoxContainer.ALIGNMENT_CENTER if compact_visual else BoxContainer.ALIGNMENT_BEGIN
-    shell_sidebar_brand_labels.visible = not compact_visual
-    shell_sidebar_version.visible = not compact_visual
-    shell_library_button.text = "" if compact_visual else _t("nav.library")
-    shell_video_button.text = "" if compact_visual else _t("nav.videos")
-    shell_settings_button.text = "" if compact_visual else _t("settings.title")
-    shell_library_button.tooltip_text = _t("nav.library") if compact_visual else ""
-    shell_video_button.tooltip_text = _t("nav.videos") if compact_visual else ""
-    shell_settings_button.tooltip_text = _t("settings.title") if compact_visual else ""
-    shell_library_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER if compact_visual else HORIZONTAL_ALIGNMENT_LEFT
-    shell_video_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER if compact_visual else HORIZONTAL_ALIGNMENT_LEFT
-    shell_settings_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER if compact_visual else HORIZONTAL_ALIGNMENT_LEFT
-    shell_library_button.alignment = HORIZONTAL_ALIGNMENT_CENTER if compact_visual else HORIZONTAL_ALIGNMENT_LEFT
-    shell_video_button.alignment = HORIZONTAL_ALIGNMENT_CENTER if compact_visual else HORIZONTAL_ALIGNMENT_LEFT
-    shell_settings_button.alignment = HORIZONTAL_ALIGNMENT_CENTER if compact_visual else HORIZONTAL_ALIGNMENT_LEFT
-    shell_sidebar_toggle.text = "☰"
-    shell_sidebar_toggle.tooltip_text = _t("nav.expand_sidebar") if shell_sidebar_collapsed else _t("nav.collapse_sidebar")
-    shell_sidebar_toggle.accessibility_name = shell_sidebar_toggle.tooltip_text
+    shell_sidebar_brand.alignment = BoxContainer.ALIGNMENT_BEGIN
+    shell_sidebar_brand_labels.visible = true
+    shell_sidebar_version.visible = true
+    shell_library_button.text = _t("nav.library")
+    shell_video_button.text = _t("nav.videos")
+    shell_settings_button.text = _t("settings.title")
+    shell_library_button.tooltip_text = ""
+    shell_video_button.tooltip_text = ""
+    shell_settings_button.tooltip_text = ""
+    shell_library_button.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
+    shell_video_button.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
+    shell_settings_button.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
+    shell_library_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+    shell_video_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+    shell_settings_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+    _update_nav_indicator(false)
     _apply_shell_nav_state(shell_library_button, shell_route == "library")
     _apply_shell_nav_state(shell_video_button, shell_route == "videos")
     _apply_shell_nav_state(shell_settings_button, shell_route == "settings")
-    if animate_labels and not compact_visual:
+    if animate_labels:
         ui_motion.enter(shell_sidebar_brand_labels, Vector2.ZERO, 0.03)
         ui_motion.enter(shell_library_button, Vector2.ZERO, 0.04)
         ui_motion.enter(shell_video_button, Vector2.ZERO, 0.06)
         ui_motion.enter(shell_settings_button, Vector2.ZERO, 0.08)
         ui_motion.enter(shell_sidebar_version, Vector2.ZERO, 0.10)
 
-func _apply_sidebar_width(width: float) -> void:
-    if shell_sidebar == null or shell_content == null:
-        return
-    shell_sidebar_layout_width = width
-    var layout_size := shell_root.size
-    if layout_size.x <= 0.0 or layout_size.y <= 0.0:
-        layout_size = _ui_safe_rect(get_viewport_rect().size).size
-    shell_sidebar.size = Vector2(width, layout_size.y)
-    shell_content.offset_left = width
-    _layout_shell_safe_area_fills(get_viewport_rect().size, _ui_safe_rect(get_viewport_rect().size))
-    _layout_home_view(Vector2(maxf(0.0, layout_size.x - width), layout_size.y))
-
 func _layout_shell(window_size: Vector2) -> void:
     if shell_content == null or shell_sidebar == null or shell_compact_header == null:
         return
     var compact := AetherDisplayScale.use_compact_shell(window_size)
-    if shell_sidebar_tween != null and shell_sidebar_tween.is_valid():
-        shell_sidebar_tween.kill()
-        shell_sidebar_animating_expand = false
-        _reset_sidebar_item_modulates()
-        _apply_sidebar_presentation(false)
     shell_sidebar.visible = not compact
     shell_compact_header.visible = compact
     shell_sidebar.position = Vector2.ZERO
-    shell_sidebar_layout_width = ui_tokens.SIDEBAR_COLLAPSED_WIDTH if shell_sidebar_collapsed else ui_tokens.SIDEBAR_WIDTH
+    shell_sidebar_layout_width = ui_tokens.SIDEBAR_WIDTH
     shell_sidebar.size = Vector2(shell_sidebar_layout_width, window_size.y)
     shell_compact_header.offset_left = 0.0
     shell_compact_header.offset_top = 0.0
@@ -3725,13 +4193,6 @@ func _apply_engine_options() -> void:
     var onscripter_encoding := OS.get_environment("AETHERKIRI_ONS_ENCODING").strip_edges()
     if not onscripter_encoding.is_empty():
         player.set_engine_option("onscripter_encoding", onscripter_encoding)
-    if current_player_runtime_kind == RUNTIME_RFVP:
-        player.set_engine_option("rfvp_encoding", GameLaunchEntry.rfvp_encoding(
-            selected_game, OS.get_environment("AETHERKIRI_RFVP_ENCODING")
-        ))
-        var rfvp_renderer := OS.get_environment("AETHERKIRI_RFVP_RENDERER").strip_edges().to_lower()
-        if not rfvp_renderer.is_empty():
-            player.set_engine_option("rfvp_renderer", rfvp_renderer)
 
 func _apply_frame_enhancement_settings() -> void:
     if player == null or not player.has_method("set_frame_enhancement_enabled"):
@@ -4074,6 +4535,9 @@ func _layout_shell_safe_area_fills(window_size: Vector2, safe_rect: Rect2) -> vo
     var top_inset := maxf(0.0, safe_rect.position.y)
     var compact_shell := AetherDisplayScale.use_compact_shell(safe_rect.size)
     shell_safe_top_fill.visible = OS.get_name() == "iOS" and compact_shell and top_inset > 0.0
+    # The compact header uses the sidebar material.  Keep the status-bar
+    # extension on that same surface so the native time/battery region and the
+    # first app row read as one continuous header on iPhone.
     shell_safe_top_fill.color = ui_tokens.sidebar_material
     if shell_safe_top_fill.visible:
         # shell_root starts at the safe-area origin. Extending this
@@ -4128,19 +4592,17 @@ func _layout_game_viewport(window_size: Vector2) -> void:
             max(1.0, float(viewport.texture.get_height()))
         )
 
-    var scale := minf(
-        window_size.x / tex_size.x,
-        window_size.y / tex_size.y
-    )
+    var scale := minf(window_size.x / tex_size.x, window_size.y / tex_size.y)
     scale = minf(scale, _max_game_view_scale())
     if scale <= 0.0:
         scale = 1.0
-    # Keep subpixel dimensions here. Flooring both axes can expose a final
-    # black row or column at fractional desktop scale factors.
-    var draw_size := tex_size * scale
-    viewport.position = (window_size - draw_size) * 0.5
+    var draw_size := Vector2(
+        floor(tex_size.x * scale),
+        floor(tex_size.y * scale)
+    )
+    viewport.position = ((window_size - draw_size) * 0.5).floor()
     viewport.size = draw_size
-    viewport.custom_minimum_size = Vector2.ZERO
+    viewport.custom_minimum_size = draw_size
 
 func _max_game_view_scale() -> float:
     var value := OS.get_environment("AETHERKIRI_GAME_VIEW_MAX_SCALE").strip_edges()
@@ -4283,6 +4745,7 @@ func _set_game_background(active: bool) -> void:
     if bg_rect != null:
         bg_rect.color = color
     RenderingServer.set_default_clear_color(color)
+    _sync_feather_visibility()
 
 func _layout_home_view(window_size: Vector2) -> void:
     if home_page_margin == null or home_header_box == null or game_list == null:
@@ -4291,7 +4754,7 @@ func _layout_home_view(window_size: Vector2) -> void:
     var phone := minf(window_size.x, window_size.y) < HOME_PHONE_BREAKPOINT
     var margin: float = 16.0 if phone else (24.0 if compact else ui_tokens.PAGE_GUTTER)
     home_page_margin.add_theme_constant_override("margin_left", int(margin))
-    home_page_margin.add_theme_constant_override("margin_top", 16 if phone else (22 if compact else 28))
+    home_page_margin.add_theme_constant_override("margin_top", 20 if phone else (28 if compact else 36))
     home_page_margin.add_theme_constant_override("margin_right", int(margin))
     home_page_margin.add_theme_constant_override("margin_bottom", 16 if phone else (22 if compact else 28))
     home_header_box.vertical = false
@@ -4306,20 +4769,13 @@ func _layout_home_view(window_size: Vector2) -> void:
     home_actions.alignment = BoxContainer.ALIGNMENT_END
     home_primary_button.text = ""
     _sync_home_action_labels()
-    var fab_size := 52.0 if phone else 56.0
-    var fab_inset := 12.0 if phone else (16.0 if compact else 20.0)
-    home_primary_button.offset_left = -fab_size - fab_inset
-    home_primary_button.offset_top = -fab_size - fab_inset
-    home_primary_button.offset_right = -fab_inset
-    home_primary_button.offset_bottom = -fab_inset
-    home_primary_button.size = Vector2(fab_size, fab_size)
     var scroll_bar_width := game_scroll.get_v_scroll_bar().get_combined_minimum_size().x
     var list_width := maxf(HOME_TILE_MIN_WIDTH, window_size.x - margin * 2.0 - scroll_bar_width)
-    var gap := 10.0 if phone else (14.0 if compact else 16.0)
+    var gap := 12.0 if phone else (16.0 if compact else 20.0)
     var columns := AetherDisplayScale.home_columns(list_width, HOME_TILE_MIN_WIDTH, gap, compact)
     game_list.columns = columns
     game_list.add_theme_constant_override("h_separation", int(gap))
-    game_list.add_theme_constant_override("v_separation", int(gap if compact else 18.0))
+    game_list.add_theme_constant_override("v_separation", int(gap))
     game_list.custom_minimum_size = Vector2(list_width, 0)
     if video_list != null:
         video_list.columns = columns
@@ -4417,6 +4873,7 @@ func _sync_home_action_labels() -> void:
         var primary_text := _t("video.refresh") if OS.get_name() == "iOS" else _t("video.import")
         if home_library_mode == "game":
             primary_text = _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import")
+        _set_pill_button_text(home_primary_button, primary_text)
         home_primary_button.tooltip_text = primary_text
         home_primary_button.accessibility_name = primary_text
     if is_instance_valid(home_guide_button):
@@ -4505,6 +4962,13 @@ func _build_home_view() -> void:
     home_search_input.text_changed.connect(_on_home_search_text_changed)
     search_row.add_child(home_search_input)
     _sync_home_search_box()
+    home_primary_button = _pill_button(
+        _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import"),
+        ICON_REFRESH if OS.get_name() == "iOS" else ICON_ADD
+    )
+    home_primary_button.custom_minimum_size = Vector2(132, ui_tokens.CONTROL_HEIGHT)
+    home_primary_button.pressed.connect(_on_refresh_or_import)
+    home_actions.add_child(home_primary_button)
 
     var library_body := Control.new()
     library_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -4541,27 +5005,8 @@ func _build_home_view() -> void:
     empty_state.mouse_filter = Control.MOUSE_FILTER_IGNORE
     library_body.add_child(empty_state)
 
-    home_primary_button = Button.new()
-    var home_action_is_refresh := OS.get_name() == "iOS"
-    home_primary_button.text = ""
-    home_primary_button.tooltip_text = _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import")
-    home_primary_button.accessibility_name = home_primary_button.tooltip_text
-    home_primary_button.anchor_left = 1.0
-    home_primary_button.anchor_top = 1.0
-    home_primary_button.anchor_right = 1.0
-    home_primary_button.anchor_bottom = 1.0
-    ui_widgets.floating_action_button(home_primary_button)
-    _attach_centered_button_icon(
-        home_primary_button,
-        ICON_REFRESH if home_action_is_refresh else ICON_ADD,
-        Vector2(23, 23)
-    )
-    home_primary_button.pressed.connect(_on_refresh_or_import)
-    library_body.add_child(home_primary_button)
-    home_primary_button.move_to_front()
-
     var empty_box := VBoxContainer.new()
-    empty_box.custom_minimum_size = Vector2(280, 0)
+    empty_box.custom_minimum_size = Vector2(320, 0)
     empty_box.add_theme_constant_override("separation", 12)
     empty_state.add_child(empty_box)
 
@@ -4572,7 +5017,8 @@ func _build_home_view() -> void:
     empty_title_label = Label.new()
     empty_title_label.text = _t("home.empty_title")
     empty_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    empty_title_label.add_theme_font_size_override("font_size", 21)
+    empty_title_label.add_theme_font_override("font", DISPLAY_FONT)
+    empty_title_label.add_theme_font_size_override("font_size", 26)
     empty_title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     empty_box.add_child(empty_title_label)
 
@@ -4584,14 +5030,6 @@ func _build_home_view() -> void:
     empty_help_label.add_theme_color_override("font_color", ui_tokens.text_secondary)
     empty_box.add_child(empty_help_label)
 
-    empty_primary_button = _pill_button(
-        _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import"),
-        ICON_REFRESH if OS.get_name() == "iOS" else ICON_ADD
-    )
-    empty_primary_button.custom_minimum_size = Vector2(164, 48)
-    empty_primary_button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-    empty_primary_button.pressed.connect(_on_refresh_or_import)
-    empty_box.add_child(empty_primary_button)
 
     video_empty_state = CenterContainer.new()
     video_empty_state.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -4693,6 +5131,7 @@ func _rebuild_settings_view() -> void:
     var layout_spec := _settings_layout_spec(available_size, scroll_bar_width)
     available_size = layout_spec["available_size"]
     var compact: bool = layout_spec["compact"]
+    settings_compact_layout = compact
     var gutter: int = layout_spec["gutter"]
     var settings_content_width: float = layout_spec["content_width"]
     var stack_settings_controls: bool = layout_spec["stack_controls"]
@@ -4702,9 +5141,9 @@ func _rebuild_settings_view() -> void:
     var margin := MarginContainer.new()
     margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     margin.add_theme_constant_override("margin_left", gutter)
-    margin.add_theme_constant_override("margin_top", 20 if compact else 28)
+    margin.add_theme_constant_override("margin_top", 12 if compact else 28)
     margin.add_theme_constant_override("margin_right", gutter)
-    margin.add_theme_constant_override("margin_bottom", 40)
+    margin.add_theme_constant_override("margin_bottom", 28 if compact else 40)
     settings_view.add_child(margin)
 
     var center := CenterContainer.new()
@@ -4714,12 +5153,12 @@ func _rebuild_settings_view() -> void:
     var page := VBoxContainer.new()
     page.custom_minimum_size = Vector2(settings_content_width, 0)
     page.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-    page.add_theme_constant_override("separation", 24)
+    page.add_theme_constant_override("separation", 14 if compact else 24)
     center.add_child(page)
 
     var top := HBoxContainer.new()
-    top.custom_minimum_size = Vector2(0, 72)
-    top.add_theme_constant_override("separation", 14)
+    top.custom_minimum_size = Vector2(0, 52 if compact else 72)
+    top.add_theme_constant_override("separation", 14 if compact else 18)
     page.add_child(top)
 
     var title_stack := VBoxContainer.new()
@@ -4729,12 +5168,12 @@ func _rebuild_settings_view() -> void:
     var title := Label.new()
     title.text = _t("settings.title")
     title.add_theme_font_override("font", DISPLAY_FONT)
-    title.add_theme_font_size_override("font_size", 31)
+    title.add_theme_font_size_override("font_size", 24 if compact else 40)
     title.add_theme_color_override("font_color", ui_tokens.text_primary)
     title_stack.add_child(title)
     var subtitle := Label.new()
-    subtitle.text = _t("home.subtitle")
-    subtitle.add_theme_font_size_override("font_size", 13)
+    subtitle.text = "AetherKiri"
+    subtitle.add_theme_font_size_override("font_size", 11 if compact else 13)
     subtitle.add_theme_color_override("font_color", ui_tokens.text_secondary)
     title_stack.add_child(subtitle)
 
@@ -4745,53 +5184,47 @@ func _rebuild_settings_view() -> void:
     save_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
     top.add_child(save_button)
 
-    var groups: BoxContainer = VBoxContainer.new() if compact else HBoxContainer.new()
-    groups.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    groups.add_theme_constant_override("separation", 18)
-    page.add_child(groups)
+    # Header hairline rule
+    var header_rule := PanelContainer.new()
+    header_rule.custom_minimum_size = Vector2(0, 1)
+    header_rule.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.separator, 0))
+    page.add_child(header_rule)
 
-    var primary_column := VBoxContainer.new()
-    primary_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    primary_column.add_theme_constant_override("separation", 20)
-    groups.add_child(primary_column)
-    var secondary_column := primary_column
-    if not compact:
-        secondary_column = VBoxContainer.new()
-        secondary_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-        secondary_column.add_theme_constant_override("separation", 20)
-        groups.add_child(secondary_column)
+    # Timeline sections: one vertical flow shared by desktop and mobile
+    var flow := VBoxContainer.new()
+    flow.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    flow.add_theme_constant_override("separation", 12 if compact else 18)
+    page.add_child(flow)
 
-    var interface_group := _settings_group(primary_column, _t("settings.section.interface"), ICON_SETTINGS, animate_page, 0.03)
-    _add_settings_row(interface_group, _settings_block(_t("settings.language"), _t("settings.language_desc"), _language_select(), stack_settings_controls))
-    _add_settings_row(interface_group, _settings_block(_t("settings.style"), _t("settings.style_desc"), _style_select(), stack_settings_controls))
+    var interface_rows := _settings_section(flow, _t("settings.section.interface"), animate_page, 0.04)
+    _add_settings_row(interface_rows, _settings_row(_t("settings.style"), _t("settings.style_desc"), _style_select(), stack_settings_controls))
+    _add_settings_row(interface_rows, _settings_row(_t("settings.language"), _t("settings.language_desc"), _language_select(), stack_settings_controls))
     if OS.get_name() == "iOS":
-        _add_settings_row(interface_group, _settings_block(_t("settings.ui_scale"), _t("settings.ui_scale_desc"), _ios_ui_scale_segment(), stack_settings_controls))
-    _add_settings_row(interface_group, _settings_toggle_row(
+        _add_settings_row(interface_rows, _settings_row(_t("settings.ui_scale"), _t("settings.ui_scale_desc"), _ios_ui_scale_segment(), stack_settings_controls))
+    _add_settings_row(interface_rows, _settings_toggle_row(
         _t("settings.virtual_control_menu"),
         _t("settings.virtual_control_menu_desc"),
-        _settings_draft_bool(
-            "game_virtual_menu_enabled", game_virtual_menu_enabled
-        ),
+        _settings_draft_bool("game_virtual_menu_enabled", game_virtual_menu_enabled),
         "game_virtual_menu"
     ))
-    _add_settings_row(interface_group, _settings_block(
+    _add_settings_row(interface_rows, _settings_row(
         _t("settings.keyboard_control_opacity"),
         _t("settings.keyboard_control_opacity_desc"),
         _keyboard_controls_opacity_control(),
         stack_settings_controls
     ))
 
-    var render_group := _settings_group(primary_column, _t("settings.section.render"), ICON_PERFORMANCE, animate_page, 0.055)
-    _add_settings_row(render_group, _settings_block(_t("settings.render_backend"), _t("settings.render_backend_desc"), _backend_segment(), stack_settings_controls))
-    _add_settings_row(render_group, _settings_block(_t("settings.surface_mode"), _t("settings.surface_mode_desc"), _surface_mode_select(), stack_settings_controls))
-    _add_settings_row(render_group, _settings_block(_t("settings.upscale"), _t("settings.upscale_desc"), _upscale_select(), stack_settings_controls))
-    _add_settings_row(render_group, _settings_block(
+    var render_rows := _settings_section(flow, _t("settings.section.render"), animate_page, 0.08)
+    _add_settings_row(render_rows, _settings_row(_t("settings.render_backend"), _t("settings.render_backend_desc"), _backend_segment(), stack_settings_controls))
+    _add_settings_row(render_rows, _settings_row(_t("settings.surface_mode"), _t("settings.surface_mode_desc"), _surface_mode_select(), stack_settings_controls))
+    _add_settings_row(render_rows, _settings_row(_t("settings.upscale"), _t("settings.upscale_desc"), _upscale_select(), stack_settings_controls))
+    _add_settings_row(render_rows, _settings_row(
         _t("settings.output_resolution"),
         _t("settings.output_resolution_desc"),
         _output_resolution_select(),
         stack_settings_controls
     ))
-    _add_settings_row(render_group, _settings_block(
+    _add_settings_row(render_rows, _settings_row(
         _t("settings.frame_enhancement"),
         _frame_enhancement_description(),
         _frame_enhancement_kind_select(),
@@ -4801,35 +5234,29 @@ func _rebuild_settings_view() -> void:
         _settings_draft_string("frame_enhancement_kind", frame_enhancement_kind)
     )
     if enhancement_kind == "preset":
-        _add_settings_row(render_group, _settings_block(
+        _add_settings_row(render_rows, _settings_row(
             _t("settings.frame_enhancement_mode"),
             _t("settings.frame_enhancement_mode_desc"),
             _frame_enhancement_mode_select(),
             stack_settings_controls
         ))
     elif enhancement_kind == "custom":
-        _add_settings_row(render_group, _settings_block(
+        _add_settings_row(render_rows, _settings_row(
             _t("settings.frame_enhancement_mode"),
             _t("settings.frame_enhancement_custom_desc"),
             _frame_enhancement_custom_editor(),
             true
         ))
-    _add_settings_row(render_group, _settings_toggle_row(_t("settings.fps_limit"), _t("settings.fps_limit_desc"), _settings_draft_bool("fps_limit_enabled", frame_limit_enabled), "fps_limit"))
+    _add_settings_row(render_rows, _settings_toggle_row(_t("settings.fps_limit"), _t("settings.fps_limit_desc"), _settings_draft_bool("fps_limit_enabled", frame_limit_enabled), "fps_limit"))
     if _settings_draft_bool("fps_limit_enabled", frame_limit_enabled):
-        _add_settings_row(render_group, _settings_fps_row())
+        _add_settings_row(render_rows, _settings_fps_row())
     if OS.get_name() == "iOS" or OS.get_name() == "Android":
-        _add_settings_row(render_group, _settings_toggle_row(_t("settings.landscape"), _t("settings.landscape_desc"), _settings_draft_bool("force_landscape", lock_landscape), "landscape"))
+        _add_settings_row(render_rows, _settings_toggle_row(_t("settings.landscape"), _t("settings.landscape_desc"), _settings_draft_bool("force_landscape", lock_landscape), "landscape"))
 
-    var diagnostic_group := _settings_group(secondary_column, _t("settings.section.diagnostics"), ICON_PERFORMANCE, animate_page, 0.08)
-    _add_settings_row(diagnostic_group, _settings_block(_t("settings.diagnostic_profile"), _t("settings.diagnostic_profile_desc"), _diagnostic_profile_select(), stack_settings_controls))
-    _add_settings_row(diagnostic_group, _settings_block(_t("settings.debug_overlay"), _t("settings.debug_overlay_desc"), _debug_overlay_select(), stack_settings_controls))
-    _add_settings_row(diagnostic_group, _settings_toggle_row(_t("settings.error_dialog_logs"), _t("settings.error_dialog_logs_desc"), _settings_draft_bool("error_dialog_logs", error_dialog_logs), "error_dialog_logs"))
-
-    var compatibility_group := _settings_group(secondary_column, _t("settings.section.compatibility"), ICON_PLUGIN, animate_page, 0.105)
-    _add_settings_row(compatibility_group, _settings_block(_t("settings.plugin_load_mode"), _t("settings.plugin_load_mode_desc"), _plugin_load_mode_select(), stack_settings_controls))
-    _add_settings_row(compatibility_group, _settings_toggle_row(_t("settings.mock"), _t("settings.mock_desc"), _settings_draft_bool("mock_enabled", mock_enabled), "mock"))
+    var compatibility_rows := _settings_section(flow, _t("settings.section.compatibility"), animate_page, 0.12)
+    _add_settings_row(compatibility_rows, _settings_row(_t("settings.plugin_load_mode"), _t("settings.plugin_load_mode_desc"), _plugin_load_mode_select(), stack_settings_controls))
     if player != null and player.has_method("is_text_translation_available") and player.is_text_translation_available():
-        _add_settings_row(compatibility_group, _settings_action_row(
+        _add_settings_row(compatibility_rows, _settings_action_row(
             _t("settings.translation_model"),
             _t("settings.translation_model_desc"),
             _t("settings.translation_model_select"),
@@ -4839,18 +5266,25 @@ func _rebuild_settings_view() -> void:
             "text_translation_model_path", text_translation_model_path
         )
         if not draft_model_path.is_empty():
-            _add_settings_row(compatibility_group, _settings_value_row(
+            _add_settings_row(compatibility_rows, _settings_value_row(
                 _t("settings.translation_model_selected"),
                 draft_model_path.get_file()
             ))
-            _add_settings_row(compatibility_group, _settings_action_row(
+            _add_settings_row(compatibility_rows, _settings_action_row(
                 _t("settings.translation_model_clear"),
                 _t("settings.translation_model_clear_desc"),
                 _t("settings.translation_model_clear"),
                 _clear_translation_model
             ))
+    _add_settings_row(compatibility_rows, _settings_toggle_row(_t("settings.mock"), _t("settings.mock_desc"), _settings_draft_bool("mock_enabled", mock_enabled), "mock"))
 
-    var advanced_group := _settings_group(secondary_column, _t("settings.section.advanced"), ICON_PLUGIN, animate_page, 0.13)
+
+    var diagnostic_rows := _settings_section(flow, _t("settings.section.diagnostics"), animate_page, 0.12)
+    _add_settings_row(diagnostic_rows, _settings_row(_t("settings.diagnostic_profile"), _t("settings.diagnostic_profile_desc"), _diagnostic_profile_select(), stack_settings_controls))
+    _add_settings_row(diagnostic_rows, _settings_row(_t("settings.debug_overlay"), _t("settings.debug_overlay_desc"), _debug_overlay_select(), stack_settings_controls))
+    _add_settings_row(diagnostic_rows, _settings_toggle_row(_t("settings.error_dialog_logs"), _t("settings.error_dialog_logs_desc"), _settings_draft_bool("error_dialog_logs", error_dialog_logs), "error_dialog_logs"))
+
+    var advanced_rows := _settings_section(flow, _t("settings.section.advanced"), animate_page, 0.16)
     var advanced_disclosure = AetherDisclosure.new()
     advanced_disclosure.setup(
         ui_tokens,
@@ -4860,67 +5294,90 @@ func _rebuild_settings_view() -> void:
         advanced_tool_expanded
     )
     ui_widgets.disclosure_button(advanced_disclosure)
-    _add_settings_row(advanced_group, advanced_disclosure)
+    _add_settings_row(advanced_rows, advanced_disclosure)
     var advanced_content := VBoxContainer.new()
     advanced_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     advanced_content.add_theme_constant_override("separation", 0)
     advanced_content.visible = advanced_tool_expanded
-    advanced_group.add_child(advanced_content)
+    advanced_rows.add_child(advanced_content)
     _add_settings_row(advanced_content, _settings_toggle_row(_t("settings.plugin_trace"), _t("settings.plugin_trace_desc"), plugin_trace, "advanced_plugin_trace"))
     _add_settings_row(advanced_content, _settings_toggle_row(_t("settings.trace_log"), _t("settings.trace_log_desc"), trace_log, "advanced_trace_log"))
     _add_settings_row(advanced_content, _settings_toggle_row(_t("settings.console_log"), _t("settings.console_log_desc"), console_log_file, "advanced_console_log"))
     _add_settings_row(advanced_content, _settings_toggle_row(_t("settings.export_tjs"), _t("settings.export_tjs_desc"), export_scripts, "advanced_export_tjs"))
+    _add_settings_row(advanced_content, _settings_row(
+        _t("settings.scene_test"),
+        _t("settings.scene_test_desc"),
+        _scene_test_control(),
+        stack_settings_controls
+    ))
     advanced_disclosure.expanded_changed.connect(func(value: bool):
         advanced_tool_expanded = value
         ui_motion.set_visible(advanced_content, value)
     )
 
     if _iap_supported_platform():
-        var purchase_group := _settings_group(secondary_column, _t("settings.section.purchases"), ICON_LIBRARY, animate_page, 0.155)
-        _add_settings_row(purchase_group, _settings_iap_product_row())
-        _add_settings_row(purchase_group, _settings_iap_coffee_row())
-        _add_settings_row(purchase_group, _settings_action_row(
+        var purchase_rows := _settings_section(flow, _t("settings.section.purchases"), animate_page, 0.24)
+        _add_settings_row(purchase_rows, _settings_iap_product_row())
+        _add_settings_row(purchase_rows, _settings_iap_coffee_row())
+        _add_settings_row(purchase_rows, _settings_action_row(
             _t("iap.restore"),
             _t("iap.restore_desc"),
             _t("iap.restore_action"),
             func(): _begin_iap_restore()
         ))
 
-    var about_group := _settings_group(secondary_column, _t("settings.section.about"), ICON_HELP, animate_page, 0.18)
+    var about_rows := _settings_section(flow, _t("settings.section.about"), animate_page, 0.28)
     if OS.get_name() == "Android":
-        _add_settings_row(about_group, _settings_action_row(
+        _add_settings_row(about_rows, _settings_action_row(
             _t("support.coffee.title"),
             _t("support.coffee.desc"),
             _t("support.coffee.open"),
             _open_android_coffee
         ))
-    _add_settings_row(about_group, _settings_action_row(
+    _add_settings_row(about_rows, _settings_action_row(
         _t("settings.legal"),
         _t("settings.legal_desc"),
         _t("settings.legal_open"),
         func(): _show_legal_agreement(false)
     ))
     if _apple_app_store_platform():
-        _add_settings_row(about_group, _settings_action_row(
+        _add_settings_row(about_rows, _settings_action_row(
             _t("settings.ios_statement"),
             _t("settings.ios_statement_desc"),
             _t("settings.ios_statement_open"),
             _show_ios_additional_statement
         ))
-    _add_settings_row(about_group, _settings_link_value_row(
-        _t("settings.app_service_filing"),
-        APP_SERVICE_FILING_NUMBER,
-        _open_app_service_filing
-    ))
     var version_row := _settings_value_row(
         _t("settings.version"),
         _application_version_text()
     )
     _attach_secret_version_tap(version_row)
-    _add_settings_row(about_group, version_row)
+    _add_settings_row(about_rows, version_row)
 
     if animate_page:
         ui_motion.reveal(top)
+        # Slow recursive cascade level 2: every row inside every section card
+        call_deferred("_cascade_settings_rows", [
+            interface_rows, render_rows, compatibility_rows,
+            diagnostic_rows, advanced_rows, about_rows,
+        ])
+    if input_trace_enabled:
+        call_deferred("_write_ui_probe_snapshot", "settings_rebuilt")
+
+func _cascade_settings_rows(groups: Array) -> void:
+    if not is_instance_valid(settings_view) or not settings_view.visible:
+        return
+    var section_delay := 0.06
+    for rows in groups:
+        if rows == null or not is_instance_valid(rows):
+            continue
+        var row_delay := section_delay
+        for row in rows.get_children():
+            if row is Control and is_instance_valid(row) and not row.is_queued_for_deletion():
+                # Livelier reveal: fade + scale spring pop per row.
+                ui_motion.spring_reveal(row, row_delay)
+                row_delay += 0.024
+        section_delay += 0.04
 
 func _application_version_text() -> String:
     return str(ProjectSettings.get_setting("application/config/version", "development"))
@@ -5583,7 +6040,12 @@ func _deep_control_at_position(node: Node, position: Vector2) -> Control:
 func _configure_shell_scroll(scroll: ScrollContainer) -> void:
     scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
     scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-    scroll.scroll_deadzone = 0
+    # The shell owns touch scrolling (finger-follow, momentum glide, elastic
+    # rubber-band). The ScrollContainer's built-in touch pan starts moving the
+    # content immediately at deadzone 0, so both systems double-drive the same
+    # offset and the gesture loses its silk. A huge deadzone disables the
+    # native pan while wheel/trackpad input keeps working normally.
+    scroll.scroll_deadzone = 1000000
 
 func _start_shell_scroll_drag(key: int, position: Vector2) -> void:
     var scroll := _find_shell_scroll_at_position(position)
@@ -5591,6 +6053,8 @@ func _start_shell_scroll_drag(key: int, position: Vector2) -> void:
         shell_scroll_drag_states.erase(key)
         return
     _stop_shell_scroll_tween(scroll)
+    _stop_shell_scroll_momentum(scroll)
+    _clear_scroll_overscroll(scroll)
     var control := _control_at_pointer(position)
     var button := _nearest_base_button(control) if control != null else null
     var horizontal_slider := (
@@ -5604,10 +6068,13 @@ func _start_shell_scroll_drag(key: int, position: Vector2) -> void:
         "scroll_id": scroll.get_instance_id(),
         "control_id": control.get_instance_id() if control != null else 0,
         "last": position,
+        "last_time": Time.get_ticks_usec(),
         "last_motion_msec": Time.get_ticks_msec(),
+        "velocity": 0.0,
         "velocity_y": 0.0,
         "distance": 0.0,
         "pending_y": 0.0,
+        "overscroll": 0.0,
         "dragging": false,
         "threshold": SHELL_SCROLL_BUTTON_DRAG_THRESHOLD if button != null else SHELL_SCROLL_DRAG_THRESHOLD,
         # A Range control owns its complete press/drag/release gesture. Do not
@@ -5617,6 +6084,14 @@ func _start_shell_scroll_drag(key: int, position: Vector2) -> void:
         "axis_lock": SHELL_SCROLL_AXIS_PENDING if horizontal_slider != null else SHELL_SCROLL_AXIS_NONE,
         "gesture_delta": Vector2.ZERO,
     }
+    if input_trace_enabled:
+        _write_probe_marker("ui_scroll_start key=%d scroll=%d pos=%.1f,%.1f deadzone=%d" % [
+            key,
+            scroll.get_instance_id(),
+            position.x,
+            position.y,
+            scroll.scroll_deadzone,
+        ])
 
 func _update_shell_scroll_drag(
     key: int,
@@ -5637,6 +6112,9 @@ func _update_shell_scroll_drag(
     if bool(state.get("scroll_locked", false)):
         return false
     var last_position := state.get("last", position) as Vector2
+    var now := Time.get_ticks_usec()
+    var last_time := int(state.get("last_time", now))
+    var dt := maxf(float(now - last_time) / 1000000.0, 1.0 / 240.0)
     var delta := position - last_position
     if delta.is_zero_approx():
         delta = relative
@@ -5649,6 +6127,11 @@ func _update_shell_scroll_drag(
     state["velocity_y"] = lerpf(previous_velocity_y, sample_velocity_y, 0.45)
     state["last_motion_msec"] = now_msec
     state["last"] = position
+    state["last_time"] = now
+    # Pointer velocity (px/s), smoothed so release flicks feel natural
+    var instant_velocity := -delta.y / dt
+    var velocity := lerpf(float(state.get("velocity", 0.0)), instant_velocity, 0.4)
+    state["velocity"] = velocity
     var distance := float(state.get("distance", 0.0)) + absf(delta.y)
     var pending_y := float(state.get("pending_y", 0.0)) + delta.y
     var axis_lock := _update_shell_scroll_axis_lock(state, delta)
@@ -5667,8 +6150,33 @@ func _update_shell_scroll_drag(
     if not dragging:
         return false
     var drag_delta := delta.y if was_dragging else pending_y
-    _scroll_container_by(scroll, -drag_delta * SHELL_SCROLL_DRAG_SPEED)
+    var move := -drag_delta * SHELL_SCROLL_DRAG_SPEED
+    var bar := scroll.get_v_scroll_bar()
+    if bar != null:
+        # Rubber-band: past an edge the content follows the finger with resistance
+        var current := float(scroll.scroll_vertical)
+        var raw := current + move
+        var clamped := clampf(raw, bar.min_value, bar.max_value)
+        var beyond := raw - clamped
+        if absf(beyond) > 0.001 or absf(float(state.get("overscroll", 0.0))) > 0.001:
+            var overscroll := clampf(float(state.get("overscroll", 0.0)) + beyond * SHELL_SCROLL_OVERSCROLL_RESISTANCE, -SHELL_SCROLL_OVERSCROLL_MAX, SHELL_SCROLL_OVERSCROLL_MAX)
+            state["overscroll"] = overscroll
+            move = clamped - current
+            _apply_scroll_overscroll(scroll, overscroll)
+        else:
+            state["overscroll"] = 0.0
+    shell_scroll_drag_states[key] = state
+    _scroll_container_by(scroll, move)
     _cancel_shell_scroll_press(state)
+    if input_trace_enabled:
+        _write_probe_marker("ui_scroll_drag key=%d scroll=%d delta=%.2f velocity=%.2f offset=%.2f value=%d" % [
+            key,
+            scroll.get_instance_id(),
+            drag_delta,
+            float(state.get("velocity_y", 0.0)),
+            float(state.get("overscroll", 0.0)),
+            scroll.scroll_vertical,
+        ])
     return true
 
 func _finish_shell_scroll_drag(key: int) -> bool:
@@ -5676,14 +6184,172 @@ func _finish_shell_scroll_drag(key: int) -> bool:
     var dragging := bool(state.get("dragging", false))
     if dragging:
         _cancel_shell_scroll_press(state)
-        var scroll := _shell_scroll_from_drag_state(state)
-        var last_motion_msec := int(state.get("last_motion_msec", 0))
-        var velocity_is_fresh := Time.get_ticks_msec() - last_motion_msec <= SHELL_SCROLL_MOMENTUM_STALE_MSEC
-        if key != SHELL_SCROLL_MOUSE_KEY and velocity_is_fresh and scroll != null and is_instance_valid(scroll):
-            var scroll_velocity := -float(state.get("velocity_y", 0.0)) * SHELL_SCROLL_DRAG_SPEED
-            _start_shell_scroll_momentum(scroll, scroll_velocity)
+    # Drag state stores instance IDs deliberately, because a rebuilt settings
+    # page can invalidate the old Object reference between touch-up frames.
+    # Resolving the ID here is essential: using state["scroll"] silently
+    # disabled every iOS release flick's inertia and edge spring.
+    var scroll := _shell_scroll_from_drag_state(state)
+    if scroll != null and is_instance_valid(scroll):
+        var velocity := -float(state.get("velocity_y", 0.0)) * SHELL_SCROLL_DRAG_SPEED
+        var overscroll := float(state.get("overscroll", 0.0))
+        if absf(overscroll) > 0.5:
+            _begin_scroll_overscroll_spring(scroll, overscroll)
+        elif absf(velocity) > SHELL_SCROLL_MOMENTUM_MIN:
+            shell_scroll_momentum[scroll.get_instance_id()] = {
+                "scroll": scroll,
+                "velocity": velocity,
+            }
+        if input_trace_enabled:
+            _write_probe_marker("ui_scroll_end key=%d scroll=%d dragging=%s velocity=%.2f overscroll=%.2f momentum=%s value=%d" % [
+                key,
+                scroll.get_instance_id(),
+                str(dragging),
+                velocity,
+                overscroll,
+                str(shell_scroll_momentum.has(scroll.get_instance_id())),
+                scroll.scroll_vertical,
+            ])
+    elif input_trace_enabled:
+        _write_probe_marker("ui_scroll_end key=%d scroll=missing dragging=%s" % [key, str(dragging)])
     shell_scroll_drag_states.erase(key)
     return dragging
+
+func _stop_shell_scroll_momentum(scroll: ScrollContainer) -> void:
+    if scroll == null or not is_instance_valid(scroll):
+        return
+    shell_scroll_momentum.erase(scroll.get_instance_id())
+
+func _add_scroll_momentum_impulse(scroll: ScrollContainer, kick: float) -> void:
+    if scroll == null or not is_instance_valid(scroll):
+        return
+    _stop_shell_scroll_tween(scroll)
+    var key := scroll.get_instance_id()
+    var entry: Dictionary = shell_scroll_momentum.get(key, {})
+    entry["scroll"] = scroll
+    entry["velocity"] = clampf(float(entry.get("velocity", 0.0)) + kick, -4200.0, 4200.0)
+    shell_scroll_momentum[key] = entry
+
+func _apply_scroll_overscroll(scroll: ScrollContainer, amount: float) -> void:
+    if scroll == null or not is_instance_valid(scroll) or scroll.get_child_count() < 1:
+        return
+    var content := scroll.get_child(0) as Control
+    if content == null or not is_instance_valid(content):
+        return
+    content.position.y = float(-scroll.scroll_vertical) - amount
+
+func _clear_scroll_overscroll(scroll: ScrollContainer) -> void:
+    if scroll == null or not is_instance_valid(scroll):
+        return
+    shell_scroll_overscroll.erase(scroll.get_instance_id())
+    _apply_scroll_overscroll(scroll, 0.0)
+
+func _begin_scroll_overscroll_spring(scroll: ScrollContainer, offset: float) -> void:
+    offset = clampf(offset, -SHELL_SCROLL_OVERSCROLL_MAX, SHELL_SCROLL_OVERSCROLL_MAX)
+    if absf(offset) < 0.5:
+        _clear_scroll_overscroll(scroll)
+        return
+    shell_scroll_overscroll[scroll.get_instance_id()] = {
+        "scroll": scroll,
+        "content": scroll.get_child(0) as Control,
+        "offset": offset,
+        "velocity": 0.0,
+    }
+
+func _process_scroll_flair(delta: float) -> void:
+    # Lively-but-ordered scroll dynamics: the card grid leans a few degrees
+    # with the scroll direction and settles back, while covers gently zoom the
+    # further they sit from the viewport centre (a quiet depth cue).
+    var target_speed := 0.0
+    var direction := scroll_flair_dir
+    for entry in shell_scroll_momentum.values():
+        var v: float = absf(float(entry.get("velocity", 0.0)))
+        if v > target_speed:
+            target_speed = v
+            direction = signf(float(entry.get("velocity", 1.0)))
+    for state in shell_scroll_drag_states.values():
+        if bool(state.get("dragging", false)):
+            var drag_v: float = absf(float(state.get("velocity_y", 0.0)))
+            if drag_v > target_speed:
+                target_speed = drag_v
+                direction = signf(-float(state.get("velocity_y", 1.0)))
+    if target_speed > 1.0:
+        scroll_flair_dir = direction
+    scroll_flair_speed = lerpf(scroll_flair_speed, target_speed, 1.0 - exp(-6.0 * delta))
+
+    var intensity := clampf(scroll_flair_speed / 2600.0, 0.0, 1.0)
+    var lean := scroll_flair_dir * intensity * 0.006
+    var viewport_height := maxf(1.0, get_viewport_rect().size.y)
+    var viewport_center_y := viewport_height * 0.5
+    var settle := 1.0 - exp(-10.0 * delta)
+    for grid in [game_list, video_list]:
+        if grid == null or not is_instance_valid(grid):
+            continue
+        if grid.pivot_offset != grid.size * 0.5:
+            grid.pivot_offset = grid.size * 0.5
+        grid.rotation = lerpf(grid.rotation, lean, settle)
+        if not grid.is_visible_in_tree():
+            continue
+        for card in grid.get_children():
+            if card == null or not is_instance_valid(card) or not card.is_visible_in_tree():
+                continue
+            var cover: Control = card.get_meta("hero_cover", null)
+            if cover == null or not is_instance_valid(cover):
+                continue
+            var card_center_y: float = card.get_global_rect().get_center().y
+            var distance := clampf(absf(card_center_y - viewport_center_y) / (viewport_height * 0.5), 0.0, 1.0)
+            var zoom := 1.0 + distance * 0.10
+            cover.pivot_offset = cover.size * 0.5
+            cover.scale = cover.scale.lerp(Vector2(zoom, zoom), settle)
+
+func _process_shell_scroll_physics(delta: float) -> void:
+    for key_variant in shell_scroll_momentum.keys():
+        var entry: Dictionary = shell_scroll_momentum.get(key_variant, {})
+        var scroll := entry.get("scroll") as ScrollContainer
+        if scroll == null or not is_instance_valid(scroll) or not scroll.is_visible_in_tree():
+            shell_scroll_momentum.erase(key_variant)
+            continue
+        var velocity := float(entry.get("velocity", 0.0))
+        var step := velocity * delta
+        var bar := scroll.get_v_scroll_bar()
+        _scroll_container_by(scroll, step)
+        velocity *= exp(-SHELL_SCROLL_MOMENTUM_FRICTION * delta)
+        var maximum_scroll := bar.max_value - maxf(0.0, bar.page) if bar != null else 0.0
+        var reached_edge := bar != null and (
+            is_equal_approx(float(scroll.scroll_vertical), maximum_scroll)
+            or is_equal_approx(float(scroll.scroll_vertical), bar.min_value)
+        )
+        if bar != null and reached_edge and absf(step) > 0.5:
+            # Leftover speed converts into an elastic edge bounce; scale with
+            # the impact velocity (per-second) so the bounce is actually visible
+            shell_scroll_momentum.erase(key_variant)
+            var impact := clampf(velocity * 0.05, 6.0, SHELL_SCROLL_OVERSCROLL_MAX)
+            _begin_scroll_overscroll_spring(scroll, clampf(impact * signf(velocity), -SHELL_SCROLL_OVERSCROLL_MAX, SHELL_SCROLL_OVERSCROLL_MAX))
+            continue
+        if absf(velocity) < SHELL_SCROLL_MOMENTUM_MIN:
+            shell_scroll_momentum.erase(key_variant)
+            continue
+        entry["velocity"] = velocity
+        shell_scroll_momentum[key_variant] = entry
+    # Overscroll elasticity: damped spring pulling the content back to the edge
+    for key_variant in shell_scroll_overscroll.keys():
+        var entry: Dictionary = shell_scroll_overscroll.get(key_variant, {})
+        var scroll := entry.get("scroll") as ScrollContainer
+        var content := entry.get("content") as Control
+        if scroll == null or not is_instance_valid(scroll) or content == null or not is_instance_valid(content):
+            shell_scroll_overscroll.erase(key_variant)
+            continue
+        var offset := float(entry.get("offset", 0.0))
+        var velocity := float(entry.get("velocity", 0.0))
+        velocity += (-SHELL_SCROLL_OVERSCROLL_STIFFNESS * offset - SHELL_SCROLL_OVERSCROLL_DAMPING * velocity) * delta
+        offset += velocity * delta
+        if absf(offset) < 0.4 and absf(velocity) < 6.0:
+            shell_scroll_overscroll.erase(key_variant)
+            _apply_scroll_overscroll(scroll, 0.0)
+            continue
+        entry["offset"] = offset
+        entry["velocity"] = velocity
+        shell_scroll_overscroll[key_variant] = entry
+        _apply_scroll_overscroll(scroll, offset)
 
 func _reset_shell_scroll_drag() -> void:
     for key in shell_scroll_drag_states.keys():
@@ -5696,9 +6362,17 @@ func _reset_shell_scroll_drag() -> void:
             tween.kill()
     shell_scroll_tweens.clear()
     shell_scroll_targets.clear()
+    shell_scroll_momentum.clear()
+    for key_variant in shell_scroll_overscroll.keys():
+        var entry: Dictionary = shell_scroll_overscroll.get(key_variant, {})
+        var scroll := entry.get("scroll") as ScrollContainer
+        _clear_scroll_overscroll(scroll)
+    shell_scroll_overscroll.clear()
 
 func _cancel_shell_scroll_press(state: Dictionary) -> void:
-    get_viewport().gui_release_focus()
+    var viewport := get_viewport()
+    if viewport != null:
+        viewport.gui_release_focus()
     var control := _shell_control_from_drag_state(state)
     if control == null:
         return
@@ -6075,22 +6749,62 @@ func _section_title(text: String, _icon_path: String) -> HBoxContainer:
     row.add_child(label)
     return row
 
-func _settings_group(page: VBoxContainer, title: String, icon_path: String, animate: bool, delay: float) -> VBoxContainer:
-    var group := VBoxContainer.new()
-    group.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    group.add_theme_constant_override("separation", 6)
-    page.add_child(group)
-    group.add_child(_section_title(title, icon_path))
+func _settings_section(page: VBoxContainer, title: String, animate: bool, delay: float) -> VBoxContainer:
+    var compact := settings_compact_layout
+    var section := HBoxContainer.new()
+    section.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    section.add_theme_constant_override("separation", 10 if compact else 14)
+    page.add_child(section)
+
+    # Timeline rail: accent dot + connecting hairline
+    var rail := VBoxContainer.new()
+    rail.custom_minimum_size = Vector2(12, 0)
+    rail.add_theme_constant_override("separation", 6)
+    section.add_child(rail)
+
+    var dot := PanelContainer.new()
+    dot.custom_minimum_size = Vector2(8, 8) if compact else Vector2(10, 10)
+    dot.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+    dot.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.accent, 4 if compact else 5))
+    rail.add_child(dot)
+
+    var line := PanelContainer.new()
+    line.custom_minimum_size = Vector2(2, 0)
+    line.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+    line.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    line.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.separator, 0))
+    rail.add_child(line)
+
+    var content := VBoxContainer.new()
+    content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    content.add_theme_constant_override("separation", 5 if compact else 8)
+    section.add_child(content)
+
+    var title_label := Label.new()
+    title_label.text = title.to_upper()
+    title_label.add_theme_font_override("font", DISPLAY_FONT)
+    title_label.add_theme_font_size_override("font_size", 11 if compact else 13)
+    title_label.add_theme_color_override("font_color", ui_tokens.accent)
+    content.add_child(title_label)
+
+    # Flat, zero-shadow card panel with 1px hairline border
     var panel := PanelContainer.new()
     panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    panel.add_theme_stylebox_override("panel", ui_tokens.material_panel())
-    group.add_child(panel)
+    var panel_style := ui_tokens.panel(ui_tokens.surface_raised, 10 if compact else 12, ui_tokens.separator, 1)
+    panel_style.content_margin_left = 12 if compact else 18
+    panel_style.content_margin_top = 6 if compact else 10
+    panel_style.content_margin_right = 12 if compact else 18
+    panel_style.content_margin_bottom = 6 if compact else 10
+    panel_style.shadow_size = 0
+    panel.add_theme_stylebox_override("panel", panel_style)
+    content.add_child(panel)
+
     var rows := VBoxContainer.new()
     rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     rows.add_theme_constant_override("separation", 0)
     panel.add_child(rows)
     if animate:
-        ui_motion.reveal(group, delay)
+        ui_motion.reveal(section, delay)
     return rows
 
 func _add_settings_row(group: VBoxContainer, row: Control) -> void:
@@ -6098,68 +6812,51 @@ func _add_settings_row(group: VBoxContainer, row: Control) -> void:
         group.add_child(_detail_separator())
     group.add_child(row)
 
-func _settings_block(title: String, subtitle: String, control: Control, stack_control: bool = false) -> Control:
+func _settings_row(title: String, subtitle: String, control: Control, stack_control: bool = false) -> Control:
+    var compact := settings_compact_layout
     var margin := MarginContainer.new()
     margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    margin.add_theme_constant_override("margin_left", 2)
-    margin.add_theme_constant_override("margin_top", 10)
-    margin.add_theme_constant_override("margin_right", 2)
-    margin.add_theme_constant_override("margin_bottom", 10)
+    margin.add_theme_constant_override("margin_left", 2 if compact else 8)
+    margin.add_theme_constant_override("margin_top", 7 if compact else 12)
+    margin.add_theme_constant_override("margin_right", 2 if compact else 8)
+    margin.add_theme_constant_override("margin_bottom", 7 if compact else 12)
+
     var box: BoxContainer = VBoxContainer.new() if stack_control else HBoxContainer.new()
-    box.custom_minimum_size = Vector2(0, 94 if stack_control else 68)
-    box.add_theme_constant_override("separation", 12 if stack_control else 18)
+    box.custom_minimum_size = Vector2(0, (64 if compact else 78) if stack_control else (46 if compact else 56))
+    box.add_theme_constant_override("separation", 8 if compact else 20)
     margin.add_child(box)
+
     var labels := VBoxContainer.new()
     labels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    labels.add_theme_constant_override("separation", 4)
+    labels.add_theme_constant_override("separation", 2 if compact else 3)
     box.add_child(labels)
+
     var title_label := Label.new()
     title_label.text = title
-    title_label.add_theme_font_size_override("font_size", 16)
+    title_label.add_theme_font_override("font", DISPLAY_FONT)
+    title_label.add_theme_font_size_override("font_size", 14 if compact else 15)
     title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
+
     if not subtitle.is_empty():
         var sub := Label.new()
         sub.text = subtitle
         sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-        sub.add_theme_font_size_override("font_size", 13)
+        sub.add_theme_font_size_override("font_size", 11 if compact else 12)
         sub.add_theme_color_override("font_color", ui_tokens.text_secondary)
         labels.add_child(sub)
+
     control.size_flags_horizontal = Control.SIZE_EXPAND_FILL if stack_control else Control.SIZE_SHRINK_END
     control.size_flags_vertical = Control.SIZE_SHRINK_CENTER
     box.add_child(control)
     return margin
 
 func _settings_toggle_row(title: String, subtitle: String, initial: bool, key: String) -> Control:
-    var margin := MarginContainer.new()
-    margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    margin.add_theme_constant_override("margin_left", 2)
-    margin.add_theme_constant_override("margin_top", 10)
-    margin.add_theme_constant_override("margin_right", 2)
-    margin.add_theme_constant_override("margin_bottom", 10)
-    var row := HBoxContainer.new()
-    row.custom_minimum_size = Vector2(0, 62)
-    row.add_theme_constant_override("separation", 14)
-    margin.add_child(row)
-    var labels := VBoxContainer.new()
-    labels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    labels.add_theme_constant_override("separation", 4)
-    var title_label := Label.new()
-    title_label.text = title
-    title_label.add_theme_font_size_override("font_size", 16)
-    title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
-    labels.add_child(title_label)
-    var sub := Label.new()
-    sub.text = subtitle
-    sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    sub.add_theme_font_size_override("font_size", 13)
-    sub.add_theme_color_override("font_color", ui_tokens.text_secondary)
-    labels.add_child(sub)
-    row.add_child(labels)
-
     var toggle := _settings_switch(initial, key)
-    row.add_child(toggle)
-    return margin
+    return _settings_row(title, subtitle, toggle, false)
+
+func _settings_block(title: String, subtitle: String, control: Control, stack_control: bool = false) -> Control:
+    return _settings_row(title, subtitle, control, stack_control)
 
 func _settings_switch(initial: bool, key: String) -> Button:
     var toggle = AetherSwitch.new()
@@ -6170,6 +6867,7 @@ func _settings_switch(initial: bool, key: String) -> Button:
     return toggle
 
 func _settings_value_row(title: String, value: String) -> Control:
+    var compact := settings_compact_layout
     var margin := MarginContainer.new()
     margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     margin.add_theme_constant_override("margin_left", 2)
@@ -6184,48 +6882,18 @@ func _settings_value_row(title: String, value: String) -> Control:
     label.text = title
     label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-    label.add_theme_font_size_override("font_size", 17)
+    # Same family + size scale as _settings_row so every settings row reads
+    # with one voice (the old 17px default-font title broke the rhythm).
+    label.add_theme_font_override("font", DISPLAY_FONT)
+    label.add_theme_font_size_override("font_size", 14 if compact else 15)
     label.add_theme_color_override("font_color", ui_tokens.text_primary)
     row.add_child(label)
     var value_label := Label.new()
     value_label.text = value
     value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-    value_label.add_theme_font_size_override("font_size", 15)
+    value_label.add_theme_font_size_override("font_size", 11 if compact else 12)
     value_label.add_theme_color_override("font_color", ui_tokens.text_secondary)
     row.add_child(value_label)
-    return margin
-
-func _settings_link_value_row(title: String, value: String, action: Callable) -> Control:
-    var margin := MarginContainer.new()
-    margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    margin.add_theme_constant_override("margin_left", 2)
-    margin.add_theme_constant_override("margin_top", 8)
-    margin.add_theme_constant_override("margin_right", 2)
-    margin.add_theme_constant_override("margin_bottom", 8)
-    var row := HBoxContainer.new()
-    row.custom_minimum_size = Vector2(0, 44)
-    row.add_theme_constant_override("separation", 18)
-    margin.add_child(row)
-    var label := Label.new()
-    label.text = title
-    label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-    label.add_theme_font_size_override("font_size", 17)
-    label.add_theme_color_override("font_color", ui_tokens.text_primary)
-    row.add_child(label)
-    var link := LinkButton.new()
-    link.text = value
-    link.underline = LinkButton.UNDERLINE_MODE_ALWAYS
-    link.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-    link.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-    link.add_theme_font_size_override("font_size", 15)
-    var link_color := Color("0969da") if style_mode == STYLE_CLASSIC else Color("58a6ff")
-    link.add_theme_color_override("font_color", link_color)
-    link.add_theme_color_override("font_focus_color", link_color)
-    link.add_theme_color_override("font_hover_color", link_color.lightened(0.12))
-    link.add_theme_color_override("font_pressed_color", link_color.darkened(0.12))
-    link.pressed.connect(action)
-    row.add_child(link)
     return margin
 
 func _settings_action_row(title: String, subtitle: String, action_text: String, action: Callable) -> Control:
@@ -6235,7 +6903,7 @@ func _settings_action_row(title: String, subtitle: String, action_text: String, 
     margin.add_theme_constant_override("margin_top", 10)
     margin.add_theme_constant_override("margin_right", 2)
     margin.add_theme_constant_override("margin_bottom", 10)
-    var compact := shell_content.size.x < 640.0
+    var compact := settings_compact_layout
     var row: BoxContainer = VBoxContainer.new() if compact else HBoxContainer.new()
     row.custom_minimum_size = Vector2(0, 126 if compact else 92)
     row.add_theme_constant_override("separation", 12 if compact else 18)
@@ -6246,18 +6914,20 @@ func _settings_action_row(title: String, subtitle: String, action_text: String, 
     row.add_child(labels)
     var title_label := Label.new()
     title_label.text = title
-    title_label.add_theme_font_size_override("font_size", 16)
+    title_label.add_theme_font_override("font", DISPLAY_FONT)
+    title_label.add_theme_font_size_override("font_size", 14 if compact else 15)
     title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
     var sub := Label.new()
     sub.text = subtitle
     sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    sub.add_theme_font_size_override("font_size", 13)
+    sub.add_theme_font_size_override("font_size", 11 if compact else 12)
     sub.add_theme_color_override("font_color", ui_tokens.text_secondary)
     labels.add_child(sub)
     var open := _pill_button(action_text)
     _configure_settings_action_button(open)
-    open.pressed.connect(action)
+    if action.is_valid():
+        open.pressed.connect(action)
     row.add_child(open)
     return margin
 
@@ -6273,7 +6943,7 @@ func _settings_iap_product_row() -> Control:
     margin.add_theme_constant_override("margin_top", 10)
     margin.add_theme_constant_override("margin_right", 2)
     margin.add_theme_constant_override("margin_bottom", 10)
-    var compact := shell_content.size.x < 640.0
+    var compact := settings_compact_layout
     var row: BoxContainer = VBoxContainer.new() if compact else HBoxContainer.new()
     row.custom_minimum_size = Vector2(0, 150 if compact else 112)
     row.add_theme_constant_override("separation", 12 if compact else 18)
@@ -6286,20 +6956,21 @@ func _settings_iap_product_row() -> Control:
 
     var title_label := Label.new()
     title_label.text = _t("iap.list_limit.title")
-    title_label.add_theme_font_size_override("font_size", 16)
+    title_label.add_theme_font_override("font", DISPLAY_FONT)
+    title_label.add_theme_font_size_override("font_size", 14 if compact else 15)
     title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
 
     var description := Label.new()
     description.text = _t("iap.list_limit.desc")
     description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    description.add_theme_font_size_override("font_size", 13)
+    description.add_theme_font_size_override("font_size", 11 if compact else 12)
     description.add_theme_color_override("font_color", ui_tokens.text_secondary)
     labels.add_child(description)
 
     var status := Label.new()
     status.text = _iap_product_status_text()
-    status.add_theme_font_size_override("font_size", 15)
+    status.add_theme_font_size_override("font_size", 11 if compact else 12)
     status.add_theme_color_override("font_color", ui_tokens.accent)
     labels.add_child(status)
 
@@ -6338,7 +7009,7 @@ func _settings_iap_coffee_row() -> Control:
     margin.add_theme_constant_override("margin_top", 10)
     margin.add_theme_constant_override("margin_right", 2)
     margin.add_theme_constant_override("margin_bottom", 10)
-    var compact := shell_content.size.x < 640.0
+    var compact := settings_compact_layout
     var row: BoxContainer = VBoxContainer.new() if compact else HBoxContainer.new()
     row.custom_minimum_size = Vector2(0, 150 if compact else 112)
     row.add_theme_constant_override("separation", 12 if compact else 18)
@@ -6351,21 +7022,22 @@ func _settings_iap_coffee_row() -> Control:
 
     var title_label := Label.new()
     title_label.text = _t("iap.coffee.title")
-    title_label.add_theme_font_size_override("font_size", 16)
+    title_label.add_theme_font_override("font", DISPLAY_FONT)
+    title_label.add_theme_font_size_override("font_size", 14 if compact else 15)
     title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
 
     var description := Label.new()
     description.text = _t("iap.coffee.desc")
     description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    description.add_theme_font_size_override("font_size", 13)
+    description.add_theme_font_size_override("font_size", 11 if compact else 12)
     description.add_theme_color_override("font_color", ui_tokens.text_secondary)
     labels.add_child(description)
 
     var status := Label.new()
     status.text = _iap_coffee_status_text()
     status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    status.add_theme_font_size_override("font_size", 15)
+    status.add_theme_font_size_override("font_size", 11 if compact else 12)
     status.add_theme_color_override("font_color", ui_tokens.accent)
     labels.add_child(status)
 
@@ -6613,6 +7285,7 @@ func _settings_fps_row() -> Control:
     margin.add_theme_constant_override("margin_top", 10)
     margin.add_theme_constant_override("margin_right", 2)
     margin.add_theme_constant_override("margin_bottom", 10)
+    var compact := settings_compact_layout
     var row := HBoxContainer.new()
     row.custom_minimum_size = Vector2(0, 62)
     row.add_theme_constant_override("separation", 14)
@@ -6622,12 +7295,13 @@ func _settings_fps_row() -> Control:
     labels.add_theme_constant_override("separation", 6)
     var title_label := Label.new()
     title_label.text = _t("settings.target_fps")
-    title_label.add_theme_font_size_override("font_size", 18)
+    title_label.add_theme_font_override("font", DISPLAY_FONT)
+    title_label.add_theme_font_size_override("font_size", 14 if compact else 15)
     title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
     var sub := Label.new()
     sub.text = _t("settings.target_fps_desc")
-    sub.add_theme_font_size_override("font_size", 14)
+    sub.add_theme_font_size_override("font_size", 11 if compact else 12)
     sub.add_theme_color_override("font_color", ui_tokens.text_secondary)
     labels.add_child(sub)
     row.add_child(labels)
@@ -7155,7 +7829,7 @@ func _refresh_language_texts() -> void:
         shell_compact_video_button.tooltip_text = _t("nav.videos")
     if is_instance_valid(shell_compact_settings_button):
         shell_compact_settings_button.tooltip_text = _t("settings.title")
-    if is_instance_valid(shell_sidebar_toggle):
+    if is_instance_valid(shell_sidebar_brand_labels):
         _apply_sidebar_presentation(false)
     _sync_shell_route(shell_route)
     _sync_home_header_text()
@@ -7261,7 +7935,27 @@ func _animate_shell_route(outgoing: Control, incoming: Control, lift: bool = tru
     if outgoing == incoming:
         ui_motion.settle_route(incoming, true)
         return
-    ui_motion.route_transition(outgoing, incoming, lift)
+    # Phones/narrow screens slide horizontally, desktop slides vertically
+    var horizontal := get_viewport_rect().size.x < HOME_PHONE_BREAKPOINT
+    ui_motion.route_transition(outgoing, incoming, lift, horizontal)
+    if incoming == home_view:
+        call_deferred("_cascade_home_cards")
+
+func _cascade_home_cards() -> void:
+    if not is_instance_valid(home_view) or not home_view.visible:
+        return
+    # Fast cascade level 1: header elements
+    if is_instance_valid(home_header_box):
+        var header_index := 0
+        for child in home_header_box.get_children():
+            if child is Control and is_instance_valid(child) and not child.is_queued_for_deletion():
+                ui_motion.reveal(child, 0.04 + 0.05 * float(header_index))
+                header_index += 1
+    # Level 2: cards fan in quickly with spring reveal
+    if home_library_mode == "video" and video_list != null and is_instance_valid(video_list):
+        ui_motion.cascade_children(video_list, 0.035, 0.14)
+    elif game_list != null and is_instance_valid(game_list):
+        ui_motion.cascade_children(game_list, 0.035, 0.14)
 
 func _show_home() -> void:
     _show_library("game")
@@ -7294,8 +7988,21 @@ func _show_library(mode: String) -> void:
         _refresh_games()
     if previous_route != "library":
         _animate_shell_route(outgoing, home_view, not returning_from_detail)
+    else:
+        # Game/video pages share the library route: still play the slow cascade swap
+        _animate_library_swap()
     if returning_from_detail:
         call_deferred("_animate_hero_back", detail_rect)
+
+func _animate_library_swap() -> void:
+    if not is_instance_valid(home_view):
+        return
+    # Whole-view breath + header fade, then cards cascade in slowly
+    home_view.modulate.a = 0.35
+    ui_motion._fade(home_view, 1.0, 0.22, "route")
+    if is_instance_valid(home_header_box):
+        ui_motion.reveal(home_header_box, 0.0)
+    call_deferred("_cascade_home_cards")
 
 func _show_settings() -> void:
     if shell_route == "settings":
@@ -7424,12 +8131,12 @@ func _rebuild_detail_contents(game: Dictionary, animate_hero: bool, animate_cont
     var page := VBoxContainer.new()
     page.custom_minimum_size = Vector2(detail_content_width, 0)
     page.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-    page.add_theme_constant_override("separation", 24)
+    page.add_theme_constant_override("separation", 28)
     center.add_child(page)
 
     var top := HBoxContainer.new()
-    top.custom_minimum_size = Vector2(0, 48)
-    top.add_theme_constant_override("separation", 10)
+    top.custom_minimum_size = Vector2(0, 52)
+    top.add_theme_constant_override("separation", 12)
     page.add_child(top)
 
     var back := _shell_compact_button(ICON_BACK, _t("nav.library"), _show_home)
@@ -7438,10 +8145,10 @@ func _rebuild_detail_contents(game: Dictionary, animate_hero: bool, animate_cont
     top.add_child(back)
 
     var eyebrow := Label.new()
-    eyebrow.text = _t("detail.eyebrow")
+    eyebrow.text = _t("detail.eyebrow").to_upper()
     eyebrow.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     eyebrow.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-    eyebrow.add_theme_font_size_override("font_size", 16)
+    eyebrow.add_theme_font_size_override("font_size", 13)
     eyebrow.add_theme_color_override("font_color", ui_tokens.text_secondary)
     top.add_child(eyebrow)
 
@@ -7451,10 +8158,15 @@ func _rebuild_detail_contents(game: Dictionary, animate_hero: bool, animate_cont
     if animate_content:
         ui_motion.reveal(top)
     if animate_hero:
+        # Zero-latency instant hero launch: start immediately on the same frame without any delay
+        detail_view.visible = true
+        detail_view.modulate.a = 1.0
         body.modulate.a = 0.0
         call_deferred("_animate_hero_forward", body)
     elif animate_content:
         ui_motion.reveal(body, 0.04)
+        # Recursive cascade: cover, identity, tools, panels stagger in
+        ui_motion.cascade_children(body, 0.06, 0.12)
 
 func _build_desktop_detail(game: Dictionary, phone_landscape: bool = false) -> Control:
     var body := HBoxContainer.new()
@@ -7464,7 +8176,7 @@ func _build_desktop_detail(game: Dictionary, phone_landscape: bool = false) -> C
 
     var information := VBoxContainer.new()
     information.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    information.add_theme_constant_override("separation", 14)
+    information.add_theme_constant_override("separation", 16)
     body.add_child(information)
     information.add_child(_detail_identity(game, false))
     information.add_child(_detail_tools(game))
@@ -7480,7 +8192,10 @@ func _build_compact_detail(game: Dictionary) -> Control:
     summary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     summary.add_theme_constant_override("separation", 16)
     body.add_child(summary)
-    summary.add_child(_detail_cover_with_action(game, Vector2(112, 158)))
+    # The action row is wider than the portrait cover.  Let it overflow below
+    # the cover without making the summary column that wide; otherwise the
+    # title starts hundreds of points away from the cover on iPhone.
+    summary.add_child(_detail_cover_with_action(game, Vector2(112, 158), true))
 
     var primary := VBoxContainer.new()
     primary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -7517,17 +8232,16 @@ func _detail_cover(game: Dictionary, cover_size: Vector2) -> PanelContainer:
         cover.add_child(icon)
     return cover
 
-func _detail_cover_with_action(game: Dictionary, cover_size: Vector2) -> VBoxContainer:
-    var column := VBoxContainer.new()
-    column.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-    column.add_theme_constant_override("separation", 6)
-    column.add_child(_detail_cover(game, cover_size))
+func _detail_cover_with_action(
+    game: Dictionary,
+    cover_size: Vector2,
+    constrain_portrait_width: bool = false
+) -> Control:
     var cover_path := _resolve_cover_path(game)
     var has_cover := not cover_path.is_empty() and FileAccess.file_exists(cover_path)
     var actions := HBoxContainer.new()
     actions.alignment = BoxContainer.ALIGNMENT_CENTER
     actions.add_theme_constant_override("separation", 6)
-    column.add_child(actions)
     var action := _pill_button(_t("detail.set_cover"), ICON_PAGE)
     action.custom_minimum_size = Vector2(128, 40)
     action.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
@@ -7540,6 +8254,32 @@ func _detail_cover_with_action(game: Dictionary, cover_size: Vector2) -> VBoxCon
         clear.custom_minimum_size = Vector2(112, 40)
         clear.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
         actions.add_child(clear)
+
+    if constrain_portrait_width:
+        # A plain Control keeps the cover column's minimum width fixed.  The
+        # action row is laid out manually and may extend to the right below
+        # the cover, where it cannot push the identity column away.
+        var compact_column := Control.new()
+        compact_column.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+        compact_column.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+        compact_column.custom_minimum_size = Vector2(cover_size.x, cover_size.y + 46.0)
+
+        var compact_cover := _detail_cover(game, cover_size)
+        compact_cover.position = Vector2.ZERO
+        compact_cover.size = cover_size
+        compact_column.add_child(compact_cover)
+
+        var action_width := maxf(cover_size.x, actions.get_combined_minimum_size().x)
+        actions.position = Vector2(0.0, cover_size.y + 6.0)
+        actions.size = Vector2(action_width, 40.0)
+        compact_column.add_child(actions)
+        return compact_column
+
+    var column := VBoxContainer.new()
+    column.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+    column.add_theme_constant_override("separation", 6)
+    column.add_child(_detail_cover(game, cover_size))
+    column.add_child(actions)
     return column
 
 func _detail_identity(game: Dictionary, compact: bool) -> VBoxContainer:
@@ -7555,7 +8295,7 @@ func _detail_identity(game: Dictionary, compact: bool) -> VBoxContainer:
 
     var title := Label.new()
     title.text = _game_display_title(game)
-    title.custom_minimum_size = Vector2(0, 64 if compact else 72)
+    title.custom_minimum_size = Vector2(0, 72 if compact else 94)
     title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
     title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     title.max_lines_visible = 3 if compact else 2
@@ -7633,24 +8373,6 @@ func _detail_information_panel(game: Dictionary) -> PanelContainer:
     info.add_child(_detail_line(ICON_LIBRARY, _game_type_label(String(game.get("type", "Directory")))))
     info.add_child(_detail_separator())
     info.add_child(_detail_line(ICON_PLAY, _t("detail.launch_entry", [_game_launch_entry_label(game)])))
-    if _game_runtime_kind(String(game.get("path", ""))) == RUNTIME_RFVP:
-        info.add_child(_detail_separator())
-        var row := _detail_line(ICON_PAGE, _t("detail.rfvp_encoding"))
-        var encoding := OptionButton.new()
-        encoding.name = "RfvpEncoding"
-        encoding.custom_minimum_size = Vector2(140, 40)
-        ui_widgets.secondary_button(encoding)
-        for label in ["Shift-JIS", "GBK", "UTF-8"]:
-            encoding.add_item(label)
-        encoding.select(GameLaunchEntry.RFVP_ENCODINGS.find(GameLaunchEntry.rfvp_encoding(game)))
-        var library_path := String(game.get("path", ""))
-        encoding.item_selected.connect(func(index: int):
-            _update_game(library_path, {
-                GameLaunchEntry.RFVP_ENCODING_FIELD: GameLaunchEntry.RFVP_ENCODINGS[index]
-            })
-        )
-        row.add_child(encoding)
-        info.add_child(row)
     return info_panel
 
 func _detail_remove_button(game: Dictionary) -> Button:
@@ -7839,14 +8561,6 @@ func _open_android_coffee() -> void:
         _show_system_alert(
             _t("support.coffee.open_failed"),
             _t("support.coffee.title")
-        )
-
-func _open_app_service_filing() -> void:
-    var result := OS.shell_open(APP_SERVICE_FILING_URL)
-    if result != OK:
-        _show_system_alert(
-            _t("settings.app_service_filing_open_failed"),
-            _t("settings.app_service_filing")
         )
 
 func _iap_supported_platform() -> bool:
@@ -8474,7 +9188,7 @@ func _show_launch_file_godot_dialog(library_path: String) -> void:
     var dialog := _create_file_dialog(
         _t("dialog.choose_launch_file"),
         FileDialog.FILE_MODE_OPEN_FILE,
-        PackedStringArray(["*.exe,*.EXE,*.xp3,*.XP3,*.hcb,*.HCB;Visual novel launch file"])
+        PackedStringArray(["*.exe,*.EXE,*.xp3,*.XP3;Visual novel launch file"])
     )
     if DirAccess.dir_exists_absolute(library_path):
         dialog.current_dir = library_path
@@ -9877,22 +10591,12 @@ func _path_exists(path: String) -> bool:
     return DirAccess.dir_exists_absolute(candidate) or FileAccess.file_exists(candidate)
 
 func _resolve_game_path(path: String) -> String:
-    # Native file pickers return authoritative filesystem paths.  A trailing
-    # space is a valid filename character on POSIX (and occurs in real game
-    # folders), so try the exact value before treating surrounding whitespace
-    # as accidental user input.
-    var normalized := path
-    if normalized.is_empty() or normalized.strip_edges().is_empty():
-        return ""
+    var normalized := path.strip_edges()
+    if normalized.is_empty():
+        return normalized
     if OS.get_name() == "Android":
         normalized = _android_external_storage_path_from_tree_uri(normalized)
-    if _path_exists(normalized):
-        return normalized
-
-    var trimmed := normalized.strip_edges()
-    if trimmed != normalized and _path_exists(trimmed):
-        return trimmed
-    if OS.get_name() != "iOS":
+    if _path_exists(normalized) or OS.get_name() != "iOS":
         return normalized
 
     var current_root := ProjectSettings.globalize_path("user://Games")
@@ -9990,18 +10694,12 @@ func _game_runtime_kind(path: String) -> String:
     )
     if runtime_kind != RUNTIME_KIRIKIRI:
         return runtime_kind
-    for marker in SIGLUS_SCRIPT_MARKERS:
-        if FileAccess.file_exists(root.path_join(marker)):
-            return RUNTIME_SIGLUS
     if player != null and player.has_method("probe_runtime"):
-        # Metadata can only inspect loose files.  Provider probing also sees
-        # manifests stored inside an archive (notably Artemis system.ini in
-        # root.pfs), or CatSystem2's packed IRISPCK data, and must run before
-        # falling back to the legacy host.
-        if int(player.probe_runtime("catsystem2", root)) > 0:
-            return "catsystem2"
-        if int(player.probe_runtime("artemis", root)) > 0:
-            return "artemis"
+        # Packed CatSystem2 titles may not expose the loose markers used by
+        # GameMetadata. Let the registered provider inspect the game root
+        # before falling back to the legacy KiriKiri host.
+        if int(player.probe_runtime(RUNTIME_CATSYSTEM2, root)) > 0:
+            return RUNTIME_CATSYSTEM2
         if int(player.probe_runtime(RUNTIME_MINORI, root)) > 0:
             return RUNTIME_MINORI
     return runtime_kind
@@ -10025,9 +10723,7 @@ func _backfill_game_metadata(games: Array[Dictionary]) -> bool:
                 if String(game.get("name", "")).is_empty():
                     game["name"] = title
                 changed = true
-        if GameLaunchEntry.backfill(game, metadata):
-            changed = true
-        for key in ["titleCandidates", "metadataSignals"]:
+        for key in ["titleCandidates", "metadataSignals", "launchFile"]:
             var value = metadata.get(key, null)
             if value != null and JSON.stringify(game.get(key, null)) != JSON.stringify(value):
                 game[key] = value
@@ -10426,6 +11122,41 @@ func _populate_game_card_metadata(metadata: PanelContainer, game: Dictionary, co
     sub.add_theme_color_override("font_color", ui_tokens.text_secondary)
     labels.add_child(sub)
 
+func _start_hero_forward_instant(body: Control, compact: bool, available_size: Vector2, gutter: int) -> void:
+    if hero_source_rect.size == Vector2.ZERO or not is_instance_valid(detail_hero_cover):
+        ui_motion.reveal(body)
+        return
+
+    # Calculate exact destination rect immediately with mathematical precision (0ms latency)
+    var cover_size := Vector2(128.0, 180.0) if compact else Vector2(300.0, 420.0)
+    var page_width: float = available_size.x - float(gutter * 2) if compact else minf(1120.0, maxf(320.0, available_size.x - float(gutter * 2)))
+    var page_left: float = float(gutter) if compact else (available_size.x - page_width) * 0.5
+    var top_y: float = (20.0 if compact else 28.0) + 52.0 + 28.0
+    var destination_global := Rect2(
+        shell_content.global_position + Vector2(page_left, top_y),
+        cover_size
+    )
+
+    _finish_hero_overlay()
+    detail_hero_cover.modulate.a = 0.0
+    hero_hidden_target = detail_hero_cover
+
+    # Fade in body smoothly without scaling distortion so layout coordinates stay anchored
+    var body_key := ui_motion._tween_key(body, "reveal")
+    ui_motion._stop_tween_key(body_key)
+    body.modulate.a = 0.0
+    body.scale = Vector2.ONE
+    var body_tween := body.create_tween()
+    ui_motion.active_tweens[body_key] = body_tween
+    body_tween.tween_property(body, "modulate:a", 1.0, 0.22).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+    body_tween.chain().tween_callback(func(): ui_motion._finish_tween_key(body_key))
+
+    var overlay := _create_hero_overlay(hero_source_rect, hero_source_texture)
+    var transition_id := hero_transition_id
+    var overlay_ref: WeakRef = weakref(overlay)
+    ui_motion.hero_rect(overlay, _hero_local_rect(destination_global), func(): _complete_hero_overlay_ref(overlay_ref, transition_id, false))
+    _arm_hero_watchdog(overlay, transition_id, false)
+
 func _animate_hero_forward(body: Control) -> void:
     if not is_instance_valid(detail_hero_cover) or hero_source_rect.size == Vector2.ZERO:
         ui_motion.reveal(body)
@@ -10474,6 +11205,10 @@ func _create_hero_overlay(global_rect: Rect2, texture: Texture2D) -> PanelContai
     hero_overlay.position = _hero_local_rect(global_rect).position
     hero_overlay.size = global_rect.size
     var style := ui_tokens.detail_outline_style()
+    style.content_margin_left = 0
+    style.content_margin_top = 0
+    style.content_margin_right = 0
+    style.content_margin_bottom = 0
     hero_overlay.add_theme_stylebox_override("panel", style)
     if texture != null:
         var image := TextureRect.new()
@@ -10642,7 +11377,7 @@ func _start_selected_game_after_iap() -> void:
         return
     var selected_runtime_kind := _game_runtime_kind(library_path)
     # Development artifacts and Android releases do not use the Apple-only
-    # beta entitlement flow. Keep provider beta access enabled for both paths.
+    # beta entitlement flow.
     if not _beta_access_enforcement_enabled():
         if (
             selected_runtime_kind == RUNTIME_KIRIKIRI
@@ -10650,8 +11385,6 @@ func _start_selected_game_after_iap() -> void:
             and not _switch_runtime_player(RUNTIME_KIRIKIRI)
         ):
             return
-        if player.has_method("set_engine_option"):
-            player.set_engine_option("beta_runtime_allowed", "1")
         _start_selected_game_after_entitlements()
         return
 
@@ -10662,13 +11395,9 @@ func _start_selected_game_after_iap() -> void:
         and not _switch_runtime_player(RUNTIME_KIRIKIRI)
     ):
         return
-    if player.has_method("set_engine_option"):
-        # Reset a grant left on the reusable engine handle before every Release
-        # launch. A fresh verified coffee entitlement enables it again below.
-        player.set_engine_option("beta_runtime_allowed", "0")
     var requires_beta_access := (
         _runtime_requires_beta_access(selected_runtime_kind)
-        or _selected_game_uses_beta_provider()
+        or _selected_game_uses_wa2()
     )
     if not requires_beta_access:
         _start_selected_game_after_entitlements()
@@ -10685,33 +11414,24 @@ func _start_selected_game_after_iap() -> void:
         _deny_runtime_beta_launch()
 
 func _runtime_requires_beta_access(runtime_kind: String) -> bool:
-    # CatSystem2, Siglus, Minori, and RFVP remain gated by an active coffee
-    # entitlement in iOS and macOS distribution builds. Artemis and Onscripter
-    # are released runtimes and must remain available without beta access.
-    return runtime_kind in [
-        "catsystem2",
-        RUNTIME_SIGLUS,
-        RUNTIME_MINORI,
-        RUNTIME_RFVP,
-    ]
+    # ONS and Artemis are generally available. Minori remains gated by an
+    # active coffee entitlement in iOS and macOS distribution builds.
+    # Provider-backed runtimes such as WA2 are checked separately.
+    return runtime_kind == RUNTIME_MINORI
 
 func _beta_access_enforcement_enabled(platform_name: String = "") -> bool:
     var effective_platform := platform_name if not platform_name.is_empty() else OS.get_name()
     return effective_platform in ["iOS", "macOS"] and not OS.is_debug_build()
 
-func _provider_runtime_requires_beta_access(runtime_id: String) -> bool:
-    return BETA_PROVIDER_RUNTIME_IDS.has(runtime_id.strip_edges().to_lower())
-
-func _selected_game_uses_beta_provider() -> bool:
+func _selected_game_uses_wa2() -> bool:
+    # WHITE ALBUM2 runs on the KiriKiri host through the compiled Wa2
+    # provider and retains the provider beta-access policy.
     if player == null or not player.has_method("probe_runtime"):
         return false
     var library_path := String(selected_game.get("path", "")).strip_edges()
     if library_path.is_empty():
         return false
-    for runtime_id in BETA_PROVIDER_RUNTIME_IDS:
-        if int(player.probe_runtime(runtime_id, library_path)) > 0:
-            return true
-    return false
+    return int(player.probe_runtime("wa2", library_path)) > 0
 
 func _complete_runtime_beta_check() -> void:
     iap_pending_beta_check_id = 0
@@ -10723,23 +11443,13 @@ func _complete_runtime_beta_check() -> void:
         _deny_runtime_beta_launch()
         return
     selected_game = pending_game
-    # The entitlement check above authorizes provider-backed beta runtimes as
-    # well as the legacy KiriKiri host.  The dispatch layer defaults this flag
-    # to false in Release builds, so every successful check must explicitly
-    # enable it before reopening the selected game.  Restricting this to the
-    # KiriKiri host left Artemis games blocked with "requires active beta
-    # access" even after StoreKit had verified the entitlement.
-    if player.has_method("set_engine_option"):
-        player.set_engine_option("beta_runtime_allowed", "1")
     _start_selected_game_after_entitlements()
 
 func _deny_runtime_beta_launch() -> void:
     iap_pending_beta_check_id = 0
     iap_pending_beta_game.clear()
-    if player != null and player.has_method("set_engine_option"):
-        player.set_engine_option("beta_runtime_allowed", "0")
     _show_system_alert(
-        _t("iap.runtime_unavailable"),
+        _t("iap.beta_runtime_unavailable"),
         _t("alert.warning_title")
     )
 
@@ -10779,22 +11489,20 @@ func _start_selected_game_after_entitlements() -> void:
             _t("alert.warning_title")
         )
         return
-    var configured_launch_path := GameLaunchEntry.resolve(selected_game)
+    var launch_path := GameLaunchEntry.resolve_for_runtime(
+        selected_game,
+        active_runtime_kind
+    )
     if (
         not launch_uses_directory
         and not relative_launch_file.is_empty()
-        and not FileAccess.file_exists(configured_launch_path)
+        and not FileAccess.file_exists(launch_path)
     ):
         _show_system_alert(
             _t("message.launch_file_missing", [relative_launch_file]),
             _t("alert.warning_title")
         )
         return
-    var launch_path := GameLaunchEntry.resolve_for_runtime(
-        selected_game,
-        active_runtime_kind,
-        _selected_game_uses_beta_provider()
-    )
     _set_game_runtime_orientation(true)
     var played_game := _mark_game_played(library_path)
     if not played_game.is_empty():
@@ -10877,14 +11585,6 @@ func _return_to_library_after_runtime_exit() -> void:
     runtime_exit_cleanup_pending = false
 
 func _ready() -> void:
-    get_window().mouse_entered.connect(_on_siglus_window_mouse_entered)
-    get_window().mouse_exited.connect(_on_siglus_window_mouse_exited)
-    siglus_pointer_inside_window = get_window().get_visible_rect().has_point(get_window().get_mouse_position())
-    siglus_joypad.load_config()
-    Input.joy_connection_changed.connect(func(device: int, connected: bool):
-        if not connected:
-            _send_siglus_joypad_events(siglus_joypad.release_device(device))
-    )
     var vndb_resolver := VNDBCoverResolver.new()
     vndb_resolver.name = "VNDBCoverResolver"
     add_child(vndb_resolver)
@@ -10919,11 +11619,7 @@ func _ready() -> void:
     input_trace_enabled = (
         _runtime_flag("AETHERKIRI_INPUT_TRACE")
         or ios_diagnostics_enabled
-        # A CLI probe should measure the game, not force the very verbose
-        # LayerIntf input tracer on every click.  The tracer walks and logs a
-        # large TJS object graph from onMouseDown/onMouseUp and can itself
-        # create 45-70ms host frames.  Keep it opt-in for targeted input
-        # investigations while probes retain their normal input delivery.
+        or not cli_probe_script.is_empty()
     )
     device_probe_enabled = device_probe_enabled or frame_probe_enabled
     device_probe_enabled = device_probe_enabled or input_trace_enabled
@@ -10971,6 +11667,11 @@ func _ready() -> void:
         add_child(ui_motion)
     _build_ui()
     _stage_runtime_fonts()
+
+    # Scene-test preview: scheduled before the optional runtime player init
+    # so developer scene inspection works even without the native extension.
+    _restore_scene_test_state()
+    call_deferred("_apply_pending_scene_test")
 
     if not _create_runtime_player():
         return
@@ -11287,12 +11988,7 @@ func _create_runtime_player(runtime_kind: String = RUNTIME_KIRIKIRI) -> bool:
 
 func _switch_runtime_player(runtime_kind: String) -> bool:
     var normalized := runtime_kind
-    if normalized not in [
-        RUNTIME_ONSCRIPTER,
-        RUNTIME_SIGLUS,
-        RUNTIME_MINORI,
-        RUNTIME_RFVP,
-    ]:
+    if normalized != RUNTIME_ONSCRIPTER and normalized != RUNTIME_MINORI:
         normalized = RUNTIME_KIRIKIRI
     if player != null and current_player_runtime_kind == normalized:
         return true
@@ -11319,12 +12015,11 @@ func _switch_runtime_player(runtime_kind: String) -> bool:
             diagnostic_session.finish()
         diagnostic_session.start(player, selected_backend)
     _append_log("Runtime selected: %s" % (
-        {
-            RUNTIME_ONSCRIPTER: "OnscripterYuri",
-            RUNTIME_SIGLUS: "SiglusEngine",
-            RUNTIME_MINORI: "MinoriRust",
-            RUNTIME_RFVP: "rfvp",
-        }.get(normalized, "KiriKiri")
+        "OnscripterYuri"
+        if normalized == RUNTIME_ONSCRIPTER
+        else "MinoriRust"
+        if normalized == RUNTIME_MINORI
+        else "KiriKiri"
     ))
     return true
 
@@ -11340,75 +12035,6 @@ func _parse_platform_form(argument: String) -> Dictionary:
 
 func _on_runtime_platform_request(operation: String, argument: String) -> void:
     if player == null:
-        return
-    if operation == "siglus_open_target":
-        var target := String(_parse_platform_form(argument).get("target", ""))
-        if not target.is_empty():
-            OS.shell_open(target)
-        return
-    if operation == "siglus_window_state":
-        if not _is_touch_platform():
-            var fields := _parse_platform_form(argument)
-            var fullscreen := int(fields.get("mode", "0")) != 0
-            DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN if fullscreen else DisplayServer.WINDOW_MODE_WINDOWED)
-            if not fullscreen:
-                DisplayServer.window_set_size(Vector2i(maxi(1, int(fields.get("width", "1280"))), maxi(1, int(fields.get("height", "720")))))
-        return
-    if operation == "siglus_cursor_visible":
-        if not _is_touch_platform() and game_running:
-            var show_cursor := String(_parse_platform_form(argument).get("visible", "1")) == "1"
-            siglus_native_cursor_visible = show_cursor
-            _update_siglus_cursor_mode()
-            _log_input_diagnostic_line("siglus_pointer cursor_visible=%s" % str(show_cursor))
-        return
-    if operation == "siglus_mouse_warp":
-        var fields := _parse_platform_form(argument)
-        var can_warp := _can_apply_siglus_mouse_warp(get_window().has_focus())
-        if can_warp:
-            var game_size := Vector2(maxi(1, int(fields.get("width", "1"))), maxi(1, int(fields.get("height", "1"))))
-            var game_position := Vector2(float(fields.get("x", "0")), float(fields.get("y", "0")))
-            var viewport_position := _map_surface_point_to_viewport(game_position * _game_input_surface_size() / game_size)
-            # warp_mouse applies the window/stretch transform itself. Screen
-            # pixels here would apply HiDPI/content scaling a second time.
-            viewport.get_viewport().warp_mouse(viewport_position)
-        _log_input_diagnostic_line("siglus_pointer warp_applied=%s request=%s" % [str(can_warp), argument])
-        return
-    if operation == "siglus_capture_file":
-        var fields := _parse_platform_form(argument)
-        var save := String(fields.get("save", "0")) == "1"
-        var extension := String(fields.get("extension", "bmp"))
-        var request_id := String(fields.get("id", ""))
-        var dialog := _create_file_dialog(
-            String(fields.get("title", "Capture")),
-            FileDialog.FILE_MODE_SAVE_FILE if save else FileDialog.FILE_MODE_OPEN_FILE,
-            PackedStringArray(["*.%s ; %s" % [extension, extension.to_upper()]])
-        )
-        var initial_path := String(fields.get("path", ""))
-        dialog.current_dir = initial_path.get_base_dir()
-        dialog.current_file = initial_path.get_file()
-        dialog.file_selected.connect(func(path: String):
-            if player != null:
-                player.submit_platform_response("siglus_capture_file", "id=%s&path=%s" % [request_id, path.uri_encode()])
-        )
-        dialog.canceled.connect(func():
-            if player != null:
-                player.submit_platform_response("siglus_capture_file", "id=%s&path=" % request_id)
-        )
-        add_child(dialog)
-        dialog.popup_centered(Vector2i(900, 640))
-        return
-    if operation in ["siglus_tweet", "siglus_joypad_config"]:
-        var fields := _parse_platform_form(argument)
-        var request_id := String(fields.get("id", ""))
-        _send_siglus_joypad_events(siglus_joypad.release_all())
-        var done := func():
-            if player != null:
-                player.submit_platform_response(operation, "id=%s" % request_id)
-        if operation == "siglus_tweet":
-            var preview: Image = viewport.texture.get_image() if viewport != null and viewport.texture != null else null
-            SiglusPlatformDialogs.tweet(self, fields, done, preview)
-        else:
-            SiglusPlatformDialogs.joypad(self, siglus_joypad, done)
         return
     if operation == "minori_select":
         _show_minori_select(argument)
@@ -11549,7 +12175,6 @@ func _build_runtime_dialog_content(
         runtime_dialog_input.custom_minimum_size = Vector2(0, 68)
         runtime_dialog_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
         runtime_dialog_input.add_theme_font_size_override("font_size", 25)
-        runtime_dialog_input.text = String(values.get("text", ""))
         var maximum_characters := int(
             String(values.get("maximum_characters", "0"))
         )
@@ -11564,20 +12189,14 @@ func _build_runtime_dialog_content(
     box.add_child(buttons)
 
     if yes_no:
-        var no_label := String(values.get("no_label", ""))
-        if no_label.is_empty():
-            no_label = _t("debug.value.no")
-        var no := _pill_button(no_label)
+        var no := _pill_button("No")
         no.custom_minimum_size = Vector2(150, 60)
         no.pressed.connect(
             _complete_runtime_dialog.bind(0, runtime_dialog_input)
         )
         buttons.add_child(no)
 
-    var ok_label := String(values.get("yes_label" if yes_no else "ok_label", ""))
-    if ok_label.is_empty():
-        ok_label = _t("debug.value.yes") if yes_no else _t("dialog.ok")
-    var ok := _pill_button(ok_label)
+    var ok := _pill_button("Yes" if yes_no else "OK")
     ok.custom_minimum_size = Vector2(150, 60)
     ok.pressed.connect(
         _complete_runtime_dialog.bind(1, runtime_dialog_input)
@@ -11590,7 +12209,6 @@ func _build_runtime_dialog_content(
                 _complete_runtime_dialog(1, runtime_dialog_input)
         )
         runtime_dialog_input.call_deferred("grab_focus")
-        runtime_dialog_input.call_deferred("select_all")
     else:
         ok.call_deferred("grab_focus")
 
@@ -11636,12 +12254,7 @@ func _ensure_player_initialized() -> bool:
         return false
 
     var runtime_id := "auto"
-    if current_player_runtime_kind in [
-        RUNTIME_ONSCRIPTER,
-        RUNTIME_SIGLUS,
-        RUNTIME_MINORI,
-        RUNTIME_RFVP,
-    ]:
+    if current_player_runtime_kind in [RUNTIME_ONSCRIPTER, RUNTIME_MINORI]:
         runtime_id = current_player_runtime_kind
     var runtime_result := int(player.set_engine_option("runtime", runtime_id))
     if runtime_result != ENGINE_RESULT_OK:
@@ -11654,12 +12267,7 @@ func _ensure_player_initialized() -> bool:
         return false
 
     _append_log("%s engine initialized." % (
-        {
-            RUNTIME_ONSCRIPTER: "OnscripterYuri",
-            RUNTIME_SIGLUS: "SiglusEngine",
-            RUNTIME_MINORI: "MinoriRust",
-            RUNTIME_RFVP: "rfvp",
-        }.get(current_player_runtime_kind, "AetherKiri")
+        "OnscripterYuri" if current_player_runtime_kind == RUNTIME_ONSCRIPTER else "AetherKiri"
     ))
     return true
 
@@ -11684,6 +12292,7 @@ func _finish_ready_after_first_frame() -> void:
 
     _append_log("Debug CPU is a fallback backend and is not part of performance acceptance.")
     _write_probe_marker("ready")
+    _write_ui_probe_snapshot("ready")
     video_progress_data = _load_video_progress()
     _refresh_games()
     _refresh_videos()
@@ -12046,6 +12655,204 @@ func _capture_ui_after_ready() -> void:
     if OS.get_environment("AETHERKIRI_QUIT_AFTER_CAPTURE") == "1":
         get_tree().quit(0)
 
+func _scene_test_control() -> Control:
+    var col := VBoxContainer.new()
+    col.add_theme_constant_override("separation", 8)
+    var compact := settings_compact_layout
+
+    var mode_row := HBoxContainer.new()
+    mode_row.add_theme_constant_override("separation", 10)
+    var mode_toggle := AetherSwitch.new()
+    mode_toggle.setup(ui_tokens, ui_motion, scene_test_enabled)
+    mode_toggle.custom_minimum_size = Vector2(58, 34)
+    mode_row.add_child(mode_toggle)
+    var mode_label := Label.new()
+    mode_label.text = _t("settings.scene_test_mode_label")
+    mode_label.add_theme_font_size_override("font_size", 12 if compact else 13)
+    mode_label.add_theme_color_override("font_color", ui_tokens.text_secondary)
+    mode_row.add_child(mode_label)
+    col.add_child(mode_row)
+
+    var scene_options := [
+        ["home", _t("settings.scene_test_home")],
+        ["settings", _t("settings.scene_test_settings")],
+        ["detail", _t("settings.scene_test_detail")],
+        ["video", _t("settings.scene_test_video")],
+        ["video_player", _t("settings.scene_test_video_player")],
+        ["game_loading", _t("settings.scene_test_game_loading")],
+        ["game_started", _t("settings.scene_test_game_started")],
+    ]
+    var state_options := PackedStringArray([
+        _t("settings.scene_test_state_default"),
+        _t("settings.scene_test_state_loading"),
+        _t("settings.scene_test_state_started"),
+    ])
+
+    var pick_row := HBoxContainer.new()
+    pick_row.add_theme_constant_override("separation", 10)
+    var scene_select = _apple_select(150.0)
+    for entry in scene_options:
+        scene_select.add_item(String(entry[1]))
+        scene_select.set_item_metadata(scene_select.item_count - 1, entry[0])
+    var saved_scene_idx := 0
+    for idx in scene_options.size():
+        if String(scene_options[idx][0]) == scene_test_scene:
+            saved_scene_idx = idx
+            break
+    scene_select.select(saved_scene_idx)
+    pick_row.add_child(scene_select)
+
+    var state_select = _apple_select(110.0)
+    for s_label in state_options:
+        state_select.add_item(s_label)
+    var saved_state_idx := 0
+    for idx in state_options.size():
+        if state_options[idx] == scene_test_state:
+            saved_state_idx = idx
+            break
+    state_select.select(saved_state_idx)
+    pick_row.add_child(state_select)
+    col.add_child(pick_row)
+
+    var action_row := HBoxContainer.new()
+    action_row.add_theme_constant_override("separation", 10)
+    var enter := _pill_button(_t("settings.scene_test_enter"))
+    enter.custom_minimum_size = Vector2(150.0, 44.0)
+    enter.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+    action_row.add_child(enter)
+    col.add_child(action_row)
+
+    mode_toggle.toggled.connect(func(enabled: bool):
+        scene_test_enabled = enabled
+    )
+    enter.pressed.connect(func():
+        var idx: int = scene_select.selected_index
+        var scene_key: String = String(scene_select.get_item_metadata(idx)) if idx >= 0 else "home"
+        var state_idx: int = state_select.selected_index
+        var state_val: String = state_options[state_idx] if state_idx >= 0 and state_idx < state_options.size() else state_options[0]
+        scene_test_scene = scene_key
+        scene_test_state = state_val
+        scene_test_enabled = true
+        _begin_scene_test(scene_key, state_val)
+    )
+    return col
+
+
+func _begin_scene_test(_scene: String, _state: String = "") -> void:
+    _save_scene_test_settings()
+    _restart_app()
+
+func _save_scene_test_settings() -> void:
+    var cfg := ConfigFile.new()
+    var _err := cfg.load(ProjectSettings.globalize_path(SETTINGS_FILE))
+    cfg.set_value("scene_test", "enabled", scene_test_enabled)
+    cfg.set_value("scene_test", "scene", scene_test_scene)
+    cfg.set_value("scene_test", "state", scene_test_state)
+    cfg.save(ProjectSettings.globalize_path(SETTINGS_FILE))
+
+func _clear_scene_test_settings() -> void:
+    var cfg := ConfigFile.new()
+    var _err := cfg.load(ProjectSettings.globalize_path(SETTINGS_FILE))
+    if cfg.has_section("scene_test"):
+        cfg.erase_section("scene_test")
+    cfg.save(ProjectSettings.globalize_path(SETTINGS_FILE))
+
+func _load_scene_test_settings() -> Dictionary:
+    var cfg := ConfigFile.new()
+    var _err := cfg.load(ProjectSettings.globalize_path(SETTINGS_FILE))
+    return {
+        "enabled": bool(cfg.get_value("scene_test", "enabled", false)),
+        "scene": String(cfg.get_value("scene_test", "scene", "home")),
+        "state": String(cfg.get_value("scene_test", "state", "")),
+    }
+
+func _restore_scene_test_state() -> void:
+    var st := _load_scene_test_settings()
+    scene_test_enabled = bool(st["enabled"])
+    scene_test_scene = String(st["scene"])
+    scene_test_state = String(st["state"])
+
+
+func _restart_app() -> void:
+    var executable := OS.get_executable_path()
+    if executable.is_empty():
+        return
+    var arguments := PackedStringArray()
+    var project_dir := ProjectSettings.globalize_path("res://")
+    if project_dir != "res://" and DirAccess.dir_exists_absolute(project_dir):
+        arguments.append("--path")
+        arguments.append(project_dir)
+    var pid: int = OS.create_process(executable, arguments)
+    if pid < 0:
+        return
+    get_tree().quit()
+
+
+func _apply_pending_scene_test() -> void:
+    if not scene_test_enabled:
+        return
+    var scene: String = scene_test_scene
+    var state: String = scene_test_state
+    print("scene_test applied scene=%s state=%s" % [scene, state])
+    match scene:
+        "home":
+            pass
+        "settings":
+            _show_settings()
+        "detail":
+            if not known_games.is_empty():
+                _show_detail(known_games[0])
+        "video":
+            _select_home_library("video")
+        "video_player":
+            if not known_videos.is_empty():
+                _open_video_player(known_videos[0])
+        "game_loading":
+            _apply_scene_test_game(false)
+        "game_started":
+            _apply_scene_test_game(true)
+    _add_scene_test_exit_chip()
+
+func _apply_scene_test_game(running: bool) -> void:
+    if shell_root != null:
+        shell_root.visible = false
+    if game_view != null:
+        game_view.visible = true
+    if viewport != null:
+        viewport.visible = true
+    if running:
+        if loading_panel != null:
+            loading_panel.visible = false
+        if restart_notice != null:
+            restart_notice.visible = false
+        game_running = true
+        cached_startup_state = 2
+    else:
+        if restart_notice != null:
+            restart_notice.visible = true
+        _show_loading_overlay(true)
+        game_running = false
+        cached_startup_state = 0
+    _sync_debug_console_state()
+    _set_perf_visible(false)
+    _fit_full_rects()
+
+
+func _add_scene_test_exit_chip() -> void:
+    var chip := _pill_button(_t("settings.scene_test_exit"))
+    chip.name = "SceneTestExitChip"
+    chip.custom_minimum_size = Vector2(176.0, 44.0)
+    chip.position = Vector2(20.0, 20.0)
+    chip.z_index = 500
+    chip.tooltip_text = _t("settings.scene_test_exit")
+    chip.pressed.connect(func():
+        scene_test_enabled = false
+        _clear_scene_test_settings()
+        _restart_app()
+    )
+    add_child(chip)
+
+
 func _run_cli_script_probe() -> void:
     _write_probe_marker("cli_probe start script=%s" % cli_probe_script)
     var config := ProbeConfig.load()
@@ -12055,14 +12862,7 @@ func _run_cli_script_probe() -> void:
         _refresh_known_games_for_auto_start()
         var game := _find_known_game_by_query(target_game_path)
         if not game.is_empty():
-            var library_path := String(game.get("path", target_game_path))
-            if FileAccess.file_exists(library_path):
-                target_game_path = library_path
-            else:
-                var runtime_kind := String(game.get("engine", "")).strip_edges().to_lower()
-                if runtime_kind.is_empty():
-                    runtime_kind = _game_runtime_kind(library_path)
-                target_game_path = GameLaunchEntry.resolve_for_runtime(game, runtime_kind)
+            target_game_path = String(game.get("path", target_game_path))
         else:
             target_game_path = _resolve_game_path(target_game_path)
     _write_probe_marker("cli_probe target requested=%s resolved=%s" % [requested_game_path, target_game_path])
@@ -12428,10 +13228,6 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
     var click_every_frames: int = max(1, int(action.get("click_every_frames", 1)))
     var max_clicks: int = max(0, int(action.get("max_clicks", 0)))
     var capture_every: int = max(0, int(action.get("capture_every", 0)))
-    # Optional frame-accurate capture after Godot has advanced its present
-    # boundary.  The regular capture path runs before process_frame and can
-    # miss a transient swap/clear black frame visible in the native window.
-    var capture_after_present_every: int = max(0, int(action.get("capture_after_present_every", 0)))
     var spike_ms: float = max(0.0, float(action.get("spike_ms", 20.0)))
     var sample_interval_ms: int = max(0, int(action.get("sample_interval_ms", 0)))
     var pointer_id: int = int(action.get("pointer_id", TOUCH_POINTER_ID_OFFSET))
@@ -12439,13 +13235,10 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
     var tick_total := 0.0
     var update_total := 0.0
     var frame_total := 0.0
-    var wall_frame_total := 0.0
     var input_max := 0.0
     var tick_max := 0.0
     var update_max := 0.0
     var frame_max := 0.0
-    var wall_frame_max := 0.0
-    var wait_max := 0.0
     var spikes := 0
     var input_events := 0
     var clicks_sent := 0
@@ -12458,13 +13251,10 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
     var sample_tick_total := 0.0
     var sample_update_total := 0.0
     var sample_frame_total := 0.0
-    var sample_wall_frame_total := 0.0
     var sample_input_max := 0.0
     var sample_tick_max := 0.0
     var sample_update_max := 0.0
     var sample_frame_max := 0.0
-    var sample_wall_frame_max := 0.0
-    var sample_wait_max := 0.0
     var sample_spikes := 0
     var sample_index := 0
 
@@ -12541,39 +13331,6 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
             step += 1
         await get_tree().process_frame
         var sample_end_ticks := Time.get_ticks_usec()
-        if capture_after_present_every > 0 and (frame_index % capture_after_present_every) == 0:
-            var presented_image := _probe_capture_image()
-            var presented_path := _default_output_path("aetherkiri-step-%02d-%s_present_f%03d.png" % [
-                step,
-                label,
-                frame_index,
-            ])
-            presented_image.save_png(presented_path)
-            var presented_line := "step %02d label=%s frame=%d present_capture=1 texture_backend=%s renderer=\"%s\" screenshot=%s stats=%s" % [
-                step,
-                label,
-                frame_index,
-                player.get_frame_texture_backend(),
-                player.get_renderer_info(),
-                presented_path,
-                JSON.stringify(_image_stats(presented_image)),
-            ]
-            print(presented_line)
-            _write_probe_marker(presented_line)
-            step += 1
-
-        # The overlay's Frame value is the host/Godot frame delta, which
-        # includes the time spent yielding to the next process_frame. Keep
-        # that wall-clock interval separate from the active engine work above
-        # so click-stream results can be compared with the floating panel.
-        var wall_frame_ms := float(sample_end_ticks - frame_start) / 1000.0
-        var wait_ms := maxf(0.0, wall_frame_ms - frame_ms)
-        wall_frame_total += wall_frame_ms
-        wall_frame_max = maxf(wall_frame_max, wall_frame_ms)
-        wait_max = maxf(wait_max, wait_ms)
-        sample_wall_frame_total += wall_frame_ms
-        sample_wall_frame_max = maxf(sample_wall_frame_max, wall_frame_ms)
-        sample_wait_max = maxf(sample_wait_max, wait_ms)
         var sample_elapsed_ms := float(sample_end_ticks - sample_start_ticks) / 1000.0
         var stream_finished := frame_index + 1 >= frames
         if sample_interval_ms > 0 and (sample_elapsed_ms >= sample_interval_ms or stream_finished):
@@ -12582,7 +13339,7 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
                 0.0,
                 (sample_elapsed_ms - sample_frame_total) / sample_divisor
             )
-            var sample_line := "click_stream_sample label=%s index=%d frames=%d clicks=%d elapsed_ms=%.2f fps=%.2f avg_input_ms=%.2f avg_tick_ms=%.2f avg_update_ms=%.2f avg_active_ms=%.2f avg_wait_ms=%.2f avg_wall_frame_ms=%.2f max_input_ms=%.2f max_tick_ms=%.2f max_update_ms=%.2f max_active_ms=%.2f max_wall_frame_ms=%.2f max_wait_ms=%.2f spikes=%d spike_ms=%.2f texture_backend=%s renderer=\"%s\"" % [
+            var sample_line := "click_stream_sample label=%s index=%d frames=%d clicks=%d elapsed_ms=%.2f fps=%.2f avg_input_ms=%.2f avg_tick_ms=%.2f avg_update_ms=%.2f avg_active_ms=%.2f avg_wait_ms=%.2f max_input_ms=%.2f max_tick_ms=%.2f max_update_ms=%.2f max_active_ms=%.2f spikes=%d spike_ms=%.2f texture_backend=%s renderer=\"%s\"" % [
                 label,
                 sample_index,
                 sample_frames,
@@ -12594,13 +13351,10 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
                 sample_update_total / sample_divisor,
                 sample_frame_total / sample_divisor,
                 sample_wait_ms,
-                sample_wall_frame_total / sample_divisor,
                 sample_input_max,
                 sample_tick_max,
                 sample_update_max,
                 sample_frame_max,
-                sample_wall_frame_max,
-                sample_wait_max,
                 sample_spikes,
                 spike_ms,
                 player.get_frame_texture_backend(),
@@ -12616,18 +13370,15 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
             sample_tick_total = 0.0
             sample_update_total = 0.0
             sample_frame_total = 0.0
-            sample_wall_frame_total = 0.0
             sample_input_max = 0.0
             sample_tick_max = 0.0
             sample_update_max = 0.0
             sample_frame_max = 0.0
-            sample_wall_frame_max = 0.0
-            sample_wait_max = 0.0
             sample_spikes = 0
 
     var divisor := float(max(1, measured_frames))
     var elapsed_sec: float = maxf(0.0001, float(Time.get_ticks_usec() - stream_start_ticks) / 1000000.0)
-    var line := "click_stream label=%s frames=%d measured_frames=%d clicks_per_frame=%d click_every_frames=%d max_clicks=%d clicks_sent=%d input_events=%d fps=%.2f avg_input_ms=%.2f max_input_ms=%.2f avg_tick_ms=%.2f max_tick_ms=%.2f avg_update_ms=%.2f max_update_ms=%.2f avg_frame_ms=%.2f max_frame_ms=%.2f avg_wall_frame_ms=%.2f max_wall_frame_ms=%.2f max_wait_ms=%.2f spikes=%d spike_ms=%.2f texture_backend=%s renderer=\"%s\"" % [
+    var line := "click_stream label=%s frames=%d measured_frames=%d clicks_per_frame=%d click_every_frames=%d max_clicks=%d clicks_sent=%d input_events=%d fps=%.2f avg_input_ms=%.2f max_input_ms=%.2f avg_tick_ms=%.2f max_tick_ms=%.2f avg_update_ms=%.2f max_update_ms=%.2f avg_frame_ms=%.2f max_frame_ms=%.2f spikes=%d spike_ms=%.2f texture_backend=%s renderer=\"%s\"" % [
         label,
         frames,
         measured_frames,
@@ -12645,9 +13396,6 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
         update_max,
         frame_total / divisor,
         frame_max,
-        wall_frame_total / divisor,
-        wall_frame_max,
-        wait_max,
         spikes,
         spike_ms,
         player.get_frame_texture_backend(),
@@ -13137,8 +13885,10 @@ func _process(delta: float) -> void:
     _poll_native_cover_file_picker()
     _poll_native_translation_model_file_picker()
     _fit_full_rects()
+    _follow_nav_pills()
+    _process_shell_scroll_physics(delta)
+    _process_scroll_flair(delta)
     _sync_game_virtual_controls()
-    _update_siglus_cursor_mode()
     _process_iap(delta)
     _update_advanced_tool_timeouts()
     _flush_log_view_if_needed(delta)
@@ -13319,9 +14069,6 @@ func _process(delta: float) -> void:
                 current_surface_size.x,
                 current_surface_size.y,
             ]
-            var runtime_debug := String(player.get_plugin_debug_info())
-            if not runtime_debug.is_empty():
-                state_line += " runtime=%s" % runtime_debug
             print(state_line)
             _write_probe_marker(state_line)
             if perf_log_file != null:
@@ -13709,13 +14456,6 @@ func _log_input_trace(delta: float, tick_ms: float, update_ms: float) -> void:
     input_trace_present_holds = 0
 
 func _notification(what: int) -> void:
-    if what == NOTIFICATION_WM_MOUSE_ENTER:
-        _on_siglus_window_mouse_entered()
-    elif what == NOTIFICATION_WM_MOUSE_EXIT:
-        # Window.mouse_exited is not consistently delivered while macOS is
-        # hiding a software-cursor game's native pointer. Restore it at the
-        # main-loop boundary as well so the cursor remains usable outside.
-        _on_siglus_window_mouse_exited()
     if what == NOTIFICATION_RESIZED:
         _fit_full_rects()
         _queue_settings_relayout_after_resize()
@@ -13723,14 +14463,7 @@ func _notification(what: int) -> void:
         return
     if player == null:
         return
-    if what == NOTIFICATION_OS_IME_UPDATE and game_text_input_active:
-        if player.has_method("send_ime_preedit"):
-            var selection := DisplayServer.ime_get_selection()
-            player.send_ime_preedit(DisplayServer.ime_get_text(), selection.x, selection.y)
-        return
     if what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_APPLICATION_FOCUS_OUT:
-        if active_runtime_kind == RUNTIME_SIGLUS:
-            Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
         if diagnostic_session != null:
             diagnostic_session.record("godot", "lifecycle", "info", "application_paused", 0, {"notification": what})
         if video_playing:
@@ -13767,7 +14500,7 @@ func _notification(what: int) -> void:
 func _pause_game_for_lifecycle(reason: String) -> void:
     game_text_input_suspended = true
     _deactivate_game_text_input()
-    if not _is_touch_platform() and active_runtime_kind != RUNTIME_SIGLUS:
+    if not _is_touch_platform():
         return
     if app_lifecycle_paused or not game_running or cached_startup_state != STARTUP_SUCCEEDED:
         return
@@ -13786,7 +14519,7 @@ func _pause_game_for_lifecycle(reason: String) -> void:
 
 func _resume_game_for_lifecycle(reason: String) -> void:
     game_text_input_suspended = false
-    if not _is_touch_platform() and active_runtime_kind != RUNTIME_SIGLUS:
+    if not _is_touch_platform():
         return
     if not app_lifecycle_paused:
         return
@@ -13894,7 +14627,7 @@ func _renderer_summary(renderer: String) -> String:
 func _on_open_game() -> void:
     if not _require_legal_documents_for_media():
         return
-    var requested_path := game_path.text
+    var requested_path := game_path.text.strip_edges()
     var path := _resolve_game_path(requested_path)
     if path != requested_path:
         _write_probe_marker("open_game remapped_path=%s requested=%s" % [path, requested_path])
@@ -14224,11 +14957,12 @@ func _game_input_content_size() -> Vector2:
     return Vector2(maxi(1, last_texture_size.x), maxi(1, last_texture_size.y))
 
 func _game_input_surface_size() -> Vector2:
-    return GameInputMapping.input_surface_size(
-        active_runtime_kind,
-        _game_input_content_size(),
-        Vector2(current_surface_size)
-    )
+    # ONS and Minori consume coordinates in their published content space.
+    if active_runtime_kind in [RUNTIME_ONSCRIPTER, RUNTIME_MINORI]:
+        return _game_input_content_size()
+    if current_surface_size.x > 0 and current_surface_size.y > 0:
+        return Vector2(current_surface_size)
+    return _game_input_content_size()
 
 func _update_frame() -> void:
     if present_hold_frames > 0:
@@ -14297,14 +15031,7 @@ func _capture_main_view(frame_stats: Dictionary) -> void:
         var visible := int(screenshot_stats.get("visible", 0))
         get_tree().quit(0 if visible > 0 else 2)
 
-func _send_siglus_joypad_events(events: Array) -> void:
-    if player == null or active_runtime_kind != RUNTIME_SIGLUS:
-        return
-    for event in events:
-        player.send_key_event(bool(event[1]), int(event[0]), 0, 0)
-
 func _clear_game_input_capture() -> void:
-    _send_siglus_joypad_events(siglus_joypad.release_all())
     if game_virtual_controls != null:
         game_virtual_controls.set_enabled(false)
     _deactivate_game_text_input()
@@ -14345,66 +15072,13 @@ func _clear_game_input_capture() -> void:
     black_frame_last_log_msec = 0
 
 func _run_auto_probe() -> void:
-    var awaited_script := _runtime_string("AETHERKIRI_AUTO_PROBE_WAIT_RUNTIME_SCRIPT")
-    if not awaited_script.is_empty():
-        await _auto_probe_wait_for_runtime_script(awaited_script)
     await _auto_probe_wait_frames(_runtime_int("AETHERKIRI_AUTO_PROBE_WARMUP_FRAMES", 180))
     await _save_auto_probe_step(0, "startup")
     var step := 1
     for pos in auto_probe_clicks:
-        _send_probe_motion(pos)
-        await _auto_probe_wait_frames(2)
         _send_probe_click(pos)
-        var after_click_frames: int = max(1, _runtime_int("AETHERKIRI_AUTO_PROBE_AFTER_CLICK_FRAMES", 180))
-        var post_click_move_frames: int = clampi(
-            _runtime_int("AETHERKIRI_AUTO_PROBE_POST_CLICK_MOVE_FRAMES", 0),
-            0,
-            after_click_frames - 1
-        )
-        if post_click_move_frames > 0:
-            await _auto_probe_wait_frames(post_click_move_frames)
-            _send_probe_motion(pos + Vector2(2.0, 0.0))
-            await _auto_probe_wait_frames(after_click_frames - post_click_move_frames)
-        else:
-            await _auto_probe_wait_frames(after_click_frames)
+        await _auto_probe_wait_frames(_runtime_int("AETHERKIRI_AUTO_PROBE_AFTER_CLICK_FRAMES", 180))
         await _save_auto_probe_step(step, "click_%d_%d" % [int(pos.x), int(pos.y)])
-        step += 1
-    var dialog_steps_spec := _runtime_string("AETHERKIRI_AUTO_PROBE_DIALOG_STEPS")
-    var dialog_steps = (
-        JSON.parse_string(dialog_steps_spec)
-        if not dialog_steps_spec.is_empty()
-        else []
-    )
-    if dialog_steps is Array:
-        for value in dialog_steps:
-            var dialog_step: Dictionary = value if value is Dictionary else {}
-            var dialog_result := int(dialog_step.get("result", 1))
-            var dialog_text := String(dialog_step.get("text", ""))
-            var after_dialog_frames := int(dialog_step.get(
-                "after_frames",
-                _runtime_int("AETHERKIRI_AUTO_PROBE_AFTER_DIALOG_FRAMES", 180)
-            ))
-            if not await _auto_probe_complete_runtime_dialog(
-                dialog_result, dialog_text, after_dialog_frames
-            ):
-                break
-            await _save_auto_probe_step(step, "dialog_%d" % dialog_result)
-            step += 1
-    var post_dialog_clicks := _parse_click_points(
-        _runtime_string("AETHERKIRI_AUTO_PROBE_POST_DIALOG_CLICKS")
-    )
-    for pos in post_dialog_clicks:
-        _send_probe_motion(pos)
-        await _auto_probe_wait_frames(2)
-        _send_probe_click(pos)
-        await _auto_probe_wait_frames(max(
-            1,
-            _runtime_int("AETHERKIRI_AUTO_PROBE_AFTER_CLICK_FRAMES", 180)
-        ))
-        await _save_auto_probe_step(step, "post_dialog_click_%d_%d" % [
-            int(pos.x),
-            int(pos.y),
-        ])
         step += 1
     auto_probe_done = true
     auto_probe_running = false
@@ -14492,12 +15166,6 @@ func _can_write_probe_files() -> bool:
     return not cli_probe_script.is_empty() or _runtime_flag("AETHERKIRI_IOS_FILE_LOG")
 
 func _send_startup_probe_mouse_click(pos: Vector2) -> bool:
-    var motion := InputEventMouseMotion.new()
-    motion.position = pos
-    motion.global_position = pos
-    motion.relative = Vector2(1.0, 0.0)
-    _handle_game_pointer_event(motion)
-
     var down := InputEventMouseButton.new()
     down.button_index = MOUSE_BUTTON_LEFT
     down.pressed = true
@@ -14540,44 +15208,6 @@ func _auto_probe_wait_frames(frames: int) -> void:
     for i in range(max(1, frames)):
         await get_tree().process_frame
 
-func _auto_probe_wait_for_runtime_script(script_name: String) -> void:
-    var frame_budget: int = max(1, _runtime_int("AETHERKIRI_AUTO_PROBE_WAIT_RUNTIME_FRAMES", 3600))
-    var required_objects: int = max(0, _runtime_int("AETHERKIRI_AUTO_PROBE_WAIT_RUNTIME_OBJECTS", 0))
-    for i in range(frame_budget):
-        var state = JSON.parse_string(player.get_plugin_debug_info())
-        if state is Dictionary and String(state.get("vmScript", "")) == script_name and int(state.get("fesObjects", 0)) >= required_objects:
-            _write_probe_marker("auto_wait_runtime matched script=%s objects=%d frame=%d" % [
-                script_name,
-                int(state.get("fesObjects", 0)),
-                i,
-            ])
-            return
-        await get_tree().process_frame
-    _write_probe_marker("auto_wait_runtime timeout script=%s frames=%d" % [script_name, frame_budget])
-
-func _auto_probe_complete_runtime_dialog(
-    result: int, text: String, after_frames: int
-) -> bool:
-    var frame_budget: int = max(
-        1, _runtime_int("AETHERKIRI_AUTO_PROBE_DIALOG_WAIT_FRAMES", 1800)
-    )
-    for i in range(frame_budget):
-        if modal_layer != null and bool(
-            modal_layer.get_meta("runtime_platform_dialog", false)
-        ):
-            var input := runtime_dialog_input
-            if input != null and is_instance_valid(input):
-                input.text = text
-            _write_probe_marker(
-                "auto_dialog result=%d text=%s frame=%d" % [result, text, i]
-            )
-            _complete_runtime_dialog(result, input)
-            await _auto_probe_wait_frames(max(1, after_frames))
-            return true
-        await get_tree().process_frame
-    _write_probe_marker("auto_dialog timeout frames=%d" % frame_budget)
-    return false
-
 func _save_auto_probe_step(index: int, label: String) -> void:
     await get_tree().process_frame
     await get_tree().process_frame
@@ -14617,38 +15247,6 @@ func _save_auto_probe_step(index: int, label: String) -> void:
         perf_log_file.flush()
 
 func _send_probe_click(window_pos: Vector2) -> void:
-    if _runtime_flag("AETHERKIRI_AUTO_PROBE_DISPATCH_INPUT"):
-        var motion := InputEventMouseMotion.new()
-        motion.position = window_pos
-        motion.global_position = window_pos
-        motion.relative = Vector2(1.0, 0.0)
-        Input.parse_input_event(motion)
-
-        var down := InputEventMouseButton.new()
-        down.button_index = MOUSE_BUTTON_LEFT
-        down.pressed = true
-        down.position = window_pos
-        down.global_position = window_pos
-        Input.parse_input_event(down)
-
-        var up := InputEventMouseButton.new()
-        up.button_index = MOUSE_BUTTON_LEFT
-        up.pressed = false
-        up.position = window_pos
-        up.global_position = window_pos
-        Input.parse_input_event(up)
-        _write_probe_marker("auto_click window=%s route=input_dispatch" % window_pos)
-        return
-    if _runtime_flag("AETHERKIRI_AUTO_PROBE_ROUTE_GAME_INPUT"):
-        if not _can_forward_game_input():
-            _write_probe_marker("auto_click_blocked window=%s route=game_input" % window_pos)
-            return
-        var forwarded := _send_startup_probe_mouse_click(window_pos)
-        _write_probe_marker("auto_click window=%s route=game_input forwarded=%s" % [
-            window_pos,
-            str(forwarded),
-        ])
-        return
     var mapped := _map_probe_window_point(window_pos)
     if mapped.x < 0.0 or mapped.y < 0.0:
         _write_probe_marker("auto_click_skipped window=%s mapped=%s" % [window_pos, mapped])
@@ -14661,21 +15259,6 @@ func _send_probe_click(window_pos: Vector2) -> void:
     player.send_pointer_event(POINTER_UP, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
     _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
     _write_probe_marker("auto_click window=%s mapped=%s" % [window_pos, mapped])
-
-func _send_probe_motion(window_pos: Vector2) -> void:
-    var motion := InputEventMouseMotion.new()
-    motion.position = window_pos
-    motion.global_position = window_pos
-    motion.relative = Vector2(2.0, 0.0)
-    if _runtime_flag("AETHERKIRI_AUTO_PROBE_DISPATCH_INPUT"):
-        Input.parse_input_event(motion)
-    elif _runtime_flag("AETHERKIRI_AUTO_PROBE_ROUTE_GAME_INPUT"):
-        _handle_game_pointer_event(motion)
-    else:
-        var mapped := _map_probe_window_point(window_pos)
-        if mapped.x >= 0.0 and mapped.y >= 0.0:
-            player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, 2.0, 0.0, 0)
-    _write_probe_marker("auto_motion window=%s" % window_pos)
 
 func _map_probe_window_point(pos: Vector2) -> Vector2:
     var panel_size := Vector2(
@@ -14894,6 +15477,38 @@ func _write_probe_marker(line: String) -> void:
     marker.seek_end()
     marker.store_line("%d %s" % [Time.get_ticks_msec(), line])
     marker.flush()
+
+func _write_ui_probe_snapshot(label: String) -> void:
+    if not input_trace_enabled:
+        return
+    var viewport_size := get_viewport_rect().size
+    var safe_rect := _ui_safe_rect(viewport_size)
+    var compact := AetherDisplayScale.use_compact_shell(safe_rect.size)
+    var indicator: Control = shell_compact_indicator if compact else shell_nav_indicator
+    var indicator_rect := indicator.get_global_rect() if indicator != null and is_instance_valid(indicator) else Rect2()
+    var scroll_deadzone := -1
+    if settings_view != null and is_instance_valid(settings_view):
+        scroll_deadzone = settings_view.scroll_deadzone
+    _write_probe_marker("ui_snapshot label=%s platform=%s viewport=%.0fx%.0f safe=%.0f,%.0f %.0fx%.0f compact=%s sidebar_visible=%s sidebar_size=%.1fx%.1f indicator_visible=%s indicator_rect=%.1f,%.1f %.1fx%.1f scroll_deadzone=%d" % [
+        label,
+        OS.get_name(),
+        viewport_size.x,
+        viewport_size.y,
+        safe_rect.position.x,
+        safe_rect.position.y,
+        safe_rect.size.x,
+        safe_rect.size.y,
+        str(compact),
+        str(shell_sidebar != null and is_instance_valid(shell_sidebar) and shell_sidebar.visible),
+        shell_sidebar.size.x if shell_sidebar != null and is_instance_valid(shell_sidebar) else 0.0,
+        shell_sidebar.size.y if shell_sidebar != null and is_instance_valid(shell_sidebar) else 0.0,
+        str(indicator != null and is_instance_valid(indicator) and indicator.visible),
+        indicator_rect.position.x,
+        indicator_rect.position.y,
+        indicator_rect.size.x,
+        indicator_rect.size.y,
+        scroll_deadzone,
+    ])
 
 func _kirikiri_virtual_key(event: InputEventKey) -> int:
     var key_code := int(event.keycode)
@@ -15204,10 +15819,6 @@ func _input(event: InputEvent) -> void:
     # them, and never pass the same event through to the game.
     if modal_layer != null and modal_layer.visible:
         return
-    if (event is InputEventJoypadButton or event is InputEventJoypadMotion) and active_runtime_kind == RUNTIME_SIGLUS and _can_forward_game_input():
-        _send_siglus_joypad_events(siglus_joypad.translate(event))
-        get_viewport().set_input_as_handled()
-        return
     # KAG [edit] controls own their focus inside the rendered game; Godot does
     # not mirror that focus onto the TextureRect. Forward keyboard input here,
     # before shell Controls can consume it.
@@ -15303,6 +15914,13 @@ func _handle_shell_scroll_input(event: InputEvent) -> bool:
     if get_tree().get_first_node_in_group(AETHER_SELECT_OVERLAY_INPUT_GROUP) != null:
         return false
 
+    if event is InputEventMouseButton or event is InputEventMouseMotion:
+        if _is_touch_platform() and event.device == INPUT_DEVICE_ID_EMULATION:
+            # iOS synthesized this mouse event from a real touch; the
+            # ScreenTouch/Drag branches below already own that gesture.
+            # Handling both would double-drive the scroll offset.
+            return false
+
     if event is InputEventScreenTouch:
         var touch := event as InputEventScreenTouch
         if touch.pressed:
@@ -15333,7 +15951,12 @@ func _handle_shell_scroll_input(event: InputEvent) -> bool:
             var wheel_factor := absf(mouse_button.factor)
             if wheel_factor < 1.0:
                 wheel_factor = 1.0
-            _scroll_container_by(wheel_scroll, wheel_direction * SHELL_SCROLL_WHEEL_STEP * SHELL_SCROLL_WHEEL_SPEED * wheel_factor, true)
+            # Wheel flicks feed the same momentum physics as touch: glide +
+            # friction decay + elastic edge bounce instead of a fixed tween.
+            _add_scroll_momentum_impulse(
+                wheel_scroll,
+                wheel_direction * SHELL_SCROLL_WHEEL_STEP * SHELL_SCROLL_WHEEL_SPEED * wheel_factor
+            )
             return true
         if mouse_button.button_index != MOUSE_BUTTON_LEFT:
             return false
@@ -15731,27 +16354,11 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
                 mapped,
                 _touch_drag_distance_threshold()
             )
-        var touch_was_dragged := dragging_touch_points.has(pointer_id)
         active_touch_points.erase(pointer_id)
         touch_down_points.erase(pointer_id)
         dragging_touch_points.erase(pointer_id)
         last_forwarded_touch_move_msec_by_id.erase(pointer_id)
-        var release_modifiers := 0
-        if GameInputMapping.touch_drag_release_is_cancelled(
-            active_runtime_kind,
-            touch_was_dragged
-        ):
-            release_modifiers = POINTER_MOD_CANCEL
-        _send_game_pointer_event(
-            POINTER_UP,
-            _touch_engine_pointer_id(pointer_id),
-            mapped.x,
-            mapped.y,
-            0.0,
-            0.0,
-            0,
-            release_modifiers
-        )
+        _send_game_pointer_event(POINTER_UP, _touch_engine_pointer_id(pointer_id), mapped.x, mapped.y, 0.0, 0.0, 0)
         last_forwarded_touch_up_msec = Time.get_ticks_msec()
         _apply_touch_action_cooldown()
         _arm_black_frame_guard()
@@ -16327,64 +16934,7 @@ func _sync_game_text_input_state() -> void:
     game_text_input_attention_position = attention_position
     game_text_input_reopen_requested = false
 
-func _on_siglus_window_mouse_entered() -> void:
-    siglus_pointer_inside_window = true
-    _update_siglus_cursor_mode()
-
-func _on_siglus_window_mouse_exited() -> void:
-    siglus_pointer_inside_window = false
-    _update_siglus_cursor_mode()
-
-func _siglus_cursor_mouse_mode(window_focused: bool) -> int:
-    # macOS can keep a hidden cursor invisible after it crosses this window's
-    # boundary, so retain the native pointer there. The rendered Siglus cursor
-    # remains aligned with it and continues to drive game hover state.
-    if OS.get_name() == "macOS":
-        return Input.MOUSE_MODE_VISIBLE
-    if (
-        not siglus_native_cursor_visible
-        and _siglus_pointer_session_active(window_focused)
-    ):
-        return Input.MOUSE_MODE_HIDDEN
-    return Input.MOUSE_MODE_VISIBLE
-
-func _update_siglus_cursor_mode() -> void:
-    if active_runtime_kind != RUNTIME_SIGLUS or not game_running or _is_touch_platform():
-        return
-    var mode := _siglus_cursor_mouse_mode(get_window().has_focus())
-    if Input.mouse_mode != mode:
-        Input.mouse_mode = mode
-
-func _can_apply_siglus_mouse_warp(window_focused: bool) -> bool:
-    # Script mouse.set_pos updates Siglus' internal pointer before this host
-    # request is emitted. Applying it to the macOS system cursor can repeatedly
-    # pull the user's pointer back into the game window.
-    return OS.get_name() != "macOS" and _siglus_pointer_session_active(window_focused)
-
-func _siglus_pointer_session_active(window_focused: bool) -> bool:
-    # A script may request a warp just as focus changes or a dialog opens.
-    # Never move the user's desktop pointer on behalf of a background game.
-    return (
-        not _is_touch_platform()
-        and window_focused
-        and siglus_pointer_inside_window
-        and not app_lifecycle_paused
-        and active_runtime_kind == RUNTIME_SIGLUS
-        and viewport != null
-        and _can_forward_game_input()
-    )
-
-func _map_surface_point_to_viewport(point: Vector2) -> Vector2:
-    if viewport == null:
-        return point
-    return viewport.get_global_transform_with_canvas() * _map_surface_point_to_local(point)
-
 func _map_surface_point_to_screen(point: Vector2) -> Vector2:
-    if viewport == null:
-        return point
-    return viewport.get_screen_transform() * _map_surface_point_to_local(point)
-
-func _map_surface_point_to_local(point: Vector2) -> Vector2:
     if viewport == null:
         return point
     var local_point := point
@@ -16406,7 +16956,7 @@ func _map_surface_point_to_local(point: Vector2) -> Vector2:
         var drawn_size := texture_size * scale
         var offset := (panel_size - drawn_size) * 0.5
         local_point = offset + texture_point * scale
-    return local_point
+    return viewport.get_screen_transform() * local_point
 
 func _map_viewport_point(pos: Vector2, clamp_to_bounds: bool = false) -> Vector2:
     if viewport.texture == null:

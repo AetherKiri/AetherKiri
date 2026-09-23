@@ -439,11 +439,28 @@ TEST_CASE("Beta runtime providers require active coffee access") {
   REQUIRE(engine_register_runtime_provider(&kRfvpGateProvider) ==
           ENGINE_RESULT_OK);
 
-  const std::array<std::array<const char*, 2>, 2> runtimes{{
-      {{"catsystem2", "CatSystem2 runtime requires active beta access"}},
-      {{"rfvp", "RFVP runtime requires active beta access"}},
-  }};
-  for (const auto& runtime : runtimes) {
+  // CatSystem2 is a released runtime.  A stale beta_runtime_allowed=0 must
+  // not bring back the old coffee-only restriction.
+  {
+    Handle handle;
+    engine_option_t runtime_option{};
+    runtime_option.key_utf8 = "runtime";
+    runtime_option.value_utf8 = "catsystem2";
+    REQUIRE(engine_set_option(handle.value, &runtime_option) ==
+            ENGINE_RESULT_OK);
+    engine_option_t beta_option{};
+    beta_option.key_utf8 = "beta_runtime_allowed";
+    beta_option.value_utf8 = "0";
+    REQUIRE(engine_set_option(handle.value, &beta_option) == ENGINE_RESULT_OK);
+    REQUIRE(engine_open_game(handle.value, ".artemis-debug-gate-test",
+                             "first.iet") == ENGINE_RESULT_OK);
+  }
+
+  // RFVP remains an explicitly gated provider until its compatibility work is
+  // released.
+  {
+    const std::array<const char*, 2> runtime{{
+        "rfvp", "RFVP runtime requires active beta access"}};
     {
       Handle default_handle;
       engine_option_t default_runtime_option{};

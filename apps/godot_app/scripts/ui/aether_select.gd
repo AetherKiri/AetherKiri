@@ -9,6 +9,10 @@ const ITEM_HEIGHT := 40.0
 const OVERLAY_INPUT_GROUP := "aether_select_input_overlay"
 const TOUCH_DRAG_THRESHOLD := 6.0
 const TOUCH_MOUSE_SUPPRESS_MS := 500
+const MENU_ITEM_STAGGER := 0.028
+const MENU_ITEM_MAX_STAGGER := 12
+const MENU_ITEM_START_SCALE_Y := 0.55
+const POPUP_REST_SCALE := 0.86
 
 var tokens
 var motion
@@ -18,6 +22,7 @@ var items: Array[Dictionary] = []
 var selected_index := -1
 var overlay: Control
 var popup_panel: PanelContainer
+var menu_highlight: PanelContainer
 var popup_scroll: ScrollContainer
 var popup_menu: VBoxContainer
 var chevron: TextureRect
@@ -47,11 +52,11 @@ func setup(design_tokens, motion_system, next_chevron: Texture2D, next_check: Te
     add_theme_color_override("font_pressed_color", tokens.text_primary)
     add_theme_color_override("font_focus_color", tokens.text_primary)
     add_theme_color_override("font_disabled_color", tokens.text_tertiary)
-    add_theme_stylebox_override("normal", _field_box(Color.TRANSPARENT, Color.TRANSPARENT, 0))
+    add_theme_stylebox_override("normal", _field_box(tokens.glass_material, Color.TRANSPARENT, 0))
     add_theme_stylebox_override("hover", _field_box(tokens.accent_fill, Color.TRANSPARENT, 0))
     add_theme_stylebox_override("pressed", _field_box(tokens.accent_fill, Color.TRANSPARENT, 0))
-    add_theme_stylebox_override("focus", tokens.focus_style(8))
-    add_theme_stylebox_override("disabled", _field_box(Color(tokens.surface_raised.r, tokens.surface_raised.g, tokens.surface_raised.b, 0.34), tokens.separator, 1))
+    add_theme_stylebox_override("focus", tokens.focus_style(14))
+    add_theme_stylebox_override("disabled", _field_box(Color(tokens.surface_raised.r, tokens.surface_raised.g, tokens.surface_raised.b, 0.34), Color.TRANSPARENT, 0))
 
     chevron = TextureRect.new()
     chevron.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -153,6 +158,13 @@ func _open_popup() -> void:
         maxf(ITEM_HEIGHT, menu_height - MENU_PADDING * 2.0)
     )
     popup_panel.add_child(popup_scroll)
+    # Sliding jelly highlight lives inside the scroll so it moves with the rows
+    menu_highlight = PanelContainer.new()
+    menu_highlight.name = "MenuHighlight"
+    menu_highlight.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    menu_highlight.visible = false
+    menu_highlight.add_theme_stylebox_override("panel", tokens.panel(tokens.accent_fill, 6))
+    popup_scroll.add_child(menu_highlight)
     popup_menu = VBoxContainer.new()
     popup_menu.name = "MenuItems"
     popup_menu.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -172,6 +184,9 @@ func _open_popup() -> void:
     popup_panel.pivot_offset = Vector2(menu_width - 20.0, 0.0 if menu_position.y > trigger_rect.position.y else menu_height)
     _animate_popup(true)
     _animate_chevron(true)
+    # Jelly slide the highlight to the selected row after layout settles
+    call_deferred("_slide_menu_highlight", true, selected_index)
+    call_deferred("_cascade_menu_items")
     call_deferred("_focus_selected_item")
 
 func _menu_item(index: int) -> Button:
@@ -189,10 +204,9 @@ func _menu_item(index: int) -> Button:
     button.add_theme_color_override("font_hover_color", tokens.text_primary)
     button.add_theme_color_override("font_pressed_color", tokens.text_primary)
     button.add_theme_color_override("font_focus_color", tokens.text_primary)
-    button.add_theme_stylebox_override("normal", tokens.button_style(tokens.accent_fill if selected else Color.TRANSPARENT, Color.TRANSPARENT, 6))
-    button.add_theme_stylebox_override("hover", tokens.button_style(tokens.surface_hover, Color.TRANSPARENT, 6))
-    button.add_theme_stylebox_override("pressed", tokens.button_style(tokens.accent_fill, Color.TRANSPARENT, 6))
-    button.add_theme_stylebox_override("focus", tokens.button_style(tokens.accent_fill, Color.TRANSPARENT, 6))
+    # The sliding jelly highlight is the only selection/hover visual
+    for state in ["normal", "hover", "pressed", "hover_pressed", "focus"]:
+        button.add_theme_stylebox_override(state, tokens.panel(Color.TRANSPARENT, 6))
     if selected:
         button.icon = check_texture
         button.expand_icon = true
@@ -201,14 +215,87 @@ func _menu_item(index: int) -> Button:
         button.add_theme_color_override("icon_normal_color", tokens.accent)
         button.add_theme_color_override("icon_hover_color", tokens.accent)
     button.pressed.connect(func(): _choose(index))
+    button.mouse_entered.connect(func(): _slide_menu_highlight(true, index))
+    button.focus_entered.connect(func(): _slide_menu_highlight(true, index))
     motion.bind_pressable(button)
     return button
+
+func _cascade_menu_items() -> void:
+    # Incremental slide-in: every row drops in from under the previous one,
+    # top to bottom, so long menus read as a staggered reveal.
+    if popup_menu == null or not is_instance_valid(popup_menu):
+        return
+    var step := 0
+    for child in popup_menu.get_children():
+        var item := child as Control
+        if item == null or not is_instance_valid(item):
+            continue
+        if motion.reduced_motion:
+            item.modulate.a = 1.0
+            item.scale = Vector2.ONE
+            step += 1
+            continue
+        var delay := float(mini(step, MENU_ITEM_MAX_STAGGER)) * MENU_ITEM_STAGGER
+        item.pivot_offset = Vector2(maxf(1.0, item.size.x) * 0.5, 0.0)
+        item.modulate.a = 0.0
+        item.scale = Vector2(1.0, MENU_ITEM_START_SCALE_Y)
+        # Probe-visible contract: rows slide in from a squashed state.
+        item.set_meta("aether_cascade_start_scale_y", MENU_ITEM_START_SCALE_Y)
+        item.set_meta("aether_cascade_delay", delay)
+        var tween := item.create_tween().set_parallel(true)
+        tween.tween_property(item, "modulate:a", 1.0, 0.16) \
+            .set_delay(delay).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+        tween.tween_property(item, "scale", Vector2.ONE, 0.26) \
+            .set_delay(delay).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+        step += 1
+
+func _slide_menu_highlight(animate: bool, index: int) -> void:
+    if menu_highlight == null or not is_instance_valid(menu_highlight):
+        return
+    if popup_panel == null or not is_instance_valid(popup_panel):
+        return
+    var host := menu_highlight.get_parent() as Control
+    if host == null or host.size.x <= 0.0 or index < 0:
+        return
+    var target_pos := Vector2(0.0, float(index) * ITEM_HEIGHT)
+    var target_size := Vector2(host.size.x, ITEM_HEIGHT)
+    menu_highlight.visible = true
+    menu_highlight.size = target_size
+    menu_highlight.pivot_offset = target_size * 0.5
+    if animate and not motion.reduced_motion:
+        motion.spring_property(menu_highlight, "position", target_pos, 0.30, 0.55)
+        motion.spring_property(menu_highlight, "scale", Vector2(1.03, 0.92), 0.12, 0.8)
+        var tree := get_tree()
+        if tree != null:
+            tree.create_timer(0.09).timeout.connect(
+                func():
+                    if menu_highlight != null and is_instance_valid(menu_highlight):
+                        motion.spring_property(menu_highlight, "scale", Vector2.ONE, 0.26, 0.55),
+                CONNECT_ONE_SHOT
+            )
+    else:
+        motion.active_springs.erase(motion._motion_key(menu_highlight, "position"))
+        motion.active_springs.erase(motion._motion_key(menu_highlight, "scale"))
+        menu_highlight.position = target_pos
+        menu_highlight.scale = Vector2.ONE
 
 func _choose(index: int) -> void:
     var changed := index != selected_index
     select(index)
     _close_popup()
     if changed:
+        # Jelly pulse on the trigger button so the new value lands with a wobble
+        if not motion.reduced_motion:
+            motion._update_pivot(self)
+            motion.spring_property(self, "scale", Vector2(1.04, 0.94), 0.12, 0.8)
+            var tree := get_tree()
+            if tree != null:
+                tree.create_timer(0.09).timeout.connect(
+                    func():
+                        if is_instance_valid(self):
+                            motion.spring_property(self, "scale", Vector2.ONE, 0.26, 0.55),
+                    CONNECT_ONE_SHOT
+                )
         item_selected.emit(index)
 
 func _input(event: InputEvent) -> void:
@@ -286,14 +373,27 @@ func _animate_popup(show: bool) -> void:
         return
     if popup_tween != null and popup_tween.is_valid():
         popup_tween.kill()
+    var rest_position: Vector2 = popup_panel.get_meta("aether_rest_position", popup_panel.position)
+    popup_panel.set_meta("aether_rest_position", rest_position)
     if show:
         popup_panel.modulate.a = 0.0
-        popup_panel.scale = Vector2.ONE if motion.reduced_motion else Vector2(0.98, 0.98)
+        if not motion.reduced_motion:
+            popup_panel.scale = Vector2(POPUP_REST_SCALE, POPUP_REST_SCALE)
+            popup_panel.position = rest_position + Vector2(0, -14)
     var duration := 0.12 if motion.reduced_motion else (0.18 if show else 0.14)
     popup_tween = create_tween().set_parallel(true)
     popup_tween.tween_property(popup_panel, "modulate:a", 1.0 if show else 0.0, duration).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
     if not motion.reduced_motion:
-        motion.spring_property(popup_panel, "scale", Vector2.ONE if show else Vector2(0.98, 0.98), 0.22 if show else 0.16, 1.0)
+        # Springy pop: bigger compression + lower damping so the panel visibly
+        # overshoots (~4.5% at damping 0.34) and wobbles back before settling.
+        motion.spring_property(
+            popup_panel,
+            "scale",
+            Vector2.ONE if show else Vector2(POPUP_REST_SCALE, POPUP_REST_SCALE),
+            0.32 if show else 0.18,
+            0.34 if show else 1.0
+        )
+        motion.spring_property(popup_panel, "position", rest_position, 0.34 if show else 0.20, 0.72 if show else 1.0)
     if not show:
         popup_tween.chain().tween_callback(_free_overlay)
 
@@ -311,12 +411,14 @@ func _focus_selected_item() -> void:
         var selected_control := popup_menu.get_child(selected_index) as Control
         selected_control.grab_focus()
         popup_scroll.ensure_control_visible(selected_control)
+        _slide_menu_highlight(false, selected_index)
 
 func _free_overlay() -> void:
     if overlay != null and is_instance_valid(overlay):
         overlay.queue_free()
     overlay = null
     popup_panel = null
+    menu_highlight = null
     popup_scroll = null
     popup_menu = null
     _reset_popup_touch()
@@ -332,18 +434,19 @@ func _exit_tree() -> void:
         overlay.queue_free()
 
 func _field_box(fill: Color, border: Color, border_width: int) -> StyleBoxFlat:
-    var style: StyleBoxFlat = tokens.button_style(fill, border, 8)
-    style.content_margin_left = 13
+    var style: StyleBoxFlat = tokens.button_style(fill, Color.TRANSPARENT, 14)
+    style.content_margin_left = 14
     style.content_margin_right = 42
     style.shadow_color = Color.TRANSPARENT
-    style.border_width_left = border_width
-    style.border_width_top = border_width
-    style.border_width_right = border_width
-    style.border_width_bottom = border_width
+    style.shadow_size = 0
+    style.border_width_left = 0
+    style.border_width_top = 0
+    style.border_width_right = 0
+    style.border_width_bottom = 0
     return style
 
 func _popup_box() -> StyleBoxFlat:
-    var style: StyleBoxFlat = tokens.panel(tokens.surface, 8)
+    var style: StyleBoxFlat = tokens.panel(tokens.surface, 12)
     style.content_margin_left = MENU_PADDING
     style.content_margin_top = MENU_PADDING
     style.content_margin_right = MENU_PADDING
