@@ -4292,12 +4292,12 @@ func _apply_shell_runtime_settings() -> void:
 func _apply_host_frame_rate_limit() -> void:
     # The engine fps_limit only gates the embedded runtime's render step. The
     # Godot host can still tick and submit the presentation texture at the
-    # display refresh rate, which is wasteful on ProMotion devices when the
-    # visual novel has no animation that needs 120Hz.
+    # display refresh rate, which is wasteful on high-refresh mobile devices
+    # when the visual novel has no animation that needs 90/120Hz.
     var override := OS.get_environment("AETHERKIRI_HOST_MAX_FPS").strip_edges()
     if not override.is_empty():
         Engine.max_fps = maxi(0, int(override))
-    elif OS.get_name() == "iOS":
+    elif OS.get_name() == "iOS" or OS.get_name() == "Android":
         Engine.max_fps = 60
 
 func _game_runtime_restore_orientation(previous_screen_size: Vector2i, fallback: int) -> int:
