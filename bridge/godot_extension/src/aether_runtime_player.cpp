@@ -9335,6 +9335,7 @@ public:
         clear_runtime_save_slots();
         runtime_presentation_sprite_.Clear();
         reset_runtime_tick_timing();
+        frame_rendered_this_tick_ = false;
         if (handle_ == nullptr) {
             return;
         }
@@ -9530,6 +9531,8 @@ public:
 
     bool is_game_open() const { return game_open_; }
 
+    bool frame_rendered_this_tick() const { return frame_rendered_this_tick_; }
+
     String get_last_result() const { return last_result_; }
 
     String get_last_error() const { return last_error_; }
@@ -9633,6 +9636,7 @@ public:
             ? engine_open_game_async(handle_, path_utf8.get_data(), nullptr)
             : engine_open_game(handle_, path_utf8.get_data(), nullptr);
         game_open_ = result == ENGINE_RESULT_OK;
+        frame_rendered_this_tick_ = false;
         if (!game_open_) {
             artemis_logical_frame_pacing_ = false;
         }
@@ -9644,6 +9648,7 @@ public:
     }
 
     int tick(double delta_seconds) {
+        frame_rendered_this_tick_ = false;
         if (handle_ == nullptr) {
             return ENGINE_RESULT_INVALID_STATE;
         }
@@ -9662,6 +9667,18 @@ public:
         const uint32_t delta_ms =
             runtime_tick_quantizer_.Quantize(runtime_delta_seconds);
         const engine_result_t result = engine_tick(handle_, delta_ms);
+        if (result == ENGINE_RESULT_OK) {
+            // Keep the old always-present behavior for providers that do not
+            // implement the optional flag. The KiriKiri/Godot provider does,
+            // so skipped engine renders no longer trigger a duplicate full
+            // GPU presentation copy from the Godot host.
+            frame_rendered_this_tick_ = true;
+            uint32_t rendered = 0;
+            if (engine_get_frame_rendered_flag(handle_, &rendered) ==
+                ENGINE_RESULT_OK) {
+                frame_rendered_this_tick_ = rendered != 0;
+            }
+        }
         update_runtime_message_reveal(runtime_delta_seconds);
         drain_platform_requests();
         update_runtime_message_layout();
@@ -11400,6 +11417,8 @@ protected:
                              &AetherRuntimePlayer::open_game, DEFVAL(true));
         ClassDB::bind_method(D_METHOD("tick", "delta_seconds"),
                              &AetherRuntimePlayer::tick);
+        ClassDB::bind_method(D_METHOD("frame_rendered_this_tick"),
+                             &AetherRuntimePlayer::frame_rendered_this_tick);
         ClassDB::bind_method(D_METHOD("pause"), &AetherRuntimePlayer::pause);
         ClassDB::bind_method(D_METHOD("resume"), &AetherRuntimePlayer::resume);
         ClassDB::bind_method(D_METHOD("media_open", "path"),
@@ -12439,6 +12458,7 @@ private:
     engine_handle_t handle_ = nullptr;
     engine_media_handle_t media_ = nullptr;
     bool game_open_ = false;
+    bool frame_rendered_this_tick_ = false;
     String backend_ = "Godot Native";
     String last_result_;
     String last_error_;

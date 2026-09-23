@@ -4289,6 +4289,17 @@ func _apply_shell_runtime_settings() -> void:
         var orientation := DisplayServer.SCREEN_LANDSCAPE if lock_landscape else DisplayServer.SCREEN_SENSOR
         DisplayServer.screen_set_orientation(orientation)
 
+func _apply_host_frame_rate_limit() -> void:
+    # The engine fps_limit only gates the embedded runtime's render step. The
+    # Godot host can still tick and submit the presentation texture at the
+    # display refresh rate, which is wasteful on high-refresh mobile devices
+    # when the visual novel has no animation that needs 90/120Hz.
+    var override := OS.get_environment("AETHERKIRI_HOST_MAX_FPS").strip_edges()
+    if not override.is_empty():
+        Engine.max_fps = maxi(0, int(override))
+    elif OS.get_name() == "iOS" or OS.get_name() == "Android":
+        Engine.max_fps = 60
+
 func _game_runtime_restore_orientation(previous_screen_size: Vector2i, fallback: int) -> int:
     if lock_landscape:
         return DisplayServer.SCREEN_LANDSCAPE
@@ -11655,6 +11666,7 @@ func _ready() -> void:
         ProjectSettings.get_setting(SETTINGS_KEY, "Godot Native")
     ))
     _load_shell_settings()
+    _apply_host_frame_rate_limit()
     _apply_shell_runtime_settings()
     _configure_runtime_diagnostics()
     var env_backend := _runtime_string("AETHERKIRI_BACKEND", "")
@@ -14009,7 +14021,15 @@ func _process(delta: float) -> void:
                     ])
                 _sync_game_text_input_state()
                 var update_start := Time.get_ticks_usec()
-                _update_frame()
+                var frame_rendered_this_tick := true
+                if player.has_method("frame_rendered_this_tick"):
+                    frame_rendered_this_tick = bool(player.frame_rendered_this_tick())
+                if frame_rendered_this_tick:
+                    _update_frame()
+                elif present_hold_frames > 0:
+                    # Count presentation holds in host frames even when the
+                    # embedded engine's render limiter skipped this tick.
+                    present_hold_frames -= 1
                 var update_ms := float(Time.get_ticks_usec() - update_start) / 1000.0
                 last_update_ms = update_ms
                 _flush_artemis_input_trace_samples()
