@@ -59,6 +59,63 @@ ensure_vcpkg() {
 
 ensure_vcpkg
 
+# Resolve a Rust toolchain that can build for the requested Android target.
+# Homebrew's Rust formula ships without Android targets, so a cargo found in
+# PATH may fail with E0463 ("can't find crate for core") even though rustup
+# toolchains with the target exist on the machine. CMake locates cargo via
+# find_program(), so the fix is to prepend the right toolchain's bin directory
+# to PATH before configure time.
+ensure_android_rust() {
+    local triple="$1"
+    local cargo_dir
+    local sysroot
+    local toolchain_bin
+    local candidate
+
+    # An explicit CARGO override always wins; make sure CMake can see it.
+    if [[ -n "${CARGO:-}" ]]; then
+        cargo_dir="$(dirname "$CARGO")"
+        case ":$PATH:" in
+            *":$cargo_dir:"*) ;;
+            *) export PATH="$cargo_dir:$PATH" ;;
+        esac
+        return 0
+    fi
+
+    if [[ -z "$(command -v cargo || true)" ]]; then
+        echo "Error: cargo not found in PATH. Install Rust from https://rustup.rs," >&2
+        echo "       then add the Android target: rustup target add $triple" >&2
+        exit 1
+    fi
+
+    sysroot="$(rustc --print sysroot 2>/dev/null || true)"
+    if [[ -n "$sysroot" && -d "$sysroot/lib/rustlib/$triple" ]]; then
+        return 0
+    fi
+
+    local rustup_home="${RUSTUP_HOME:-$HOME/.rustup}"
+    if [[ -d "$rustup_home/toolchains" ]]; then
+        # Prefer a stable toolchain when several provide the target.
+        for candidate in "$rustup_home"/toolchains/*/; do
+            candidate="${candidate%/}"
+            [[ -x "$candidate/bin/cargo" && -d "$candidate/lib/rustlib/$triple" ]] || continue
+            if [[ "$(basename "$candidate")" == stable-* || -z "$toolchain_bin" ]]; then
+                toolchain_bin="$candidate/bin"
+            fi
+        done
+    fi
+
+    if [[ -z "$toolchain_bin" ]]; then
+        echo "Error: The active Rust toolchain lacks the '$triple' target and no rustup" >&2
+        echo "       toolchain in $rustup_home/toolchains provides it." >&2
+        echo "       Fix with: rustup target add $triple" >&2
+        exit 1
+    fi
+
+    echo "[INFO] Active cargo is missing '$triple'; using rustup toolchain: $toolchain_bin"
+    export PATH="$toolchain_bin:$PATH"
+}
+
 find_android_ndk() {
     local candidate
     # A caller-selected NDK must win over SDK auto-discovery. This lets the
@@ -232,6 +289,7 @@ build_abi() {
         arm64-v8a)
             cmake_config_preset="Android arm64 ${BUILD_TYPE_CAP} Config"
             cmake_build_preset="Android arm64 ${BUILD_TYPE_CAP} Build"
+            ensure_android_rust "aarch64-linux-android"
             ;;
         *)
             echo "Error: Android ABI '$abi' is not wired for the Godot migration yet. Use arm64-v8a." >&2
