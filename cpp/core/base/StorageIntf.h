@@ -84,23 +84,21 @@ private:
     void AddToHash();
 
 public:
-    tTJSBinaryStream *CreateStream(const ttstr &name);
-
-    bool IsExistent(const ttstr &name);
-
+    virtual tTJSBinaryStream *CreateStream(const ttstr &name); 
+    virtual bool IsExistent(const ttstr &name); 
+    
     tjs_int GetFirstIndexStartsWith(const ttstr &prefix);
     // returns first index which have 'prefix' at start of the name.
 };
 //---------------------------------------------------------------------------
 
-/*[*/
+/*[
 //---------------------------------------------------------------------------
 // iTVPStorageMedia
 //---------------------------------------------------------------------------
-/*
-        abstract class for managing media ( like file: http: etc.)
-*/
-/*]*/
+//        abstract class for managing media ( like file: http: etc.)
+//
+]*/
 #if 0
 /*[*/
     // for plug-in

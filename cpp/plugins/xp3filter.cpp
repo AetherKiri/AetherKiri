@@ -405,6 +405,131 @@ public:
     }
 };
 
+// --- Dynamic Hxv4 DripVM Data loading from TJS ---
+#include "drip_data.h"
+
+bool g_Hxv4DripDataLoaded = false;
+
+static void ParseTJSArrayToU8(iTJSDispatch2* obj, const tjs_char* key, uint8_t* out_buffer, tjs_int expected_size) {
+    tTJSVariant val;
+    if (TJS_SUCCEEDED(obj->PropGet(0, key, nullptr, &val, obj)) && val.Type() == tvtObject) {
+        iTJSDispatch2* arr = val.AsObjectNoAddRef();
+        if (arr) {
+            tTJSVariant vCount;
+            if (TJS_SUCCEEDED(arr->PropGet(0, TJS_W("count"), nullptr, &vCount, arr))) {
+                tjs_int count = static_cast<tjs_int>(vCount.AsInteger());
+                if (count == expected_size) {
+                    for (tjs_int i = 0; i < count; i++) {
+                        tTJSVariant item;
+                        if (TJS_SUCCEEDED(arr->PropGetByNum(0, i, &item, arr))) {
+                            out_buffer[i] = static_cast<uint8_t>(item.AsInteger());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+static void ParseTJSArrayToU32(iTJSDispatch2* obj, const tjs_char* key, uint32_t* out_buffer, tjs_int expected_size) {
+    tTJSVariant val;
+    if (TJS_SUCCEEDED(obj->PropGet(0, key, nullptr, &val, obj)) && val.Type() == tvtObject) {
+        iTJSDispatch2* arr = val.AsObjectNoAddRef();
+        if (arr) {
+            tTJSVariant vCount;
+            if (TJS_SUCCEEDED(arr->PropGet(0, TJS_W("count"), nullptr, &vCount, arr))) {
+                tjs_int count = static_cast<tjs_int>(vCount.AsInteger());
+                if (count == expected_size) {
+                    for (tjs_int i = 0; i < count; i++) {
+                        tTJSVariant item;
+                        if (TJS_SUCCEEDED(arr->PropGetByNum(0, i, &item, arr))) {
+                            out_buffer[i] = static_cast<uint32_t>(item.AsInteger());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+static void ParseTJSArrayToDripLanes(iTJSDispatch2* obj, const tjs_char* key, DripOp out_buffer[128][100]) {
+    tTJSVariant val;
+    if (TJS_SUCCEEDED(obj->PropGet(0, key, nullptr, &val, obj)) && val.Type() == tvtObject) {
+        iTJSDispatch2* arr = val.AsObjectNoAddRef();
+        if (arr) {
+            tTJSVariant vOuterCount;
+            if (TJS_SUCCEEDED(arr->PropGet(0, TJS_W("count"), nullptr, &vOuterCount, arr))) {
+                tjs_int outer_count = static_cast<tjs_int>(vOuterCount.AsInteger());
+                if (outer_count == 128) {
+                    for (tjs_int i = 0; i < 128; i++) {
+                        tTJSVariant inner_val;
+                        if (TJS_SUCCEEDED(arr->PropGetByNum(0, i, &inner_val, arr)) && inner_val.Type() == tvtObject) {
+                            iTJSDispatch2* inner_arr = inner_val.AsObjectNoAddRef();
+                            if (inner_arr) {
+                                tTJSVariant vInnerCount;
+                                if (TJS_SUCCEEDED(inner_arr->PropGet(0, TJS_W("count"), nullptr, &vInnerCount, inner_arr))) {
+                                    tjs_int inner_count = static_cast<tjs_int>(vInnerCount.AsInteger());
+                                    tjs_int ops = inner_count / 2;
+                                    if (ops > 100) ops = 100;
+                                    
+                                    // Clear existing lane
+                                    for (tjs_int j = 0; j < 100; j++) {
+                                        out_buffer[i][j].param = 0;
+                                        out_buffer[i][j].op = 0x51D90; // Fill with breaking OP
+                                    }
+                                    
+                                    for (tjs_int j = 0; j < ops; j++) {
+                                        tTJSVariant p, o;
+                                        inner_arr->PropGetByNum(0, j * 2, &p, inner_arr);
+                                        inner_arr->PropGetByNum(0, j * 2 + 1, &o, inner_arr);
+                                        out_buffer[i][j].param = static_cast<uint32_t>(p.AsInteger());
+                                        out_buffer[i][j].op = static_cast<uint32_t>(o.AsInteger());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+static void setHxv4DripData(tTJSVariant dictData) {
+    if (g_Hxv4DripDataLoaded) return;
+
+    iTJSDispatch2* obj = dictData.AsObjectNoAddRef();
+    if (!obj) return;
+
+    ParseTJSArrayToU8(obj, TJS_W("kHxv4Key"), kHxv4Key, 32);
+    ParseTJSArrayToU8(obj, TJS_W("kHxv4Nonce0"), kHxv4Nonce0, 24);
+    ParseTJSArrayToU8(obj, TJS_W("kHxv4Nonce1"), kHxv4Nonce1, 24);
+    ParseTJSArrayToU32(obj, TJS_W("kHolderWords"), kHolderWords, 6);
+    ParseTJSArrayToU32(obj, TJS_W("kContextU32"), kContextU32, 3106);
+    ParseTJSArrayToDripLanes(obj, TJS_W("kDripLanes"), kDripLanes);
+
+    g_Hxv4DripDataLoaded = true;
+    TVPAddImportantLog(TJS_W("(info) Hxv4 DripVM dynamic keys loaded successfully from TJS."));
+}
+
+
+
+class SetHxv4DripDataRegister : public tTJSDispatch {
+public:
+    tjs_error FuncCall(tjs_uint32 flag, const tjs_char *membername,
+                       tjs_uint32 *hint, tTJSVariant *result, tjs_int numparams,
+                       tTJSVariant **param, iTJSDispatch2 *objthis) {
+        if(membername)
+            return tTJSDispatch::FuncCall(flag, membername, hint, result, numparams, param, objthis);
+        if(numparams < 1)
+            return TJS_E_BADPARAMCOUNT;
+        
+        setHxv4DripData(*param[0]);
+        if(result) result->Clear();
+        return TJS_S_OK;
+    }
+};
+
 static XP3FilterDecoder *AddXP3Decoder() {
     XP3FilterDecoder *decoder = new XP3FilterDecoder;
     tTJSVariant val;
@@ -427,7 +552,12 @@ static XP3FilterDecoder *AddXP3Decoder() {
                               new XP3ContentFilterRegister(decoder),
                               cls->GetClassName().c_str(), nitMethod,
                               TJS_STATICMEMBER);
-    REGISTER_OBJECT(Storages, cls);
+    
+    TJSNativeClassRegisterNCM(cls, TJS_W("setHxv4DripData"),
+                              new SetHxv4DripDataRegister(),
+                              cls->GetClassName().c_str(), nitMethod,
+                              TJS_STATICMEMBER);
+REGISTER_OBJECT(Storages, cls);
 
     decoder->ScriptEngine->ExecScript(sXP3FilterScript);
     //	sTVPScriptEngineStack.emplace_back(decoder);
@@ -673,3 +803,4 @@ static void PostRegistCallback() {
 
 NCB_POST_REGIST_CALLBACK(PostRegistCallback);
 NCB_PRE_UNREGIST_CALLBACK(ResetXP3FilterForHostSession);
+

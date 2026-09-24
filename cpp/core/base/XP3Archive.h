@@ -151,6 +151,8 @@ public:
     [[nodiscard]] const ttstr &GetName() const { return ArchiveName; }
 
     tTJSBinaryStream *CreateStreamByIndex(tjs_uint idx) override;
+    tTJSBinaryStream *CreateStream(const ttstr &name) override; 
+    bool IsExistent(const ttstr &name) override; 
 
 private:
     static bool FindChunk(const tjs_uint8 *data, const tjs_uint8 *name,
