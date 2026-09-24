@@ -11,8 +11,8 @@
     "web:dev:release": "AETHERKIRI_WEB_DIR=out/godot/web/release vite --clearScreen false"
   },
   "devDependencies": {
-    "@types/node": "^25.9.6",
+    "@types/node": "^25.9.8",
     "typescript": "^6.0.3",
-    "vite": "^8.2.2"
+    "vite": "^8.3.0"
   }
 }
