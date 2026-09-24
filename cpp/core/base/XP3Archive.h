@@ -57,11 +57,24 @@ typedef tjs_int(
 
 /*]*/
 //---------------------------------------------------------------------------
+extern tTVPXP3ArchiveExtractionFilter TVPXP3ArchiveExtractionFilter;
+
 TJS_EXP_FUNC_DEF(void, TVPSetXP3ArchiveExtractionFilter,
                  (tTVPXP3ArchiveExtractionFilter filter));
 
 TJS_EXP_FUNC_DEF(void, TVPSetXP3ArchiveContentFilter,
                  (tTVPXP3ArchiveContentFilter filter));
+
+// Generic unknown chunk filter
+typedef void(TVP_tTVPXP3ArchiveExtractionFilter_CONVENTION
+                 *tTVPXP3UnknownChunkFilter)(
+    class tTVPXP3Archive *archive, tTJSBinaryStream *stream, tjs_int64 stream_offset, const tjs_uint8 *chunk_name, const tjs_uint8 *chunk_data, tjs_uint size);
+
+TJS_EXP_FUNC_DEF(void, TVPRegisterXP3UnknownChunkFilter,
+                 (tTVPXP3UnknownChunkFilter filter));
+
+TJS_EXP_FUNC_DEF(void, TVPUnregisterXP3UnknownChunkFilter,
+                 (tTVPXP3UnknownChunkFilter filter));
 //---------------------------------------------------------------------------
 
 //---------------------------------------------------------------------------
@@ -151,6 +164,8 @@ public:
     [[nodiscard]] const ttstr &GetName() const { return ArchiveName; }
 
     tTJSBinaryStream *CreateStreamByIndex(tjs_uint idx) override;
+    tTJSBinaryStream *CreateStream(const ttstr &name) override; 
+    bool IsExistent(const ttstr &name) override; 
 
 private:
     static bool FindChunk(const tjs_uint8 *data, const tjs_uint8 *name,

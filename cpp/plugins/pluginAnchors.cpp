@@ -4,6 +4,7 @@ extern "C" void TVPRegisterKAGParserExPluginAnchor();
 extern "C" void TVPRegisterExtKAGParserPluginAnchor();
 extern "C" void TVPRegisterMotionPlayerPluginAnchor();
 extern "C" void TVPRegisterTomlPluginAnchor();
+extern "C" void TVPRegisterHxv4ProviderPluginAnchor();
 
 namespace {
 
@@ -22,6 +23,8 @@ void linkStaticPluginModules() {
     // Plugins.link("toml.dll") falls back to the incompatible external
     // parser and localization errors surface as English UI text.
     TVPRegisterTomlPluginAnchor();
+    // Anchor for Hxv4 decoder to ensure it's statically linked
+    TVPRegisterHxv4ProviderPluginAnchor();
 }
 
 } // namespace

@@ -405,6 +405,8 @@ public:
     }
 };
 
+
+
 static XP3FilterDecoder *AddXP3Decoder() {
     XP3FilterDecoder *decoder = new XP3FilterDecoder;
     tTJSVariant val;
@@ -427,7 +429,9 @@ static XP3FilterDecoder *AddXP3Decoder() {
                               new XP3ContentFilterRegister(decoder),
                               cls->GetClassName().c_str(), nitMethod,
                               TJS_STATICMEMBER);
-    REGISTER_OBJECT(Storages, cls);
+    
+
+REGISTER_OBJECT(Storages, cls);
 
     decoder->ScriptEngine->ExecScript(sXP3FilterScript);
     //	sTVPScriptEngineStack.emplace_back(decoder);
@@ -673,3 +677,4 @@ static void PostRegistCallback() {
 
 NCB_POST_REGIST_CALLBACK(PostRegistCallback);
 NCB_PRE_UNREGIST_CALLBACK(ResetXP3FilterForHostSession);
+

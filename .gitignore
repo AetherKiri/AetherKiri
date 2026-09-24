@@ -30,6 +30,15 @@ node_modules/
 /stats_server
 local.properties
 
+# Local experiment folders
+Freemote/
+Ginka Port/
+hxv4_unhash_tools-refactor-dynamic-plaintext-providers/
+templates/
+doc/CXDEC/
+drip_program.json
+Godot_v4.7-stable_export_templates.tpz
+
 # Live2D Cubism Core is distributed under Live2D's proprietary license.
 third_party/live2d/Core/live2dcubismcore*.js
 third_party/live2d/Core/live2dcubismcore*.wasm

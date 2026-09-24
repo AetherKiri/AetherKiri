@@ -4,6 +4,7 @@
   "version-string": "1.5.0",
   "dependencies": [
     "7zip",
+    "libsodium",
     {
       "name": "argparse",
       "platform": "linux | windows | osx"

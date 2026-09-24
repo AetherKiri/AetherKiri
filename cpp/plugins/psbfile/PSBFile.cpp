@@ -402,7 +402,14 @@ namespace PSB {
             stream->SetPosition(pos + offset);
             PSBNumber nameIdx(static_cast<PSBObjType>(stream->ReadI8LE()),
                               stream);
-            auto name = PSBFile::names[static_cast<int>(nameIdx)];
+            int nIdx = static_cast<int>(nameIdx);
+            if(nIdx < 0 || nIdx >= PSBFile::names.size()) {
+                LOGGER->warn("Bad PSB format: at position:{}, name index {} >= "
+                             "Names count ({}), skipping.",
+                             pos, nIdx, PSBFile::names.size());
+                continue;
+            }
+            auto name = PSBFile::names[nIdx];
             auto obj = unpack(stream, lazyLoad);
             if(obj != nullptr) {
 

@@ -47,6 +47,28 @@ void TVPSetXP3ArchiveContentFilter(tTVPXP3ArchiveContentFilter filter) {
 }
 
 //---------------------------------------------------------------------------
+// Unknown Chunk Filter
+//---------------------------------------------------------------------------
+static std::vector<tTVPXP3UnknownChunkFilter> TVPXP3UnknownChunkFilters;
+static std::mutex TVPXP3UnknownChunkFiltersMutex;
+
+void TVPRegisterXP3UnknownChunkFilter(tTVPXP3UnknownChunkFilter filter) {
+    std::lock_guard<std::mutex> lock(TVPXP3UnknownChunkFiltersMutex);
+    for (auto f : TVPXP3UnknownChunkFilters) {
+        if (f == filter) return;
+    }
+    TVPXP3UnknownChunkFilters.push_back(filter);
+}
+
+void TVPUnregisterXP3UnknownChunkFilter(tTVPXP3UnknownChunkFilter filter) {
+    std::lock_guard<std::mutex> lock(TVPXP3UnknownChunkFiltersMutex);
+    auto it = std::find(TVPXP3UnknownChunkFilters.begin(), TVPXP3UnknownChunkFilters.end(), filter);
+    if (it != TVPXP3UnknownChunkFilters.end()) {
+        TVPXP3UnknownChunkFilters.erase(it);
+    }
+}
+
+//---------------------------------------------------------------------------
 // tTVPXP3ArchiveHandleCache
 //---------------------------------------------------------------------------
 #define TVP_MAX_ARCHIVE_HANDLE_CACHE 8
@@ -612,34 +634,57 @@ void tTVPXP3Archive::Init(tTJSBinaryStream *st, tjs_int64 off,
                 Count++;
             }
 
+            // --- BROADCAST UNKNOWN CHUNKS TO PLUGINS ---
+            {
+                tjs_uint ch_pos = 0;
+                while(ch_pos + 12 <= index_size) {
+                    tjs_uint8 chunk_name[4];
+                    std::memcpy(chunk_name, indexdata + ch_pos, 4);
+                    tjs_uint64 chunk_size64 = ReadI64FromMem(indexdata + ch_pos + 4);
+                    tjs_uint chunk_size = (tjs_uint)chunk_size64;
+                    
+                    
+                    if (ch_pos + 12 + chunk_size > index_size) break;
+
+                    if (std::memcmp(chunk_name, cn_File, 4) != 0 && std::memcmp(chunk_name, cn_hnfn, 4) != 0) {
+                        std::lock_guard<std::mutex> lock(TVPXP3UnknownChunkFiltersMutex);
+                        for (auto filter : TVPXP3UnknownChunkFilters) {
+                            filter(this, st, offset, chunk_name, indexdata + ch_pos + 12, chunk_size);
+                        }
+                    }
+                    ch_pos += 12 + chunk_size;
+                }
+            }
             if(!(index_flag & TVP_XP3_INDEX_CONTINUE))
                 break; // continue reading index when the bit sets
         }
-
+        
         // A content hash alone is not enough to select Cx: translated XP3s
         // can retain protected metadata after their payload is already
         // decrypted. Probe the root startup payload before enabling the
         // decoder for this archive.
-        for(const auto &item : ItemVector) {
-            if(item.Name != TJS_W("startup.tjs") ||
-               !TVPIsBuiltinXP3CxScheme(item.FileHash))
-                continue;
+        if (true) {
+            for(const auto &item : ItemVector) {
+                if(item.Name != TJS_W("startup.tjs") ||
+                   !TVPIsBuiltinXP3CxScheme(item.FileHash))
+                    continue;
 
-            std::array<tjs_uint8, 8> header{};
-            const bool headerRead = TVPReadXP3ItemHeader(st, item, header);
-            if(TVPShouldUseBuiltinXP3CxDecoder(
-                   item.FileHash, headerRead ? header.data() : nullptr,
-                   headerRead ? header.size() : 0)) {
-                UseBuiltinCxDecoder =
-                    TVPActivateBuiltinXP3CxDecoder(item.FileHash);
-                if(UseBuiltinCxDecoder)
+                std::array<tjs_uint8, 8> header{};
+                const bool headerRead = TVPReadXP3ItemHeader(st, item, header);
+                if(TVPShouldUseBuiltinXP3CxDecoder(
+                       item.FileHash, headerRead ? header.data() : nullptr,
+                       headerRead ? header.size() : 0)) {
+                    UseBuiltinCxDecoder =
+                        TVPActivateBuiltinXP3CxDecoder(item.FileHash);
+                    if(UseBuiltinCxDecoder)
+                        TVPAddImportantLog(
+                            TJS_W("(info) Activated built-in XP3 Cx decoder"));
+                } else {
                     TVPAddImportantLog(
-                        TJS_W("(info) Activated built-in XP3 Cx decoder"));
-            } else {
-                TVPAddImportantLog(
-                    TJS_W("(info) Protected XP3 payload is already decoded; skipped built-in Cx decoder"));
+                        TJS_W("(info) Protected XP3 payload is already decoded; skipped built-in Cx decoder"));
+                }
+                break;
             }
-            break;
         }
 
         // sort item vector by its name (required for tTVPArchive
@@ -672,6 +717,7 @@ tTVPXP3Archive::tTVPXP3Archive(const ttstr &name, tTJSBinaryStream *st,
 
 //---------------------------------------------------------------------------
 tTVPXP3Archive::~tTVPXP3Archive() {
+
     try {
         TVPFreeArchiveHandlePoolByPointer(this);
     } catch(...) {
@@ -724,6 +770,14 @@ tTJSBinaryStream *tTVPXP3Archive::CreateStreamByIndex(tjs_uint idx) {
     }
 
     return out;
+}
+
+tTJSBinaryStream *tTVPXP3Archive::CreateStream(const ttstr &name) {
+    return tTVPArchive::CreateStream(name);
+}
+
+bool tTVPXP3Archive::IsExistent(const ttstr &name) {
+    return tTVPArchive::IsExistent(name);
 }
 
 //---------------------------------------------------------------------------
@@ -781,8 +835,8 @@ tjs_int64 tTVPXP3Archive::ReadI64FromMem(const tjs_uint8 *mem) {
 //---------------------------------------------------------------------------
 // Compressed segment cache related
 //---------------------------------------------------------------------------
-#define TVP_SEGCACHE_ONE_LIMIT (1024 * 1024) // max size limit for each segment
-#define TVP_SEGCACHE_TOTAL_LIMIT (1024 * 1024) // total segment cache size
+#define TVP_SEGCACHE_ONE_LIMIT (256 * 1024 * 1024) // max size limit for each segment
+#define TVP_SEGCACHE_TOTAL_LIMIT (256 * 1024 * 1024) // total segment cache size
 tjs_uint TVPSegmentCacheLimit = TVP_SEGCACHE_TOTAL_LIMIT;
 
 //---------------------------------------------------------------------------

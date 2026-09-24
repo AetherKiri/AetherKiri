@@ -44,7 +44,6 @@ target_include_directories(engine_api
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
-
 if(TARGET krkr2core AND TARGET krkr2plugin)
     target_compile_definitions(engine_api PRIVATE ENGINE_API_USE_KRKR2_RUNTIME)
     if(WEB OR EMSCRIPTEN)
@@ -72,6 +71,10 @@ endif()
 
 if(BUILD_GPU_BRIDGE)
     target_compile_definitions(engine_api PRIVATE KRKR_ENABLE_GPU_BRIDGE=1)
+endif()
+
+if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_catsystem2)
+    aetherinternal_extend_catsystem2(engine_api)
 endif()
 
 if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_artemis)

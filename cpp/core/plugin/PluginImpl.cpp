@@ -753,6 +753,7 @@ void TVPLoadInternalPlugins() {
         ncbAutoRegister::LoadAllModules();
     } else {
         TVPLoadPlugin(TJS_W("xp3filter.dll"));
+        TVPLoadPlugin(TJS_W("hxv4_decoder.dll"));
         TVPLoadPlugin(TJS_W("varfile.dll"));
         TVPLoadPlugin(TJS_W("shrinkCopy.dll"));
     }

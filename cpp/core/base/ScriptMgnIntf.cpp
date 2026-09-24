@@ -34,6 +34,7 @@
 #include "PadIntf.h"
 #include "TextStream.h"
 #include "Random.h"
+#include "TVPWindow.h"
 #include "tjsRandomGenerator.h"
 #include "SysInitIntf.h"
 #include "PhaseVocoderFilter.h"
@@ -4010,13 +4011,15 @@ static void TVPLogStartupScriptError(const char *stage,
     spdlog::default_logger()->flush();
 }
 
+
+
 void TVPExecuteStartupScript() {
     // The engine library can open more than one game in the same host
     // process.  Do not let a previous game's Storages.setTextEncoding()
     // setting leak into the next title; its patch.tjs may select a different
+    // setting leak into the next title; its patch.tjs may select a different
     // legacy encoding again after startup.
     TVPSetDefaultReadEncoding(TJS_W("utf-8"));
-
     ttstr strPatchError;
     try {
         TVPInstallStartupPatchPrerequisites();
@@ -4062,8 +4065,10 @@ void TVPExecuteStartupScript() {
 
     // execute "startup.tjs"
     try {
-
         ttstr place(TVPSearchPlacedPath(TVPStartupScriptName));
+        
+
+
         spdlog::info("Loading startup script: {}", place.AsStdString());
 #if defined(__ANDROID__)
         __android_log_print(ANDROID_LOG_INFO, "krkr2",

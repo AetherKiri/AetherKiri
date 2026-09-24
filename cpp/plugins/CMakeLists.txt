@@ -142,6 +142,7 @@ if(NOT WEB AND NOT EMSCRIPTEN)
     add_subdirectory(layerex_draw)
 endif()
 add_subdirectory(motionplayer)
+add_subdirectory(Crypt/hxv4)
 add_subdirectory(kagparserex)
 add_subdirectory(extkagparser)
 
@@ -152,6 +153,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
         psdfile
         psbfile
         motionplayer
+        hxv4_decoder
         kagparserex
         extkagparser
 #        json steam DrawDeviceForSteam
