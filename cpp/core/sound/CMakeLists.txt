@@ -62,6 +62,10 @@ endif()
 
 find_package(OpenAL CONFIG REQUIRED)
 
+# Sanitize vcpkg's raw -Wl,-framework items on this scope's OpenAL copy so
+# swiftc-driven (mixed C++/Swift) consumers can link it.
+aetherkiri_sanitize_openal_link()
+
 target_link_libraries(${PROJECT_NAME} PRIVATE
     Vorbis::vorbis
     Vorbis::vorbisfile

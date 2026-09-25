@@ -1,11 +1,15 @@
 /**
  * @file android_jni_bridge.cpp
- * @brief Android JNI entry point for the Godot-hosted engine bridge.
+ * @brief Android JNI entry point for the engine_api host surface.
  *
- * engine_api.so is loaded by the Godot Android app. This file provides
- * Android-specific JNI initialization needed
- * by the engine runtime, including JavaVM storage for JNI calls
- * from native threads and the SurfaceTexture bridge.
+ * engine_api.so is loaded by the Godot Android app. This file provides the
+ * Android-specific host services: JavaVM storage for JNI calls from native
+ * threads, the SurfaceTexture bridge and the Application Context holder.
+ * Since the Phase 2d link flip it lives in engine_api (not the KiriKiri
+ * runtime glue) because the Java host binds the Java_org_github_krkr2
+ * natives and JNI_OnLoad to this library; consumers on the engine side
+ * (krkr2core's KrkrJniHelper, the Godot extension) resolve the exported
+ * krkr_Get* accessors across the DSO boundary.
  */
 
 #include <jni.h>
@@ -15,7 +19,6 @@
 #include <dlfcn.h>
 #include <chrono>
 #include <mutex>
-#include "environ/android/KrkrJniHelper.h"
 
 #define LOG_TAG "krkr2"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -65,7 +68,7 @@ JavaVM* RecoverJavaVMFromRuntime() {
 
 } // namespace
 
-JavaVM* krkr_GetJavaVM() {
+__attribute__((visibility("default"))) JavaVM* krkr_GetJavaVM() {
     const auto now = std::chrono::steady_clock::now();
     {
         std::lock_guard<std::mutex> lock(g_jvm_mutex);
@@ -88,7 +91,6 @@ JavaVM* krkr_GetJavaVM() {
         std::lock_guard<std::mutex> lock(g_jvm_mutex);
         g_javaVM = vm;
     }
-    krkr::JniHelper::setJavaVM(vm);
     return vm;
 }
 
@@ -131,7 +133,7 @@ __attribute__((visibility("default"))) jobject krkr_GetApplicationContext() {
     return g_app_context;
 }
 
-ANativeWindow* krkr_GetNativeWindow() {
+__attribute__((visibility("default"))) ANativeWindow* krkr_GetNativeWindow() {
     std::lock_guard<std::mutex> lock(g_surface_mutex);
     if (g_native_window) {
         ANativeWindow_acquire(g_native_window);
@@ -139,7 +141,8 @@ ANativeWindow* krkr_GetNativeWindow() {
     return g_native_window;
 }
 
-void krkr_GetSurfaceDimensions(uint32_t* out_width, uint32_t* out_height) {
+__attribute__((visibility("default"))) void krkr_GetSurfaceDimensions(
+    uint32_t* out_width, uint32_t* out_height) {
     std::lock_guard<std::mutex> lock(g_surface_mutex);
     if (out_width) *out_width = g_surface_width;
     if (out_height) *out_height = g_surface_height;
@@ -158,9 +161,9 @@ extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void* reserved) {
         g_last_jvm_recovery_attempt = std::chrono::steady_clock::now();
     }
 
-    // Also set JavaVM for the KrkrJniHelper (used by AndroidUtils.cpp)
-    krkr::JniHelper::setJavaVM(vm);
-
+    // KiriKiri-core consumers read the JavaVM through krkr_GetJavaVM() below;
+    // this library no longer links the engine, so there is no
+    // krkr::JniHelper::setJavaVM() to forward to.
     LOGI("krkr2 JNI_OnLoad: JavaVM stored");
     return JNI_VERSION_1_6;
 }

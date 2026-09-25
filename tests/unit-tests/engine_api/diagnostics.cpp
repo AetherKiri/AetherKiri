@@ -16,6 +16,18 @@
 #include "engine_runtime_provider.h"
 #include "engine_startup_thread.h"
 
+/* dispatch routes the built-in "kirikiri" entry through the installable
+ * legacy services table; every test process (catch_discover_tests spawns one
+ * per TEST_CASE) must install the standalone stub table before the first
+ * engine_create call. */
+extern "C" engine_result_t engine_stub_install_legacy_services(void);
+namespace {
+const bool kStubLegacyServicesInstalled = [] {
+  engine_stub_install_legacy_services();
+  return true;
+}();
+}  // namespace
+
 namespace {
 
 #if defined(__APPLE__)

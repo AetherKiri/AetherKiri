@@ -12595,6 +12595,13 @@ GDExtensionBool GDE_EXPORT aether_kiri_library_init(
     GDExtensionInterfaceGetProcAddress get_proc_address,
     GDExtensionClassLibraryPtr library,
     GDExtensionInitialization *initialization) {
+#if defined(AETHERKIRI_WITH_KRKR2)
+    // Phase 2d link flip: the KiriKiri runtime glue is linked into this
+    // extension instead of engine_api, so its engine_legacy_* surface must be
+    // installed as the dispatch services table before any engine_create call.
+    extern engine_result_t aether_krkr2_install_legacy_services(void);
+    aether_krkr2_install_legacy_services();
+#endif
     godot::GDExtensionBinding::InitObject init_obj(
         get_proc_address, library, initialization);
     init_obj.register_initializer(godot::InitializeAetherRuntime);

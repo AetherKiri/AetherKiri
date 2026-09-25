@@ -55,6 +55,35 @@ endif()
 
 project(krkr2)
 
+# vcpkg's OpenAL target carries raw "-Wl,-framework,..." items in its
+# interface. Imported targets are directory-scoped: every scope that calls
+# find_package(OpenAL) gets a fresh copy with the raw flags, and the mixed
+# C++/Swift Godot extension is linked by swiftc, which rejects the -Wl
+# spelling. Each scope that creates an OpenAL::OpenAL copy must sanitize it
+# to the driver-neutral LINKER: form (see aetherkiri_sanitize_openal_link).
+function(aetherkiri_sanitize_openal_link)
+    if(NOT TARGET OpenAL::OpenAL)
+        return()
+    endif()
+    get_target_property(_aetherkiri_openal_interface OpenAL::OpenAL
+        INTERFACE_LINK_LIBRARIES)
+    if(NOT _aetherkiri_openal_interface)
+        return()
+    endif()
+    list(FIND _aetherkiri_openal_interface "-Wl,-framework,AudioToolbox"
+        _aetherkiri_openal_raw_index)
+    if(_aetherkiri_openal_raw_index EQUAL -1)
+        return()
+    endif()
+    list(TRANSFORM _aetherkiri_openal_interface REPLACE
+        "^-Wl,-framework,(.+)$" "LINKER:-framework,\\1")
+    # macOS pthreads live in libSystem; the bare -pthread driver flag would
+    # reach swiftc-driven links (which reject it) through this interface.
+    list(REMOVE_ITEM _aetherkiri_openal_interface "$<LINK_ONLY:-pthread>")
+    set_target_properties(OpenAL::OpenAL PROPERTIES
+        INTERFACE_LINK_LIBRARIES "${_aetherkiri_openal_interface}")
+endfunction()
+
 if(ANDROID)
     add_compile_options(-Wno-inconsistent-missing-override)
 endif()
@@ -230,8 +259,9 @@ if(ENABLE_TESTS AND AETHERKIRI_ENABLE_ONSCRIPTER AND
 endif()
 
 # The KiriKiri runtime glue owns the legacy engine implementation and the
-# krkr2core/krkr2plugin linkage; engine_api links it back in so its binary
-# layout is unchanged (Phase 2 dependency inversion).
+# krkr2core/krkr2plugin linkage; the Godot extension host links the glue and
+# installs its engine_legacy_* surface into engine_api through the legacy
+# services table (Phase 2d link flip — engine_api itself never links it).
 if(BUILD_ENGINE_API OR AETHERKIRI_BUILD_NATIVE_ONSCRIPTER_TESTS OR AETHERKIRI_ENABLE_RFVP)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/krkr2_runtime)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/engine_api)

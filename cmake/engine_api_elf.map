@@ -5,7 +5,14 @@
         JNI_OnLoad;
         Java_org_github_krkr2_aetherkiri_EngineBridge_*;
         _Z14krkr_GetJNIEnvv;
+        _Z14krkr_GetJavaVMv;
+        _Z20krkr_GetNativeWindowv;
+        _Z25krkr_GetSurfaceDimensions*;
         _Z26krkr_GetApplicationContextv;
+        _Z16TVPTransformText*;
+        _Z15TVPPrefetchText*;
+        _Z27TVPSetTextTransformCallback*;
+        _Z26TVPSetTextPrefetchCallback*;
     local:
         *;
 };

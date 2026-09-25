@@ -2,6 +2,7 @@
 #include "engine_options.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cctype>
 #include <cstring>
@@ -34,12 +35,8 @@
 
 #include "engine_runtime_provider_registry.h"
 #include "engine_startup_thread.h"
-#include "legacy_engine_api.h"
+#include "engine_legacy_services.h"
 #include "TextTransform.h"
-
-#if defined(AETHERKIRI_INTERNAL_CATSYSTEM2)
-extern "C" void AetherInternalRegisterCatSystem2Runtime(void);
-#endif
 
 #if defined(AETHERKIRI_INTERNAL_TEXT_TRANSLATION)
 extern "C" bool AetherInternalConfigureTextTranslation(
@@ -58,20 +55,20 @@ extern "C" void AetherInternalSetTextTranslationSkipping(
     const char* runtime_id_utf8, uint32_t skipping);
 #endif
 
-#if defined(AETHERKIRI_INTERNAL_ARTEMIS) && \
-    defined(AETHERKIRI_ENABLE_ARTEMIS_RUNTIME)
-extern "C" void AetherInternalRegisterArtemisRuntime(void);
-#endif
-
-#if defined(AETHERKIRI_INTERNAL_WA2) && defined(AETHERKIRI_ENABLE_WA2_RUNTIME)
-extern "C" void AetherInternalRegisterWa2Runtime(void);
-#endif
-
 namespace {
 
 using aetherkiri::engine_api::StartupThread;
 
 enum class BackendKind { kUndecided, kLegacy, kProvider };
+
+/* The KiriKiri legacy services table is installed once by the host before the
+ * first engine_create call (see engine_install_legacy_services); dispatch
+ * reads it without ever linking the KiriKiri runtime. */
+std::atomic<const engine_legacy_services_v1_t*> g_legacy_services{nullptr};
+
+const engine_legacy_services_v1_t* LegacyServices() {
+  return g_legacy_services.load(std::memory_order_acquire);
+}
 
 struct DispatchHandle {
   std::recursive_mutex mutex;
@@ -113,7 +110,14 @@ std::unordered_map<engine_media_handle_t, engine_handle_t>
 thread_local std::string g_dispatch_thread_error;
 
 bool ActivateProviderAudioSessionForHost() {
-  return engine_legacy_activate_audio_session_for_host();
+  const engine_legacy_services_v1_t* services = LegacyServices();
+  if (services == nullptr ||
+      services->activate_audio_session_for_host == nullptr) {
+    // No KiriKiri glue installed: nothing owns a host audio session, so
+    // provider resume is never held back (the stub behaves the same way).
+    return true;
+  }
+  return services->activate_audio_session_for_host();
 }
 
 void PopulateHostMemoryStats(engine_memory_stats_t* stats) {
@@ -224,9 +228,9 @@ void SetLegacyError(DispatchHandle* handle, engine_result_t result,
     SetThreadError(nullptr);
     return;
   }
-  const char* legacy_error = engine_legacy_get_last_error(handle->legacy);
+  const char* legacy_error = LegacyServices()->get_last_error(handle->legacy);
   if (legacy_error == nullptr || legacy_error[0] == '\0') {
-    legacy_error = engine_legacy_get_last_error(nullptr);
+    legacy_error = LegacyServices()->get_last_error(nullptr);
   }
   handle->last_error = legacy_error != nullptr && legacy_error[0] != '\0'
                            ? legacy_error
@@ -240,9 +244,15 @@ void SetLegacyError(DispatchHandle* handle, engine_result_t result,
  * like the eager engine_create-time construction did. */
 engine_result_t EnsureLegacyLocked(DispatchHandle* handle) {
   if (handle->legacy != nullptr) return ENGINE_RESULT_OK;
+  const engine_legacy_services_v1_t* services = LegacyServices();
+  if (services == nullptr || services->create == nullptr) {
+    handle->last_error =
+        "KiriKiri backend services are not installed in this host";
+    return ThreadError(ENGINE_RESULT_NOT_SUPPORTED,
+                       handle->last_error.c_str());
+  }
   engine_handle_t legacy = nullptr;
-  const engine_result_t result =
-      engine_legacy_create(&handle->create_desc, &legacy);
+  const engine_result_t result = services->create(&handle->create_desc, &legacy);
   if (result != ENGINE_RESULT_OK) {
     SetLegacyError(handle, result, "failed to create the KiriKiri backend");
     return result;
@@ -558,6 +568,30 @@ engine_result_t DrainProviderStartupLogs(DispatchHandle* handle, char* out_buffe
 
 extern "C" {
 
+/* Exported explicitly (the TU compiles with -fvisibility=hidden in Release;
+ * the version script cannot promote hidden symbols). */
+ENGINE_API_EXPORT engine_result_t engine_install_legacy_services(
+    const engine_legacy_services_v1_t* services) {
+  if (services == nullptr ||
+      services->struct_size < ENGINE_LEGACY_SERVICES_V1_REQUIRED_SIZE ||
+      services->create == nullptr ||
+      services->get_last_error == nullptr ||
+      services->activate_audio_session_for_host == nullptr ||
+      services->drain_texture_recycle == nullptr) {
+    return ENGINE_RESULT_INVALID_ARGUMENT;
+  }
+  const engine_legacy_services_v1_t* current =
+      g_legacy_services.load(std::memory_order_acquire);
+  if (current == services) return ENGINE_RESULT_OK;
+  if (current != nullptr) {
+    // Two runtimes must not silently fight over the built-in "kirikiri"
+    // registry entry.
+    return ENGINE_RESULT_INVALID_STATE;
+  }
+  g_legacy_services.store(services, std::memory_order_release);
+  return ENGINE_RESULT_OK;
+}
+
 engine_result_t engine_get_runtime_api_version(uint32_t* out_api_version) {
   if (out_api_version == nullptr) {
     return ThreadError(ENGINE_RESULT_INVALID_ARGUMENT, "out_api_version is null");
@@ -574,16 +608,14 @@ engine_result_t engine_create(const engine_create_desc_t* desc,
                        "engine_create requires non-null desc and out_handle");
   }
   *out_handle = nullptr;
-#if defined(AETHERKIRI_INTERNAL_CATSYSTEM2)
-  AetherInternalRegisterCatSystem2Runtime();
-#endif
-#if defined(AETHERKIRI_INTERNAL_ARTEMIS) && \
-    defined(AETHERKIRI_ENABLE_ARTEMIS_RUNTIME)
-  AetherInternalRegisterArtemisRuntime();
-#endif
-#if defined(AETHERKIRI_INTERNAL_WA2) && defined(AETHERKIRI_ENABLE_WA2_RUNTIME)
-  AetherInternalRegisterWa2Runtime();
-#endif
+  // Private runtime providers (CatSystem2 / Artemis / WA2) are compiled into
+  // the KiriKiri glue and register through the installed services table; the
+  // call is idempotent exactly like the direct registration calls it replaces.
+  if (const engine_legacy_services_v1_t* services = LegacyServices()) {
+    if (services->register_private_runtimes != nullptr) {
+      services->register_private_runtimes();
+    }
+  }
   if (desc->struct_size < sizeof(engine_create_desc_t)) {
     return ThreadError(ENGINE_RESULT_INVALID_ARGUMENT,
                        "engine_create_desc_t.struct_size is too small");
@@ -744,12 +776,12 @@ engine_result_t engine_destroy(engine_handle_t public_handle) {
     handle->runtime = nullptr;
   }
   for (const auto media : owned_media) {
-    engine_legacy_media_destroy(media);
+    LegacyServices()->media_destroy(media);
   }
   // The legacy handle is created lazily; a provider-only host that never
   // touched media or diagnostics has nothing to destroy here.
   const auto result = handle->legacy != nullptr
-                          ? engine_legacy_destroy(handle->legacy)
+                          ? LegacyServices()->destroy(handle->legacy)
                           : ENGINE_RESULT_OK;
   delete handle;
 #if defined(AETHERKIRI_INTERNAL_TEXT_TRANSLATION)
@@ -781,7 +813,7 @@ engine_result_t engine_media_open(engine_handle_t public_handle,
   const auto ensure_result = EnsureLegacyLocked(handle);
   if (ensure_result != ENGINE_RESULT_OK) return ensure_result;
   engine_media_handle_t legacy_media = nullptr;
-  const auto result = engine_legacy_media_open(handle->legacy, path_utf8,
+  const auto result = LegacyServices()->media_open(handle->legacy, path_utf8,
                                                &legacy_media);
   SetLegacyError(handle, result, "legacy media player failed to open media");
   if (result != ENGINE_RESULT_OK) return result;
@@ -811,7 +843,7 @@ engine_result_t engine_media_destroy(engine_media_handle_t media) {
   const auto validation = ValidateHandleLocked(found->second, &owner);
   if (validation != ENGINE_RESULT_OK) return validation;
   std::lock_guard<std::recursive_mutex> guard(owner->mutex);
-  const auto result = engine_legacy_media_destroy(media);
+  const auto result = LegacyServices()->media_destroy(media);
   g_dispatch_media_handles.erase(found);
   SetLegacyError(owner, result, "legacy media player failed to close media");
   return result;
@@ -820,14 +852,14 @@ engine_result_t engine_media_destroy(engine_media_handle_t media) {
 engine_result_t engine_media_play(engine_media_handle_t media) {
   return RouteMedia(media, "legacy media player failed to play media",
                     [](engine_media_handle_t legacy) {
-                      return engine_legacy_media_play(legacy);
+                      return LegacyServices()->media_play(legacy);
                     });
 }
 
 engine_result_t engine_media_pause(engine_media_handle_t media) {
   return RouteMedia(media, "legacy media player failed to pause media",
                     [](engine_media_handle_t legacy) {
-                      return engine_legacy_media_pause(legacy);
+                      return LegacyServices()->media_pause(legacy);
                     });
 }
 
@@ -835,7 +867,7 @@ engine_result_t engine_media_seek(engine_media_handle_t media,
                                   int64_t position_ms) {
   return RouteMedia(media, "legacy media player failed to seek media",
                     [&](engine_media_handle_t legacy) {
-                      return engine_legacy_media_seek(legacy, position_ms);
+                      return LegacyServices()->media_seek(legacy, position_ms);
                     });
 }
 
@@ -843,7 +875,7 @@ engine_result_t engine_media_set_rate(engine_media_handle_t media,
                                       double playback_rate) {
   return RouteMedia(media, "legacy media player failed to set playback rate",
                     [&](engine_media_handle_t legacy) {
-                      return engine_legacy_media_set_rate(legacy,
+                      return LegacyServices()->media_set_rate(legacy,
                                                           playback_rate);
                     });
 }
@@ -852,7 +884,7 @@ engine_result_t engine_media_get_state(engine_media_handle_t media,
                                        engine_media_state_t* out_state) {
   return RouteMedia(media, "legacy media player failed to read media state",
                     [&](engine_media_handle_t legacy) {
-                      return engine_legacy_media_get_state(legacy, out_state);
+                      return LegacyServices()->media_get_state(legacy, out_state);
                     });
 }
 
@@ -862,7 +894,7 @@ engine_result_t engine_media_get_subtitle_tracks_json(
   return RouteMedia(
       media, "legacy media player failed to list subtitle tracks",
       [&](engine_media_handle_t legacy) {
-        return engine_legacy_media_get_subtitle_tracks_json(
+        return LegacyServices()->media_get_subtitle_tracks_json(
             legacy, out_buffer, buffer_size, out_bytes_written);
       });
 }
@@ -872,7 +904,7 @@ engine_result_t engine_media_extract_subtitle(
     const char* output_path_utf8) {
   return RouteMedia(media, "legacy media player failed to extract subtitles",
                     [&](engine_media_handle_t legacy) {
-                      return engine_legacy_media_extract_subtitle(
+                      return LegacyServices()->media_extract_subtitle(
                           legacy, stream_index, output_path_utf8);
                     });
 }
@@ -882,7 +914,7 @@ engine_result_t engine_media_read_frame_rgba(
     engine_frame_desc_t* out_frame_desc) {
   return RouteMedia(media, "legacy media player failed to read video frame",
                     [&](engine_media_handle_t legacy) {
-                      return engine_legacy_media_read_frame_rgba(
+                      return LegacyServices()->media_read_frame_rgba(
                           legacy, out_pixels, out_pixels_size, out_frame_desc);
                     });
 }
@@ -912,7 +944,7 @@ engine_result_t engine_open_game(engine_handle_t public_handle,
   if (handle->backend == BackendKind::kLegacy) {
     result = EnsureLegacyLocked(handle);
     if (result != ENGINE_RESULT_OK) return result;
-    result = engine_legacy_open_game(handle->legacy, game_root_path_utf8,
+    result = LegacyServices()->open_game(handle->legacy, game_root_path_utf8,
                                      startup_script_utf8);
     if (result == ENGINE_RESULT_OK) StartTextTranslationLoading();
     return result;
@@ -963,7 +995,7 @@ engine_result_t engine_open_game_async(engine_handle_t public_handle,
   if (handle->backend == BackendKind::kLegacy) {
     result = EnsureLegacyLocked(handle);
     if (result != ENGINE_RESULT_OK) return result;
-    return engine_legacy_open_game_async(handle->legacy, game_root_path_utf8,
+    return LegacyServices()->open_game_async(handle->legacy, game_root_path_utf8,
                                          startup_script_utf8);
   }
 
@@ -1008,7 +1040,7 @@ engine_result_t engine_get_startup_state(engine_handle_t public_handle,
   const engine_result_t result = Route(
       public_handle, "get_startup_state",
       [&](engine_handle_t legacy) {
-        return engine_legacy_get_startup_state(legacy, out_state);
+        return LegacyServices()->get_startup_state(legacy, out_state);
       },
       [&](DispatchHandle* handle) {
         *out_state = handle->startup_state;
@@ -1027,7 +1059,7 @@ engine_result_t engine_drain_startup_logs(engine_handle_t public_handle,
                                           uint32_t* out_bytes_written) {
   return Route(public_handle, "drain_startup_logs",
                [&](engine_handle_t legacy) {
-                 return engine_legacy_drain_startup_logs(
+                 return LegacyServices()->drain_startup_logs(
                      legacy, out_buffer, buffer_size, out_bytes_written);
                },
                [&](DispatchHandle* handle) {
@@ -1039,7 +1071,7 @@ engine_result_t engine_drain_startup_logs(engine_handle_t public_handle,
 engine_result_t engine_tick(engine_handle_t public_handle, uint32_t delta_ms) {
   return Route(public_handle, "tick",
                [&](engine_handle_t legacy) {
-                 return engine_legacy_tick(legacy, delta_ms);
+                 return LegacyServices()->tick(legacy, delta_ms);
                },
                [&](DispatchHandle* handle) {
                  if (handle->provider_resume_pending) {
@@ -1060,18 +1092,22 @@ engine_result_t engine_tick(engine_handle_t public_handle, uint32_t delta_ms) {
                    }
                    handle->provider_resume_pending = false;
                  }
-                  const engine_result_t result =
-                      handle->provider->tick(handle->runtime, delta_ms);
-                  // Provider runtimes bypass the legacy EngineLoop; drain the
-                  // shared KiriKiri texture recycle queue through the runtime
-                  // glue (no-op when the stub host is linked).
-                  engine_legacy_drain_texture_recycle();
-                  return result;
+                   const engine_result_t result =
+                       handle->provider->tick(handle->runtime, delta_ms);
+                   // Provider runtimes bypass the legacy EngineLoop; drain the
+                   // shared KiriKiri texture recycle queue through the
+                   // installed services table (nothing to drain when no
+                   // KiriKiri glue is installed).
+                   if (const engine_legacy_services_v1_t* services =
+                           LegacyServices()) {
+                     services->drain_texture_recycle();
+                   }
+                   return result;
                });
 }
 
 engine_result_t engine_pause(engine_handle_t public_handle) {
-  return Route(public_handle, "pause", engine_legacy_pause,
+  return Route(public_handle, "pause", LegacyServices()->pause,
                [](DispatchHandle* handle) {
                  handle->provider_resume_pending = false;
                  return PROVIDER_HAS(handle->provider, pause)
@@ -1081,7 +1117,7 @@ engine_result_t engine_pause(engine_handle_t public_handle) {
 }
 
 engine_result_t engine_resume(engine_handle_t public_handle) {
-  return Route(public_handle, "resume", engine_legacy_resume,
+  return Route(public_handle, "resume", LegacyServices()->resume,
                [](DispatchHandle* handle) {
                  if (!PROVIDER_HAS(handle->provider, resume)) {
                    return ENGINE_RESULT_NOT_SUPPORTED;
@@ -1158,7 +1194,7 @@ engine_result_t engine_set_option(engine_handle_t public_handle,
   }
   result = EnsureLegacyLocked(handle);
   if (result != ENGINE_RESULT_OK) return result;
-  return engine_legacy_set_option(handle->legacy, option);
+  return LegacyServices()->set_option(handle->legacy, option);
 }
 
 uint32_t engine_is_text_translation_available(void) {
@@ -1279,7 +1315,7 @@ engine_result_t engine_set_surface_size(engine_handle_t public_handle,
   } else {
     result = EnsureLegacyLocked(handle);
     if (result == ENGINE_RESULT_OK) {
-      result = engine_legacy_set_surface_size(handle->legacy, width, height);
+      result = LegacyServices()->set_surface_size(handle->legacy, width, height);
     }
   }
   if (result == ENGINE_RESULT_OK) {
@@ -1294,7 +1330,7 @@ engine_result_t engine_get_frame_desc(engine_handle_t public_handle,
                                       engine_frame_desc_t* out_frame_desc) {
   return Route(public_handle, "get_frame_desc",
                [&](engine_handle_t legacy) {
-                 return engine_legacy_get_frame_desc(legacy, out_frame_desc);
+                 return LegacyServices()->get_frame_desc(legacy, out_frame_desc);
                },
                [&](DispatchHandle* handle) {
                  return PROVIDER_HAS(handle->provider, get_frame_desc)
@@ -1309,7 +1345,7 @@ engine_result_t engine_read_frame_rgba(engine_handle_t public_handle,
                                        size_t out_pixels_size) {
   return Route(public_handle, "read_frame_rgba",
                [&](engine_handle_t legacy) {
-                 return engine_legacy_read_frame_rgba(legacy, out_pixels,
+                 return LegacyServices()->read_frame_rgba(legacy, out_pixels,
                                                       out_pixels_size);
                },
                [&](DispatchHandle* handle) {
@@ -1325,7 +1361,7 @@ engine_result_t engine_get_godot_native_frame_texture(
     uint32_t* out_width, uint32_t* out_height, uint64_t* out_frame_serial) {
   return Route(public_handle, "get_godot_native_frame_texture",
                 [&](engine_handle_t legacy) {
-                  return engine_legacy_get_godot_native_frame_texture(
+                  return LegacyServices()->get_godot_native_frame_texture(
                       legacy, out_texture_id, out_width, out_height,
                       out_frame_serial);
                 },
@@ -1365,7 +1401,7 @@ engine_result_t engine_get_host_native_window(engine_handle_t public_handle,
                                               void** out_window_handle) {
   return Route(public_handle, "get_host_native_window",
                [&](engine_handle_t legacy) {
-                 return engine_legacy_get_host_native_window(legacy,
+                 return LegacyServices()->get_host_native_window(legacy,
                                                               out_window_handle);
                },
                [&](DispatchHandle* handle) {
@@ -1380,7 +1416,7 @@ engine_result_t engine_get_host_native_view(engine_handle_t public_handle,
                                             void** out_view_handle) {
   return Route(public_handle, "get_host_native_view",
                [&](engine_handle_t legacy) {
-                 return engine_legacy_get_host_native_view(legacy,
+                 return LegacyServices()->get_host_native_view(legacy,
                                                             out_view_handle);
                },
                [&](DispatchHandle* handle) {
@@ -1395,7 +1431,7 @@ engine_result_t engine_send_input(engine_handle_t public_handle,
                                   const engine_input_event_t* event) {
   return Route(public_handle, "send_input",
                [&](engine_handle_t legacy) {
-                 return engine_legacy_send_input(legacy, event);
+                 return LegacyServices()->send_input(legacy, event);
                },
                [&](DispatchHandle* handle) {
                  return PROVIDER_HAS(handle->provider, send_input)
@@ -1416,7 +1452,7 @@ engine_result_t engine_get_text_input_state(
   }
   return Route(public_handle, "get_text_input_state",
                [&](engine_handle_t legacy) {
-                 return engine_legacy_get_text_input_state(legacy, out_state);
+                 return LegacyServices()->get_text_input_state(legacy, out_state);
                },
                [&](DispatchHandle* handle) {
                  engine_text_input_state_t snapshot{};
@@ -1462,7 +1498,7 @@ engine_result_t engine_copy_text_input_text(engine_handle_t public_handle,
   *out_bytes_written = 0;
   return Route(public_handle, "copy_text_input_text",
                [&](engine_handle_t legacy) {
-                 return engine_legacy_copy_text_input_text(
+                 return LegacyServices()->copy_text_input_text(
                      legacy, out_buffer, buffer_size, out_bytes_written);
                },
                [&](DispatchHandle* handle) {
@@ -1478,7 +1514,7 @@ engine_result_t engine_get_main_menu_json(engine_handle_t public_handle,
                                           uint32_t* out_bytes_written) {
   return Route(public_handle, "get_main_menu_json",
                [&](engine_handle_t legacy) {
-                 return engine_legacy_get_main_menu_json(
+                 return LegacyServices()->get_main_menu_json(
                      legacy, out_buffer, buffer_size, out_bytes_written);
                },
                [&](DispatchHandle* handle) {
@@ -1494,7 +1530,7 @@ engine_result_t engine_activate_menu_item(engine_handle_t public_handle,
                                           const char* item_path_utf8) {
   return Route(public_handle, "activate_menu_item",
                [&](engine_handle_t legacy) {
-                 return engine_legacy_activate_menu_item(legacy,
+                 return LegacyServices()->activate_menu_item(legacy,
                                                           item_path_utf8);
                },
                [&](DispatchHandle* handle) {
@@ -1511,7 +1547,7 @@ engine_result_t engine_set_render_target_iosurface(engine_handle_t public_handle
                                                    uint32_t height) {
   return Route(public_handle, "set_render_target_iosurface",
                [&](engine_handle_t legacy) {
-                 return engine_legacy_set_render_target_iosurface(
+                 return LegacyServices()->set_render_target_iosurface(
                      legacy, iosurface_id, width, height);
                },
                [&](DispatchHandle* handle) {
@@ -1529,7 +1565,7 @@ engine_result_t engine_set_render_target_surface(engine_handle_t public_handle,
                                                  uint32_t height) {
   return Route(public_handle, "set_render_target_surface",
                [&](engine_handle_t legacy) {
-                 return engine_legacy_set_render_target_surface(
+                 return LegacyServices()->set_render_target_surface(
                      legacy, native_window, width, height);
                },
                [&](DispatchHandle* handle) {
@@ -1544,7 +1580,7 @@ engine_result_t engine_get_frame_rendered_flag(engine_handle_t public_handle,
                                                uint32_t* out_rendered) {
   return Route(public_handle, "get_frame_rendered_flag",
                [&](engine_handle_t legacy) {
-                 return engine_legacy_get_frame_rendered_flag(legacy,
+                 return LegacyServices()->get_frame_rendered_flag(legacy,
                                                                out_rendered);
                },
                [&](DispatchHandle* handle) {
@@ -1561,7 +1597,7 @@ engine_result_t engine_get_renderer_info(engine_handle_t public_handle,
                                          uint32_t buffer_size) {
   return Route(public_handle, "get_renderer_info",
                [&](engine_handle_t legacy) {
-                 return engine_legacy_get_renderer_info(legacy, out_buffer,
+                 return LegacyServices()->get_renderer_info(legacy, out_buffer,
                                                          buffer_size);
                },
                [&](DispatchHandle* handle) {
@@ -1576,7 +1612,7 @@ engine_result_t engine_get_memory_stats(engine_handle_t public_handle,
                                         engine_memory_stats_t* out_stats) {
   return Route(public_handle, "get_memory_stats",
                [&](engine_handle_t legacy) {
-                 return engine_legacy_get_memory_stats(legacy, out_stats);
+                 return LegacyServices()->get_memory_stats(legacy, out_stats);
                },
                [&](DispatchHandle* handle) {
                  if (out_stats == nullptr ||
@@ -1604,7 +1640,7 @@ engine_result_t engine_get_plugin_debug_info(engine_handle_t public_handle,
                                              uint32_t* out_bytes_written) {
   return Route(public_handle, "get_plugin_debug_info",
                [&](engine_handle_t legacy) {
-                 return engine_legacy_get_plugin_debug_info(
+                 return LegacyServices()->get_plugin_debug_info(
                      legacy, out_buffer, buffer_size, out_bytes_written);
                },
                [&](DispatchHandle* handle) {
@@ -1627,7 +1663,7 @@ engine_result_t engine_set_diagnostic_config(
   std::lock_guard<std::recursive_mutex> guard(handle->mutex);
   result = EnsureLegacyLocked(handle);
   if (result != ENGINE_RESULT_OK) return result;
-  return engine_legacy_set_diagnostic_config(handle->legacy, config);
+  return LegacyServices()->set_diagnostic_config(handle->legacy, config);
 }
 
 engine_result_t engine_mark_diagnostic_event(engine_handle_t public_handle,
@@ -1640,7 +1676,7 @@ engine_result_t engine_mark_diagnostic_event(engine_handle_t public_handle,
   std::lock_guard<std::recursive_mutex> guard(handle->mutex);
   result = EnsureLegacyLocked(handle);
   if (result != ENGINE_RESULT_OK) return result;
-  return engine_legacy_mark_diagnostic_event(handle->legacy, label_utf8,
+  return LegacyServices()->mark_diagnostic_event(handle->legacy, label_utf8,
                                               out_sequence);
 }
 
@@ -1655,7 +1691,7 @@ engine_result_t engine_drain_diagnostic_events(engine_handle_t public_handle,
   std::lock_guard<std::recursive_mutex> guard(handle->mutex);
   result = EnsureLegacyLocked(handle);
   if (result != ENGINE_RESULT_OK) return result;
-  return engine_legacy_drain_diagnostic_events(
+  return LegacyServices()->drain_diagnostic_events(
       handle->legacy, out_buffer, buffer_size, out_bytes_written);
 }
 
@@ -1676,7 +1712,7 @@ const char* engine_get_last_error(engine_handle_t public_handle) {
   if (handle->legacy == nullptr) {
     return g_dispatch_thread_error.c_str();
   }
-  return engine_legacy_get_last_error(handle->legacy);
+  return LegacyServices()->get_last_error(handle->legacy);
 }
 
 }  // extern "C"

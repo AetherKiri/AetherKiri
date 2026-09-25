@@ -174,6 +174,15 @@ endif()
 if(TARGET engine_api)
     target_link_libraries(aether_kiri_godot PRIVATE engine_api)
 endif()
+if(TARGET aether_krkr2_runtime)
+    # Phase 2d link flip: the KiriKiri runtime glue is linked by the Godot
+    # extension host (not engine_api). The extension installs the legacy
+    # services table during library init so dispatch can route the built-in
+    # "kirikiri" backend into the glue.
+    target_link_libraries(aether_kiri_godot PRIVATE aether_krkr2_runtime)
+    target_compile_definitions(aether_kiri_godot PRIVATE
+        AETHERKIRI_WITH_KRKR2=1)
+endif()
 if(TARGET aether_onscripter_runtime)
     target_link_libraries(aether_kiri_godot PRIVATE
         aether_onscripter_runtime)
