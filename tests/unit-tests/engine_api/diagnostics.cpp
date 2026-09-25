@@ -5,6 +5,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -794,4 +796,91 @@ TEST_CASE("text translation state is disabled without the private provider") {
           ENGINE_RESULT_INVALID_ARGUMENT);
   REQUIRE(engine_set_text_translation_skipping(nullptr, 1) ==
           ENGINE_RESULT_INVALID_ARGUMENT);
+}
+
+TEST_CASE("built-in kirikiri backend is exposed through the provider registry") {
+  const uint32_t count = engine_get_runtime_provider_count();
+  REQUIRE(count >= 1);
+  bool listed = false;
+  for (uint32_t index = 0; index < count; ++index) {
+    std::array<char, 32> id{};
+    uint32_t written = 0;
+    REQUIRE(engine_get_runtime_provider_id(
+                index, id.data(), static_cast<uint32_t>(id.size()), &written) ==
+            ENGINE_RESULT_OK);
+    if (std::string(id.data()) == "kirikiri") {
+      listed = true;
+      REQUIRE(written == static_cast<uint32_t>(std::strlen(id.data())));
+    }
+  }
+  REQUIRE(listed);
+
+  // The reserved selection ids stay unclaimable, and the built-in backend
+  // owns "kirikiri" before any external registration can take it.
+  engine_runtime_provider_v1_t claim = kFakeProvider;
+  claim.runtime_id_utf8 = "kirikiri";
+  REQUIRE(engine_register_runtime_provider(&claim) ==
+          ENGINE_RESULT_INVALID_STATE);
+  claim.runtime_id_utf8 = "legacy";
+  REQUIRE(engine_register_runtime_provider(&claim) ==
+          ENGINE_RESULT_INVALID_ARGUMENT);
+  claim.runtime_id_utf8 = "auto";
+  REQUIRE(engine_register_runtime_provider(&claim) ==
+          ENGINE_RESULT_INVALID_ARGUMENT);
+}
+
+TEST_CASE("kirikiri registry entry probes KiriKiri directories") {
+  std::error_code error;
+  const std::filesystem::path fixture = "kirikiri-probe-fixture";
+  std::filesystem::remove_all(fixture, error);
+  REQUIRE(std::filesystem::create_directories(fixture, error));
+  {
+    std::ofstream marker(fixture / "data.xp3", std::ios::binary);
+    marker.close();
+  }
+  REQUIRE(engine_probe_runtime_provider("kirikiri",
+                                        fixture.string().c_str()) == 100);
+  REQUIRE(std::filesystem::remove_all(fixture, error) > 0u);
+
+  REQUIRE(std::filesystem::create_directories(fixture, error));
+  {
+    std::ofstream marker(fixture / "Patch.xp3", std::ios::binary);
+    marker.close();
+  }
+  REQUIRE(engine_probe_runtime_provider("kirikiri",
+                                        fixture.string().c_str()) == 80);
+  REQUIRE(std::filesystem::remove_all(fixture, error) > 0u);
+
+  REQUIRE(std::filesystem::create_directories(fixture, error));
+  REQUIRE(engine_probe_runtime_provider("kirikiri",
+                                        fixture.string().c_str()) == 0);
+  REQUIRE(std::filesystem::remove_all(fixture, error) > 0u);
+}
+
+TEST_CASE("runtime option kirikiri and legacy resolve to the built-in backend") {
+  for (const char* spelling : {"kirikiri", "legacy"}) {
+    Handle handle;
+    engine_option_t runtime_option{};
+    runtime_option.key_utf8 = "runtime";
+    runtime_option.value_utf8 = spelling;
+    REQUIRE(engine_set_option(handle.value, &runtime_option) ==
+            ENGINE_RESULT_OK);
+    REQUIRE(engine_open_game(handle.value, ".", nullptr) == ENGINE_RESULT_OK);
+  }
+}
+
+TEST_CASE("explicit kirikiri selection keeps standalone media available") {
+  Handle handle;
+  engine_option_t runtime_option{};
+  runtime_option.key_utf8 = "runtime";
+  runtime_option.value_utf8 = "kirikiri";
+  REQUIRE(engine_set_option(handle.value, &runtime_option) ==
+          ENGINE_RESULT_OK);
+  REQUIRE(engine_open_game(handle.value, ".", nullptr) == ENGINE_RESULT_OK);
+  engine_media_handle_t media = nullptr;
+  REQUIRE(engine_media_open(handle.value, "missing-video.mp4", &media) ==
+          ENGINE_RESULT_NOT_SUPPORTED);
+  REQUIRE(media == nullptr);
+  REQUIRE(std::string(engine_get_last_error(handle.value)) ==
+          "standalone media playback is not supported in stub builds");
 }
