@@ -29,7 +29,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_SCRIPTS_DIR="$SCRIPT_DIR/build"
+BUILD_SCRIPTS_DIR="$SCRIPT_DIR/scripts"
 
 # Keep the private package opt-in at the build boundary. CI sets
 # AETHERKIRI_WITH_INTERNAL; local builds auto-detect the checked-out package.

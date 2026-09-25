@@ -3,12 +3,6 @@
 /**/cmake-build-android-release/
 /**/cmake-build-android-debug/
 /**/build/
-!/build/
-/build/*
-!/build/build_web.sh
-!/build/patch_web_export.mjs
-!/build/web_export_local_picker.js
-!/build/web_export_range_fs.js
 /**/out/
 /**/bin/
 !/rust/minori_runtime/src/bin/
