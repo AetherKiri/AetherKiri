@@ -234,6 +234,23 @@ void SetLegacyError(DispatchHandle* handle, engine_result_t result,
   SetThreadError(handle->last_error.c_str());
 }
 
+/* The legacy KiriKiri backend is created lazily: hosts that only drive
+ * provider runtimes never pay for a second engine handle, while media,
+ * diagnostics and the legacy backend itself all share one handle exactly
+ * like the eager engine_create-time construction did. */
+engine_result_t EnsureLegacyLocked(DispatchHandle* handle) {
+  if (handle->legacy != nullptr) return ENGINE_RESULT_OK;
+  engine_handle_t legacy = nullptr;
+  const engine_result_t result =
+      engine_legacy_create(&handle->create_desc, &legacy);
+  if (result != ENGINE_RESULT_OK) {
+    SetLegacyError(handle, result, "failed to create the KiriKiri backend");
+    return result;
+  }
+  handle->legacy = legacy;
+  return ENGINE_RESULT_OK;
+}
+
 engine_result_t Unsupported(DispatchHandle* handle, const char* operation) {
   handle->last_error = std::string("runtime provider does not implement ") + operation;
   SetThreadError(handle->last_error.c_str());
@@ -359,12 +376,19 @@ engine_result_t SelectBackendLocked(DispatchHandle* handle,
                                     const char* game_root_path_utf8) {
   if (handle->backend != BackendKind::kUndecided) return ENGINE_RESULT_OK;
 
-  const std::string requested = Normalize(handle->requested_runtime.c_str());
+  std::string requested = Normalize(handle->requested_runtime.c_str());
+  // Older hosts may still request the pre-registry "legacy" spelling.
+  if (requested == "legacy") requested = "kirikiri";
+
+  const auto providers = aetherkiri::runtime::SnapshotProviders();
+  const aetherkiri::runtime::RegisteredProvider* selected = nullptr;
   if (requested.empty() || requested == "auto") {
-    const auto providers = aetherkiri::runtime::SnapshotProviders();
-    const aetherkiri::runtime::RegisteredProvider* selected = nullptr;
     int32_t selected_score = 0;
     for (const auto& candidate : providers) {
+      // The built-in KiriKiri backend is the automatic fallback when no other
+      // runtime claims a directory, not a probe participant; probing it would
+      // let it steal directories that other providers already recognize.
+      if (candidate.is_legacy_builtin) continue;
       int32_t score = 0;
       try {
         score = candidate.api->probe(candidate.api->provider_user_data,
@@ -383,12 +407,13 @@ engine_result_t SelectBackendLocked(DispatchHandle* handle,
         selected_score = score;
       }
     }
-    if (selected != nullptr) handle->provider = selected->api;
-  } else if (requested == "kirikiri" || requested == "legacy") {
-    handle->backend = BackendKind::kLegacy;
-    return ENGINE_RESULT_OK;
+    if (selected == nullptr) {
+      // Nothing claimed the directory: KiriKiri stays the default engine,
+      // exactly like the pre-registry behavior.
+      handle->backend = BackendKind::kLegacy;
+      return EnsureLegacyLocked(handle);
+    }
   } else {
-    const auto providers = aetherkiri::runtime::SnapshotProviders();
     const auto found = std::find_if(
         providers.begin(), providers.end(), [&](const auto& candidate) {
           return candidate.runtime_id == requested;
@@ -398,13 +423,14 @@ engine_result_t SelectBackendLocked(DispatchHandle* handle,
       SetThreadError(handle->last_error.c_str());
       return ENGINE_RESULT_NOT_SUPPORTED;
     }
-    handle->provider = found->api;
+    if (found->is_legacy_builtin) {
+      handle->backend = BackendKind::kLegacy;
+      return EnsureLegacyLocked(handle);
+    }
+    selected = &*found;
   }
 
-  if (handle->provider == nullptr) {
-    handle->backend = BackendKind::kLegacy;
-    return ENGINE_RESULT_OK;
-  }
+  handle->provider = selected->api;
 
   void* runtime = nullptr;
   engine_result_t result = ENGINE_RESULT_INTERNAL_ERROR;
@@ -475,6 +501,8 @@ engine_result_t Route(engine_handle_t public_handle, const char* operation,
   if (result != ENGINE_RESULT_OK) return result;
   std::lock_guard<std::recursive_mutex> guard(handle->mutex);
   if (handle->backend != BackendKind::kProvider) {
+    result = EnsureLegacyLocked(handle);
+    if (result != ENGINE_RESULT_OK) return result;
     return legacy_call(handle->legacy);
   }
   result = provider_call(handle);
@@ -595,11 +623,9 @@ engine_result_t engine_create(const engine_create_desc_t* desc,
     handle->host.reserved_ptr[0] = &handle->fragment_shader_host;
   }
 
-  const auto legacy_result = engine_legacy_create(desc, &handle->legacy);
-  if (legacy_result != ENGINE_RESULT_OK) {
-    delete handle;
-    return legacy_result;
-  }
+  // The legacy KiriKiri handle is created lazily on first use (backend
+  // selection, media, diagnostics), so provider-only hosts never pay for a
+  // second engine handle.
   const auto public_handle = reinterpret_cast<engine_handle_t>(handle);
   {
     std::lock_guard<std::recursive_mutex> guard(g_dispatch_registry_mutex);
@@ -720,7 +746,11 @@ engine_result_t engine_destroy(engine_handle_t public_handle) {
   for (const auto media : owned_media) {
     engine_legacy_media_destroy(media);
   }
-  const auto result = engine_legacy_destroy(handle->legacy);
+  // The legacy handle is created lazily; a provider-only host that never
+  // touched media or diagnostics has nothing to destroy here.
+  const auto result = handle->legacy != nullptr
+                          ? engine_legacy_destroy(handle->legacy)
+                          : ENGINE_RESULT_OK;
   delete handle;
 #if defined(AETHERKIRI_INTERNAL_TEXT_TRANSLATION)
   if (release_text_translation) {
@@ -748,6 +778,8 @@ engine_result_t engine_media_open(engine_handle_t public_handle,
   const auto validation = ValidateHandleLocked(public_handle, &handle);
   if (validation != ENGINE_RESULT_OK) return validation;
   std::lock_guard<std::recursive_mutex> guard(handle->mutex);
+  const auto ensure_result = EnsureLegacyLocked(handle);
+  if (ensure_result != ENGINE_RESULT_OK) return ensure_result;
   engine_media_handle_t legacy_media = nullptr;
   const auto result = engine_legacy_media_open(handle->legacy, path_utf8,
                                                &legacy_media);
@@ -878,6 +910,8 @@ engine_result_t engine_open_game(engine_handle_t public_handle,
   result = PrepareTextTranslationLocked(handle);
   if (result != ENGINE_RESULT_OK) return result;
   if (handle->backend == BackendKind::kLegacy) {
+    result = EnsureLegacyLocked(handle);
+    if (result != ENGINE_RESULT_OK) return result;
     result = engine_legacy_open_game(handle->legacy, game_root_path_utf8,
                                      startup_script_utf8);
     if (result == ENGINE_RESULT_OK) StartTextTranslationLoading();
@@ -927,6 +961,8 @@ engine_result_t engine_open_game_async(engine_handle_t public_handle,
   result = PrepareTextTranslationLocked(handle);
   if (result != ENGINE_RESULT_OK) return result;
   if (handle->backend == BackendKind::kLegacy) {
+    result = EnsureLegacyLocked(handle);
+    if (result != ENGINE_RESULT_OK) return result;
     return engine_legacy_open_game_async(handle->legacy, game_root_path_utf8,
                                          startup_script_utf8);
   }
@@ -1120,6 +1156,8 @@ engine_result_t engine_set_option(engine_handle_t public_handle,
     SetProviderError(handle, result, "runtime provider rejected option");
     return result;
   }
+  result = EnsureLegacyLocked(handle);
+  if (result != ENGINE_RESULT_OK) return result;
   return engine_legacy_set_option(handle->legacy, option);
 }
 
@@ -1239,7 +1277,10 @@ engine_result_t engine_set_surface_size(engine_handle_t public_handle,
         handle->provider->set_surface_size(handle->runtime, width, height);
     SetProviderError(handle, result, "set_surface_size");
   } else {
-    result = engine_legacy_set_surface_size(handle->legacy, width, height);
+    result = EnsureLegacyLocked(handle);
+    if (result == ENGINE_RESULT_OK) {
+      result = engine_legacy_set_surface_size(handle->legacy, width, height);
+    }
   }
   if (result == ENGINE_RESULT_OK) {
     handle->surface_width = width;
@@ -1581,10 +1622,12 @@ engine_result_t engine_set_diagnostic_config(
     engine_handle_t public_handle, const engine_diagnostic_config_t* config) {
   std::lock_guard<std::recursive_mutex> registry_guard(g_dispatch_registry_mutex);
   DispatchHandle* handle = nullptr;
-  const auto result = ValidateHandleLocked(public_handle, &handle);
-  return result == ENGINE_RESULT_OK
-             ? engine_legacy_set_diagnostic_config(handle->legacy, config)
-             : result;
+  auto result = ValidateHandleLocked(public_handle, &handle);
+  if (result != ENGINE_RESULT_OK) return result;
+  std::lock_guard<std::recursive_mutex> guard(handle->mutex);
+  result = EnsureLegacyLocked(handle);
+  if (result != ENGINE_RESULT_OK) return result;
+  return engine_legacy_set_diagnostic_config(handle->legacy, config);
 }
 
 engine_result_t engine_mark_diagnostic_event(engine_handle_t public_handle,
@@ -1592,11 +1635,13 @@ engine_result_t engine_mark_diagnostic_event(engine_handle_t public_handle,
                                              uint64_t* out_sequence) {
   std::lock_guard<std::recursive_mutex> registry_guard(g_dispatch_registry_mutex);
   DispatchHandle* handle = nullptr;
-  const auto result = ValidateHandleLocked(public_handle, &handle);
-  return result == ENGINE_RESULT_OK
-             ? engine_legacy_mark_diagnostic_event(handle->legacy, label_utf8,
-                                                   out_sequence)
-             : result;
+  auto result = ValidateHandleLocked(public_handle, &handle);
+  if (result != ENGINE_RESULT_OK) return result;
+  std::lock_guard<std::recursive_mutex> guard(handle->mutex);
+  result = EnsureLegacyLocked(handle);
+  if (result != ENGINE_RESULT_OK) return result;
+  return engine_legacy_mark_diagnostic_event(handle->legacy, label_utf8,
+                                              out_sequence);
 }
 
 engine_result_t engine_drain_diagnostic_events(engine_handle_t public_handle,
@@ -1605,11 +1650,13 @@ engine_result_t engine_drain_diagnostic_events(engine_handle_t public_handle,
                                                uint32_t* out_bytes_written) {
   std::lock_guard<std::recursive_mutex> registry_guard(g_dispatch_registry_mutex);
   DispatchHandle* handle = nullptr;
-  const auto result = ValidateHandleLocked(public_handle, &handle);
-  return result == ENGINE_RESULT_OK
-             ? engine_legacy_drain_diagnostic_events(
-                   handle->legacy, out_buffer, buffer_size, out_bytes_written)
-             : result;
+  auto result = ValidateHandleLocked(public_handle, &handle);
+  if (result != ENGINE_RESULT_OK) return result;
+  std::lock_guard<std::recursive_mutex> guard(handle->mutex);
+  result = EnsureLegacyLocked(handle);
+  if (result != ENGINE_RESULT_OK) return result;
+  return engine_legacy_drain_diagnostic_events(
+      handle->legacy, out_buffer, buffer_size, out_bytes_written);
 }
 
 const char* engine_get_last_error(engine_handle_t public_handle) {
@@ -1625,6 +1672,9 @@ const char* engine_get_last_error(engine_handle_t public_handle) {
   std::lock_guard<std::recursive_mutex> guard(handle->mutex);
   if (handle->backend == BackendKind::kProvider || !handle->last_error.empty()) {
     return handle->last_error.c_str();
+  }
+  if (handle->legacy == nullptr) {
+    return g_dispatch_thread_error.c_str();
   }
   return engine_legacy_get_last_error(handle->legacy);
 }
