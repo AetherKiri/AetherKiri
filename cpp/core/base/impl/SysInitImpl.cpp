@@ -441,6 +441,7 @@ bool TVPTerminateOnWindowClose = true;
 bool TVPTerminateOnNoWindowStartup = true;
 int TVPTerminateCode = 0;
 bool TVPHostSuppressProcessExit = false;
+bool TVPHostSessionTeardown = false;
 
 //---------------------------------------------------------------------------
 void TVPTerminateAsync(int code) {
@@ -487,6 +488,12 @@ void TVPTerminateSync(int code) {
 //---------------------------------------------------------------------------
 void TVPMainWindowClosed() {
     // called from WindowIntf.cpp, caused by closing all window.
+    if(TVPHostSessionTeardown) {
+        // Host-driven session teardown (engine_destroy) invalidates the
+        // window graph itself; re-entering termination from inside script
+        // engine shutdown would touch half-destroyed state.
+        return;
+    }
     if(TVPTerminateOnWindowClose)
         TVPTerminateAsync();
 }

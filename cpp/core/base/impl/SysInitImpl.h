@@ -37,6 +37,9 @@ extern bool TVPTerminateOnWindowClose;
 extern bool TVPTerminateOnNoWindowStartup;
 extern int TVPTerminateCode;
 extern bool TVPHostSuppressProcessExit;
+// True while the embedded host tears a session down (engine_destroy).
+// Window unregistration during that window must not re-enter termination.
+extern bool TVPHostSessionTeardown;
 
 //---------------------------------------------------------------------------
 
