@@ -21,7 +21,9 @@ func _initialize() -> void:
     test_config = ProbeConfig.load()
     var configured_output_dir := OS.get_environment("AETHERKIRI_PROBE_OUTPUT_DIR").strip_edges()
     if not configured_output_dir.is_empty():
-        output_dir = configured_output_dir
+        output_dir = ProjectSettings.globalize_path(configured_output_dir) \
+            if configured_output_dir.begins_with("user://") \
+            else configured_output_dir
         DirAccess.make_dir_recursive_absolute(output_dir)
     root.size = ProbeConfig.window_size(test_config, Vector2i(
         _env_int("AETHERKIRI_PROBE_WINDOW_W", 1600),

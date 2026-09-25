@@ -978,15 +978,24 @@ engine_result_t engine_get_startup_state(engine_handle_t public_handle,
   if (out_state == nullptr) {
     return ThreadError(ENGINE_RESULT_INVALID_ARGUMENT, "out_state is null");
   }
-  const engine_result_t result = Route(
-      public_handle, "get_startup_state",
-      [&](engine_handle_t legacy) {
-        return engine_legacy_get_startup_state(legacy, out_state);
-      },
-      [&](DispatchHandle* handle) {
-        *out_state = handle->startup_state;
-        return ENGINE_RESULT_OK;
-      });
+  engine_result_t result;
+  {
+    std::lock_guard<std::recursive_mutex> registry_guard(g_dispatch_registry_mutex);
+    DispatchHandle* handle = nullptr;
+    result = ValidateHandleLocked(public_handle, &handle);
+    if (result != ENGINE_RESULT_OK) return result;
+    std::lock_guard<std::recursive_mutex> guard(handle->mutex);
+    if (handle->backend == BackendKind::kProvider) {
+      // A failed asynchronous open stores its diagnostic on the handle.
+      // Route() clears it after every successful query, leaving callers with
+      // an empty error precisely when startup reaches FAILED.
+      *out_state = handle->startup_state;
+      SetThreadError(nullptr);
+      result = ENGINE_RESULT_OK;
+    } else {
+      result = engine_legacy_get_startup_state(handle->legacy, out_state);
+    }
+  }
   if (result == ENGINE_RESULT_OK &&
       *out_state == ENGINE_STARTUP_STATE_SUCCEEDED) {
     StartTextTranslationLoading();
