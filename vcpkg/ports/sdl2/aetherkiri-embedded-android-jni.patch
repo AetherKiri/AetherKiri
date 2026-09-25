@@ -1,8 +1,27 @@
 diff --git a/src/core/android/SDL_android.c b/src/core/android/SDL_android.c
-index 9f9b65e4f..000000000 100644
 --- a/src/core/android/SDL_android.c
 +++ b/src/core/android/SDL_android.c
-@@ -1828,4 +1828,11 @@ void Android_JNI_AudioSetThreadPriority(int iscapture, int device_id)
+@@ -1478,7 +1478,17 @@ static jobject captureBuffer = NULL;
+
+ static void Android_JNI_GetAudioDevices(int *devices, int *length, int max_len, int is_input)
+ {
++    /* SDL is embedded in Godot and has no SDLActivity JavaVM. */
++    if (!mJavaVM || !mAudioManagerClass ||
++        (is_input ? !midGetAudioInputDevices : !midGetAudioOutputDevices)) {
++        *length = 0;
++        return;
++    }
+     JNIEnv *env = Android_JNI_GetEnv();
++    if (!env) {
++        *length = 0;
++        return;
++    }
+     jintArray result;
+
+     if (is_input) {
+@@ -1827,7 +1837,14 @@ void Android_JNI_CloseAudioDevice(const int iscapture)
+
+ void Android_JNI_AudioSetThreadPriority(int iscapture, int device_id)
  {
 +    /* SDL is embedded in Godot and has no SDLActivity JavaVM. */
 +    if (!mJavaVM || !mAudioManagerClass || !midAudioSetThreadPriority) {
@@ -14,7 +33,9 @@ index 9f9b65e4f..000000000 100644
 +    }
      (*env)->CallStaticVoidMethod(env, mAudioManagerClass, midAudioSetThreadPriority, iscapture, device_id);
  }
-@@ -2162,5 +2162,12 @@ void Android_JNI_PollInputDevices(void)
+
+@@ -2161,7 +2178,14 @@ void Android_JNI_InitTouch(void)
+
  void Android_JNI_PollInputDevices(void)
  {
 +    /* SDL is embedded in Godot, which does not initialize SDLActivity JNI. */
@@ -27,3 +48,18 @@ index 9f9b65e4f..000000000 100644
 +    }
      (*env)->CallStaticVoidMethod(env, mControllerManagerClass, midPollInputDevices);
  }
+
+@@ -2605,6 +2629,13 @@ SDL_bool Android_JNI_SetRelativeMouseEnabled(SDL_bool enabled)
+
+ SDL_bool Android_JNI_RequestPermission(const char *permission)
+ {
++    /* SDL is embedded in Godot and has no SDLActivity JavaVM. */
++    if (!mJavaVM || !mActivityClass || !midRequestPermission) {
++        return SDL_FALSE;
++    }
+     JNIEnv *env = Android_JNI_GetEnv();
++    if (!env) {
++        return SDL_FALSE;
++    }
+     jstring jpermission;
+     const int requestCode = 1;
