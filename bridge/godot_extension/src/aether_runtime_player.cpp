@@ -10367,7 +10367,14 @@ public:
                         return bridge_texture;
                     }
                 } else {
-                    if (DirectPresentGodotNativeFrameEnabled()) {
+                    // Artemis publishes a persistent Metal texture whose
+                    // contents are complete at the end of the engine tick.
+                    // The generic two-slot presentation ring intentionally
+                    // waits for a later RenderingServer submission; for
+                    // Artemis that extra slot is the previous E-mote pose and
+                    // becomes a visible one-frame flash after a tap.
+                    if (DirectPresentGodotNativeFrameEnabled() ||
+                        artemis_logical_frame_pacing_) {
                         Ref<Texture2D> native_texture =
                             ResolveBridgeTexture(texture_id);
                         if (native_texture.is_valid()) {
