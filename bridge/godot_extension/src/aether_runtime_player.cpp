@@ -4,9 +4,8 @@
 #if defined(AETHERKIRI_WITH_RFVP)
 #include "rfvp_runtime_provider.h"
 #endif
-#include "GodotGpuBridge.h"
+#include "engine_gpu_bridge.h"
 #include "GodotGpuBarrierShadowPlanner.h"
-#include "ComplexRect.h"
 #include "RuntimeTickPacer.h"
 #include "presentation/RuntimePresentationSprite.h"
 #include "frame_effect_host.h"

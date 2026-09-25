@@ -1,7 +1,7 @@
 #include "rfvp_runtime_provider.h"
 #include "rfvp_host.h"
 #include "engine_runtime_provider.h"
-#include "GodotGpuBridge.h"
+#include "engine_gpu_bridge.h"
 
 #include <cstring>
 #include <memory>

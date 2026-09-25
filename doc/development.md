@@ -80,6 +80,7 @@ Native first, then GPU Bridge where native coverage is incomplete.
 | `bridge/engine_api/include/engine_api.h` | C ABI exported by the engine bridge. |
 | `bridge/engine_api/include/engine_runtime_provider.h` | Versioned runtime-provider ABI behind `AetherRuntimePlayer`. New engines implement this contract instead of another Godot Player. |
 | `bridge/engine_api/include/engine_options.h` | Engine option keys/values shared with host code. |
+| `bridge/engine_api/include/engine_gpu_bridge.h` | Shared GPU bridge ABI (callback tables, blend modes, `tTVPRect`/`tTVPPointD` geometry) consumed by the Godot extension and every engine runtime without krkr2 header paths. |
 | `bridge/engine_api/src/engine_api_dispatch.cpp` | C ABI dispatch: creates, opens, ticks, renders, receives input, and routes between the legacy backend and registered runtime providers. |
 | `bridge/krkr2_runtime/src/krkr2_legacy_engine_api.cpp` | Legacy KiriKiri (krkr2core) implementation of the engine ABI, linked into `engine_api` through the runtime glue. |
 | `bridge/krkr2_runtime/src/krkr2_host_hooks.cpp` | Host services (audio session, texture recycle) the dispatch layer borrows from the KiriKiri runtime. |

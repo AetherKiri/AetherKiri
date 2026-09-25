@@ -1,6 +1,6 @@
 #include "siglus_shared_frame.h"
 #include "siglus_ffi.h"
-#include "GodotGpuBridge.h"
+#include "engine_gpu_bridge.h"
 #import <CoreVideo/CoreVideo.h>
 #import <Metal/Metal.h>
 #include <array>
