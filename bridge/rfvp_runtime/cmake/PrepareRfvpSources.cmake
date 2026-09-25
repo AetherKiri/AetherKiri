@@ -10,18 +10,18 @@ function(rfvp_replace file before after)
     file(WRITE "${file}" "${content}")
 endfunction()
 
-function(aetherkiri_prepare_rfvp root output)
+function(aetherkiri_prepare_rfvp root rfvp_dir output)
     # This directory contains only generated copies, never the git submodule.
     if(NOT output STREQUAL "${CMAKE_CURRENT_BINARY_DIR}/prepared")
         message(FATAL_ERROR "Refusing to refresh rfvp sources outside its build directory")
     endif()
     file(REMOVE_RECURSE "${output}/crates")
     foreach(crate rfvp rfvp-bitmap na_wmv_player na_mpeg2_decoder anzu-hal)
-        file(COPY "${root}/packages/rfvp/crates/${crate}"
+        file(COPY "${rfvp_dir}/crates/${crate}"
              DESTINATION "${output}/crates"
              PATTERN "target" EXCLUDE PATTERN "fonts" EXCLUDE)
     endforeach()
-    file(COPY "${root}/packages/rfvp/LICENSE" "${root}/packages/rfvp/README.md"
+    file(COPY "${rfvp_dir}/LICENSE" "${rfvp_dir}/README.md"
          DESTINATION "${output}")
     file(WRITE "${output}/Cargo.toml"
         "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\n[profile.dev]\ndebug = 0\nopt-level = 1\nincremental = false\n[profile.dev.package.rfvp]\nopt-level = 3\n[profile.release]\ndebug = 0\nlto = \"thin\"\ncodegen-units = 1\n")
