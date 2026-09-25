@@ -229,7 +229,11 @@ if(ENABLE_TESTS AND AETHERKIRI_ENABLE_ONSCRIPTER AND
     set(AETHERKIRI_BUILD_NATIVE_ONSCRIPTER_TESTS ON)
 endif()
 
+# The KiriKiri runtime glue owns the legacy engine implementation and the
+# krkr2core/krkr2plugin linkage; engine_api links it back in so its binary
+# layout is unchanged (Phase 2 dependency inversion).
 if(BUILD_ENGINE_API OR AETHERKIRI_BUILD_NATIVE_ONSCRIPTER_TESTS OR AETHERKIRI_ENABLE_RFVP)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/krkr2_runtime)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/engine_api)
 endif()
 if(AETHERKIRI_ENABLE_ONSCRIPTER AND
