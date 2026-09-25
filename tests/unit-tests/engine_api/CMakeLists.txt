@@ -3,7 +3,7 @@ project(TestEngineApiDiagnostics LANGUAGES CXX)
 
 add_executable(engine-api-diagnostics
     diagnostics.cpp
-    ${CMAKE_SOURCE_DIR}/bridge/engine_api/src/engine_api.cpp
+    ${CMAKE_SOURCE_DIR}/bridge/engine_api/src/engine_api_stub.cpp
     ${CMAKE_SOURCE_DIR}/bridge/engine_api/src/engine_api_dispatch.cpp
     ${CMAKE_SOURCE_DIR}/bridge/engine_api/src/engine_runtime_provider.cpp
     ${CMAKE_SOURCE_DIR}/cpp/core/utils/TextTransform.cpp

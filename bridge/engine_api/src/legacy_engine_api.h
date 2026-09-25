@@ -54,11 +54,9 @@ engine_result_t engine_legacy_media_extract_subtitle(
 engine_result_t engine_legacy_media_read_frame_rgba(
     engine_media_handle_t media, void* out_pixels, size_t out_pixels_size,
     engine_frame_desc_t* out_frame_desc);
-#if defined(ENGINE_API_USE_KRKR2_RUNTIME)
 engine_result_t engine_legacy_get_godot_native_frame_texture(
     engine_handle_t handle, uint64_t* out_texture_id, uint32_t* out_width,
     uint32_t* out_height, uint64_t* out_frame_serial);
-#endif
 engine_result_t engine_legacy_get_host_native_window(engine_handle_t handle,
                                                      void** out_window_handle);
 engine_result_t engine_legacy_get_host_native_view(engine_handle_t handle,
@@ -100,6 +98,12 @@ engine_result_t engine_legacy_drain_diagnostic_events(
     engine_handle_t handle, char* out_buffer, uint32_t buffer_size,
     uint32_t* out_bytes_written);
 const char* engine_legacy_get_last_error(engine_handle_t handle);
+
+// Host-side services implemented by the KiriKiri runtime glue
+// (bridge/krkr2_runtime). The stub engine_api build provides no-op fallbacks
+// so the dispatch layer can call these unconditionally.
+bool engine_legacy_activate_audio_session_for_host(void);
+void engine_legacy_drain_texture_recycle(void);
 
 }  // extern "C"
 

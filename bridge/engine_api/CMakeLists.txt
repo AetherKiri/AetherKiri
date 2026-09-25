@@ -3,22 +3,17 @@ cmake_minimum_required(VERSION 3.16)
 project(engine_api LANGUAGES C CXX)
 
 set(ENGINE_API_COMMON_SOURCES
-    src/engine_api.cpp
     src/engine_api_dispatch.cpp
     src/engine_runtime_provider.cpp
 )
 
 if(IOS OR WEB OR EMSCRIPTEN)
     add_library(engine_api STATIC ${ENGINE_API_COMMON_SOURCES})
-elseif(ANDROID)
-    # On Android, include the JNI entry point (JNI_OnLoad, Surface bridge)
-    # directly in engine_api.so so that System.loadLibrary("engine_api")
-    # triggers JNI_OnLoad and registers JNI native methods.
-    add_library(engine_api SHARED
-        ${ENGINE_API_COMMON_SOURCES}
-        src/android_jni_bridge.cpp
-    )
 else()
+    # On Android, the JNI entry point (JNI_OnLoad, Surface bridge) lives in
+    # the KiriKiri runtime glue archive and lands in engine_api.so through
+    # the aether_krkr2_runtime link, so System.loadLibrary("engine_api")
+    # still triggers JNI_OnLoad and registers JNI native methods.
     add_library(engine_api SHARED ${ENGINE_API_COMMON_SOURCES})
 endif()
 
@@ -43,66 +38,45 @@ target_include_directories(engine_api
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        # Runtime-neutral text transform hook shared with the engine sources.
+        # The symbol implementation itself is provided by the linked runtime
+        # (core_utils_module through aether_krkr2_runtime, or the standalone
+        # compile used by the unit tests).
+        ${CMAKE_SOURCE_DIR}/cpp/core/utils
 )
-if(TARGET krkr2core AND TARGET krkr2plugin)
-    target_compile_definitions(engine_api PRIVATE ENGINE_API_USE_KRKR2_RUNTIME)
-    if(WEB OR EMSCRIPTEN)
-        # The Web side module force-loads krkr2plugin once at the final link.
-        # Keep this dependency normal here so CMake can repeat cyclic static
-        # libs without whole-archive duplicate symbols.
-        target_link_libraries(engine_api PRIVATE krkr2core krkr2plugin)
-    else()
-        # Keep static NCB registration objects from krkr2plugin alive in the
-        # final native engine_api link as well.
-        set(_KRKR2PLUGIN_LINK_ITEM "$<LINK_LIBRARY:WHOLE_ARCHIVE,krkr2plugin>")
-        target_link_libraries(engine_api PRIVATE krkr2core ${_KRKR2PLUGIN_LINK_ITEM})
 
-        if(LINUX)
-            # The runtime modules have circular static-library dependencies.
-            # Re-scan them after all consumers have been seen so platform
-            # implementations from core_environ_module are retained.
-            target_link_libraries(engine_api PRIVATE
-                "$<LINK_GROUP:RESCAN,core_base_module,core_environ_module,core_extension_module,core_plugin_module,core_movie_module,core_sound_module,core_visual_module,core_utils_module,tvpgl_simd,tjs2>"
-            )
-        endif()
-        set_property(TARGET engine_api PROPERTY LINK_LIBRARY_OVERRIDE_krkr2plugin WHOLE_ARCHIVE)
-    endif()
+if(TARGET aether_krkr2_runtime)
+    # The legacy KiriKiri implementation (engine_legacy_* symbols, krkr2core
+    # and krkr2plugin linkage, private runtime extensions) lives in the
+    # runtime glue and is folded into this library at the final link.
+    target_link_libraries(engine_api PRIVATE aether_krkr2_runtime)
+else()
+    # No KiriKiri runtime is available: compile the standalone stub
+    # implementation of the engine_legacy_* surface instead.
+    target_sources(engine_api PRIVATE src/engine_api_stub.cpp)
 endif()
 
-if(BUILD_GPU_BRIDGE)
-    target_compile_definitions(engine_api PRIVATE KRKR_ENABLE_GPU_BRIDGE=1)
-endif()
-
-if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_catsystem2)
-    aetherinternal_extend_catsystem2(engine_api)
-endif()
-
-if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_artemis)
-    aetherinternal_extend_artemis(engine_api)
-endif()
-
-if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_wa2)
-    aetherinternal_extend_wa2(engine_api)
-endif()
-
-if(AETHERKIRI_INTERNAL_ENABLED AND
-   COMMAND aetherinternal_extend_text_translation)
+if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_text_translation)
     aetherinternal_extend_text_translation(engine_api)
 endif()
 
-if(TARGET aetherinternal_artemis_lua)
-    set(AETHERKIRI_ARTEMIS_LUA_PREFIX_HEADER
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/artemis_lua_symbol_prefix.h")
-    if(MSVC)
-        target_compile_options(aetherinternal_artemis_lua PRIVATE
-            /FI"${AETHERKIRI_ARTEMIS_LUA_PREFIX_HEADER}")
-        target_compile_options(engine_api PRIVATE
-            /FI"${AETHERKIRI_ARTEMIS_LUA_PREFIX_HEADER}")
-    else()
-        target_compile_options(aetherinternal_artemis_lua PRIVATE
-            -include "${AETHERKIRI_ARTEMIS_LUA_PREFIX_HEADER}")
-        target_compile_options(engine_api PRIVATE
-            -include "${AETHERKIRI_ARTEMIS_LUA_PREFIX_HEADER}")
+# The dispatch layer declares the private runtime registration entry points
+# (AetherInternalRegister*Runtime) and their provider sources live in the
+# runtime glue. Mirror the glue-side build gates so the extern declarations
+# always match the symbols that will be present at link time.
+if(AETHERKIRI_INTERNAL_ENABLED)
+    if(COMMAND aetherinternal_extend_catsystem2)
+        target_compile_definitions(engine_api PRIVATE
+            AETHERKIRI_INTERNAL_CATSYSTEM2=1)
+    endif()
+    if(COMMAND aetherinternal_extend_artemis)
+        target_compile_definitions(engine_api PRIVATE
+            AETHERKIRI_INTERNAL_ARTEMIS=1)
+    endif()
+    if(COMMAND aetherinternal_extend_wa2)
+        target_compile_definitions(engine_api PRIVATE
+            AETHERKIRI_INTERNAL_WA2=1
+            AETHERKIRI_ENABLE_WA2_RUNTIME=1)
     endif()
 endif()
 

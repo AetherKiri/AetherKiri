@@ -13,7 +13,7 @@ configure_file(test_config.h.in test_config.h)
 if(AETHERKIRI_INTERNAL_ENABLED AND
    COMMAND aetherinternal_add_artemis_tests)
     aetherinternal_add_artemis_tests(
-        "${CMAKE_SOURCE_DIR}/bridge/engine_api/src/artemis_lua_symbol_prefix.h")
+        "${CMAKE_SOURCE_DIR}/bridge/krkr2_runtime/src/artemis_lua_symbol_prefix.h")
 endif()
 
 add_subdirectory(unit-tests/plugins)
