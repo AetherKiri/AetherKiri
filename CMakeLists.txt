@@ -230,8 +230,8 @@ endif()
 # Keep it out of unsupported native targets, but do not make Linux the only
 # product platform that can register Minori.
 if(AETHERKIRI_ENABLE_MINORI AND BUILD_GODOT_EXTENSION AND
-   (LINUX OR APPLE OR ANDROID OR EMSCRIPTEN))
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/rust/minori_runtime)
+    (LINUX OR APPLE OR ANDROID OR EMSCRIPTEN))
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/packages/AetherMinori)
 endif()
 if(AETHERKIRI_ENABLE_RFVP)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/rfvp_runtime)
