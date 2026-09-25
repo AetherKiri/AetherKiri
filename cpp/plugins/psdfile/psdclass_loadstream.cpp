@@ -7,6 +7,13 @@
 #include <memory>
 #include <mutex>
 
+#ifdef max
+#undef max
+#endif
+#ifdef min
+#undef min
+#endif
+
 namespace {
 
 // Adapt a KiriKiri storage stream to psdparse's shared, seekable byte source.

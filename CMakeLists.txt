@@ -55,6 +55,17 @@ endif()
 
 project(krkr2)
 
+# Keep every MSVC target, including optional provider packages, on the same
+# CRT for each configuration.  Without this, a Debug static provider can be
+# linked into the host DLL with /MD and produce LNK2038 RuntimeLibrary and
+# _ITERATOR_DEBUG_LEVEL mismatches.
+if(MSVC)
+    string(REPLACE "/utf-8" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+    set(CMAKE_MSVC_RUNTIME_LIBRARY
+        "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
+        CACHE STRING "MSVC runtime library" FORCE)
+endif()
+
 if(ANDROID)
     add_compile_options(-Wno-inconsistent-missing-override)
 endif()
@@ -157,7 +168,7 @@ set(KRKR2CORE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cpp/core)
 set(KRKR2PLUGIN_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cpp/plugins)
 
 if(MSVC)
-    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/EHsc>" "/MP" "/utf-8")
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/EHsc>" "/MP")
     add_link_options(
         "/ignore:4099"
         "$<$<CONFIG:Debug>:/INCREMENTAL>"

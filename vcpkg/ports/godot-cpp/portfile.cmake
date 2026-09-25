@@ -17,6 +17,7 @@ vcpkg_cmake_configure(
     OPTIONS
         "-DPython3_EXECUTABLE=${PYTHON3}"
         "-DGODOTCPP_DISABLE_EXCEPTIONS=OFF"
+    OPTIONS_DEBUG "-DGODOTCPP_DEBUG_CRT=ON"
 )
 
 vcpkg_cmake_install()
