@@ -9486,6 +9486,16 @@ void tTJSNI_BaseLayer::DrawText(tjs_int x, tjs_int y, const ttstr &text,
                                 tjs_int shadowlevel, tjs_uint32 shadowcolor,
                                 tjs_int shadowwidth, tjs_int shadowofsx,
                                 tjs_int shadowofsy) {
+    // A few KAG3 message renderers use the edge parameters to draw a white
+    // glyph with a white outline.  The original runtime keeps the outline
+    // visible through its contrast handling; passing the identical colours
+    // through here makes the glyph disappear on a light background.  Keep
+    // the authored glyph colour and provide the missing contrast only for an
+    // edge draw (high emphasis, finite width, no shadow offset).
+    if(shadowlevel > 255 && shadowwidth > 0 && shadowofsx == 0 &&
+       shadowofsy == 0 && color == shadowcolor) {
+        shadowcolor = 0x000000;
+    }
     if(TVPLayerErrorTraceTake() &&
        (text.AsStdString().find("直太") != std::string::npos ||
         GetName().AsStdString().find("直太") != std::string::npos)) {

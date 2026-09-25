@@ -2,7 +2,7 @@
 
 [English](verified_games.md)
 
-最后更新：2026-09-21
+最后更新：2026-09-26
 
 本文档记录已经用 AetherKiri 手动 smoke test 或 flow test 过的游戏。它是兼容性记录，
 不代表每条路线、每个视频、每个插件路径或每个存档状态都已经完整验证。
@@ -25,7 +25,8 @@
 | ましろ色シンフォニー -Love is pure white- Remake for FHD | macOS app；iOS/iPadOS iPad app build | 导入、启动、标题/菜单渲染、场景/文字渲染、音频播放和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | Clover Day's | Linux x64 release app | 导入、启动、初始标题/UI 与文本渲染，以及基础输入 | 冒烟验证通过 | [@KYoiRyi](https://github.com/KYoiRyi) | 本地游戏文件不提交到仓库。 |
 | 金色ラブリッチェ -Golden Time- | Linux x64 release app；macOS app；iOS/iPadOS iPad app build | 导入、启动、初始标题/UI 与文本渲染，以及基础输入 | 冒烟验证通过 | [@KYoiRyi](https://github.com/KYoiRyi)、[@MadCcc](https://github.com/MadCcc) | 本地游戏文件不提交到仓库。 |
-| もっと！孕ませ！炎のおっぱい異世界 おっぱいバニー学園！ | Web release（Chrome，Vite 本地服务器）；macOS debug 和 release app；iOS/iPadOS iPad app build；Android release APK | 启动、脚本/插件加载、标题/菜单渲染、基础输入、继续/存读档流程、macOS debug 下 MPEG-1/MP2 场景内视频渲染并自然播放完成、CJK/符号字体渲染，以及 Web 端 IndexedDB `/userfs` 持久化行为 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。Web 部署仍需要 COOP/COEP 头。需要 Live2D 的游戏仍需单独提供 Web 版 Live2D Cubism Core 专有运行时。 |
+| もっと！孕ませ！炎のおっぱい異世界 おっぱいバニー学園！ | Web release（Chrome，Vite 本地服务器）；macOS debug 和 release app；iOS/iPadOS iPad app build；Android release APK | 启动、脚本/插件加载、标题/菜单渲染、基础输入、继续/存读档流程、场景鉴赏入口和场景列表渲染、macOS debug 下 MPEG-1/MP2 场景内视频渲染并自然播放完成、CJK/符号字体渲染，以及 Web 端 IndexedDB `/userfs` 持久化行为 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。Web 部署仍需要 COOP/COEP 头。需要 Live2D 的游戏仍需单独提供 Web 版 Live2D Cubism Core 专有运行时。 |
+| 【KR】异世界魔法学园 | iOS/iPadOS iPad debug app build | 启动、第一个存档读取、浴室场景/文字渲染、CJK 对话描边对比度和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 游戏原始对白字号为 26px；本地游戏文件不提交到仓库。 |
 | もっと！孕ませ！炎のおっぱい異世界 おっぱいスパイ学園！ | macOS debug app；iOS/iPadOS iPad app build | 导入、启动、标题/菜单渲染、复合 BMP/KSD 存档的继续游戏流程，以及基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | 喫茶ステラと死神の蝶 | macOS release app；iOS/iPadOS iPad release app build；Android release APK | 启动、标题/菜单渲染、标题背景快速切换/输入压力、继续游戏流程、场景/文字渲染，以及 CJK/符号字体渲染 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | RIDDLE JOKER | macOS release app；iOS/iPadOS iPad release app build；Android release APK | 启动、标题/菜单渲染、标题动画/图层、继续游戏流程、场景/文字渲染、对话输入压力、存读档冒烟，以及 CJK/符号字体渲染 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
