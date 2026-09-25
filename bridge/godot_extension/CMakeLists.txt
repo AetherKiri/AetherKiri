@@ -4,6 +4,14 @@ project(aether_kiri_godot LANGUAGES C CXX)
 
 if(APPLE)
     enable_language(Swift)
+    # Xcode 16.2's swiftc hands the emitted .swiftmodule to ld when the
+    # single-invocation incremental compile+link of the extension carries its
+    # full static link closure ("ld: unknown file type in ...swiftmodule").
+    # Whole-module mode — the Release default, which links the identical
+    # closure on the same CI image — does not hit the driver bug, so use it
+    # for Debug as well.
+    string(REPLACE "-incremental" "-wmo" CMAKE_Swift_FLAGS_DEBUG
+        "${CMAKE_Swift_FLAGS_DEBUG}")
 endif()
 
 find_package(unofficial-godot-cpp CONFIG REQUIRED)
