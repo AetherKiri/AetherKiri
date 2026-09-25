@@ -103,6 +103,21 @@ set(AETHERKIRI_FRAME_EFFECT_HOST_API_VERSION 2)
 set(AETHERKIRI_INTERNAL_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/packages/AetherInternal"
     CACHE PATH "path to an AetherInternal package checkout")
+# Local checkouts for the runtime submodules. Point these at a working copy
+# to iterate on a runtime without committing a gitlink bump (same pattern as
+# AETHERKIRI_INTERNAL_DIR).
+set(AETHERKIRI_ONSCRIPTERYURI_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/packages/OnscripterYuri"
+    CACHE PATH "path to an OnscripterYuri runtime checkout")
+set(AETHERKIRI_SIGLUS_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/packages/AetherSiglus"
+    CACHE PATH "path to a siglus_rs runtime checkout")
+set(AETHERKIRI_MINORI_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/packages/AetherMinori"
+    CACHE PATH "path to an AetherMinori runtime checkout")
+set(AETHERKIRI_RFVP_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/packages/rfvp"
+    CACHE PATH "path to an rfvp runtime checkout")
 
 include(cmake/AetherKiriBinaryProtection.cmake)
 
@@ -231,7 +246,7 @@ endif()
 # product platform that can register Minori.
 if(AETHERKIRI_ENABLE_MINORI AND BUILD_GODOT_EXTENSION AND
     (LINUX OR APPLE OR ANDROID OR EMSCRIPTEN))
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/packages/AetherMinori)
+    add_subdirectory(${AETHERKIRI_MINORI_DIR})
 endif()
 if(AETHERKIRI_ENABLE_RFVP)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/rfvp_runtime)
