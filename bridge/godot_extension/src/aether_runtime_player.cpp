@@ -9363,6 +9363,11 @@ public:
         release_rd_texture(true);
         release_presentation_textures(true);
         frame_texture_.unref();
+        last_native_texture_id_ = 0;
+        last_native_texture_.unref();
+        last_native_texture_width_ = 0;
+        last_native_texture_height_ = 0;
+        last_native_texture_serial_ = UINT64_MAX;
         frame_texture_backend_ = "none";
     }
 
@@ -10336,6 +10341,13 @@ public:
                     // Discard the delayed slot so the deleted character is
                     // not presented once more before the new source.
                     release_presentation_textures(true);
+                    // The provider replaced its GPU scene with a CPU handoff.
+                    // Do not reuse the old native texture across that boundary.
+                    last_native_texture_id_ = 0;
+                    last_native_texture_.unref();
+                    last_native_texture_width_ = 0;
+                    last_native_texture_height_ = 0;
+                    last_native_texture_serial_ = UINT64_MAX;
                 }
                 if (normalized_backend == ENGINE_RENDERER_GPU_BRIDGE) {
                     const auto present_started = std::chrono::steady_clock::now();
@@ -10383,6 +10395,11 @@ public:
                             frame_texture_.unref();
                             frame_texture_serial_ = serial;
                             frame_texture_backend_ = "godot_native_gpu_direct";
+                            last_native_texture_id_ = texture_id;
+                            last_native_texture_ = native_texture;
+                            last_native_texture_width_ = width;
+                            last_native_texture_height_ = height;
+                            last_native_texture_serial_ = serial;
                             return native_texture;
                         }
                     }
@@ -10404,10 +10421,37 @@ public:
                         frame_texture_.unref();
                         frame_texture_serial_ = serial;
                         frame_texture_backend_ = "godot_native_gpu";
+                        last_native_texture_id_ = texture_id;
+                        last_native_texture_ = native_texture;
+                        last_native_texture_width_ = width;
+                        last_native_texture_height_ = height;
+                        last_native_texture_serial_ = serial;
                         return native_texture;
                     }
                 }
             }
+        }
+
+        // Artemis can briefly report that its current native texture is not
+        // available while a click is committing the next E-mote composition.
+        // Falling through to engine_read_frame_rgba here publishes the older
+        // CPU compatibility frame for one host frame, which is the visible
+        // flash back to the previous pose. Keep the last valid provider-owned
+        // Metal texture on screen until the next native texture is available.
+        if (artemis_logical_frame_pacing_ && last_native_texture_id_ != 0) {
+            Ref<Texture2D> held_texture =
+                ResolveBridgeTexture(last_native_texture_id_);
+            if (held_texture.is_valid()) {
+                frame_texture_serial_ = last_native_texture_serial_;
+                frame_texture_backend_ = "godot_native_gpu_direct_hold";
+                last_native_texture_ = held_texture;
+                return held_texture;
+            }
+            last_native_texture_id_ = 0;
+            last_native_texture_.unref();
+            last_native_texture_width_ = 0;
+            last_native_texture_height_ = 0;
+            last_native_texture_serial_ = UINT64_MAX;
         }
 
         engine_frame_desc_t desc{};
@@ -12479,6 +12523,14 @@ private:
         runtime_tick_quantizer_;
     bool artemis_logical_frame_pacing_ = false;
     Ref<ImageTexture> frame_texture_;
+    // Keep the last provider-owned native texture alive across a transient
+    // native-frame query failure. Artemis otherwise falls through to the CPU
+    // compatibility frame for one tick, producing a visible stale-pose flash.
+    uint64_t last_native_texture_id_ = 0;
+    Ref<Texture2D> last_native_texture_;
+    uint32_t last_native_texture_width_ = 0;
+    uint32_t last_native_texture_height_ = 0;
+    uint64_t last_native_texture_serial_ = UINT64_MAX;
     PackedByteArray frame_rgba_buffer_;
     Ref<Texture2DRD> frame_rd_texture_;
     RID frame_rd_rid_;
