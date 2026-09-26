@@ -53,7 +53,7 @@ else()
     set(CMAKE_TOOLCHAIN_FILE $ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake)
 endif()
 
-project(krkr2)
+project(AetherKiri)
 
 # vcpkg's OpenAL target carries raw "-Wl,-framework,..." items in its
 # interface. Imported targets are directory-scoped: every scope that calls
