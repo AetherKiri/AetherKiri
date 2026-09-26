@@ -16816,6 +16816,15 @@ func _should_suppress_touch_drag(pointer_id: int) -> bool:
 func _hold_next_present_after_input(frames: int = POST_INPUT_PRESENT_HOLD_FRAMES, force: bool = false) -> void:
     if frames <= 0:
         return
+    # Artemis E-mote updates are published by the same tick that handles the
+    # click. Holding the host TextureRect here leaves the previous texture on
+    # screen for one extra frame, which is visible as a flash back to the old
+    # face/pose on every tap. Its GPU presenter already has an atomic frame
+    # boundary, so do not add a second, stale-frame hold in the shell.
+    if player != null:
+        var renderer_info := String(player.get_renderer_info()).to_lower()
+        if renderer_info.find("\"runtime\":\"artemis\"") >= 0 or renderer_info.find("runtime=artemis") >= 0:
+            return
     var now := Time.get_ticks_msec()
     if present_hold_frames > 0 and not force:
         return
