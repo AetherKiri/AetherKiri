@@ -8,6 +8,7 @@ const DIRECTORY_RUNTIME_KINDS := [
     "minori",
     "onscripter",
     "siglus",
+    "softpal",
     "wa2",
 ]
 const RFVP_ENCODING_FIELD := "rfvpEncoding"

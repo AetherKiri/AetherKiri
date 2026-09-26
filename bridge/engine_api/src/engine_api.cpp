@@ -3514,6 +3514,21 @@ engine_result_t engine_media_set_rate(engine_media_handle_t media,
   return ENGINE_RESULT_OK;
 }
 
+engine_result_t engine_media_set_volume(engine_media_handle_t media,
+                                        double volume) {
+  if (media == nullptr || !std::isfinite(volume) || volume < 0.0 ||
+      volume > 1.0) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "media volume must be between 0 and 1");
+  }
+  auto* impl = reinterpret_cast<engine_media_handle_s*>(media);
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  if (impl->player == nullptr) return ENGINE_RESULT_INVALID_STATE;
+  impl->player->SetAudioVolume(static_cast<long>(std::lround(volume * 100000.0)));
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
 engine_result_t engine_media_get_state(engine_media_handle_t media,
                                        engine_media_state_t* out_state) {
   if (media == nullptr || out_state == nullptr ||
@@ -5134,6 +5149,14 @@ engine_result_t engine_media_set_rate(engine_media_handle_t media,
                                       double playback_rate) {
   (void)media;
   (void)playback_rate;
+  return SetThreadErrorAndReturn(ENGINE_RESULT_NOT_SUPPORTED,
+                                 "media playback is unavailable");
+}
+
+engine_result_t engine_media_set_volume(engine_media_handle_t media,
+                                        double volume) {
+  (void)media;
+  (void)volume;
   return SetThreadErrorAndReturn(ENGINE_RESULT_NOT_SUPPORTED,
                                  "media playback is unavailable");
 }

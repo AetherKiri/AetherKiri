@@ -1685,6 +1685,7 @@ var backend: OptionButton
 var game_path: LineEdit
 var restart_notice: Label
 var viewport: TextureRect
+var softpal_aspect_mode := 1
 var perf: Label
 var perf_layer: CanvasLayer
 var perf_panel: PanelContainer
@@ -1896,6 +1897,9 @@ var frame_enhancement_custom_chain := PackedStringArray([
 ])
 var game_running := false
 var runtime_dialog_input: LineEdit = null
+var softpal_name_input_layer: Control = null
+var softpal_name_input: LineEdit = null
+var softpal_original_window_title := ""
 var video_playing := false
 var video_view: Control
 var video_texture: TextureRect
@@ -4167,6 +4171,9 @@ func _apply_engine_options() -> void:
     player.set_engine_option("console_log_file", "1" if console_log_file else "0")
     player.set_engine_option("trace_log", "1" if effective_trace_log else "0")
     player.set_engine_option("input_trace", "1" if effective_input_trace else "0")
+    player.set_engine_option(
+        "runtime_arguments", "\n".join(OS.get_cmdline_user_args())
+    )
     if player.has_method("is_text_translation_available") and player.is_text_translation_available():
         _restore_native_translation_model_access()
         player.set_engine_option(
@@ -4603,14 +4610,26 @@ func _layout_game_viewport(window_size: Vector2) -> void:
             max(1.0, float(viewport.texture.get_height()))
         )
 
-    var scale := minf(window_size.x / tex_size.x, window_size.y / tex_size.y)
-    scale = minf(scale, _max_game_view_scale())
-    if scale <= 0.0:
-        scale = 1.0
-    var draw_size := Vector2(
-        floor(tex_size.x * scale),
-        floor(tex_size.y * scale)
-    )
+    var draw_size := window_size
+    if softpal_aspect_mode == 2:
+        draw_size = tex_size
+    elif softpal_aspect_mode in [1, 3]:
+        var fit_scale := minf(
+            window_size.x / tex_size.x,
+            window_size.y / tex_size.y
+        )
+        var scale := fit_scale if softpal_aspect_mode == 1 else maxf(
+            window_size.x / tex_size.x,
+            window_size.y / tex_size.y
+        )
+        if softpal_aspect_mode == 1:
+            scale = minf(scale, _max_game_view_scale())
+        if scale <= 0.0:
+            scale = 1.0
+        draw_size = Vector2(
+            floor(tex_size.x * scale),
+            floor(tex_size.y * scale)
+        )
     viewport.position = ((window_size - draw_size) * 0.5).floor()
     viewport.size = draw_size
     viewport.custom_minimum_size = draw_size
@@ -10711,6 +10730,8 @@ func _game_runtime_kind(path: String) -> String:
         # before falling back to the legacy KiriKiri host.
         if int(player.probe_runtime(RUNTIME_CATSYSTEM2, root)) > 0:
             return RUNTIME_CATSYSTEM2
+        if int(player.probe_runtime("softpal", root)) > 0:
+            return "softpal"
         if int(player.probe_runtime(RUNTIME_MINORI, root)) > 0:
             return RUNTIME_MINORI
     return runtime_kind
@@ -11563,6 +11584,7 @@ func _return_to_library_after_runtime_exit() -> void:
     _clear_game_input_capture()
     _finalize_active_game_session()
     game_running = false
+    softpal_aspect_mode = 1
     _sync_debug_console_state()
     app_lifecycle_paused = false
     cached_startup_state = STARTUP_IDLE
@@ -11584,6 +11606,7 @@ func _return_to_library_after_runtime_exit() -> void:
         game_view.visible = false
     if player != null:
         player.release_frame_texture()
+        _cleanup_softpal_platform_ui()
         player.destroy_engine()
     last_texture_size = Vector2i.ZERO
     _set_game_runtime_orientation(false)
@@ -12015,6 +12038,7 @@ func _switch_runtime_player(runtime_kind: String) -> bool:
         # Runtime implementations live behind one stable Godot-facing player.
         # Recreate only its engine handle so UI signals, frame effects, and
         # platform services do not need one Node implementation per backend.
+        _cleanup_softpal_platform_ui()
         player.destroy_engine()
         current_player_runtime_kind = normalized
     if not _ensure_player_initialized():
@@ -12048,6 +12072,117 @@ func _parse_platform_form(argument: String) -> Dictionary:
 func _on_runtime_platform_request(operation: String, argument: String) -> void:
     if player == null:
         return
+    if operation == "softpal_window_size":
+        if not _is_touch_platform() and get_window().mode == Window.MODE_WINDOWED:
+            var fields := _parse_platform_form(argument)
+            get_window().size = Vector2i(
+                clampi(int(fields.get("width", "1280")), 1, 16384),
+                clampi(int(fields.get("height", "720")), 1, 16384)
+            )
+        return
+    if operation == "softpal_aspect_mode":
+        softpal_aspect_mode = clampi(int(argument), 0, 3)
+        _layout_game_viewport(get_viewport_rect().size)
+        return
+    if operation == "softpal_cursor_visible":
+        if not _is_touch_platform() and game_running:
+            var fields := _parse_platform_form(argument)
+            Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if String(
+                fields.get("visible", "1")
+            ) == "1" else Input.MOUSE_MODE_HIDDEN
+        return
+    if operation == "softpal_open_target":
+        var target := String(_parse_platform_form(argument).get("target", ""))
+        if not target.is_empty():
+            OS.shell_open(target)
+        return
+    if operation == "softpal_window_geometry":
+        var screen := get_window().current_screen
+        if screen < 0 or screen >= DisplayServer.get_screen_count():
+            screen = DisplayServer.get_primary_screen()
+        if screen < 0:
+            screen = 0
+        var monitor_size := DisplayServer.screen_get_size(screen)
+        var monitor_position := DisplayServer.screen_get_position(screen)
+        var window_position := get_window().position
+        player.submit_platform_response(
+            "softpal_window_geometry",
+            "monitor_width=%d&monitor_height=%d&window_x=%d&window_y=%d&monitor_x=%d&monitor_y=%d" % [
+                monitor_size.x,
+                monitor_size.y,
+                window_position.x,
+                window_position.y,
+                monitor_position.x,
+                monitor_position.y,
+            ]
+        )
+        return
+    if operation == "softpal_cursor_warp":
+        var fields := _parse_platform_form(argument)
+        var game_size := Vector2(
+            maxi(1, int(fields.get("width", "1"))),
+            maxi(1, int(fields.get("height", "1")))
+        )
+        var game_position := Vector2(
+            float(fields.get("x", "0")),
+            float(fields.get("y", "0"))
+        )
+        if get_window().has_focus():
+            viewport.get_viewport().warp_mouse(
+                _map_surface_point_to_viewport(
+                    game_position * _game_input_surface_size() / game_size
+                )
+            )
+        return
+    if operation == "softpal_window_title":
+        if softpal_original_window_title.is_empty():
+            softpal_original_window_title = get_window().title
+        get_window().title = String(
+            _parse_platform_form(argument).get("title", "")
+        )
+        return
+    if operation == "softpal_name_editor":
+        _handle_softpal_name_editor(_parse_platform_form(argument))
+        return
+    if operation == "softpal_file_dialog":
+        _show_softpal_file_dialog(_parse_platform_form(argument))
+        return
+    if operation == "softpal_stand_dialog":
+        _show_softpal_stand_dialog(_parse_platform_form(argument))
+        return
+    if operation == "softpal_http_get":
+        var url := String(_parse_platform_form(argument).get("url", ""))
+        var request := HTTPRequest.new()
+        request.timeout = 15.0
+        request.max_redirects = 8
+        request.use_threads = true
+        request.request_completed.connect(func(
+            result: int,
+            response_code: int,
+            _headers: PackedStringArray,
+            body: PackedByteArray
+        ) -> void:
+            var ok := result == HTTPRequest.RESULT_SUCCESS and \
+                response_code >= 200 and response_code < 400 and \
+                body.size() <= 2046
+            if player != null:
+                player.submit_platform_response(
+                    "softpal_http_get",
+                    "ok=1&body=%s" % Marshalls.raw_to_base64(body).uri_encode()
+                        if ok else "ok=0"
+                )
+            request.queue_free()
+        )
+        add_child(request)
+        var started := request.request(
+            url,
+            PackedStringArray(["Accept-Encoding: identity"]),
+            HTTPClient.METHOD_GET
+        )
+        if started != OK:
+            request.queue_free()
+            player.submit_platform_response("softpal_http_get", "ok=0")
+        return
     if operation == "minori_select":
         _show_minori_select(argument)
         return
@@ -12066,6 +12201,260 @@ func _on_runtime_platform_request(operation: String, argument: String) -> void:
         )
         return
     _append_log("Unhandled platform request: %s %s" % [operation, argument])
+
+func _softpal_name_character_width(character: String) -> int:
+    var codepoint := character.unicode_at(0)
+    return 1 if codepoint < 0x80 or (
+        codepoint >= 0xff61 and codepoint <= 0xff9f
+    ) else 2
+
+func _softpal_truncate_name(value: String, limit: int) -> String:
+    var result := ""
+    var used := 0
+    for character in value:
+        var width := _softpal_name_character_width(character)
+        if used + width > limit:
+            break
+        used += width
+        result += character
+    return result
+
+func _release_softpal_name_editor() -> void:
+    if softpal_name_input_layer != null and is_instance_valid(
+        softpal_name_input_layer
+    ):
+        softpal_name_input_layer.queue_free()
+    softpal_name_input_layer = null
+    softpal_name_input = null
+
+func _cleanup_softpal_platform_ui() -> void:
+    _release_softpal_name_editor()
+    if not softpal_original_window_title.is_empty():
+        get_window().title = softpal_original_window_title
+        softpal_original_window_title = ""
+
+func _layout_softpal_name_editor(fields: Dictionary) -> void:
+    if softpal_name_input_layer == null or softpal_name_input == null:
+        return
+    var position := Vector2(
+        float(fields.get("x", "0")),
+        float(fields.get("y", "0"))
+    )
+    var dimensions := Vector2(
+        maxf(1.0, float(fields.get("width", "1"))),
+        maxf(1.0, float(fields.get("height", "1")))
+    )
+    var top_left := _map_surface_point_to_viewport(position)
+    var bottom_right := _map_surface_point_to_viewport(position + dimensions)
+    softpal_name_input_layer.position = top_left
+    softpal_name_input_layer.size = Vector2(
+        maxf(1.0, bottom_right.x - top_left.x),
+        maxf(1.0, bottom_right.y - top_left.y)
+    )
+    softpal_name_input.position = Vector2.ZERO
+    softpal_name_input.size = softpal_name_input_layer.size
+    softpal_name_input.add_theme_font_size_override(
+        "font_size",
+        maxi(1, int(fields.get("font_size", "24")))
+    )
+
+func _handle_softpal_name_editor(fields: Dictionary) -> void:
+    var operation := int(fields.get("operation", "0"))
+    if operation == 3:
+        _release_softpal_name_editor()
+        return
+    if operation == 1:
+        _release_softpal_name_editor()
+        softpal_name_input_layer = Control.new()
+        softpal_name_input_layer.name = "SoftPalNameInputLayer"
+        softpal_name_input_layer.z_index = 4094
+        softpal_name_input_layer.mouse_filter = Control.MOUSE_FILTER_PASS
+        add_child(softpal_name_input_layer)
+        softpal_name_input = LineEdit.new()
+        softpal_name_input.name = "SoftPalNameInput"
+        softpal_name_input.add_theme_color_override("font_color", Color.BLACK)
+        softpal_name_input.add_theme_color_override("caret_color", Color.BLACK)
+        softpal_name_input.add_theme_color_override(
+            "font_selected_color", Color.WHITE
+        )
+        softpal_name_input.add_theme_color_override(
+            "selection_color", Color8(0, 120, 215)
+        )
+        var background := StyleBoxFlat.new()
+        background.bg_color = Color.WHITE
+        background.content_margin_left = 2
+        background.content_margin_right = 2
+        softpal_name_input.add_theme_stylebox_override("normal", background)
+        softpal_name_input.add_theme_stylebox_override(
+            "focus", StyleBoxEmpty.new()
+        )
+        softpal_name_input_layer.add_child(softpal_name_input)
+        softpal_name_input.text_changed.connect(func(value: String) -> void:
+            if softpal_name_input_layer == null or bool(
+                softpal_name_input_layer.get_meta("updating", false)
+            ):
+                return
+            var limit := int(
+                softpal_name_input_layer.get_meta("limit", 32)
+            )
+            var bounded := _softpal_truncate_name(value, limit)
+            if bounded != value:
+                softpal_name_input_layer.set_meta("updating", true)
+                softpal_name_input.text = bounded
+                softpal_name_input.caret_column = bounded.length()
+                softpal_name_input_layer.set_meta("updating", false)
+            if player != null:
+                player.submit_platform_response(
+                    "softpal_name_editor",
+                    "text=%s&caret=%d&composing=%d" % [
+                        bounded.uri_encode(),
+                        softpal_name_input.caret_column,
+                        int(softpal_name_input.has_ime_text()),
+                    ]
+                )
+        )
+    if softpal_name_input_layer == null or softpal_name_input == null:
+        return
+    softpal_name_input_layer.set_meta(
+        "limit", maxi(1, int(fields.get("limit", "32")))
+    )
+    if operation in [1, 5]:
+        softpal_name_input_layer.set_meta("updating", true)
+        softpal_name_input.text = _softpal_truncate_name(
+            String(fields.get("text", "")),
+            int(softpal_name_input_layer.get_meta("limit", 32))
+        )
+        softpal_name_input.caret_column = 0
+        softpal_name_input_layer.set_meta("updating", false)
+    _layout_softpal_name_editor(fields)
+    if operation == 1:
+        softpal_name_input.grab_focus()
+
+func _softpal_special_folder(value: int) -> String:
+    match value & 0xff:
+        0x00, 0x10:
+            return OS.get_system_dir(OS.SYSTEM_DIR_DESKTOP)
+        0x05:
+            return OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS)
+        0x0d:
+            return OS.get_system_dir(OS.SYSTEM_DIR_MUSIC)
+        0x0e:
+            return OS.get_system_dir(OS.SYSTEM_DIR_MOVIES)
+        0x27:
+            return OS.get_system_dir(OS.SYSTEM_DIR_PICTURES)
+        0x1a, 0x1c, 0x23:
+            return OS.get_data_dir()
+    var home := OS.get_environment("HOME")
+    return home if not home.is_empty() else OS.get_executable_path().get_base_dir()
+
+func _show_softpal_file_dialog(fields: Dictionary) -> void:
+    var extension := String(fields.get("extension", ""))
+    var filters := PackedStringArray(["*.* ; All files"])
+    if not extension.is_empty():
+        filters.insert(0, "*.%s ; %s files" % [extension, extension])
+    var dialog := _create_file_dialog(
+        String(fields.get("title", "")),
+        FileDialog.FILE_MODE_SAVE_FILE if int(fields.get("save", "0")) != 0 \
+            else FileDialog.FILE_MODE_OPEN_FILE,
+        filters
+    )
+    var folder := _softpal_special_folder(int(fields.get("folder", "0")))
+    if DirAccess.dir_exists_absolute(folder):
+        dialog.current_dir = folder
+    var initial := String(fields.get("initial", "")).replace("\\", "/")
+    if not initial.is_empty():
+        if initial.is_absolute_path():
+            dialog.current_path = initial
+        else:
+            dialog.current_file = initial.get_file()
+    dialog.file_selected.connect(func(path: String) -> void:
+        if player != null:
+            player.submit_platform_response(
+                "softpal_file_dialog",
+                "accepted=1&path=%s" % path.uri_encode()
+            )
+    )
+    dialog.canceled.connect(func() -> void:
+        if player != null:
+            player.submit_platform_response(
+                "softpal_file_dialog", "accepted=0&path="
+            )
+    )
+    add_child(dialog)
+    dialog.popup_centered(Vector2i(900, 640))
+
+func _show_softpal_stand_dialog(fields: Dictionary) -> void:
+    var dialog := ConfirmationDialog.new()
+    dialog.title = "立绘文本编辑" if active_language.begins_with("zh") else \
+        "立ち絵テキスト編集" if active_language.begins_with("ja") else \
+        "Stand Text Editor"
+    dialog.exclusive = true
+    dialog.unresizable = false
+    dialog.dialog_hide_on_ok = false
+    var column := VBoxContainer.new()
+    column.custom_minimum_size = Vector2(680, 400)
+    column.add_theme_constant_override("separation", 10)
+    var limits := Label.new()
+    limits.text = "Name: %s; dialogue: %s×%s" % [
+        fields.get("name_width", "0"),
+        fields.get("text_width", "0"),
+        fields.get("line_limit", "0"),
+    ]
+    column.add_child(limits)
+    var name_row := HBoxContainer.new()
+    var options := String(fields.get("options", "")).split("\n", false)
+    var choices: OptionButton = null
+    if not options.is_empty():
+        choices = OptionButton.new()
+        choices.custom_minimum_size.x = 180
+        for option in options:
+            choices.add_item(option)
+        name_row.add_child(choices)
+    var name_edit := LineEdit.new()
+    name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    name_edit.text = String(fields.get("name", ""))
+    name_row.add_child(name_edit)
+    column.add_child(name_row)
+    if choices != null:
+        choices.item_selected.connect(func(index: int) -> void:
+            if index >= 0 and index < options.size():
+                name_edit.text = options[index]
+        )
+    var text_edit := TextEdit.new()
+    text_edit.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    text_edit.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+    text_edit.text = String(fields.get("text", ""))
+    column.add_child(text_edit)
+    dialog.add_child(column)
+    var finished := {"value": false}
+    dialog.confirmed.connect(func() -> void:
+        if finished.value:
+            return
+        finished.value = true
+        if player != null:
+            player.submit_platform_response(
+                "softpal_stand_dialog",
+                "accepted=1&name=%s&text=%s" % [
+                    name_edit.text.uri_encode(),
+                    text_edit.text.uri_encode(),
+                ]
+            )
+        dialog.hide()
+        dialog.queue_free()
+    )
+    dialog.canceled.connect(func() -> void:
+        if finished.value:
+            return
+        finished.value = true
+        if player != null:
+            player.submit_platform_response(
+                "softpal_stand_dialog", "accepted=0"
+            )
+        dialog.queue_free()
+    )
+    add_child(dialog)
+    dialog.popup_centered(Vector2i(760, 520))
+    text_edit.grab_focus()
 
 func _show_minori_select(argument: String) -> void:
     if modal_layer == null or player == null:
@@ -12180,6 +12569,7 @@ func _build_runtime_dialog_content(
 
     var text_field := String(values.get("text_field", "0")) == "1"
     var yes_no := String(values.get("yes_no", "0")) == "1"
+    var explicit_buttons := String(values.get("buttons", ""))
     runtime_dialog_input = null
     if text_field:
         runtime_dialog_input = LineEdit.new()
@@ -12200,7 +12590,20 @@ func _build_runtime_dialog_content(
     buttons.add_theme_constant_override("separation", 14)
     box.add_child(buttons)
 
-    if yes_no:
+    if not explicit_buttons.is_empty():
+        for specification in explicit_buttons.split("|", false):
+            var separator := specification.find(":")
+            if separator <= 0:
+                continue
+            var result_id := int(specification.left(separator))
+            var label := specification.substr(separator + 1)
+            var explicit := _pill_button(label)
+            explicit.custom_minimum_size = Vector2(150, 60)
+            explicit.pressed.connect(
+                _complete_runtime_dialog.bind(result_id, runtime_dialog_input)
+            )
+            buttons.add_child(explicit)
+    elif yes_no:
         var no := _pill_button("No")
         no.custom_minimum_size = Vector2(150, 60)
         no.pressed.connect(
@@ -12208,12 +12611,14 @@ func _build_runtime_dialog_content(
         )
         buttons.add_child(no)
 
-    var ok := _pill_button("Yes" if yes_no else "OK")
-    ok.custom_minimum_size = Vector2(150, 60)
-    ok.pressed.connect(
-        _complete_runtime_dialog.bind(1, runtime_dialog_input)
-    )
-    buttons.add_child(ok)
+    var ok: Button = null
+    if explicit_buttons.is_empty():
+        ok = _pill_button("Yes" if yes_no else "OK")
+        ok.custom_minimum_size = Vector2(150, 60)
+        ok.pressed.connect(
+            _complete_runtime_dialog.bind(1, runtime_dialog_input)
+        )
+        buttons.add_child(ok)
 
     if runtime_dialog_input != null:
         runtime_dialog_input.text_submitted.connect(
@@ -12221,8 +12626,12 @@ func _build_runtime_dialog_content(
                 _complete_runtime_dialog(1, runtime_dialog_input)
         )
         runtime_dialog_input.call_deferred("grab_focus")
-    else:
+    elif ok != null:
         ok.call_deferred("grab_focus")
+    elif buttons.get_child_count() > 0:
+        var first := buttons.get_child(0) as Button
+        if first != null:
+            first.call_deferred("grab_focus")
 
 func _complete_runtime_dialog(result: int, input: LineEdit) -> void:
     if modal_layer == null or not bool(
@@ -12275,6 +12684,7 @@ func _ensure_player_initialized() -> bool:
             player.get_last_result(),
             player.get_last_error(),
         ])
+        _cleanup_softpal_platform_ui()
         player.destroy_engine()
         return false
 
@@ -13796,6 +14206,7 @@ func _probe_cleanup_and_quit(code: int) -> void:
         viewport.texture = null
         await get_tree().process_frame
         player.release_frame_texture()
+        _cleanup_softpal_platform_ui()
         player.destroy_engine()
     get_tree().quit(code)
 
@@ -14515,6 +14926,7 @@ func _notification(what: int) -> void:
             diagnostic_session.finish()
         viewport.texture = null
         player.release_frame_texture()
+        _cleanup_softpal_platform_ui()
         player.destroy_engine()
 
 func _pause_game_for_lifecycle(reason: String) -> void:
@@ -14977,12 +15389,11 @@ func _game_input_content_size() -> Vector2:
     return Vector2(maxi(1, last_texture_size.x), maxi(1, last_texture_size.y))
 
 func _game_input_surface_size() -> Vector2:
-    # ONS and Minori consume coordinates in their published content space.
-    if active_runtime_kind in [RUNTIME_ONSCRIPTER, RUNTIME_MINORI]:
-        return _game_input_content_size()
-    if current_surface_size.x > 0 and current_surface_size.y > 0:
-        return Vector2(current_surface_size)
-    return _game_input_content_size()
+    return GameInputMapping.input_surface_size(
+        active_runtime_kind,
+        _game_input_content_size(),
+        Vector2(current_surface_size)
+    )
 
 func _update_frame() -> void:
     if present_hold_frames > 0:
@@ -15231,6 +15642,16 @@ func _auto_probe_wait_frames(frames: int) -> void:
 func _save_auto_probe_step(index: int, label: String) -> void:
     await get_tree().process_frame
     await get_tree().process_frame
+    if _runtime_flag("AETHERKIRI_AUTO_PROBE_NO_CAPTURE"):
+        var runtime_debug_without_capture: String = player.get_plugin_debug_info()
+        var no_capture_line := "auto_step index=%d label=%s capture=disabled runtime_debug=%s" % [
+            index,
+            label,
+            runtime_debug_without_capture,
+        ]
+        _write_probe_marker(no_capture_line)
+        print(no_capture_line)
+        return
     var frame: Dictionary = player.read_frame_rgba()
     var frame_stats := _frame_stats(frame)
     var image := get_viewport().get_texture().get_image()
@@ -16966,6 +17387,17 @@ func _sync_game_text_input_state() -> void:
 func _map_surface_point_to_screen(point: Vector2) -> Vector2:
     if viewport == null:
         return point
+    return viewport.get_screen_transform() * _map_surface_point_to_local(point)
+
+func _map_surface_point_to_viewport(point: Vector2) -> Vector2:
+    if viewport == null:
+        return point
+    return viewport.get_global_transform_with_canvas() * \
+        _map_surface_point_to_local(point)
+
+func _map_surface_point_to_local(point: Vector2) -> Vector2:
+    if viewport == null:
+        return point
     var local_point := point
     if viewport.texture != null:
         var texture_size := Vector2(
@@ -16985,7 +17417,7 @@ func _map_surface_point_to_screen(point: Vector2) -> Vector2:
         var drawn_size := texture_size * scale
         var offset := (panel_size - drawn_size) * 0.5
         local_point = offset + texture_point * scale
-    return viewport.get_screen_transform() * local_point
+    return local_point
 
 func _map_viewport_point(pos: Vector2, clamp_to_bounds: bool = false) -> Vector2:
     if viewport.texture == null:

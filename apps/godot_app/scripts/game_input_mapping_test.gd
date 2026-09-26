@@ -28,7 +28,7 @@ func _initialize() -> void:
     # rather than the presentation surface. Using the shell surface moves
     # clicks out of the logical frame and makes controls appear unresponsive.
     var native_frame := Vector2(1024, 640)
-    for runtime_kind in ["minori", "onscripter", "rfvp", "siglus"]:
+    for runtime_kind in ["minori", "onscripter", "rfvp", "siglus", "softpal"]:
         var input_surface := GameInputMapping.input_surface_size(
             runtime_kind, native_frame, requested_surface
         )

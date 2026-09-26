@@ -73,6 +73,36 @@ typedef struct engine_runtime_fragment_shader_host_v1_t {
   engine_runtime_fragment_shader_execute_fn execute;
 } engine_runtime_fragment_shader_host_v1_t;
 
+#define ENGINE_RUNTIME_MEDIA_HOST_API_VERSION 0x01000000u
+
+/* Host-owned media decoder made available to optional runtime providers.
+ * Handles returned by open must be destroyed before the runtime instance. */
+typedef struct engine_runtime_media_host_v1_t {
+  uint32_t struct_size;
+  uint32_t api_version;
+  void* user_data;
+  engine_result_t (*open)(void* user_data, const char* path_utf8,
+                          engine_media_handle_t* out_media);
+  engine_result_t (*destroy)(void* user_data, engine_media_handle_t media);
+  engine_result_t (*play)(void* user_data, engine_media_handle_t media);
+  engine_result_t (*pause)(void* user_data, engine_media_handle_t media);
+  engine_result_t (*seek)(void* user_data, engine_media_handle_t media,
+                          int64_t position_ms);
+  engine_result_t (*set_rate)(void* user_data, engine_media_handle_t media,
+                              double playback_rate);
+  engine_result_t (*set_volume)(void* user_data, engine_media_handle_t media,
+                                double volume);
+  engine_result_t (*get_state)(void* user_data, engine_media_handle_t media,
+                               engine_media_state_t* out_state);
+  engine_result_t (*read_frame_rgba)(void* user_data,
+                                     engine_media_handle_t media,
+                                     void* out_pixels,
+                                     size_t out_pixels_size,
+                                     engine_frame_desc_t* out_frame_desc);
+  uint64_t reserved_u64[4];
+  void* reserved_ptr[4];
+} engine_runtime_media_host_v1_t;
+
 typedef struct engine_runtime_host_v1_t {
   uint32_t struct_size;
   uint32_t api_version;
@@ -82,6 +112,8 @@ typedef struct engine_runtime_host_v1_t {
   uint64_t (*monotonic_time_micros)(void* user_data);
   engine_runtime_platform_request_fn platform_request;
   uint64_t reserved_u64[4];
+  /* reserved_ptr[0] is engine_runtime_fragment_shader_host_v1_t.
+   * reserved_ptr[1] is engine_runtime_media_host_v1_t. */
   void* reserved_ptr[3];
 } engine_runtime_host_v1_t;
 
