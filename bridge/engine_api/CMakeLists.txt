@@ -5,6 +5,7 @@ project(engine_api LANGUAGES C CXX)
 set(ENGINE_API_COMMON_SOURCES
     src/engine_api.cpp
     src/engine_api_dispatch.cpp
+    src/engine_api_crash_capture.cpp
     src/engine_runtime_provider.cpp
 )
 
@@ -124,4 +125,8 @@ endif()
 # On Android, link system platform libs.
 if(ANDROID)
     target_link_libraries(engine_api PRIVATE log android dl)
+endif()
+
+if(WIN32)
+    target_link_libraries(engine_api PRIVATE dbghelp)
 endif()

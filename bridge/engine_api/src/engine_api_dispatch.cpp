@@ -8,6 +8,7 @@
 #include <deque>
 #include <exception>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <new>
 #include <string>
@@ -16,6 +17,9 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/basic_file_sink.h>
 
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
@@ -34,6 +38,7 @@
 
 #include "engine_runtime_provider_registry.h"
 #include "engine_startup_thread.h"
+#include "engine_api_crash_capture.h"
 #include "legacy_engine_api.h"
 #include "TextTransform.h"
 #if defined(ENGINE_API_USE_KRKR2_RUNTIME)
@@ -115,6 +120,35 @@ std::unordered_set<engine_handle_t> g_dispatch_handles;
 std::unordered_map<engine_media_handle_t, engine_handle_t>
     g_dispatch_media_handles;
 thread_local std::string g_dispatch_thread_error;
+
+engine_result_t RunProviderOpen(DispatchHandle* handle, const char* path,
+                                const char* startup_script) {
+  try {
+    return handle->provider->open_game(handle->runtime, path, startup_script);
+  } catch (const std::exception& error) {
+    aetherkiri::engine_api::WriteCrashReport(
+        "runtime provider open_game threw std::exception", error.what());
+    return ENGINE_RESULT_INTERNAL_ERROR;
+  } catch (...) {
+    aetherkiri::engine_api::WriteCrashReport(
+        "runtime provider open_game threw unknown exception", nullptr);
+    return ENGINE_RESULT_INTERNAL_ERROR;
+  }
+}
+
+engine_result_t RunProviderTick(DispatchHandle* handle, uint32_t delta_ms) {
+  try {
+    return handle->provider->tick(handle->runtime, delta_ms);
+  } catch (const std::exception& error) {
+    aetherkiri::engine_api::WriteCrashReport(
+        "runtime provider tick threw std::exception", error.what());
+    return ENGINE_RESULT_INTERNAL_ERROR;
+  } catch (...) {
+    aetherkiri::engine_api::WriteCrashReport(
+        "runtime provider tick threw unknown exception", nullptr);
+    return ENGINE_RESULT_INTERNAL_ERROR;
+  }
+}
 
 bool ActivateProviderAudioSessionForHost() {
 #if defined(__APPLE__) && TARGET_OS_IPHONE && \
@@ -224,6 +258,8 @@ void SetProviderError(DispatchHandle* handle, engine_result_t result,
                            ? provider_error
                            : fallback;
   SetThreadError(handle->last_error.c_str());
+  spdlog::error("runtime provider failure: {} ({})", handle->last_error,
+                fallback != nullptr ? fallback : "");
 }
 
 void SetLegacyError(DispatchHandle* handle, engine_result_t result,
@@ -321,6 +357,60 @@ void StartTextTranslationLoading() {
 #endif
 }
 
+std::mutex g_provider_log_sink_mutex;
+std::shared_ptr<spdlog::sinks::sink> g_provider_log_sink;
+
+// Runtime-provider engines (CatSystem2, Artemis, WA2) emit their logs through
+// the provider host callback instead of the legacy KiriKiri "core"/"tjs2"
+// loggers, so krkr2.log never receives them. Attach a per-game sidecar file
+// sink to the spdlog default logger so provider diagnostics survive windowed
+// release exports that have no console. The sink flushes on every message to
+// keep the tail readable after a hard crash.
+void AttachProviderGameLogFileSink(const std::string& game_root,
+                                   const std::string& writable_path) {
+  std::lock_guard<std::mutex> sink_guard(g_provider_log_sink_mutex);
+  std::vector<std::string> candidates;
+  if (!game_root.empty()) {
+    std::string root = game_root;
+    while (!root.empty() && (root.back() == '/' || root.back() == '\\')) {
+      root.pop_back();
+    }
+    if (!root.empty()) candidates.push_back(root + "/aetherkiri-engine.log");
+  }
+  if (!writable_path.empty()) {
+    std::string root = writable_path;
+    while (!root.empty() && (root.back() == '/' || root.back() == '\\')) {
+      root.pop_back();
+    }
+    if (!root.empty()) candidates.push_back(root + "/aetherkiri-engine.log");
+  }
+  for (const std::string& candidate : candidates) {
+    try {
+      auto sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
+          candidate, true);
+      auto logger = spdlog::default_logger();
+      // Drop any previously attached provider sink before adding the new one.
+      if (g_provider_log_sink != nullptr) {
+        auto& sinks = logger->sinks();
+        sinks.erase(
+            std::remove_if(sinks.begin(), sinks.end(),
+                           [previous = g_provider_log_sink.get()](
+                               const std::shared_ptr<spdlog::sinks::sink>& s) {
+                             return s.get() == previous;
+                           }),
+            sinks.end());
+      }
+      logger->sinks().push_back(sink);
+      g_provider_log_sink = sink;
+      logger->flush_on(spdlog::level::trace);
+      spdlog::info("aetherkiri provider engine log attached: {}", candidate);
+      return;
+    } catch (const std::exception&) {
+      // Game roots can be read-only; fall through to the next candidate.
+    }
+  }
+}
+
 void HostLog(void* user_data, uint32_t level, const char* subsystem,
              const char* message) {
   auto* handle = static_cast<DispatchHandle*>(user_data);
@@ -340,6 +430,16 @@ void HostLog(void* user_data, uint32_t level, const char* subsystem,
     line += "] ";
   }
   line += message != nullptr ? message : "";
+  // Mirror into the spdlog default logger so provider logs reach the per-game
+  // sidecar file even when the UI log view is disabled. This must run before
+  // line is moved into the startup log queue.
+  const spdlog::level::level_enum spdlog_level =
+      level == ENGINE_RUNTIME_LOG_ERROR   ? spdlog::level::err
+      : level == ENGINE_RUNTIME_LOG_WARNING ? spdlog::level::warn
+      : level == ENGINE_RUNTIME_LOG_DEBUG  ? spdlog::level::debug
+      : level == ENGINE_RUNTIME_LOG_TRACE  ? spdlog::level::trace
+                                            : spdlog::level::info;
+  spdlog::default_logger()->log(spdlog_level, "{}", line);
   handle->startup_logs.push_back(std::move(line));
 }
 
@@ -555,6 +655,7 @@ engine_result_t engine_create(const engine_create_desc_t* desc,
                        "engine_create requires non-null desc and out_handle");
   }
   *out_handle = nullptr;
+  aetherkiri::engine_api::InstallCrashCapture();
 #if defined(AETHERKIRI_INTERNAL_CATSYSTEM2)
   AetherInternalRegisterCatSystem2Runtime();
 #endif
@@ -893,9 +994,9 @@ engine_result_t engine_open_game(engine_handle_t public_handle,
     return result;
   }
   handle->startup_state = ENGINE_STARTUP_STATE_RUNNING;
+  AttachProviderGameLogFileSink(game_root_path_utf8, handle->writable_path);
   AETHER_DISPATCH_DIAG_LOG("engine_open_game before provider open_game");
-  result = handle->provider->open_game(handle->runtime, game_root_path_utf8,
-                                       startup_script_utf8);
+  result = RunProviderOpen(handle, game_root_path_utf8, startup_script_utf8);
   AETHER_DISPATCH_DIAG_LOG("engine_open_game after provider open_game");
   handle->startup_state = result == ENGINE_RESULT_OK
                               ? ENGINE_STARTUP_STATE_SUCCEEDED
@@ -945,12 +1046,13 @@ engine_result_t engine_open_game_async(engine_handle_t public_handle,
                                   ? startup_script_utf8
                                   : "";
   handle->startup_state = ENGINE_STARTUP_STATE_RUNNING;
+  AttachProviderGameLogFileSink(game_root_path_utf8, handle->writable_path);
   try {
     handle->startup_thread = StartupThread([handle, root, startup]() {
       const char* startup_value = startup.empty() ? nullptr : startup.c_str();
       AETHER_DISPATCH_DIAG_LOG("engine_open_game_async before provider open_game");
-      const auto open_result = handle->provider->open_game(
-          handle->runtime, root.c_str(), startup_value);
+      const auto open_result = RunProviderOpen(handle, root.c_str(),
+                                               startup_value);
       AETHER_DISPATCH_DIAG_LOG("engine_open_game_async after provider open_game");
       std::lock_guard<std::recursive_mutex> thread_guard(handle->mutex);
       handle->startup_state = open_result == ENGINE_RESULT_OK
@@ -1043,7 +1145,7 @@ engine_result_t engine_tick(engine_handle_t public_handle, uint32_t delta_ms) {
                    handle->provider_resume_pending = false;
                  }
                  const engine_result_t result =
-                     handle->provider->tick(handle->runtime, delta_ms);
+                     RunProviderTick(handle, delta_ms);
 #if defined(ENGINE_API_USE_KRKR2_RUNTIME)
                  // Provider runtimes bypass the legacy EngineLoop, which is
                  // normally responsible for draining textures whose intrusive
