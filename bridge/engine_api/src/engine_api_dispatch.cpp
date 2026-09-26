@@ -430,16 +430,17 @@ void HostLog(void* user_data, uint32_t level, const char* subsystem,
     line += "] ";
   }
   line += message != nullptr ? message : "";
-  handle->startup_logs.push_back(std::move(line));
   // Mirror into the spdlog default logger so provider logs reach the per-game
-  // sidecar file even when the UI log view is disabled.
+  // sidecar file even when the UI log view is disabled. This must run before
+  // line is moved into the startup log queue.
   const spdlog::level::level_enum spdlog_level =
       level == ENGINE_RUNTIME_LOG_ERROR   ? spdlog::level::err
       : level == ENGINE_RUNTIME_LOG_WARNING ? spdlog::level::warn
       : level == ENGINE_RUNTIME_LOG_DEBUG  ? spdlog::level::debug
       : level == ENGINE_RUNTIME_LOG_TRACE  ? spdlog::level::trace
                                             : spdlog::level::info;
-  spdlog::log(spdlog_level, "{}", line);
+  spdlog::default_logger()->log(spdlog_level, "{}", line);
+  handle->startup_logs.push_back(std::move(line));
 }
 
 uint64_t HostMonotonicTimeMicros(void*) {
