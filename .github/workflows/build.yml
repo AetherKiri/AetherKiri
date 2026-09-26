@@ -120,6 +120,7 @@ jobs:
             submodule update --init --recursive --depth 1 packages/psdfile
           git submodule update --init --depth 1 packages/AetherSiglus
           git submodule update --init --depth 1 packages/AetherMinori
+          git submodule update --init --depth 1 packages/krkr2
 
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''
@@ -399,6 +400,7 @@ jobs:
             submodule update --init --recursive --depth 1 packages/psdfile
           git submodule update --init --depth 1 packages/AetherSiglus
           git submodule update --init --depth 1 packages/AetherMinori
+          git submodule update --init --depth 1 packages/krkr2
 
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''
@@ -699,6 +701,7 @@ jobs:
             submodule update --init --recursive --depth 1 packages/psdfile
           git submodule update --init --depth 1 packages/AetherSiglus
           git submodule update --init --depth 1 packages/AetherMinori
+          git submodule update --init --depth 1 packages/krkr2
 
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''
@@ -991,6 +994,7 @@ jobs:
             submodule update --init --recursive --depth 1 packages/psdfile
           git submodule update --init --depth 1 packages/AetherSiglus
           git submodule update --init --depth 1 packages/AetherMinori
+          git submodule update --init --depth 1 packages/krkr2
 
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''

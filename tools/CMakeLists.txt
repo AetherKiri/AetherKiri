@@ -11,8 +11,14 @@ endif()
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_CURRENT_SOURCE_DIR}/bin/${OS_PLATFORM}/rel")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_CURRENT_SOURCE_DIR}/bin/${OS_PLATFORM}/dbg")
-add_subdirectory(xp3)
-add_subdirectory(xp3_select)
+# The xp3 archive tools live in the krkr2 engine repository (issue #241
+# Phase 2); this checkout owns their wiring and the binary output paths.
+# Out-of-tree sources need an explicit binary directory; keep it mirroring
+# the engine submodule location.
+add_subdirectory("${AETHERKIRI_KRKR2_DIR}/tools/xp3"
+    "${CMAKE_BINARY_DIR}/packages/krkr2/tools/xp3")
+add_subdirectory("${AETHERKIRI_KRKR2_DIR}/tools/xp3_select"
+    "${CMAKE_BINARY_DIR}/packages/krkr2/tools/xp3_select")
 
 if(AETHERKIRI_INTERNAL_ENABLED AND
    COMMAND aetherinternal_add_catsystem2_probe)

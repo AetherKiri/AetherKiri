@@ -6,18 +6,20 @@
 // extension, the siglus/rfvp runtime glue, and the krkr2 runtime all include
 // it without any krkr2 header paths.
 //
-// cpp/core/visual/ComplexRect.h builds its region classes on the geometry
-// types defined here, and cpp/core/visual/godot/GodotGpuBridge.h wraps this
-// header for the krkr2-side C++ batch helpers, so every build shares one
-// definition of the callback tables, blend modes, and rectangle geometry.
+// The krkr2 engine repository (packages/krkr2) builds its region classes on
+// the geometry types defined here
+// (core/visual/ComplexRect.h), and core/visual/godot/GodotGpuBridge.h wraps
+// this header for the krkr2-side C++ batch helpers, so every build shares
+// one definition of the callback tables, blend modes, and rectangle
+// geometry.
 
 #include <cstddef>
 #include <cstdint>
 
 //---------------------------------------------------------------------------
-// Geometry ABI (moved verbatim from cpp/core/visual/ComplexRect.h; tjs_int
-// is int on every supported platform, int32_t keeps this header free of the
-// krkr2 tjsTypes.h dependency).
+// Geometry ABI (moved verbatim from the krkr2 engine's ComplexRect.h;
+// tjs_int is int on every supported platform, int32_t keeps this header
+// free of the krkr2 tjsTypes.h dependency).
 //---------------------------------------------------------------------------
 // tTVPRect - intersection and union
 //---------------------------------------------------------------------------

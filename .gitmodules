@@ -20,3 +20,6 @@
 [submodule "packages/AetherMinori"]
 	path = packages/AetherMinori
 	url = git@github.com:AetherKiri/AetherMinori.git
+[submodule "packages/krkr2"]
+	path = packages/krkr2
+	url = git@github.com:AetherKiri/krkr2.git

@@ -75,8 +75,7 @@ Godot App Shell
 | `bridge/engine_api/` | 宿主层驱动 C++ 引擎的 C ABI。 |
 | `bridge/onscripter_runtime/` | OnscripterYuri 无窗口宿主、帧读取和输入桥接。 |
 | `bridge/siglus_runtime/` | Siglus 运行时 provider，以及应用到 pristine siglus_rs 源码的构建期 overlay（补丁 + FFI 文件），见 `bridge/siglus_runtime/overlay/`。 |
-| `cpp/core/` | KiriKiri2 运行时、视觉系统、音频、存储、VM 和插件支持。 |
-| `cpp/plugins/` | 内置 native 插件实现和兼容 stub。 |
+| `packages/krkr2/` | KiriKiri2 引擎运行时 submodule（core、TJS2 VM、视觉/音频/存储/视频模块与内置 native 插件）；其集成胶水位于 `bridge/krkr2_runtime/`。 |
 | `packages/AetherInternal/` | 可选的私有 E-mote package submodule；公开版本不依赖它也能构建。 |
 | `packages/OnscripterYuri/` | 公开的 OnscripterYuri git submodule。 |
 | `packages/AetherSiglus/` | 公开的 siglus_rs（Rust 版 SiglusEngine）git submodule。保持只读；AetherKiri 侧改动全部位于 `bridge/siglus_runtime/overlay/`。 |
