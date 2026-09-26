@@ -40,7 +40,3 @@ updates:
       github-actions:
         patterns:
           - "*"
-    ignore:
-      # Action 的 major 升级（如 v4 -> v5）同样可能有 breaking change，人工评估后手动升
-      - dependency-name: "*"
-        update-types: ["version-update:semver-major"]
