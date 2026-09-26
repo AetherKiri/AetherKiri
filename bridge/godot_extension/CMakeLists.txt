@@ -109,13 +109,38 @@ else()
 endif()
 
 if(APPLE)
-    target_sources(aether_kiri_godot PRIVATE
-        src/apple_external_texture.mm
-        src/apple_native_file_picker.swift
-        src/apple_storekit.swift)
+    target_sources(aether_kiri_godot PRIVATE src/apple_external_texture.mm)
     set_source_files_properties(src/apple_external_texture.mm
         PROPERTIES LANGUAGE CXX COMPILE_FLAGS "-x objective-c++")
-    set_property(TARGET aether_kiri_godot PROPERTY Swift_LANGUAGE_VERSION 5)
+    if(IOS)
+        # The Godot iOS exporter links this archive straight into the app, so
+        # the Swift sources must live inside it; CMake compiles them with its
+        # Swift static-library rules (the same rules a standalone Swift static
+        # library target uses).
+        target_sources(aether_kiri_godot PRIVATE
+            src/apple_native_file_picker.swift
+            src/apple_storekit.swift)
+        set_property(TARGET aether_kiri_godot PROPERTY Swift_LANGUAGE_VERSION 5)
+    else()
+        # Keep the macOS dylib itself free of Swift sources so CMake links it
+        # with clang++. Linking the dylib through swiftc runs into Xcode 16.2's
+        # swift-driver bug: with the phase 2d link flip the single swiftc
+        # compile+link invocation now carries the full KiriKiri static closure,
+        # and that driver hands the emitted .swiftmodule to ld ("ld: unknown
+        # file type in ...swiftmodule"). The Swift objects autolink the Swift
+        # runtime through LC_LINKER_OPTION entries, so the CXX link resolves
+        # them without the Swift driver.
+        add_library(aether_kiri_godot_swift STATIC
+            src/apple_native_file_picker.swift
+            src/apple_storekit.swift)
+        set_property(TARGET aether_kiri_godot_swift PROPERTY
+            Swift_LANGUAGE_VERSION 5)
+        target_link_libraries(aether_kiri_godot PRIVATE aether_kiri_godot_swift)
+        # Linking a Swift archive into the closure would otherwise make CMake
+        # pick the Swift driver for the dylib — the exact path the Xcode 16.2
+        # swift-driver bug lives on.
+        set_property(TARGET aether_kiri_godot PROPERTY LINKER_LANGUAGE CXX)
+    endif()
     target_link_libraries(aether_kiri_godot PRIVATE
         "-framework CoreVideo"
         "-framework Metal"
@@ -173,6 +198,15 @@ endif()
 
 if(TARGET engine_api)
     target_link_libraries(aether_kiri_godot PRIVATE engine_api)
+endif()
+if(TARGET aether_krkr2_runtime)
+    # Phase 2d link flip: the KiriKiri runtime glue is linked by the Godot
+    # extension host (not engine_api). The extension installs the legacy
+    # services table during library init so dispatch can route the built-in
+    # "kirikiri" backend into the glue.
+    target_link_libraries(aether_kiri_godot PRIVATE aether_krkr2_runtime)
+    target_compile_definitions(aether_kiri_godot PRIVATE
+        AETHERKIRI_WITH_KRKR2=1)
 endif()
 if(TARGET aether_onscripter_runtime)
     target_link_libraries(aether_kiri_godot PRIVATE

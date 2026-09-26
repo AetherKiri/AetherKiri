@@ -61,3 +61,16 @@ target_include_directories(${PROJECT_NAME} PUBLIC ${FFMPEG_INCLUDE_DIRS})
 target_link_libraries(${PROJECT_NAME} PRIVATE
     ${FFMPEG_LIBRARIES}
 )
+
+if(APPLE)
+    # vcpkg's FFMPEG_LIBRARIES carry a bare "-pthread" driver flag; macOS
+    # pthreads live in libSystem and swiftc-driven links (the mixed C++/Swift
+    # Godot extension) reject it.
+    get_target_property(_movie_module_interface ${PROJECT_NAME}
+        INTERFACE_LINK_LIBRARIES)
+    if(_movie_module_interface)
+        list(REMOVE_ITEM _movie_module_interface "$<LINK_ONLY:-pthread>")
+        set_target_properties(${PROJECT_NAME} PROPERTIES
+            INTERFACE_LINK_LIBRARIES "${_movie_module_interface}")
+    endif()
+endif()

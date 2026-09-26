@@ -3,10 +3,11 @@ cmake_minimum_required(VERSION 3.19)
 project(aether_krkr2_runtime LANGUAGES C CXX)
 
 # The KiriKiri (krkr2) engine runtime glue: the legacy engine_api
-# implementation plus the Android JNI entry point. engine_api keeps the
-# provider registry and dispatch layer only; this static library carries the
-# krkr2core/krkr2plugin linkage and is linked into engine_api.so so the final
-# binary layout and exported symbol surface stay unchanged.
+# implementation plus host-side texture recycle/audio services. engine_api
+# keeps the provider registry and dispatch layer only and consumes this
+# library through the installable legacy services table
+# (aether_krkr2_install_legacy_services); the Godot extension host links the
+# glue so engine_api itself stays free of KiriKiri symbols (Phase 2d).
 if(NOT TARGET krkr2core OR NOT TARGET krkr2plugin)
     message(FATAL_ERROR
         "aether_krkr2_runtime requires the krkr2core and krkr2plugin targets.")
@@ -14,13 +15,9 @@ endif()
 
 set(KRKR2_RUNTIME_SOURCES
     src/krkr2_legacy_engine_api.cpp
+    src/krkr2_legacy_services.cpp
     src/krkr2_host_hooks.cpp
 )
-if(ANDROID)
-    # The Godot Android host loads engine_api.so directly; the JNI entry
-    # point (JNI_OnLoad, Surface bridge) travels with the KiriKiri runtime.
-    list(APPEND KRKR2_RUNTIME_SOURCES src/android_jni_bridge.cpp)
-endif()
 
 add_library(aether_krkr2_runtime STATIC ${KRKR2_RUNTIME_SOURCES})
 
@@ -82,17 +79,48 @@ endif()
 
 # Private runtime extensions contribute sources that compile against
 # krkr2core/krkr2plugin, so they extend the runtime glue instead of the
-# engine_api dispatch target.
-if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_catsystem2)
-    aetherinternal_extend_catsystem2(aether_krkr2_runtime)
+# engine_api dispatch target. Mirror the build gates that used to live in
+# engine_api so krkr2_legacy_services.cpp declares exactly the registration
+# symbols the extension objects provide.
+if(AETHERKIRI_INTERNAL_ENABLED)
+    if(COMMAND aetherinternal_extend_catsystem2)
+        aetherinternal_extend_catsystem2(aether_krkr2_runtime)
+        target_compile_definitions(aether_krkr2_runtime PRIVATE
+            AETHERKIRI_INTERNAL_CATSYSTEM2=1)
+    endif()
+
+    if(COMMAND aetherinternal_extend_artemis)
+        aetherinternal_extend_artemis(aether_krkr2_runtime)
+        target_compile_definitions(aether_krkr2_runtime PRIVATE
+            AETHERKIRI_INTERNAL_ARTEMIS=1)
+    endif()
+
+    if(COMMAND aetherinternal_extend_wa2)
+        aetherinternal_extend_wa2(aether_krkr2_runtime)
+        target_compile_definitions(aether_krkr2_runtime PRIVATE
+            AETHERKIRI_INTERNAL_WA2=1
+            AETHERKIRI_ENABLE_WA2_RUNTIME=1)
+    endif()
 endif()
 
-if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_artemis)
-    aetherinternal_extend_artemis(aether_krkr2_runtime)
-endif()
+# The AetherInternal extension functions above run find_package(OpenAL) in
+# this scope, creating a scope-local OpenAL::OpenAL copy. Sanitize its raw
+# -Wl,-framework items: this glue is linked by the mixed C++/Swift Godot
+# extension whose final link is driven by swiftc (rejects the -Wl spelling).
+aetherkiri_sanitize_openal_link()
 
-if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_wa2)
-    aetherinternal_extend_wa2(aether_krkr2_runtime)
+if(APPLE)
+    # The FFMPEG dependency lists appended by the extension functions carry a
+    # bare "-pthread" driver flag; macOS pthreads live in libSystem and the
+    # swiftc-driven extension link rejects the flag. Drop it from the glue's
+    # static-consumer interface.
+    get_target_property(_krkr2_runtime_interface aether_krkr2_runtime
+        INTERFACE_LINK_LIBRARIES)
+    if(_krkr2_runtime_interface)
+        list(REMOVE_ITEM _krkr2_runtime_interface "$<LINK_ONLY:-pthread>")
+        set_target_properties(aether_krkr2_runtime PROPERTIES
+            INTERFACE_LINK_LIBRARIES "${_krkr2_runtime_interface}")
+    endif()
 endif()
 
 if(TARGET aetherinternal_artemis_lua)

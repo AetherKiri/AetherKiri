@@ -16,10 +16,9 @@ namespace krkr {
 
 class JniHelper {
 public:
-    /// Store the JavaVM pointer (called from JNI_OnLoad).
-    static void setJavaVM(JavaVM* vm);
-
-    /// Get the stored JavaVM pointer.
+    /// Get the process JavaVM (owned by the engine_api JNI bridge, which
+    /// stores it in JNI_OnLoad and recovers it from the Android runtime at a
+    /// low rate before that).
     static JavaVM* getJavaVM();
 
     /// Get a JNIEnv for the current thread (attaches if needed).
