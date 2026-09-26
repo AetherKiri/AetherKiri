@@ -10,7 +10,25 @@
 #include "tjsDictionary.h"
 #include "ScriptMgnIntf.h"
 
+#if defined(_WIN32)
+// jxrlib ships its own SAL compatibility macros. The Windows SDK can define
+// the same names with annotations that are not valid in jxrlib's C headers.
+#pragma push_macro("__in")
+#pragma push_macro("__out")
+#pragma push_macro("__in_win")
+#pragma push_macro("__out_win")
+#undef __in
+#undef __out
+#define __in_win
+#define __out_win
+#endif
 #include <jxrlib/JXRGlue.h>
+#if defined(_WIN32)
+#pragma pop_macro("__out_win")
+#pragma pop_macro("__in_win")
+#pragma pop_macro("__out")
+#pragma pop_macro("__in")
+#endif
 
 static tjs_uint32 GetStride(const tjs_uint32 width, const tjs_uint32 bitCount) {
     const tjs_uint32 byteCount = bitCount / 8;

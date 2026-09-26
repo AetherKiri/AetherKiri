@@ -2170,12 +2170,16 @@ uint ps_screen_blend(uint d, uint s, uint opa) {
     uint dr = d & 0xffu;
     uint dg = (d >> 8) & 0xffu;
     uint db = (d >> 16) & 0xffu;
-    uint sr = s & 0xffu;
+      )GLSL"
+      R"GLSL(
+     uint sr = s & 0xffu;
     uint sg = (s >> 8) & 0xffu;
     uint sb = (s >> 16) & 0xffu;
     uint r = min(dr + (((sr - ((sr * dr) >> 8)) * a) >> 8), 255u);
     uint g = min(dg + (((sg - ((sg * dg) >> 8)) * a) >> 8), 255u);
-    uint b = min(db + (((sb - ((sb * db) >> 8)) * a) >> 8), 255u);
+      )GLSL"
+      R"GLSL(
+      uint b = min(db + (((sb - ((sb * db) >> 8)) * a) >> 8), 255u);
     return (d & 0xff000000u) | r | (g << 8) | (b << 16);
 }
 
@@ -2408,7 +2412,9 @@ void main() {
         out_color = apply_color_map_a(
             d, s & 0xffu, opa,
             uvec3(uint(pc.color0.x), uint(pc.color0.y), uint(pc.color0.z)));
-        } else if (pc.rect1.z == 24) {
+         } else if (pc.rect1.z == 24) {
+         )GLSL"
+         R"GLSL(
         out_color = additive_alpha_blend_hda(d, s, opa);
         } else if (pc.rect1.z == 25) {
         out_color = additive_alpha_blend_a(d, s, opa);
@@ -3639,11 +3645,15 @@ uint ps_screen_blend(uint d, uint s, uint opa) {
     uint dr = d & 0xffu;
     uint dg = (d >> 8) & 0xffu;
     uint db = (d >> 16) & 0xffu;
+    )GLSL"
+    R"GLSL(
     uint sr = s & 0xffu;
     uint sg = (s >> 8) & 0xffu;
     uint sb = (s >> 16) & 0xffu;
     uint r = min(dr + (((sr - ((sr * dr) >> 8)) * a) >> 8), 255u);
     uint g = min(dg + (((sg - ((sg * dg) >> 8)) * a) >> 8), 255u);
+    )GLSL"
+    R"GLSL(
     uint b = min(db + (((sb - ((sb * db) >> 8)) * a) >> 8), 255u);
     return (d & 0xff000000u) | r | (g << 8) | (b << 16);
 }

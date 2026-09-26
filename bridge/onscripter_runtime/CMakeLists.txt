@@ -106,8 +106,15 @@ target_include_directories(aether_onscripter_runtime
 )
 
 if(MSVC)
+    # This source contains UTF-8 literals; only gbk2utf16.cpp is a GBK source.
+    set_source_files_properties(
+        "${ONSCRIPTER_YURI_SOURCE_DIR}/gbk2utf16.cpp"
+        PROPERTIES COMPILE_OPTIONS "/source-charset:gbk")
+    set_source_files_properties(
+        "${ONSCRIPTER_YURI_SOURCE_DIR}/coding2utf16.cpp"
+        PROPERTIES COMPILE_OPTIONS "/source-charset:utf-8")
     target_compile_options(aether_onscripter_runtime PRIVATE
-        /FI"${CMAKE_CURRENT_SOURCE_DIR}/src/onscripter_host_shim.h"
+        "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/onscripter_host_shim.h"
         /W0)
 else()
     target_compile_options(aether_onscripter_runtime PRIVATE

@@ -50,6 +50,56 @@ endif()
 vcpkg_cmake_get_vars(cmake_vars_file)
 include("${cmake_vars_file}")
 if(VCPKG_DETECTED_MSVC)
+    string(REPLACE " --enable-debug=3" " --disable-debug" OPTIONS "${OPTIONS}")
+    # FFmpeg 8.1.2 can mis-detect cl.exe when it is invoked through the MSYS
+    # shell used by vcpkg. In that case configure leaves generic GNU `-o`
+    # output flags in generated Makefiles even though the compiler is MSVC;
+    # cl accepts the deprecated spelling with a warning and writes a non-object
+    # file, which then fails at the linker with LNK1136. Make configure emit
+    # native output flags after selecting the msvc toolchain.
+    file(READ "${SOURCE_PATH}/configure" FFMPEG_CONFIGURE)
+    string(REPLACE "CC_O='-o $@'" "CC_O='-Fo$@'" FFMPEG_CONFIGURE "${FFMPEG_CONFIGURE}")
+    string(REPLACE "CXX_O='-o $@'" "CXX_O='-Fo$@'" FFMPEG_CONFIGURE "${FFMPEG_CONFIGURE}")
+    string(REPLACE "HOSTCC_O='-o $@'" "HOSTCC_O='-Fo$@'" FFMPEG_CONFIGURE "${FFMPEG_CONFIGURE}")
+    string(REPLACE "CC_E='-E -Fo $@'" "CC_E='-E -Fo$@'" FFMPEG_CONFIGURE "${FFMPEG_CONFIGURE}")
+    string(REPLACE "HOSTCC_E='-E -Fo $@'" "HOSTCC_E='-E -Fo$@'" FFMPEG_CONFIGURE "${FFMPEG_CONFIGURE}")
+    string(REPLACE "CXX_E='-E -Fo $@'" "CXX_E='-E -Fo$@'" FFMPEG_CONFIGURE "${FFMPEG_CONFIGURE}")
+    string(REPLACE "LD_O='-o $@'" "LD_O='-out:$@'" FFMPEG_CONFIGURE "${FFMPEG_CONFIGURE}")
+    string(REPLACE "HOSTLD_O='-o $@'" "HOSTLD_O='-out:$@'" FFMPEG_CONFIGURE "${FFMPEG_CONFIGURE}")
+    string(REPLACE "_cc_o='-Fo $@'" "_cc_o='-Fo$@'" FFMPEG_CONFIGURE "${FFMPEG_CONFIGURE}")
+    string(REPLACE "-g)                   echo -Z7" "-g|-g*)               echo -Z7" FFMPEG_CONFIGURE "${FFMPEG_CONFIGURE}")
+    string(REPLACE
+        [=[enabled debug && add_allcflags -g"$debuglevel" && add_asflags -g"$debuglevel"]=]
+        [=[enabled debug && if [ "$cc_type" = msvc ]; then add_allcflags -Z7; add_asflags -Z7; else add_allcflags -g"$debuglevel"; add_asflags -g"$debuglevel"; fi]=]
+        FFMPEG_CONFIGURE "${FFMPEG_CONFIGURE}")
+    string(REPLACE
+        "check_host_cflags_cc -std=$stdc ctype.h \"__STDC_VERSION__ >= 201112L\" ||\n    check_host_cflags_cc -std=c11 ctype.h \"__STDC_VERSION__ >= 201112L\" || die \"Host compiler lacks C11 support\""
+        ": # MSVC accepts the C11 language constructs used by FFmpeg, but does not define __STDC_VERSION__."
+        FFMPEG_CONFIGURE "${FFMPEG_CONFIGURE}")
+    string(REPLACE
+        "check_cflags_cc -std=$stdc ctype.h \"__STDC_VERSION__ >= 201112L\" ||\n    { check_cflags_cc -std=c11 ctype.h \"__STDC_VERSION__ >= 201112L\" && stdc=\"c11\" || die \"Compiler lacks C11 support\"; }"
+        "stdc=c11"
+        FFMPEG_CONFIGURE "${FFMPEG_CONFIGURE}")
+    string(REPLACE "_Static_assert(" "static_assert(" FFMPEG_CONFIGURE "${FFMPEG_CONFIGURE}")
+    string(REPLACE
+        [=[    CCDEP=${_DEPCMD:-$DEPCMD}
+    CXXDEP=${CCDEP}
+    CCDEP_FLAGS=${_DEPFLAGS:=$DEPFLAGS}
+    CXXDEP_FLAGS=${CCDEP_FLAGS}]=]
+        [=[    CCDEP=:
+    CXXDEP=:
+    CCDEP_FLAGS=
+    CXXDEP_FLAGS=]=]
+        FFMPEG_CONFIGURE "${FFMPEG_CONFIGURE}")
+    string(REPLACE
+        [=[DEPCMD='$(DEP$(1)) $(DEP$(1)FLAGS) $($(1)DEP_FLAGS) $< 2>/dev/null | sed -e "/^\#.*/d" -e "s,^[[:space:]]*$(@F),$(@D)/$(@F)," > $(@:.o=.d)']=]
+        [=[DEPCMD=:]=]
+        FFMPEG_CONFIGURE "${FFMPEG_CONFIGURE}")
+    string(REPLACE
+        "        --enable-debug=*)\n            debuglevel=\"$optval\""
+        "        --disable-debug)\n            debug=no\n        ;;\n        --enable-debug=*)\n            debuglevel=\"$optval\""
+        FFMPEG_CONFIGURE "${FFMPEG_CONFIGURE}")
+    file(WRITE "${SOURCE_PATH}/configure" "${FFMPEG_CONFIGURE}")
     string(APPEND OPTIONS " --disable-inline-asm") # clang-cl has inline assembly but this leads to undefined symbols.
     set(OPTIONS "--toolchain=msvc ${OPTIONS}")
     # This is required because ffmpeg depends upon optimizations to link correctly

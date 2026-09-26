@@ -6068,8 +6068,8 @@ func _start_shell_scroll_drag(key: int, position: Vector2) -> void:
     _clear_scroll_overscroll(scroll)
     var control := _control_at_pointer(position)
     var button := _nearest_base_button(control) if control != null else null
-    var horizontal_slider := (
-        _nearest_horizontal_slider(control) if control != null else null
+    var horizontal_control := (
+        _nearest_horizontal_control(control) if control != null else null
     )
     shell_scroll_drag_states[key] = {
         # Controls can be rebuilt between the touch press and the following
@@ -6091,8 +6091,8 @@ func _start_shell_scroll_drag(key: int, position: Vector2) -> void:
         # A Range control owns its complete press/drag/release gesture. Do not
         # let vertical finger wobble hand that same pointer to the surrounding
         # settings ScrollContainer midway through a slider adjustment.
-        "scroll_locked": horizontal_slider != null,
-        "axis_lock": SHELL_SCROLL_AXIS_PENDING if horizontal_slider != null else SHELL_SCROLL_AXIS_NONE,
+        "scroll_locked": horizontal_control != null,
+        "axis_lock": SHELL_SCROLL_AXIS_PENDING if horizontal_control != null else SHELL_SCROLL_AXIS_NONE,
         "gesture_delta": Vector2.ZERO,
     }
     if input_trace_enabled:
@@ -6417,11 +6417,11 @@ func _nearest_base_button(control: Control) -> BaseButton:
         current = current.get_parent()
     return null
 
-func _nearest_horizontal_slider(control: Control) -> HSlider:
+func _nearest_horizontal_control(control: Control) -> Control:
     var current: Node = control
     while current != null:
-        if current is HSlider:
-            return current as HSlider
+        if current is HSlider or current is AetherSegmentedControl:
+            return current as Control
         current = current.get_parent()
     return null
 
@@ -7252,7 +7252,7 @@ func _apple_select(width: float = 220.0):
 func _keyboard_controls_opacity_control() -> Control:
     var row := HBoxContainer.new()
     row.name = "KeyboardControlsOpacityControl"
-    row.custom_minimum_size = Vector2(272.0, 40.0)
+    row.custom_minimum_size = Vector2(332.0, 46.0)
     row.add_theme_constant_override("separation", 8)
 
     var slider = AetherSlider.new()
@@ -16050,7 +16050,8 @@ func _sync_game_virtual_controls() -> void:
         _should_enable_game_virtual_controls(
             _is_touch_platform(),
             _can_forward_game_input(),
-            app_lifecycle_paused
+            app_lifecycle_paused,
+            game_view != null and game_view.visible
         )
     )
 
@@ -16065,10 +16066,14 @@ func _apply_game_virtual_control_preferences() -> void:
 func _should_enable_game_virtual_controls(
     touch_platform: bool,
     input_ready: bool,
-    lifecycle_paused: bool
+    lifecycle_paused: bool,
+    preview_visible: bool = false
 ) -> bool:
     # Every runtime uses the same EngineApi key and pointer input contract.
-    return touch_platform and input_ready and not lifecycle_paused
+    # Keep the launcher controls available on the play surface before startup;
+    # their panel is useful for previewing the layout and remains inert until
+    # the runtime accepts input.
+    return not lifecycle_paused and ((touch_platform and input_ready) or preview_visible)
 
 func _on_game_virtual_key_event(
     pressed: bool,

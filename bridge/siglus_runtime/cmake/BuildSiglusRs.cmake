@@ -167,8 +167,13 @@ function(aetherkiri_add_siglus_rs imported_target)
         "${SIGLUS_RS_WORKSPACE}/crates/siglus_scene_vm/Cargo.toml")
 
     set(SIGLUS_CARGO_TARGET_DIR "${CMAKE_BINARY_DIR}/siglus-rs-target")
+    if(rust_triple MATCHES "windows")
+        set(SIGLUS_STATIC_LIB_NAME "siglus_scene_vm.lib")
+    else()
+        set(SIGLUS_STATIC_LIB_NAME "libsiglus_scene_vm.a")
+    endif()
     set(SIGLUS_STATIC_LIB
-        "${SIGLUS_CARGO_TARGET_DIR}/${rust_triple}/${rust_profile}/libsiglus_scene_vm.a")
+        "${SIGLUS_CARGO_TARGET_DIR}/${rust_triple}/${rust_profile}/${SIGLUS_STATIC_LIB_NAME}")
 
     # Directories prepended to PATH for the cargo invocation. Kept as a single
     # combined PATH assignment because repeated PATH entries passed to
@@ -248,7 +253,12 @@ function(aetherkiri_add_siglus_rs imported_target)
     if(CMAKE_HOST_UNIX)
         list(PREPEND SIGLUS_PATH_PREFIX "PATH=${siglus_path_leading}$ENV{PATH}")
     else()
-        list(PREPEND SIGLUS_PATH_PREFIX "PATH=${siglus_path_leading}\;$ENV{PATH}")
+        # cmake -E env receives one assignment argument; escape the Windows
+        # list separators so CMake does not split PATH into multiple args.
+        set(siglus_windows_path "${siglus_path_leading};$ENV{PATH}")
+        string(REPLACE ";" "\\;" siglus_windows_path
+            "${siglus_windows_path}")
+        list(PREPEND SIGLUS_PATH_PREFIX "PATH=${siglus_windows_path}")
     endif()
 
     # Rust and cc-rs native dependencies must use the same macOS minimum as
@@ -315,7 +325,8 @@ function(aetherkiri_add_siglus_rs imported_target)
     elseif(WIN32)
         set_property(TARGET ${imported_target} APPEND PROPERTY
             INTERFACE_LINK_LIBRARIES
-            ntdll user32 gdi32 shell32 ws2_2 bcrypt advapi32 ole32 oleaut32)
+            ntdll user32 gdi32 shell32 ws2_32 bcrypt advapi32 ole32 oleaut32
+            opengl32 d3dcompiler dwmapi propsys userenv uxtheme runtimeobject)
     elseif(UNIX AND NOT ANDROID)
         # Rodio's ALSA backend (siglus_rs movie/media audio) references
         # libasound directly from the static archive. Cargo cannot propagate

@@ -9,6 +9,11 @@ add_executable(engine-api-diagnostics
     ${CMAKE_SOURCE_DIR}/cpp/core/utils/TextTransform.cpp
 )
 
+if(MSVC)
+    set_source_files_properties(diagnostics.cpp PROPERTIES
+        COMPILE_OPTIONS "/utf-8")
+endif()
+
 target_compile_features(engine-api-diagnostics PRIVATE cxx_std_17)
 target_include_directories(engine-api-diagnostics PRIVATE
     ${CMAKE_SOURCE_DIR}/bridge/engine_api/include

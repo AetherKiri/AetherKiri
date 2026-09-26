@@ -1,8 +1,8 @@
 extends Button
 
-const TRACK_SIZE := Vector2(51, 31)
-const KNOB_SIZE := Vector2(23, 23)
-const TRACK_INSET := 4.0
+const TRACK_SIZE := Vector2(58, 34)
+const KNOB_SIZE := Vector2(24, 24)
+const TRACK_INSET := 5.0
 
 var tokens
 var motion
@@ -56,14 +56,17 @@ func _sync(enabled: bool, animate: bool) -> void:
         0.10 if dark else 0.14
     )
     var track_fill: Color = tokens.accent if enabled else off_fill
-    var track_border: Color = tokens.accent.lightened(0.25) if enabled else tokens.separator
+    var track_border: Color = tokens.accent.lightened(0.32) if enabled else Color(
+        tokens.separator.r, tokens.separator.g, tokens.separator.b, 0.72
+    )
     var style: StyleBoxFlat = tokens.panel(track_fill, 16, track_border, 1)
     if enabled:
         style.shadow_color = Color(tokens.accent.r, tokens.accent.g, tokens.accent.b, 0.30)
-        style.shadow_size = 6
+        style.shadow_size = 8
+        style.shadow_offset = Vector2(0, 2)
     else:
         style.shadow_color = Color(tokens.shadow.r, tokens.shadow.g, tokens.shadow.b, 0.10)
-        style.shadow_size = 2
+        style.shadow_size = 3
     style.shadow_offset = Vector2(0, 2)
     add_theme_stylebox_override("normal", style)
     add_theme_stylebox_override("hover", _track_variant_box(style, 0.04))
