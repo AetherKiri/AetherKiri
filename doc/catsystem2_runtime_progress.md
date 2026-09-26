@@ -44,6 +44,42 @@ Status: verified on Windows x64 release.
   `sscript.kcs` -> OP movie playback (non-black captured frames) ->
   responsive message-window toolbar and confirm dialogs.
 
+## Stage 2: Skip, Quick-Save/Load, And Stand-Sprite Repair
+
+Status: verified on Windows x64 release (`8bb1ce9`, `d0b5ce9`).
+
+- Message-window skip was inert: clicking the toolbar skip button did
+  nothing and Ctrl had no effect. Native `Input_SetSkip` /
+  `Input_CheckHold` semantics are now mirrored: Ctrl press latches
+  `key_skip_continuous_`, release completes motions, and the tick
+  condition gained a `skip_voice_advance` gate that advances legacy
+  CatScene lines while voice plays without leaving the read-line stop.
+- Quick-save gave no feedback and quick-load stalled at its
+  confirmation: a successful `Save(100)` now dispatches the
+  `MES_COMP_QSAVE` skin popup, and pointer events that miss a modal
+  confirmation no longer fall through to the story advance path
+  (`HasSystemModalTask` guards reuse the native KEYBLOCK ownership, so
+  `WAIT_CONF_QLOAD` keeps its polling context and the second quick-load
+  works).
+- Stand sprites (立绘) were pinned to the top-left corner: Grisaia-era
+  CatScene positions characters through computed variable indices
+  (`cg 0 Tchi01m,1,1,2,2 #(950+#300) #(955+0) 1 0` with
+  `#(950+#300)=512`, `#(955+0)=576`). Native `kcInterpreter::Calc`
+  (IDA, libfescript.so, case 176) evaluates the parenthesized body and
+  addresses the numbered bank with the result. Our expression evaluator
+  stopped the token scan at the parenthesis (bare `#` lookup -> zero)
+  and assignments landed in a literal `(950+#300)` slot no read ever
+  reached. `ExpressionParser::Primary` now routes `#(` through the same
+  computed-variable path as `\(` and `$(`, and `ResolveVariable` /
+  `SetVariable` evaluate the body and canonicalize the normalized form.
+- Verified by automated probe: `cg[0] pos 512,576 asset=Tchi01m`
+  (authored bottom-center anchor; previously 0,0), `fw[0] pos 0,413
+  asset=Tchi01f` (authored position), OP montage expression coordinates
+  (`48+96`=144, `576-144`=432), skip toggles `skipMode:true` and
+  advances dialogue during voice, quick-save writes `slot100.aecs2`
+  with the skin popup, and quick-load dispatches message 22 twice with
+  a stable `#WAIT_CONF_QLOAD` polling tag.
+
 ## Diagnostics
 
 - `AETHERKIRI_CATSYSTEM2_DUMP_FES=1` dumps loaded FES program structure
