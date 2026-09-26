@@ -277,6 +277,16 @@ public:
     virtual ~iTVPAudioRenderer() = default;
 
     void InitMixer() {
+#if defined(__ANDROID__)
+        // SDL is embedded in the Godot host, which never runs SDLActivity's
+        // JNI registration, so SDL has no JavaVM there. Device enumeration
+        // (Android_DetectDevices, used by both the Java AudioTrack backend
+        // and the AAudio fallback) is null-guarded by our vcpkg SDL patch,
+        // and the Java AudioTrack playback path is unusable without JNI, so
+        // prefer the native backends regardless.
+        SDL_SetHintWithPriority(SDL_HINT_AUDIODRIVER,
+                                "openslES,aaudio,dummy", SDL_HINT_OVERRIDE);
+#endif
         if(SDL_Init(SDL_INIT_AUDIO) < 0) { // for format converter
             SDL_Log("Fail to initialize audio.");
             return;
