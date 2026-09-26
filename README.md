@@ -84,7 +84,7 @@ runtimes unrestricted for compatibility development and testing.
 | --- | --- |
 | `apps/godot_app/` | Godot project, scenes, settings UI, performance/log panel, icons, and export presets. |
 | `bridge/godot_extension/` | Godot native host library entry points. |
-| `bridge/engine_api/` | C ABI used by the host layer to drive the C++ engine. |
+| `abi/` | C ABI used by the host layer to drive the C++ engine. |
 | `bridge/onscripter_runtime/` | Headless OnscripterYuri host, frame capture, and input bridge. |
 | `bridge/siglus_runtime/` | Siglus runtime provider plus build-time overlay (patches + FFI files) applied to the pristine `siglus_rs` sources; see `bridge/siglus_runtime/overlay/`. |
 | `packages/AetherKrkr/` | KiriKiri2 engine runtime submodule (core, TJS2 VM, visual/audio/storage/movie modules, and the bundled native plugins); its integration glue lives in `bridge/krkr2_runtime/`. |

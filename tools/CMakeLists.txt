@@ -17,7 +17,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_CURRENT_SOURCE_DIR}/bin/${OS_P
 # (Phase 2d); pass its path down to the tool, mirroring the standalone
 # krkr2 test suites in tests/CMakeLists.txt.
 set(KRKR2_TEXT_TRANSFORM_SOURCE
-    "${CMAKE_SOURCE_DIR}/bridge/engine_api/src/TextTransform.cpp")
+    "${CMAKE_SOURCE_DIR}/abi/src/TextTransform.cpp")
 
 # The xp3 archive tools live in the krkr2 engine repository (issue #241
 # Phase 2); this checkout owns their wiring and the binary output paths.

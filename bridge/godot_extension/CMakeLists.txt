@@ -186,7 +186,7 @@ target_compile_definitions(aether_kiri_godot PRIVATE
     $<$<CONFIG:Debug>:DEBUG_ENABLED DEBUG_METHODS_ENABLED HOT_RELOAD_ENABLED>
 )
 target_include_directories(aether_kiri_godot PRIVATE
-    $<$<COMPILE_LANGUAGE:CXX>:${CMAKE_CURRENT_SOURCE_DIR}/../engine_api/include>
+    $<$<COMPILE_LANGUAGE:CXX>:${CMAKE_SOURCE_DIR}/abi/include>
 )
 
 if(AETHERKIRI_INTERNAL_ENABLED AND

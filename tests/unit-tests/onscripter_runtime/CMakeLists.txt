@@ -27,7 +27,7 @@ catch_discover_tests(onscripter-runtime-save-storage)
 add_executable(onscripter-runtime-provider provider.cpp)
 target_compile_features(onscripter-runtime-provider PRIVATE cxx_std_17)
 target_include_directories(onscripter-runtime-provider PRIVATE
-    ${CMAKE_SOURCE_DIR}/bridge/engine_api/include
+    ${CMAKE_SOURCE_DIR}/abi/include
     ${CMAKE_SOURCE_DIR}/bridge/onscripter_runtime/include
 )
 target_link_libraries(onscripter-runtime-provider PRIVATE

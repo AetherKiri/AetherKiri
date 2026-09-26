@@ -2,7 +2,7 @@
  * layer. Since the Phase 2d link flip the runtime glue is linked by the Godot
  * extension host instead of engine_api itself, so the engine_legacy_* surface
  * travels through one installable table (see
- * bridge/engine_api/src/engine_legacy_services.h). */
+ * abi/src/engine_legacy_services.h). */
 
 #include "legacy_engine_api.h"
 #include "engine_legacy_services.h"

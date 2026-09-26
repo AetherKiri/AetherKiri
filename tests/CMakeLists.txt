@@ -22,7 +22,7 @@ endif()
 # its path down to them. Out-of-tree sources need an explicit binary
 # directory; keep it mirroring the engine submodule location.
 set(KRKR2_TEXT_TRANSFORM_SOURCE
-    "${CMAKE_SOURCE_DIR}/bridge/engine_api/src/TextTransform.cpp")
+    "${CMAKE_SOURCE_DIR}/abi/src/TextTransform.cpp")
 
 add_subdirectory("${AETHERKIRI_KRKR_DIR}/tests/plugins"
     "${CMAKE_BINARY_DIR}/packages/AetherKrkr/tests/plugins")

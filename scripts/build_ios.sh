@@ -277,7 +277,7 @@ combine_ios_static_extension() {
     local libs=(
         "$CMAKE_BUILD_DIR/bridge/godot_extension/libaether_kiri_godot.a"
         "$CMAKE_BUILD_DIR/bridge/onscripter_runtime/libaether_onscripter_runtime.a"
-        "$CMAKE_BUILD_DIR/bridge/engine_api/libengine_api.a"
+        "$CMAKE_BUILD_DIR/abi/libengine_api.a"
         "$CMAKE_BUILD_DIR/bridge/krkr2_runtime/libaether_krkr2_runtime.a"
         "$CMAKE_BUILD_DIR/packages/AetherKrkr/core/base/libcore_base_module.a"
         "$CMAKE_BUILD_DIR/packages/AetherKrkr/core/environ/libcore_environ_module.a"
@@ -635,7 +635,7 @@ cmake --preset "$CMAKE_CONFIG_PRESET" --fresh "${cmake_config_args[@]}"
 cmake --build --preset "$CMAKE_BUILD_PRESET" -- -j"$PARALLEL_JOBS"
 
 mkdir -p "$GODOT_BIN_DIR"
-cp -f "$CMAKE_BUILD_DIR/bridge/engine_api/libengine_api.a" "$GODOT_BIN_DIR/" 2>/dev/null || true
+cp -f "$CMAKE_BUILD_DIR/abi/libengine_api.a" "$GODOT_BIN_DIR/" 2>/dev/null || true
 cp -f "$CMAKE_BUILD_DIR/bridge/godot_extension/libaether_kiri_godot.a" "$GODOT_BIN_DIR/" 2>/dev/null || true
 build_ios_sdk_compat_archive "$GODOT_BIN_DIR/$IOS_SDK_COMPAT_ARCHIVE" "$VCPKG_TRIPLET_DIR"
 stage_force_load_plugin_archives "$GODOT_BIN_DIR"
@@ -645,7 +645,7 @@ fi
 if [[ "$SIMULATOR" == true ]]; then
     GODOT_EXPORT_BIN_DIR="$GODOT_APP_DIR/bin/ios/$BUILD_TYPE_LOWER"
     mkdir -p "$GODOT_EXPORT_BIN_DIR"
-    cp -f "$CMAKE_BUILD_DIR/bridge/engine_api/libengine_api.a" "$GODOT_EXPORT_BIN_DIR/" 2>/dev/null || true
+    cp -f "$CMAKE_BUILD_DIR/abi/libengine_api.a" "$GODOT_EXPORT_BIN_DIR/" 2>/dev/null || true
     cp -f "$GODOT_BIN_DIR/libaether_kiri_godot.a" "$GODOT_EXPORT_BIN_DIR/" 2>/dev/null || true
     cp -f "$GODOT_BIN_DIR/$IOS_SDK_COMPAT_ARCHIVE" "$GODOT_EXPORT_BIN_DIR/" 2>/dev/null || true
     stage_force_load_plugin_archives "$GODOT_EXPORT_BIN_DIR"
