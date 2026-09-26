@@ -162,10 +162,6 @@ target_compile_definitions(aether_kiri_godot PRIVATE
 )
 target_include_directories(aether_kiri_godot PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:${CMAKE_CURRENT_SOURCE_DIR}/../engine_api/include>
-    $<$<COMPILE_LANGUAGE:CXX>:${CMAKE_CURRENT_SOURCE_DIR}/../../cpp/core/visual/godot>
-    $<$<COMPILE_LANGUAGE:CXX>:${CMAKE_CURRENT_SOURCE_DIR}/../../cpp/core/visual>
-    $<$<COMPILE_LANGUAGE:CXX>:${CMAKE_CURRENT_SOURCE_DIR}/../../cpp/core/tjs2>
-    $<$<COMPILE_LANGUAGE:CXX>:${CMAKE_BINARY_DIR}/cpp/core/tjs2/gen>
 )
 
 if(AETHERKIRI_INTERNAL_ENABLED AND
