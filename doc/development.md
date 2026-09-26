@@ -40,8 +40,8 @@ Native first, then GPU Bridge where native coverage is incomplete.
 | `apps/godot_app/` | Godot project, scene, scripts, assets, export presets, and GDExtension descriptor. |
 | `bridge/godot_extension/` | C++ GDExtension classes exposed to Godot, including the host node/player binding. |
 | `bridge/engine_api/` | Stable C ABI between the Godot host and the engine core. Keep this narrow and versionable. |
-| `cpp/core/` | KiriKiri runtime core: script VM, storage, events, window/layer system, rendering, audio, movie, and plugin infrastructure. |
-| `cpp/plugins/` | Built-in plugin implementations and compatibility adapters registered as KiriKiri plugins. |
+| `packages/AetherKrkr/` | KiriKiri engine runtime submodule: script VM, storage, events, window/layer system, rendering, audio, movie, and plugin infrastructure (`core/`, `plugins/`, `external/`). |
+| `bridge/krkr2_runtime/` | KiriKiri integration glue: the legacy engine_api implementation, host hooks, and the krkr2core/krkr2plugin linkage. |
 | `build/` | Platform build entry scripts and validation scripts. |
 | `tests/` | Unit tests, fixtures, and generic probe profiles. Committed test profiles must not contain local absolute game paths. |
 | `tools/` | Developer tools such as XP3 helpers and plugin audit utilities. |
@@ -88,13 +88,13 @@ Native first, then GPU Bridge where native coverage is incomplete.
 | `bridge/onscripter_runtime/src/onscripter_runtime_provider.cpp` | ONScripterYuri adapter for the shared runtime-provider ABI. |
 | `bridge/siglus_runtime/src/siglus_runtime_provider.cpp` | SiglusEngine (siglus_rs) adapter for the shared runtime-provider ABI. |
 | `bridge/siglus_runtime/cmake/PrepareSiglusRsWorkspace.cmake` | Build-time overlay: copies pristine `packages/AetherSiglus` into the build tree and applies `bridge/siglus_runtime/overlay/` patches there, keeping the submodule untouched. |
-| `cpp/core/environ/EngineLoop.*` | Main runtime lifecycle, tick loop, and host input conversion into TVP events. |
-| `cpp/core/visual/LayerManager.*` | Layer hit testing, focus/capture, mouse/touch/key dispatch, and compatibility input behavior. |
-| `cpp/core/visual/impl/DrawDevice.*` | Draw device bridge between window/layer updates and render managers. |
-| `cpp/core/visual/impl/LayerBitmapImpl.*` | Bitmap/layer pixel operations and text drawing. |
-| `cpp/core/visual/godot/` | Godot Native render manager and texture/backend code, when present in the branch. |
-| `cpp/core/plugin/PluginImpl.cpp` | Plugin registration/loading path for internal KiriKiri plugin modules. |
-| `cpp/plugins/CMakeLists.txt` | Plugin build wiring. Use this when adding or enabling plugin modules. |
+| `packages/AetherKrkr/core/environ/EngineLoop.*` | Main runtime lifecycle, tick loop, and host input conversion into TVP events. |
+| `packages/AetherKrkr/core/visual/LayerManager.*` | Layer hit testing, focus/capture, mouse/touch/key dispatch, and compatibility input behavior. |
+| `packages/AetherKrkr/core/visual/impl/DrawDevice.*` | Draw device bridge between window/layer updates and render managers. |
+| `packages/AetherKrkr/core/visual/impl/LayerBitmapImpl.*` | Bitmap/layer pixel operations and text drawing. |
+| `packages/AetherKrkr/core/visual/godot/` | Godot Native render manager and texture/backend code, when present in the branch. |
+| `packages/AetherKrkr/core/plugin/PluginImpl.cpp` | Plugin registration/loading path for internal KiriKiri plugin modules. |
+| `packages/AetherKrkr/plugins/CMakeLists.txt` | Plugin build wiring (krkr2 repository). Use this when adding or enabling plugin modules. |
 | `tests/profiles/kr37s.json` | Generic probe profile. It intentionally has an empty `game_path`; use environment variables for local paths. |
 | `doc/krkr2_plugins.md` | Reference list of known KiriKiri2 plugin names and source locations. |
 
@@ -271,7 +271,7 @@ Cross-Origin-Resource-Policy: same-origin
 Also configure `application/wasm` for `.wasm` files and
 `application/octet-stream` for `.pck` files. Web currently uses Emscripten's
 virtual filesystem through a conservative platform shim in
-`cpp/core/environ/web/Platform.cpp`. Cloud Web deployments cannot read user game
+`packages/AetherKrkr/core/environ/web/Platform.cpp`. Cloud Web deployments cannot read user game
 files from server environment variables; the product import path is the browser
 file/directory picker. After user authorization, local `File`/`Blob` objects are
 mounted read-only under `/webgames/<id>` with Range reads, so multi-GB packages

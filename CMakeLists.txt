@@ -159,7 +159,7 @@ if(AETHERKIRI_ENABLE_INTERNAL)
     find_package(AetherInternal CONFIG QUIET
         NO_DEFAULT_PATH)
     if(AetherInternal_FOUND)
-        if(NOT AETHERINTERNAL_PACKAGE_API_VERSION EQUAL 7 OR
+        if(NOT AETHERINTERNAL_PACKAGE_API_VERSION EQUAL 8 OR
            NOT AETHERINTERNAL_REQUIRED_MOTIONPLAYER_API_VERSION EQUAL
                AETHERKIRI_MOTIONPLAYER_BACKEND_API_VERSION OR
            NOT AETHERINTERNAL_REQUIRED_LIVE2D_HOST_API_VERSION EQUAL
@@ -197,8 +197,18 @@ set(CMAKE_C_STANDARD 17)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-set(KRKR2CORE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cpp/core)
-set(KRKR2PLUGIN_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cpp/plugins)
+# The krkr2 engine runtime lives in its own repository (issue #241 Phase 2,
+# AetherKiri/AetherKrkr) and is embedded as the packages/AetherKrkr submodule. This consuming build
+# injects the two paths the engine repository needs: the engine_api ABI
+# headers (engine_gpu_bridge.h / TextTransform.h consumed by the core
+# visual/utils modules) and the psdfile adapter package.
+set(AETHERKIRI_KRKR_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/packages/AetherKrkr"
+    CACHE PATH "path to a krkr2 engine checkout")
+set(KRKR2_ENGINE_ABI_INCLUDE_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/bridge/engine_api/include")
+set(KRKR2_PSDFILE_PACKAGE_ROOT
+    "${CMAKE_CURRENT_SOURCE_DIR}/packages/psdfile")
 
 if(MSVC)
     add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/EHsc>" "/MP" "/utf-8")
@@ -216,12 +226,9 @@ endif()
 # Godot is the product app shell on the wired platforms. This native build
 # produces engine libraries and the GDExtension host, not standalone launchers.
 
-# external lib
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cpp/external)
-
-# build library
-add_subdirectory(${KRKR2CORE_PATH})
-add_subdirectory(${KRKR2PLUGIN_PATH})
+# The krkr2 engine repository defines the engine targets (external/, core/,
+# plugins/); its integration glue stays in bridge/krkr2_runtime.
+add_subdirectory(${AETHERKIRI_KRKR_DIR})
 
 # AetherInternal contributes sources to public targets but does not own the
 # obfuscation policy. Register only package-owned source units for protected

@@ -37,8 +37,8 @@ CPU 上传只能作为 debug fallback。性能优化应优先落到 Godot Native
 | `apps/godot_app/` | Godot 项目、场景、脚本、资源、导出配置和 GDExtension 描述文件。 |
 | `bridge/godot_extension/` | 暴露给 Godot 的 C++ GDExtension 类和 host/player 绑定。 |
 | `bridge/engine_api/` | Godot host 与 C++ engine core 之间的稳定 C ABI。这个边界应保持窄且可版本化。 |
-| `cpp/core/` | KiriKiri 运行时核心：脚本 VM、存储、事件、窗口/图层系统、渲染、音频、视频和插件基础设施。 |
-| `cpp/plugins/` | 内置插件实现和兼容适配模块，以 KiriKiri 插件名注册。 |
+| `packages/AetherKrkr/` | KiriKiri 引擎运行时 submodule：脚本 VM、存储、事件、窗口/图层系统、渲染、音频、视频和插件基础设施（`core/`、`plugins/`、`external/`）。 |
+| `bridge/krkr2_runtime/` | KiriKiri 集成胶水：legacy engine_api 实现、host hooks 与 krkr2core/krkr2plugin 链接块。 |
 | `build/` | 各平台构建脚本和验证脚本。 |
 | `tests/` | 单元测试、fixture 和通用 probe profile。提交的 profile 不能包含本机绝对游戏路径。 |
 | `tools/` | 开发工具，例如 XP3 工具和插件审计工具。 |
@@ -85,13 +85,13 @@ CPU 上传只能作为 debug fallback。性能优化应优先落到 Godot Native
 | `bridge/onscripter_runtime/src/onscripter_runtime_provider.cpp` | ONScripterYuri 到统一 Runtime Provider ABI 的适配器。 |
 | `bridge/siglus_runtime/src/siglus_runtime_provider.cpp` | SiglusEngine（siglus_rs）到统一 Runtime Provider ABI 的适配器。 |
 | `bridge/siglus_runtime/cmake/PrepareSiglusRsWorkspace.cmake` | 构建期 overlay：把 pristine 的 `packages/AetherSiglus` 拷贝进构建树并应用 `bridge/siglus_runtime/overlay/` 补丁，submodule 本体保持只读。 |
-| `cpp/core/environ/EngineLoop.*` | 运行时生命周期、tick loop，以及 host input 到 TVP 事件的转换。 |
-| `cpp/core/visual/LayerManager.*` | 图层命中测试、焦点/capture、鼠标/触摸/键盘派发和兼容输入逻辑。 |
-| `cpp/core/visual/impl/DrawDevice.*` | Window/layer 更新与 render manager 之间的 draw device 桥。 |
-| `cpp/core/visual/impl/LayerBitmapImpl.*` | Bitmap/layer 像素操作和文字绘制。 |
-| `cpp/core/visual/godot/` | Godot Native render manager、texture 和后端代码。具体文件随分支演进。 |
-| `cpp/core/plugin/PluginImpl.cpp` | 内部 KiriKiri 插件模块注册和加载路径。 |
-| `cpp/plugins/CMakeLists.txt` | 插件构建接线。添加或启用插件时通常需要修改这里。 |
+| `packages/AetherKrkr/core/environ/EngineLoop.*` | 运行时生命周期、tick loop，以及 host input 到 TVP 事件的转换。 |
+| `packages/AetherKrkr/core/visual/LayerManager.*` | 图层命中测试、焦点/capture、鼠标/触摸/键盘派发和兼容输入逻辑。 |
+| `packages/AetherKrkr/core/visual/impl/DrawDevice.*` | Window/layer 更新与 render manager 之间的 draw device 桥。 |
+| `packages/AetherKrkr/core/visual/impl/LayerBitmapImpl.*` | Bitmap/layer 像素操作和文字绘制。 |
+| `packages/AetherKrkr/core/visual/godot/` | Godot Native render manager、texture 和后端代码。具体文件随分支演进。 |
+| `packages/AetherKrkr/core/plugin/PluginImpl.cpp` | 内部 KiriKiri 插件模块注册和加载路径。 |
+| `packages/AetherKrkr/plugins/CMakeLists.txt` | 插件构建接线（krkr2 仓库）。添加或启用插件时通常需要修改这里。 |
 | `tests/profiles/kr37s.json` | 通用 probe profile，`game_path` 故意为空。本地路径通过环境变量传入。 |
 | `doc/krkr2_plugins.md` | KiriKiri2 插件名和来源位置参考表。 |
 
@@ -263,7 +263,7 @@ Cross-Origin-Resource-Policy: same-origin
 ```
 
 同时需要配置 `.wasm` 的 MIME 为 `application/wasm`，`.pck` 为
-`application/octet-stream`。Web 当前通过 `cpp/core/environ/web/Platform.cpp`
+`application/octet-stream`。Web 当前通过 `packages/AetherKrkr/core/environ/web/Platform.cpp`
 里的保守 platform shim 使用 Emscripten 虚拟文件系统。云端 Web 版不能依赖服务器
 环境变量读取用户电脑上的游戏；正式导入路径是浏览器文件/目录选择器，用户授权后将
 本地 `File`/`Blob` 对象以只读 Range FS 挂载到 `/webgames/<id>`。这样 2-3G 游戏包
