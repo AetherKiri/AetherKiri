@@ -39,7 +39,7 @@ Native first, then GPU Bridge where native coverage is incomplete.
 | --- | --- |
 | `apps/godot_app/` | Godot project, scene, scripts, assets, export presets, and GDExtension descriptor. |
 | `bridge/godot_extension/` | C++ GDExtension classes exposed to Godot, including the host node/player binding. |
-| `bridge/engine_api/` | Stable C ABI between the Godot host and the engine core. Keep this narrow and versionable. |
+| `abi/` | Stable C ABI between the Godot host and the engine core. Keep this narrow and versionable. |
 | `packages/AetherKrkr/` | KiriKiri engine runtime submodule: script VM, storage, events, window/layer system, rendering, audio, movie, and plugin infrastructure (`core/`, `plugins/`, `external/`). |
 | `bridge/krkr2_runtime/` | KiriKiri integration glue: the legacy engine_api implementation, host hooks, and the krkr2core/krkr2plugin linkage. |
 | `build/` | Platform build entry scripts and validation scripts. |
@@ -77,14 +77,14 @@ Native first, then GPU Bridge where native coverage is incomplete.
 | `apps/godot_app/scripts/gui_render_probe.gd` | GUI render screenshot probe. |
 | `apps/godot_app/scripts/gpu_blend_self_test.gd` | Godot GPU blend self-test harness. |
 | `bridge/godot_extension/src/aether_runtime_player.cpp` | Godot-visible `AetherRuntimePlayer` implementation and Godot method bindings. |
-| `bridge/engine_api/include/engine_api.h` | C ABI exported by the engine bridge. |
-| `bridge/engine_api/include/engine_runtime_provider.h` | Versioned runtime-provider ABI behind `AetherRuntimePlayer`. New engines implement this contract instead of another Godot Player. |
-| `bridge/engine_api/include/engine_options.h` | Engine option keys/values shared with host code. |
-| `bridge/engine_api/include/engine_gpu_bridge.h` | Shared GPU bridge ABI (callback tables, blend modes, `tTVPRect`/`tTVPPointD` geometry) consumed by the Godot extension and every engine runtime without krkr2 header paths. |
-| `bridge/engine_api/src/engine_api_dispatch.cpp` | C ABI dispatch: creates, opens, ticks, renders, receives input, and routes between the legacy backend and registered runtime providers. |
+| `abi/include/engine_api.h` | C ABI exported by the engine bridge. |
+| `abi/include/engine_runtime_provider.h` | Versioned runtime-provider ABI behind `AetherRuntimePlayer`. New engines implement this contract instead of another Godot Player. |
+| `abi/include/engine_options.h` | Engine option keys/values shared with host code. |
+| `abi/include/engine_gpu_bridge.h` | Shared GPU bridge ABI (callback tables, blend modes, `tTVPRect`/`tTVPPointD` geometry) consumed by the Godot extension and every engine runtime without krkr2 header paths. |
+| `abi/src/engine_api_dispatch.cpp` | C ABI dispatch: creates, opens, ticks, renders, receives input, and routes between the legacy backend and registered runtime providers. |
 | `bridge/krkr2_runtime/src/krkr2_legacy_engine_api.cpp` | Legacy KiriKiri (krkr2core) implementation of the engine ABI, linked into `engine_api` through the runtime glue. |
 | `bridge/krkr2_runtime/src/krkr2_host_hooks.cpp` | Host services (audio session, texture recycle) the dispatch layer borrows from the KiriKiri runtime. |
-| `bridge/engine_api/src/engine_api_stub.cpp` | Standalone stub of the legacy engine surface used when no KiriKiri runtime is linked (unit tests, provider-only configs). |
+| `abi/src/engine_api_stub.cpp` | Standalone stub of the legacy engine surface used when no KiriKiri runtime is linked (unit tests, provider-only configs). |
 | `bridge/onscripter_runtime/src/onscripter_runtime_provider.cpp` | ONScripterYuri adapter for the shared runtime-provider ABI. |
 | `bridge/siglus_runtime/src/siglus_runtime_provider.cpp` | SiglusEngine (siglus_rs) adapter for the shared runtime-provider ABI. |
 | `bridge/siglus_runtime/cmake/PrepareSiglusRsWorkspace.cmake` | Build-time overlay: copies pristine `packages/AetherSiglus` into the build tree and applies `bridge/siglus_runtime/overlay/` patches there, keeping the submodule untouched. |
@@ -556,7 +556,7 @@ scripts, extracted bytecode, DLLs, or machine-local paths.
 - Keep local test paths out of committed project settings and profiles.
 - Prefer backend-specific fixes over broad behavior changes in the engine core.
 - Do not silently downgrade performance paths to Debug CPU.
-- Treat `bridge/engine_api` as a stable boundary.
+- Treat `abi` as a stable boundary.
 - Add plugin compatibility only when behavior is real or intentionally
   documented; avoid pretending unsupported APIs succeeded.
 - Preserve user work in the working tree. Do not reset or revert unrelated

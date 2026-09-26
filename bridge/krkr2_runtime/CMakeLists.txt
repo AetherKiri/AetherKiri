@@ -25,8 +25,8 @@ target_compile_features(aether_krkr2_runtime PRIVATE cxx_std_17)
 target_include_directories(aether_krkr2_runtime
     PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../engine_api/include"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../engine_api/src"
+        "${CMAKE_SOURCE_DIR}/abi/include"
+        "${CMAKE_SOURCE_DIR}/abi/src"
 )
 
 # Mirror the engine_api export-macro compilation context so the moved
@@ -47,7 +47,7 @@ else()
         ENGINE_API_BUILD_SHARED)
 endif()
 
-# krkr2 link block (moved verbatim from bridge/engine_api).
+# krkr2 link block (moved verbatim from the engine_api library, now abi/).
 if(WEB OR EMSCRIPTEN)
     # The Web side module force-loads krkr2plugin once at the final link.
     # Keep this dependency normal here so CMake can repeat cyclic static

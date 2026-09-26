@@ -46,7 +46,7 @@ add_library(aether_siglus_runtime STATIC
 if(APPLE)
     enable_language(OBJCXX)
     target_sources(aether_siglus_runtime PRIVATE src/siglus_shared_frame.mm)
-    target_include_directories(aether_siglus_runtime PRIVATE "${CMAKE_SOURCE_DIR}/bridge/engine_api/include")
+    target_include_directories(aether_siglus_runtime PRIVATE "${CMAKE_SOURCE_DIR}/abi/include")
     target_link_libraries(aether_siglus_runtime PRIVATE "-framework CoreVideo" "-framework Metal")
 else()
     target_sources(aether_siglus_runtime PRIVATE src/siglus_shared_frame.cpp)

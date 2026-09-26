@@ -149,7 +149,7 @@ cmake --preset "$CMAKE_CONFIG_PRESET" --fresh "${cmake_config_args[@]}"
 cmake --build --preset "$CMAKE_BUILD_PRESET" -- -j"$PARALLEL_JOBS"
 
 mkdir -p "$GODOT_BIN_DIR"
-cp -f "$CMAKE_BUILD_DIR/bridge/engine_api/libengine_api.dylib" "$GODOT_BIN_DIR/"
+cp -f "$CMAKE_BUILD_DIR/abi/libengine_api.dylib" "$GODOT_BIN_DIR/"
 cp -f "$CMAKE_BUILD_DIR/bridge/godot_extension/libaether_kiri_godot.dylib" "$GODOT_BIN_DIR/"
 if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
     echo "==> Removing non-runtime symbols from staged macOS Release libraries"

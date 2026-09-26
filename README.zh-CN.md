@@ -72,7 +72,7 @@ Godot App Shell
 | --- | --- |
 | `apps/godot_app/` | Godot 项目、场景、设置 UI、性能/日志面板、图标和导出配置。 |
 | `bridge/godot_extension/` | Godot 原生宿主库入口。 |
-| `bridge/engine_api/` | 宿主层驱动 C++ 引擎的 C ABI。 |
+| `abi/` | 宿主层驱动 C++ 引擎的 C ABI。 |
 | `bridge/onscripter_runtime/` | OnscripterYuri 无窗口宿主、帧读取和输入桥接。 |
 | `bridge/siglus_runtime/` | Siglus 运行时 provider，以及应用到 pristine siglus_rs 源码的构建期 overlay（补丁 + FFI 文件），见 `bridge/siglus_runtime/overlay/`。 |
 | `packages/AetherKrkr/` | KiriKiri2 引擎运行时 submodule（core、TJS2 VM、视觉/音频/存储/视频模块与内置 native 插件）；其集成胶水位于 `bridge/krkr2_runtime/`。 |

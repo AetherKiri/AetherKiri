@@ -206,7 +206,7 @@ set(AETHERKIRI_KRKR_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/packages/AetherKrkr"
     CACHE PATH "path to a krkr2 engine checkout")
 set(KRKR2_ENGINE_ABI_INCLUDE_DIR
-    "${CMAKE_CURRENT_SOURCE_DIR}/bridge/engine_api/include")
+    "${CMAKE_CURRENT_SOURCE_DIR}/abi/include")
 set(KRKR2_PSDFILE_PACKAGE_ROOT
     "${CMAKE_CURRENT_SOURCE_DIR}/packages/psdfile")
 
@@ -271,7 +271,7 @@ endif()
 # services table (Phase 2d link flip — engine_api itself never links it).
 if(BUILD_ENGINE_API OR AETHERKIRI_BUILD_NATIVE_ONSCRIPTER_TESTS OR AETHERKIRI_ENABLE_RFVP)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/krkr2_runtime)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/engine_api)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/abi)
 endif()
 if(AETHERKIRI_ENABLE_ONSCRIPTER AND
    (BUILD_GODOT_EXTENSION OR AETHERKIRI_BUILD_NATIVE_ONSCRIPTER_TESTS))
