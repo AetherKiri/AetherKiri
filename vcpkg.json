@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
-  "name": "krkr2",
+  "name": "aetherkiri",
   "version-string": "1.5.0",
   "dependencies": [
     "7zip",
@@ -8,24 +8,12 @@
       "name": "argparse",
       "platform": "linux | windows | osx"
     },
-    "boost-iostreams",
     "bzip2",
     {
       "name": "boost-locale",
       "default-features": false
     },
-    {
-      "name": "bullet3",
-      "platform": "!emscripten"
-    },
-    "boost-phoenix",
-    "boost-spirit",
     "curl",
-    {
-      "name": "breakpad",
-      "default-features": false,
-      "platform": "android"
-    },
     {
       "name": "catch2",
       "default-features": false,
