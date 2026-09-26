@@ -856,7 +856,7 @@ jobs:
           cmake --preset "MacOS Debug Config" --fresh \
             -B "$test_build_dir" \
             -D ENABLE_TESTS=ON \
-            -D BUILD_TOOLS=OFF \
+            -D BUILD_TOOLS=ON \
             -D BUILD_ENGINE_API=OFF \
             -D BUILD_GODOT_EXTENSION=OFF \
             -D VCPKG_MANIFEST_INSTALL=OFF \
@@ -878,6 +878,11 @@ jobs:
             --output-on-failure \
             --no-tests=error \
             --parallel 4
+
+          # The xp3 archive tools are built in this step so their standalone
+          # links cannot silently regress again (issue #241 Phase 2 fallout).
+          tools/bin/mac/dbg/xp3 --help >/dev/null
+          tools/bin/mac/dbg/xp3_select --help >/dev/null
 
       - name: Verify built .app
         run: |
