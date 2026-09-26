@@ -380,6 +380,9 @@ const UI_TEXT := {
         "dialog.select_game_dir": "选择游戏目录",
         "dialog.select_local_game_dir": "选择本地游戏目录",
         "dialog.cancel": "取消",
+        "dialog.exit_game_title": "退出游戏",
+        "dialog.exit_game_body": "确定要退出当前游戏并返回媒体库吗？",
+        "dialog.exit_game_confirm": "退出游戏",
         "dialog.dev_mount": "开发挂载  %s",
         "message.web_manifest_failed": "无法读取 Web 游戏挂载清单",
         "message.web_mount_failed": "Web 本地挂载失败：%s",
@@ -673,6 +676,9 @@ const UI_TEXT := {
         "dialog.select_game_dir": "選擇遊戲目錄",
         "dialog.select_local_game_dir": "選擇本機遊戲目錄",
         "dialog.cancel": "取消",
+        "dialog.exit_game_title": "退出遊戲",
+        "dialog.exit_game_body": "確定要退出目前的遊戲並返回媒體庫嗎？",
+        "dialog.exit_game_confirm": "退出遊戲",
         "dialog.dev_mount": "開發掛載  %s",
         "message.web_manifest_failed": "無法讀取 Web 遊戲掛載清單",
         "message.web_mount_failed": "Web 本機掛載失敗：%s",
@@ -968,6 +974,9 @@ const UI_TEXT := {
         "dialog.select_game_dir": "Choose Game Folder",
         "dialog.select_local_game_dir": "Choose Local Game Folder",
         "dialog.cancel": "Cancel",
+        "dialog.exit_game_title": "Exit Game",
+        "dialog.exit_game_body": "Exit the current game and return to the library?",
+        "dialog.exit_game_confirm": "Exit Game",
         "dialog.dev_mount": "Dev Mount  %s",
         "message.web_manifest_failed": "Could not read the Web game mount manifest",
         "message.web_mount_failed": "Web local mount failed: %s",
@@ -1261,6 +1270,9 @@ const UI_TEXT := {
         "dialog.select_game_dir": "ゲームフォルダーを選択",
         "dialog.select_local_game_dir": "ローカルゲームフォルダーを選択",
         "dialog.cancel": "キャンセル",
+        "dialog.exit_game_title": "ゲームを終了",
+        "dialog.exit_game_body": "現在のゲームを終了してライブラリに戻りますか？",
+        "dialog.exit_game_confirm": "終了",
         "dialog.dev_mount": "開発マウント  %s",
         "message.web_manifest_failed": "Web ゲームのマウントマニフェストを読み取れません",
         "message.web_mount_failed": "Web ローカルマウントに失敗しました：%s",
@@ -1554,6 +1566,9 @@ const UI_TEXT := {
         "dialog.select_game_dir": "게임 폴더 선택",
         "dialog.select_local_game_dir": "로컬 게임 폴더 선택",
         "dialog.cancel": "취소",
+        "dialog.exit_game_title": "게임 종료",
+        "dialog.exit_game_body": "현재 게임을 종료하고 라이브러리로 돌아갈까요?",
+        "dialog.exit_game_confirm": "종료",
         "dialog.dev_mount": "개발 마운트  %s",
         "message.web_manifest_failed": "Web 게임 마운트 매니페스트를 읽을 수 없습니다",
         "message.web_mount_failed": "Web 로컬 마운트 실패: %s",
@@ -14481,6 +14496,9 @@ func _notification(what: int) -> void:
         _queue_settings_relayout_after_resize()
         _queue_detail_relayout_after_resize()
         return
+    if what == NOTIFICATION_WM_GO_BACK_REQUEST:
+        _handle_go_back_request()
+        return
     if player == null:
         return
     if what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_APPLICATION_FOCUS_OUT:
@@ -14516,6 +14534,82 @@ func _notification(what: int) -> void:
         viewport.texture = null
         player.release_frame_texture()
         player.destroy_engine()
+
+func _handle_go_back_request() -> void:
+    # Android system back gesture (edge swipe / dedicated key). Godot's
+    # default quit_on_go_back behavior quits the SceneTree on the spot, so
+    # the runtime is torn down inside Godot's own shutdown path, which races
+    # the render teardown and crashes the process. Handle the gesture
+    # explicitly through the graceful exit paths instead.
+    if modal_layer != null and modal_layer.visible:
+        _dismiss_modal()
+        return
+    if video_playing:
+        _close_video_player()
+        return
+    if game_running or cached_startup_state == STARTUP_RUNNING:
+        _confirm_exit_game_for_go_back()
+        return
+    if shell_route == "detail" or shell_route == "settings":
+        _show_home()
+        return
+    _quit_app_for_go_back()
+
+func _confirm_exit_game_for_go_back() -> void:
+    if player == null:
+        return
+    var dialog := _modal_dialog(Vector2(520, 260))
+    var box := _modal_stack(dialog, _t("dialog.exit_game_title"), ICON_LIBRARY)
+    var label := Label.new()
+    label.text = _t("dialog.exit_game_body")
+    label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    label.add_theme_font_size_override("font_size", 15)
+    label.add_theme_color_override("font_color", ui_tokens.text_secondary)
+    box.add_child(label)
+    var buttons := HBoxContainer.new()
+    buttons.add_theme_constant_override("separation", 12)
+    buttons.alignment = BoxContainer.ALIGNMENT_END
+    buttons.custom_minimum_size = Vector2(0, 62)
+    box.add_child(buttons)
+    var cancel := Button.new()
+    cancel.text = _t("dialog.cancel")
+    cancel.flat = true
+    cancel.custom_minimum_size = Vector2(112, 62)
+    cancel.add_theme_font_size_override("font_size", 20)
+    cancel.add_theme_color_override("font_color", color_text)
+    cancel.pressed.connect(func(): modal_layer.visible = false)
+    buttons.add_child(cancel)
+    var exit_game := _pill_button(_t("dialog.exit_game_confirm"))
+    exit_game.custom_minimum_size = Vector2(148, 52)
+    exit_game.pressed.connect(func():
+        _dismiss_modal(func(): _exit_game_for_go_back())
+    )
+    buttons.add_child(exit_game)
+
+func _exit_game_for_go_back() -> void:
+    if player == null:
+        return
+    if app_lifecycle_paused:
+        # Mirrors the window-close path: destroying a paused runtime is
+        # unsafe, so wake it before the teardown call.
+        player.resume()
+        app_lifecycle_paused = false
+    _return_to_library_after_runtime_exit()
+
+func _quit_app_for_go_back() -> void:
+    if player != null:
+        if video_playing:
+            _store_active_video_progress()
+            player.media_close()
+            video_playing = false
+        _finalize_active_game_session()
+        if diagnostic_session != null:
+            diagnostic_session.finish()
+        viewport.texture = null
+        player.release_frame_texture()
+        player.destroy_engine()
+    get_tree().quit(0)
 
 func _pause_game_for_lifecycle(reason: String) -> void:
     game_text_input_suspended = true
