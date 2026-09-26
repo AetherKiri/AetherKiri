@@ -5,8 +5,6 @@
 /**/build/
 /**/out/
 /**/bin/
-!/rust/minori_runtime/src/bin/
-!/rust/minori_runtime/src/bin/*.rs
 vcpkg_installed/
 
 .idea/

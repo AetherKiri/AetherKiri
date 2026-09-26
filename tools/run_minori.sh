@@ -6,7 +6,7 @@ workspace_root="$(cd "$repo_root/.." && pwd)"
 game_root="${AETHERKIRI_SMOKE_GAME:-$workspace_root/game}"
 godot_bin="${GODOT_BIN:-$HOME/Projects/AetherKiri/.aetherkiri-cache/godot/Godot_v4.7-stable_linux.x86_64}"
 build_dir="$repo_root/out/linux/debug"
-cargo_target="$build_dir/rust/minori_runtime/cargo-target"
+cargo_target="$build_dir/packages/AetherMinori/cargo-target"
 extension="$build_dir/bridge/godot_extension/libaether_kiri_godot.so"
 
 mode="${1:-}"
@@ -27,7 +27,7 @@ if [[ ! -f "$build_dir/build.ninja" ]]; then
 fi
 
 CARGO_TARGET_DIR="$cargo_target" \
-    cargo build --manifest-path "$repo_root/rust/minori_runtime/Cargo.toml" --lib
+    cargo build --manifest-path "$repo_root/packages/AetherMinori/Cargo.toml" --lib
 ninja -C "$build_dir" -j2 aether_kiri_godot
 
 install -Dm755 "$extension" \

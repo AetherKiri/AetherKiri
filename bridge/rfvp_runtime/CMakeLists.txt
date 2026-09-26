@@ -2,7 +2,10 @@ cmake_minimum_required(VERSION 3.28)
 project(aether_rfvp_runtime LANGUAGES CXX)
 
 get_filename_component(AETHERKIRI_RFVP_PROJECT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
-if(NOT EXISTS "${AETHERKIRI_RFVP_PROJECT_ROOT}/packages/rfvp/crates/rfvp/Cargo.toml")
+if(NOT AETHERKIRI_RFVP_DIR)
+    set(AETHERKIRI_RFVP_DIR "${AETHERKIRI_RFVP_PROJECT_ROOT}/packages/rfvp")
+endif()
+if(NOT EXISTS "${AETHERKIRI_RFVP_DIR}/crates/rfvp/Cargo.toml")
     message(FATAL_ERROR "Initialize packages/rfvp with git submodule update --init packages/rfvp")
 endif()
 if(ANDROID OR EMSCRIPTEN OR WEB)
@@ -36,7 +39,7 @@ if(APPLE AND CMAKE_OSX_ARCHITECTURES)
 endif()
 include(cmake/PrepareRfvpSources.cmake)
 set(rfvp_prepared "${CMAKE_CURRENT_BINARY_DIR}/prepared")
-aetherkiri_prepare_rfvp("${AETHERKIRI_RFVP_PROJECT_ROOT}" "${rfvp_prepared}")
+aetherkiri_prepare_rfvp("${AETHERKIRI_RFVP_PROJECT_ROOT}" "${AETHERKIRI_RFVP_DIR}" "${rfvp_prepared}")
 set(rfvp_features "soft-render-core,audio,native-video,random,image-formats,zlib-flate2")
 set(rfvp_profile debug)
 set(rfvp_profile_args)
@@ -51,8 +54,8 @@ else()
 endif()
 file(GLOB_RECURSE rfvp_inputs CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/*.rs"
-    "${AETHERKIRI_RFVP_PROJECT_ROOT}/packages/rfvp/crates/*/src/*.rs"
-    "${AETHERKIRI_RFVP_PROJECT_ROOT}/packages/rfvp/crates/*/Cargo.toml")
+    "${AETHERKIRI_RFVP_DIR}/crates/*/src/*.rs"
+    "${AETHERKIRI_RFVP_DIR}/crates/*/Cargo.toml")
 list(APPEND rfvp_inputs "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/PrepareRfvpSources.cmake"
     "${AETHERKIRI_RFVP_PROJECT_ROOT}/apps/godot_app/assets/fonts/aetherkiri-runtime-cjk.otf")
@@ -89,7 +92,7 @@ if(PROJECT_IS_TOP_LEVEL OR ENABLE_TESTS)
     add_executable(rfvp-provider-test tests/provider.cpp)
     target_link_libraries(rfvp-provider-test PRIVATE aether_rfvp_runtime)
     target_compile_definitions(rfvp-provider-test PRIVATE
-        RFVP_TEST_DEMO="${AETHERKIRI_RFVP_PROJECT_ROOT}/packages/rfvp/win95_painter_demo")
+        RFVP_TEST_DEMO="${AETHERKIRI_RFVP_DIR}/win95_painter_demo")
     add_test(NAME rfvp-provider COMMAND rfvp-provider-test)
     set_tests_properties(rfvp-provider PROPERTIES TIMEOUT 60)
     add_test(NAME rfvp-host-regressions

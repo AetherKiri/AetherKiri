@@ -238,6 +238,12 @@ checkout. Trusted runs of the `Build` GitHub Actions workflow use the
 private submodule recursively. Fork and Dependabot pull requests cannot access
 repository secrets, so those untrusted runs use the public fallback.
 
+Each runtime submodule also accepts a local checkout override, following the
+same pattern: `AETHERKIRI_ONSCRIPTERYURI_DIR`, `AETHERKIRI_SIGLUS_DIR`,
+`AETHERKIRI_MINORI_DIR`, and `AETHERKIRI_RFVP_DIR` (all cache paths, defaulting
+to the submodule location under `packages/`). Point one at a working copy to
+iterate on a runtime without committing a gitlink bump.
+
 The internal package extends the existing public `motionplayer`, runtime, and
 `krkr2plugin` targets; it does not replace those targets or copy their public
 source trees. KiriRuntime, Artemis, and CatSystem2 share the official GPU

@@ -10,8 +10,7 @@ find_package(SDL2_image CONFIG REQUIRED)
 find_package(SDL2_mixer CONFIG REQUIRED)
 find_package(SDL2_ttf CONFIG REQUIRED)
 
-set(ONSCRIPTER_YURI_ROOT
-    "${CMAKE_SOURCE_DIR}/packages/OnscripterYuri")
+set(ONSCRIPTER_YURI_ROOT "${AETHERKIRI_ONSCRIPTERYURI_DIR}")
 set(ONSCRIPTER_YURI_SOURCE_DIR
     "${ONSCRIPTER_YURI_ROOT}/src/onsyuri")
 
