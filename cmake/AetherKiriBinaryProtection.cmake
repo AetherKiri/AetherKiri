@@ -51,10 +51,23 @@ function(aetherkiri_limit_runtime_exports target_name export_surface)
         target_link_options("${target_name}" PRIVATE
             "$<$<CONFIG:Release>:-Wl,--gc-sections>"
             "$<$<CONFIG:Release>:-Wl,--version-script=${version_script}>"
-            "$<$<CONFIG:Release>:-Wl,--exclude-libs,ALL>"
         )
         set_property(TARGET "${target_name}" APPEND PROPERTY
             LINK_DEPENDS "${version_script}")
+        # The engine_api surface pulls the KiriKiri runtime in as a static
+        # archive (aether_krkr2_runtime, krkr2core, krkr2plugin), and the
+        # exported engine_* / JNI symbols now live in those archives. The
+        # version script's "local: *" catch-all already demotes every
+        # unmatched archive symbol, and --exclude-libs,ALL would additionally
+        # force-hidden the archive members that the global patterns must
+        # export (engine_legacy_*, engine_register_godot_gpu_*, JNI_OnLoad,
+        # krkr_GetJNIEnv), which broke the Godot extension link on Android.
+        # Keep --exclude-libs for the extension only: it defines its whole
+        # export surface in its own objects.
+        if(export_surface STREQUAL "GODOT_EXTENSION")
+            target_link_options("${target_name}" PRIVATE
+                "$<$<CONFIG:Release>:-Wl,--exclude-libs,ALL>")
+        endif()
     endif()
 endfunction()
 

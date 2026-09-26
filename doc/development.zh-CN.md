@@ -77,7 +77,10 @@ CPU 上传只能作为 debug fallback。性能优化应优先落到 Godot Native
 | `bridge/engine_api/include/engine_api.h` | engine bridge 导出的 C ABI。 |
 | `bridge/engine_api/include/engine_runtime_provider.h` | `AetherRuntimePlayer` 背后的版本化 Runtime Provider ABI；新增引擎实现该接口，不再新增 Godot Player。 |
 | `bridge/engine_api/include/engine_options.h` | host 与 engine 共享的 option key/value。 |
-| `bridge/engine_api/src/engine_api.cpp` | C ABI 实现，负责创建、打开、tick、render 和输入传递。 |
+| `bridge/engine_api/src/engine_api_dispatch.cpp` | C ABI 派发层：创建、打开、tick、render、输入传递，并在 legacy 后端与已注册 runtime provider 之间路由。 |
+| `bridge/krkr2_runtime/src/krkr2_legacy_engine_api.cpp` | KiriKiri（krkr2core）的 legacy 引擎 ABI 实现，经 runtime 胶水链接进 `engine_api`。 |
+| `bridge/krkr2_runtime/src/krkr2_host_hooks.cpp` | 派发层向 KiriKiri 运行时借用的 host 服务（音频会话、纹理回收）。 |
+| `bridge/engine_api/src/engine_api_stub.cpp` | 未链接 KiriKiri 运行时（单测、纯 provider 配置）使用的 legacy 引擎桩实现。 |
 | `bridge/onscripter_runtime/src/onscripter_runtime_provider.cpp` | ONScripterYuri 到统一 Runtime Provider ABI 的适配器。 |
 | `bridge/siglus_runtime/src/siglus_runtime_provider.cpp` | SiglusEngine（siglus_rs）到统一 Runtime Provider ABI 的适配器。 |
 | `bridge/siglus_runtime/cmake/PrepareSiglusRsWorkspace.cmake` | 构建期 overlay：把 pristine 的 `packages/AetherSiglus` 拷贝进构建树并应用 `bridge/siglus_runtime/overlay/` 补丁，submodule 本体保持只读。 |

@@ -80,7 +80,10 @@ Native first, then GPU Bridge where native coverage is incomplete.
 | `bridge/engine_api/include/engine_api.h` | C ABI exported by the engine bridge. |
 | `bridge/engine_api/include/engine_runtime_provider.h` | Versioned runtime-provider ABI behind `AetherRuntimePlayer`. New engines implement this contract instead of another Godot Player. |
 | `bridge/engine_api/include/engine_options.h` | Engine option keys/values shared with host code. |
-| `bridge/engine_api/src/engine_api.cpp` | C ABI implementation that creates, opens, ticks, renders, and receives input. |
+| `bridge/engine_api/src/engine_api_dispatch.cpp` | C ABI dispatch: creates, opens, ticks, renders, receives input, and routes between the legacy backend and registered runtime providers. |
+| `bridge/krkr2_runtime/src/krkr2_legacy_engine_api.cpp` | Legacy KiriKiri (krkr2core) implementation of the engine ABI, linked into `engine_api` through the runtime glue. |
+| `bridge/krkr2_runtime/src/krkr2_host_hooks.cpp` | Host services (audio session, texture recycle) the dispatch layer borrows from the KiriKiri runtime. |
+| `bridge/engine_api/src/engine_api_stub.cpp` | Standalone stub of the legacy engine surface used when no KiriKiri runtime is linked (unit tests, provider-only configs). |
 | `bridge/onscripter_runtime/src/onscripter_runtime_provider.cpp` | ONScripterYuri adapter for the shared runtime-provider ABI. |
 | `bridge/siglus_runtime/src/siglus_runtime_provider.cpp` | SiglusEngine (siglus_rs) adapter for the shared runtime-provider ABI. |
 | `bridge/siglus_runtime/cmake/PrepareSiglusRsWorkspace.cmake` | Build-time overlay: copies pristine `packages/AetherSiglus` into the build tree and applies `bridge/siglus_runtime/overlay/` patches there, keeping the submodule untouched. |

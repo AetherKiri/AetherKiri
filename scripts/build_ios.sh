@@ -278,6 +278,7 @@ combine_ios_static_extension() {
         "$CMAKE_BUILD_DIR/bridge/godot_extension/libaether_kiri_godot.a"
         "$CMAKE_BUILD_DIR/bridge/onscripter_runtime/libaether_onscripter_runtime.a"
         "$CMAKE_BUILD_DIR/bridge/engine_api/libengine_api.a"
+        "$CMAKE_BUILD_DIR/bridge/krkr2_runtime/libaether_krkr2_runtime.a"
         "$CMAKE_BUILD_DIR/cpp/core/base/libcore_base_module.a"
         "$CMAKE_BUILD_DIR/cpp/core/environ/libcore_environ_module.a"
         "$CMAKE_BUILD_DIR/cpp/core/extension/libcore_extension_module.a"

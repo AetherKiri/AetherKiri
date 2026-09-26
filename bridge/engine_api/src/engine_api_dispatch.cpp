@@ -36,10 +36,6 @@
 #include "engine_startup_thread.h"
 #include "legacy_engine_api.h"
 #include "TextTransform.h"
-#if defined(ENGINE_API_USE_KRKR2_RUNTIME)
-#include "environ/Platform.h"
-#include "visual/RenderManager.h"
-#endif
 
 #if defined(AETHERKIRI_INTERNAL_CATSYSTEM2)
 extern "C" void AetherInternalRegisterCatSystem2Runtime(void);
@@ -117,12 +113,7 @@ std::unordered_map<engine_media_handle_t, engine_handle_t>
 thread_local std::string g_dispatch_thread_error;
 
 bool ActivateProviderAudioSessionForHost() {
-#if defined(__APPLE__) && TARGET_OS_IPHONE && \
-    defined(ENGINE_API_USE_KRKR2_RUNTIME)
-  return TVPActivateAudioSessionForHost();
-#else
-  return true;
-#endif
+  return engine_legacy_activate_audio_session_for_host();
 }
 
 void PopulateHostMemoryStats(engine_memory_stats_t* stats) {
@@ -1042,17 +1033,13 @@ engine_result_t engine_tick(engine_handle_t public_handle, uint32_t delta_ms) {
                    }
                    handle->provider_resume_pending = false;
                  }
-                 const engine_result_t result =
-                     handle->provider->tick(handle->runtime, delta_ms);
-#if defined(ENGINE_API_USE_KRKR2_RUNTIME)
-                 // Provider runtimes bypass the legacy EngineLoop, which is
-                 // normally responsible for draining textures whose intrusive
-                 // reference count reached zero during the frame.  Artemis
-                 // uses the same KiriKiri render manager for E-mote, so leaving
-                 // this queue undrained retains every superseded Metal texture.
-                 iTVPTexture2D::RecycleProcess();
-#endif
-                 return result;
+                  const engine_result_t result =
+                      handle->provider->tick(handle->runtime, delta_ms);
+                  // Provider runtimes bypass the legacy EngineLoop; drain the
+                  // shared KiriKiri texture recycle queue through the runtime
+                  // glue (no-op when the stub host is linked).
+                  engine_legacy_drain_texture_recycle();
+                  return result;
                });
 }
 
@@ -1305,16 +1292,11 @@ engine_result_t engine_get_godot_native_frame_texture(
     engine_handle_t public_handle, uint64_t* out_texture_id,
     uint32_t* out_width, uint32_t* out_height, uint64_t* out_frame_serial) {
   return Route(public_handle, "get_godot_native_frame_texture",
-               [&](engine_handle_t legacy) {
-#if defined(ENGINE_API_USE_KRKR2_RUNTIME)
-                 return engine_legacy_get_godot_native_frame_texture(
-                     legacy, out_texture_id, out_width, out_height,
-                     out_frame_serial);
-#else
-                 (void)legacy;
-                 return ENGINE_RESULT_NOT_SUPPORTED;
-#endif
-               },
+                [&](engine_handle_t legacy) {
+                  return engine_legacy_get_godot_native_frame_texture(
+                      legacy, out_texture_id, out_width, out_height,
+                      out_frame_serial);
+                },
                [&](DispatchHandle* handle) {
                  return PROVIDER_HAS(handle->provider,
                                      get_godot_native_frame_texture)
