@@ -15,10 +15,10 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_CURRENT_SOURCE_DIR}/bin/${OS_P
 # Phase 2); this checkout owns their wiring and the binary output paths.
 # Out-of-tree sources need an explicit binary directory; keep it mirroring
 # the engine submodule location.
-add_subdirectory("${AETHERKIRI_KRKR2_DIR}/tools/xp3"
-    "${CMAKE_BINARY_DIR}/packages/krkr2/tools/xp3")
-add_subdirectory("${AETHERKIRI_KRKR2_DIR}/tools/xp3_select"
-    "${CMAKE_BINARY_DIR}/packages/krkr2/tools/xp3_select")
+add_subdirectory("${AETHERKIRI_KRKR_DIR}/tools/xp3"
+    "${CMAKE_BINARY_DIR}/packages/AetherKrkr/tools/xp3")
+add_subdirectory("${AETHERKIRI_KRKR_DIR}/tools/xp3_select"
+    "${CMAKE_BINARY_DIR}/packages/AetherKrkr/tools/xp3_select")
 
 if(AETHERKIRI_INTERNAL_ENABLED AND
    COMMAND aetherinternal_add_catsystem2_probe)

@@ -87,7 +87,7 @@ runtimes unrestricted for compatibility development and testing.
 | `bridge/engine_api/` | C ABI used by the host layer to drive the C++ engine. |
 | `bridge/onscripter_runtime/` | Headless OnscripterYuri host, frame capture, and input bridge. |
 | `bridge/siglus_runtime/` | Siglus runtime provider plus build-time overlay (patches + FFI files) applied to the pristine `siglus_rs` sources; see `bridge/siglus_runtime/overlay/`. |
-| `packages/krkr2/` | KiriKiri2 engine runtime submodule (core, TJS2 VM, visual/audio/storage/movie modules, and the bundled native plugins); its integration glue lives in `bridge/krkr2_runtime/`. |
+| `packages/AetherKrkr/` | KiriKiri2 engine runtime submodule (core, TJS2 VM, visual/audio/storage/movie modules, and the bundled native plugins); its integration glue lives in `bridge/krkr2_runtime/`. |
 | `packages/AetherInternal/` | Optional private E-mote package submodule; public builds work without it. |
 | `packages/OnscripterYuri/` | Public OnscripterYuri git submodule. |
 | `packages/AetherSiglus/` | Public siglus_rs (Rust SiglusEngine) git submodule. Kept pristine; AetherKiri-specific changes live in `bridge/siglus_runtime/overlay/`. |
@@ -239,7 +239,7 @@ repository secrets, so those untrusted runs use the public fallback.
 
 Each runtime submodule also accepts a local checkout override, following the
 same pattern: `AETHERKIRI_ONSCRIPTERYURI_DIR`, `AETHERKIRI_SIGLUS_DIR`,
-`AETHERKIRI_MINORI_DIR`, `AETHERKIRI_RFVP_DIR`, and `AETHERKIRI_KRKR2_DIR` (all cache paths, defaulting
+`AETHERKIRI_MINORI_DIR`, `AETHERKIRI_RFVP_DIR`, and `AETHERKIRI_KRKR_DIR` (all cache paths, defaulting
 to the submodule location under `packages/`). Point one at a working copy to
 iterate on a runtime without committing a gitlink bump.
 

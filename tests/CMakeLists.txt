@@ -24,10 +24,10 @@ endif()
 set(KRKR2_TEXT_TRANSFORM_SOURCE
     "${CMAKE_SOURCE_DIR}/bridge/engine_api/src/TextTransform.cpp")
 
-add_subdirectory("${AETHERKIRI_KRKR2_DIR}/tests/plugins"
-    "${CMAKE_BINARY_DIR}/packages/krkr2/tests/plugins")
-add_subdirectory("${AETHERKIRI_KRKR2_DIR}/tests/tjs2"
-    "${CMAKE_BINARY_DIR}/packages/krkr2/tests/tjs2")
+add_subdirectory("${AETHERKIRI_KRKR_DIR}/tests/plugins"
+    "${CMAKE_BINARY_DIR}/packages/AetherKrkr/tests/plugins")
+add_subdirectory("${AETHERKIRI_KRKR_DIR}/tests/tjs2"
+    "${CMAKE_BINARY_DIR}/packages/AetherKrkr/tests/tjs2")
 add_subdirectory(unit-tests/engine_api)
 if(TARGET aether_siglus_runtime)
     add_subdirectory(unit-tests/siglus_runtime)

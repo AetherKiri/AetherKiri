@@ -6,8 +6,8 @@
 // extension, the siglus/rfvp runtime glue, and the krkr2 runtime all include
 // it without any krkr2 header paths.
 //
-// The krkr2 engine repository (packages/krkr2) builds its region classes on
-// the geometry types defined here
+// The krkr2 engine repository (packages/AetherKrkr) builds its region
+// classes on the geometry types defined here
 // (core/visual/ComplexRect.h), and core/visual/godot/GodotGpuBridge.h wraps
 // this header for the krkr2-side C++ batch helpers, so every build shares
 // one definition of the callback tables, blend modes, and rectangle

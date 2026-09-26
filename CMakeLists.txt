@@ -197,13 +197,13 @@ set(CMAKE_C_STANDARD 17)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# The krkr2 engine runtime lives in its own repository (issue #241 Phase 2)
-# and is embedded as the packages/krkr2 submodule. This consuming build
+# The krkr2 engine runtime lives in its own repository (issue #241 Phase 2,
+# AetherKiri/AetherKrkr) and is embedded as the packages/AetherKrkr submodule. This consuming build
 # injects the two paths the engine repository needs: the engine_api ABI
 # headers (engine_gpu_bridge.h / TextTransform.h consumed by the core
 # visual/utils modules) and the psdfile adapter package.
-set(AETHERKIRI_KRKR2_DIR
-    "${CMAKE_CURRENT_SOURCE_DIR}/packages/krkr2"
+set(AETHERKIRI_KRKR_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/packages/AetherKrkr"
     CACHE PATH "path to a krkr2 engine checkout")
 set(KRKR2_ENGINE_ABI_INCLUDE_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/bridge/engine_api/include")
@@ -228,7 +228,7 @@ endif()
 
 # The krkr2 engine repository defines the engine targets (external/, core/,
 # plugins/); its integration glue stays in bridge/krkr2_runtime.
-add_subdirectory(${AETHERKIRI_KRKR2_DIR})
+add_subdirectory(${AETHERKIRI_KRKR_DIR})
 
 # AetherInternal contributes sources to public targets but does not own the
 # obfuscation policy. Register only package-owned source units for protected
