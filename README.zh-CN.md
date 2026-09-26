@@ -439,14 +439,12 @@ npm run web:dev:release
 迁移检查：
 
 ```bash
-rg "F[l]utter|f[l]utter|A[N]GLE|Platform[ ]Graphics" README.md README.zh-CN.md apps bridge build CMakeLists.txt
-rg "u[n]official-angle|l[i]bEGL|l[i]bGLESv2" CMakeLists.txt bridge cpp build vcpkg.json
+rg "F[l]utter|f[l]utter|A[N]GLE|Platform[ ]Graphics" README.md README.zh-CN.md apps bridge scripts CMakeLists.txt
+rg "u[n]official-angle|l[i]bEGL|l[i]bGLESv2" CMakeLists.txt bridge cpp scripts vcpkg.json
 ./build.sh macos debug
 ./build.sh ios debug --simulator
 ./build.sh android debug --abi=arm64-v8a
 ./build.sh web debug
-build/validate_godot_native.sh
-build/validate_gpu_bridge.sh
 ```
 
 Godot 脚本检查：

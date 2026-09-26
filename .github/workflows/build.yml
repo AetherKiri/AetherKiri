@@ -1134,9 +1134,9 @@ jobs:
           test -f out/godot/web/release/index.wasm
           test -f out/godot/web/release/index.pck
           test -f out/godot/web/release/live2d/aetherkiri-live2d-bridge.js
-          node --check build/web_export_local_picker.js
-          node --check build/web_export_range_fs.js
-          node --check build/patch_web_export.mjs
+          node --check scripts/web_export_local_picker.js
+          node --check scripts/web_export_range_fs.js
+          node --check scripts/patch_web_export.mjs
 
       - name: Upload Artifact
         if: success()

@@ -51,10 +51,10 @@ CPU 上传只能作为 debug fallback。性能优化应优先落到 Godot Native
 | 文件 | 作用 |
 | --- | --- |
 | `build.sh` | 统一构建入口，根据平台分发到 `build/` 下的脚本。 |
-| `build/build_macos.sh` | 构建 macOS C++ core/GDExtension，复制 dylib，并导出 Godot macOS app。 |
-| `build/build_ios.sh` | 构建 iOS 真机或模拟器静态库，导出并 patch Xcode 工程。 |
-| `build/build_android.sh` | 构建 Android native 库，并通过 Godot 导出 APK。 |
-| `build/build_web.sh` | 构建 Emscripten Web GDExtension side module，并在 dlink 模板可用时导出 Godot Web app。 |
+| `scripts/build_macos.sh` | 构建 macOS C++ core/GDExtension，复制 dylib，并导出 Godot macOS app。 |
+| `scripts/build_ios.sh` | 构建 iOS 真机或模拟器静态库，导出并 patch Xcode 工程。 |
+| `scripts/build_android.sh` | 构建 Android native 库，并通过 Godot 导出 APK。 |
+| `scripts/build_web.sh` | 构建 Emscripten Web GDExtension side module，并在 dlink 模板可用时导出 Godot Web app。 |
 | `CMakeLists.txt` | 顶层 native build，组织 engine API、GDExtension、core、plugins、tests 和 tools。 |
 | `CMakePresets.json` | macOS、iOS、Android、Web 等平台的 CMake preset 和输出目录。 |
 | `vcpkg.json` | native 依赖清单。Godot Native 默认路径不能依赖 ANGLE。 |
@@ -408,11 +408,9 @@ out/godot/macos/debug/AetherKiri.app/Contents/MacOS/AetherKiri \
 
 ```bash
 rg "F[l]utter|f[l]utter|A[N]GLE|Platform[ ]Graphics" \
-  README.md README.zh-CN.md apps bridge build CMakeLists.txt
+  README.md README.zh-CN.md apps bridge scripts CMakeLists.txt
 rg "u[n]official-angle|l[i]bEGL|l[i]bGLESv2" \
-  CMakeLists.txt bridge cpp build vcpkg.json
-build/validate_godot_native.sh
-build/validate_gpu_bridge.sh
+  CMakeLists.txt bridge cpp scripts vcpkg.json
 ```
 
 手动游戏冒烟：

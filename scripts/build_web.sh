@@ -195,7 +195,7 @@ else
     mkdir -p "$export_root"
     with_web_only_gdextension "$export_path"
     if command -v node >/dev/null; then
-        node "$PROJECT_ROOT/build/patch_web_export.mjs" "$export_root"
+        node "$PROJECT_ROOT/scripts/patch_web_export.mjs" "$export_root"
     else
         echo "Warning: node not found; Web local game mount patch was not applied." >&2
     fi

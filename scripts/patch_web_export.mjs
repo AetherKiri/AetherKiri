@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const exportRoot = resolve(process.argv[2] ?? "");
 if (!exportRoot) {
-  throw new Error("Usage: node build/patch_web_export.mjs <export-root>");
+  throw new Error("Usage: node scripts/patch_web_export.mjs <export-root>");
 }
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));

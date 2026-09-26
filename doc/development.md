@@ -54,10 +54,10 @@ Native first, then GPU Bridge where native coverage is incomplete.
 | File | Purpose |
 | --- | --- |
 | `build.sh` | Unified build entry point. Dispatches to platform scripts in `build/`. |
-| `build/build_macos.sh` | Builds C++ core/GDExtension for macOS, stages dylibs, exports the Godot macOS app. |
-| `build/build_ios.sh` | Builds iOS device or simulator static libraries, exports and patches the Xcode project. |
-| `build/build_android.sh` | Builds Android native libraries and exports APKs through Godot. |
-| `build/build_web.sh` | Builds the Emscripten Web GDExtension side module and exports the Godot Web app when dlink templates are installed. |
+| `scripts/build_macos.sh` | Builds C++ core/GDExtension for macOS, stages dylibs, exports the Godot macOS app. |
+| `scripts/build_ios.sh` | Builds iOS device or simulator static libraries, exports and patches the Xcode project. |
+| `scripts/build_android.sh` | Builds Android native libraries and exports APKs through Godot. |
+| `scripts/build_web.sh` | Builds the Emscripten Web GDExtension side module and exports the Godot Web app when dlink templates are installed. |
 | `CMakeLists.txt` | Top-level native build. Adds engine API, GDExtension, core, plugins, tests, and tools. |
 | `CMakePresets.json` | Named CMake presets for macOS, iOS, Android, Web, and related build directories. |
 | `vcpkg.json` | Native dependency manifest. Godot Native must not depend on ANGLE. |
@@ -431,11 +431,9 @@ Renderer migration checks:
 
 ```bash
 rg "F[l]utter|f[l]utter|A[N]GLE|Platform[ ]Graphics" \
-  README.md README.zh-CN.md apps bridge build CMakeLists.txt
+  README.md README.zh-CN.md apps bridge scripts CMakeLists.txt
 rg "u[n]official-angle|l[i]bEGL|l[i]bGLESv2" \
-  CMakeLists.txt bridge cpp build vcpkg.json
-build/validate_godot_native.sh
-build/validate_gpu_bridge.sh
+  CMakeLists.txt bridge cpp scripts vcpkg.json
 ```
 
 Manual game smoke:
