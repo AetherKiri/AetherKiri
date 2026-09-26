@@ -1942,9 +1942,14 @@ void RunOpenGameAsync(engine_handle_t handle,
   TVPTerminated = false;
   TVPTerminateCode = 0;
   TVPSystemUninitCalled = false;
-  TVPTerminateOnWindowClose = false;
+  // Reset to the desktop krkr default for each session: a game that closes
+  // its main window exits (System.exitOnWindowClose). Games may still turn
+  // the behavior off from script. engine_destroy guards host-side teardown
+  // with TVPHostSessionTeardown so this stays armed only for live sessions.
+  TVPTerminateOnWindowClose = true;
   TVPTerminateOnNoWindowStartup = false;
   TVPHostSuppressProcessExit = true;
+  TVPHostSessionTeardown = false;
 
   const engine_result_t open_result =
       OpenGameCore(handle, impl, game_root_path_utf8.c_str());
@@ -2134,6 +2139,9 @@ engine_result_t engine_destroy(engine_handle_t handle) {
   }
 
   if (needs_session_cleanup) {
+    // Window unregistration happens deep inside script-engine shutdown;
+    // it must not re-enter TVPTerminateAsync from TVPMainWindowClosed.
+    TVPHostSessionTeardown = true;
     if (auto* loop = EngineLoop::GetInstance(); loop != nullptr) {
       loop->ResetPointerState();
     }
@@ -2204,6 +2212,7 @@ engine_result_t engine_destroy(engine_handle_t handle) {
     }
 
     // Avoid triggering platform exit() path in the host process.
+    TVPHostSessionTeardown = false;
     TVPTerminated = false;
     TVPTerminateCode = 0;
     TVPSystemUninitCalled = false;
@@ -2271,9 +2280,14 @@ engine_result_t engine_open_game(engine_handle_t handle,
   TVPTerminated = false;
   TVPTerminateCode = 0;
   TVPSystemUninitCalled = false;
-  TVPTerminateOnWindowClose = false;
+  // Reset to the desktop krkr default for each session: a game that closes
+  // its main window exits (System.exitOnWindowClose). Games may still turn
+  // the behavior off from script. engine_destroy guards host-side teardown
+  // with TVPHostSessionTeardown so this stays armed only for live sessions.
+  TVPTerminateOnWindowClose = true;
   TVPTerminateOnNoWindowStartup = false;
   TVPHostSuppressProcessExit = true;
+  TVPHostSessionTeardown = false;
   g_runtime_startup_active = true;
   g_runtime_startup_owner = handle;
   ResetStartupState(impl);

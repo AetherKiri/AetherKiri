@@ -47,6 +47,7 @@
 #include <GLES3/gl3.h>
 #endif
 #include "SysInitImpl.h"
+#include "EventIntf.h"
 
 #if defined(__EMSCRIPTEN__)
 extern "C" void TVPEngineApiNotifyWebStartupReady() __attribute__((weak));
@@ -1430,19 +1431,54 @@ public:
     bool GetWindowActive() override { return active_; }
 
     void Close() override {
-        closing_ = true;
-        spdlog::debug("HostWindowLayer::Close called");
-        if(owner_ == TVPMainWindow) {
-            TVPTerminateAsync(0);
-        } else {
-            visible_ = false;
-            DetachOwner();
+        // Closing action by the "close" method, mirroring
+        // TTVPWindowForm::Close() -> tTVPWindow::Close() -> OnCloseQuery()
+        // on Win32. Deliver the onCloseQuery event synchronously before the
+        // window (or the whole session, for the main window) goes away, so
+        // games can run their exit confirmation and save continue data.
+        // The handler reports its decision through the native
+        // Window.onCloseQuery method: true allows the close, false vetoes
+        // it; a missing handler keeps the default "allow".
+        if(closing_ || close_query_active_)
+            return;
+        if(owner_) {
+            iTJSDispatch2 *script_owner = owner_->GetOwnerNoAddRef();
+            if(script_owner) {
+                tTJSVariant arg[1] = { true };
+                static ttstr eventname(TJS_W("onCloseQuery"));
+                close_query_active_ = true;
+                can_close_work_ = true;
+                try {
+                    TVPPostEvent(script_owner, script_owner, eventname, 0,
+                                 TVP_EPT_IMMEDIATE, 1, arg);
+                } catch(...) {
+                    close_query_active_ = false;
+                    throw;
+                }
+                close_query_active_ = false;
+                if(!can_close_work_) {
+                    spdlog::debug(
+                        "HostWindowLayer::Close vetoed by onCloseQuery");
+                    return;
+                }
+            }
         }
+        PerformActualClose();
     }
 
     void OnCloseQueryCalled(bool b) override {
-        if (b) {
-            Close();
+        if(close_query_active_) {
+            // Synchronous verdict from the onCloseQuery event handler.
+            can_close_work_ = b;
+            return;
+        }
+        // Late decision handed over by the game after its own asynchronous
+        // confirmation finished (Win32 "closing action by the user" path).
+        if(b) {
+            if(!closing_)
+                PerformActualClose();
+        } else {
+            closing_ = false;
         }
     }
 
@@ -1491,6 +1527,20 @@ public:
     TVPOverlayNode *GetPrimaryArea() override { return nullptr; }
 
 private:
+    void PerformActualClose() {
+        closing_ = true;
+        spdlog::debug("HostWindowLayer::Close performing close");
+        if(owner_ == TVPMainWindow) {
+            // The confirmed main-window close ends the session; the host
+            // observes TVPTerminated on the next tick and tears the engine
+            // down without killing the process.
+            TVPTerminateAsync(0);
+        } else {
+            visible_ = false;
+            DetachOwner();
+        }
+    }
+
     void DetachOwner() {
         if(owner_ == nullptr)
             return;
@@ -1669,6 +1719,8 @@ private:
     tjs_int paint_height_ = 0;
     bool active_;
     bool closing_;
+    bool close_query_active_ = false;
+    bool can_close_work_ = true;
 
     // Cached mouse position in surface coordinates.
     // Updated by EngineLoop on pointer events, read by GetCursorPos().
