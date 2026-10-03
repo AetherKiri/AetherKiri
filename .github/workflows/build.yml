@@ -79,6 +79,9 @@ jobs:
       GODOT_RELEASE: 4.7-stable
       GODOT_TEMPLATE_VERSION: 4.7.stable
       ANDROID_NDK_VERSION: 28.1.13356709
+      # Compile the guarded Ren'Py mobile provider stub.  The provider still
+      # returns NOT_SUPPORTED until the official RAPT/JNI bootstrap is wired.
+      AETHERKIRI_ENABLE_RENPY: ON
 
     steps:
       - name: Checkout Repository
@@ -111,7 +114,7 @@ jobs:
 
       - name: Initialize private runtime dependencies
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
-        run: packages/AetherInternal/tools/prepare_ci_dependencies.sh --platform android
+        run: bash packages/AetherInternal/tools/prepare_ci_dependencies.sh --platform android
 
       - name: Initialize public runtime packages
         if: env.AETHERKIRI_WITH_INTERNAL != 'true'
@@ -144,6 +147,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build pkg-config autoconf autoconf-archive automake libtool gettext bison flex curl unzip zip zstd ccache jq mono-complete
           rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
+
+      - name: Stage official Ren'Py Android support inputs
+        run: |
+          set -euo pipefail
+          mobile_root="${RUNNER_TEMP}/aetherkiri-renpy-mobile/android"
+          bash tools/install_renpy_mobile_support.sh \
+            --platform android \
+            --destination "$mobile_root"
+          test -f "$mobile_root/rapt/prototype/renpyandroid/src/main/jniLibs/arm64-v8a/librenpython.so"
+          RENPY_MOBILE_STAGE_TEST_ROOT="$mobile_root" bash tools/test_stage_renpy_android_support.sh
+          echo "RENPY_MOBILE_ROOT=$mobile_root" >> "$GITHUB_ENV"
 
       - name: Restore ccache
         id: restore-ccache
@@ -331,6 +345,14 @@ jobs:
           export NDK_CCACHE=ccache
           ./build.sh android debug --jobs=4
 
+      - name: Verify Android Ren'Py mobile guard was compiled
+        run: |
+          set -euo pipefail
+          grep -F 'renpy_runtime_mobile_provider.cpp' \
+            out/android/arm64-v8a/debug/compile_commands.json
+          grep -F 'renpy_mobile_adapter.cpp' \
+            out/android/arm64-v8a/debug/compile_commands.json
+
       - name: Verify exported APKs
         run: |
           set -euo pipefail
@@ -360,6 +382,9 @@ jobs:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       GODOT_RELEASE: 4.7-stable
       GODOT_TEMPLATE_VERSION: 4.7.stable
+      # Compile the guarded Ren'Py mobile provider stub.  The provider still
+      # returns NOT_SUPPORTED until the official Renios/Xcode adapter is wired.
+      AETHERKIRI_ENABLE_RENPY: ON
 
     steps:
       - name: Checkout Repository
@@ -391,7 +416,7 @@ jobs:
 
       - name: Initialize private runtime dependencies
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
-        run: packages/AetherInternal/tools/prepare_ci_dependencies.sh --platform apple
+        run: bash packages/AetherInternal/tools/prepare_ci_dependencies.sh --platform apple
 
       - name: Initialize public runtime packages
         if: env.AETHERKIRI_WITH_INTERNAL != 'true'
@@ -456,6 +481,16 @@ jobs:
           echo "$(brew --prefix gettext)/bin" >> $GITHUB_PATH
           echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
           rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+
+      - name: Stage official Ren'Py iOS support inputs
+        run: |
+          set -euo pipefail
+          mobile_root="${RUNNER_TEMP}/aetherkiri-renpy-mobile/ios"
+          bash tools/install_renpy_mobile_support.sh \
+            --platform ios \
+            --destination "$mobile_root"
+          test -f "$mobile_root/renios/prototype/prebuilt/release/librenpython.a"
+          echo "RENPY_MOBILE_ROOT=$mobile_root" >> "$GITHUB_ENV"
 
       - name: Install Godot export tools
         run: |
@@ -601,6 +636,14 @@ jobs:
             exit 1
           fi
 
+      - name: Verify iOS Ren'Py mobile guard was compiled
+        run: |
+          set -euo pipefail
+          grep -F 'renpy_runtime_mobile_provider.cpp' \
+            out/ios/debug/compile_commands.json
+          grep -F 'renpy_runtime_ios_adapter.cpp' \
+            out/ios/debug/compile_commands.json
+
       - name: Verify exported Xcode project and IPA
         run: |
           set -euo pipefail
@@ -616,6 +659,13 @@ jobs:
             build_type_cap="$(echo "${build_type:0:1}" | tr '[:lower:]' '[:upper:]')${build_type:1}"
             if [[ ! -f "out/godot/ios/${build_type}/Aether-${build_type_cap}-Unsigned.ipa" ]]; then
               echo "Godot iOS ${build_type} unsigned IPA not found" >&2
+              exit 1
+            fi
+            test -f "out/godot/ios/${build_type}/Aether/renios/renios-manifest.txt"
+            test -f "out/godot/ios/${build_type}/Aether/Frameworks/MetalANGLE.xcframework/Info.plist"
+            if [[ -e "out/godot/ios/${build_type}/Aether/renios/main.c" ||
+                  -e "out/godot/ios/${build_type}/Aether/renios/prototype.xcodeproj" ]]; then
+              echo "Renios bundle unexpectedly includes a prototype entrypoint/project" >&2
               exit 1
             fi
           done
@@ -692,7 +742,7 @@ jobs:
 
       - name: Initialize private runtime dependencies
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
-        run: packages/AetherInternal/tools/prepare_ci_dependencies.sh --platform macos
+        run: bash packages/AetherInternal/tools/prepare_ci_dependencies.sh --platform macos
 
       - name: Initialize public runtime packages
         if: env.AETHERKIRI_WITH_INTERNAL != 'true'
@@ -748,6 +798,33 @@ jobs:
           echo "$(brew --prefix gettext)/bin" >> $GITHUB_PATH
           echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
           rustup target add aarch64-apple-darwin
+
+      - name: Validate Ren'Py SDK installer
+        run: bash tools/test_install_renpy_sdk.sh
+
+      - name: Validate Ren'Py mobile support staging
+        run: bash tools/test_install_renpy_mobile_support.sh
+
+      - name: Validate Ren'Py iOS link and bundle boundary
+        run: bash tools/test_renios_ios_bundle.sh
+
+      - name: Validate Ren'Py mobile native source-build plan
+        run: bash tools/test_renpy_mobile_source_build_plan.sh
+
+      - name: Install pinned Ren'Py SDK
+        run: |
+          set -euo pipefail
+          sdk_root="${RUNNER_TEMP}/aetherkiri-renpy-sdk"
+          ./tools/install_renpy_sdk.sh --platform darwin --arch arm64 --destination "$sdk_root"
+          {
+            echo "AETHERKIRI_ENABLE_RENPY=ON"
+            echo "AETHERKIRI_RENPY_SDK_ROOT=$sdk_root"
+            echo "RENPY_SDK=$sdk_root"
+          } >> "$GITHUB_ENV"
+          test -x "$sdk_root/renpy.sh"
+
+      - name: Run Ren'Py SDK smoke fixture
+        run: bash tools/run_renpy_smoke.sh
 
       - name: Install Godot export tools
         run: |
@@ -848,15 +925,27 @@ jobs:
             --path apps/godot_app \
             --script res://scripts/smoke_test.gd
 
+      - name: Run Ren'Py Godot gameplay E2E
+        env:
+          AETHERKIRI_RENPY_FIXTURE: ${{ github.workspace }}/tests/fixtures/renpy_smoke
+        run: |
+          set -euo pipefail
+          chmod +x tools/run_renpy_godot_e2e.sh
+          tools/run_renpy_godot_e2e.sh
+
       - name: Run complete public and integrated private unit tests
         run: |
           set -euo pipefail
           test_build_dir="${GITHUB_WORKSPACE}/out/macos/ci-tests"
           configure_log="${RUNNER_TEMP}/aetherkiri-test-configure.log"
 
+          test -n "${AETHERKIRI_RENPY_SDK_ROOT:-}"
+          test -d "$AETHERKIRI_RENPY_SDK_ROOT"
           cmake --preset "MacOS Debug Config" --fresh \
             -B "$test_build_dir" \
             -D ENABLE_TESTS=ON \
+            -D AETHERKIRI_ENABLE_RENPY=ON \
+            -D "AETHERKIRI_RENPY_SDK_ROOT=$AETHERKIRI_RENPY_SDK_ROOT" \
             -D BUILD_TOOLS=ON \
             -D BUILD_ENGINE_API=OFF \
             -D BUILD_GODOT_EXTENSION=OFF \
@@ -873,7 +962,10 @@ jobs:
           fi
 
           cmake --build "$test_build_dir" --parallel 4
-          ctest --test-dir "$test_build_dir" --show-only=human
+          test_listing="${RUNNER_TEMP}/aetherkiri-test-listing.txt"
+          ctest --test-dir "$test_build_dir" --show-only=human | tee "$test_listing"
+          grep -F "renpy-provider" "$test_listing"
+          grep -F "renpy-input-mapping" "$test_listing"
           ctest \
             --test-dir "$test_build_dir" \
             --output-on-failure \

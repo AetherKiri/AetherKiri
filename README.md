@@ -303,3 +303,41 @@ release, or a distributor they authorize in writing; third-party forks and
 derivative apps may not rely on that permission, which neither grants rights
 in upstream or third-party material on behalf of other copyright holders nor
 revokes rights already granted by the GPL.
+
+
+## Ren'Py support
+
+Ren'Py desktop support is an opt-in provider. CI and local builds download the
+official Ren'Py 8.5.3 SDK through `tools/install_renpy_sdk.sh` and verify its
+pinned SHA-256 before extraction. Set `AETHERKIRI_RENPY_SDK_ROOT` to the
+extracted SDK when launching a desktop build. Android and iOS builds may link
+the provider registration stub, but opening a game returns
+`ENGINE_RESULT_NOT_SUPPORTED` until the native mobile adapter is implemented;
+Web builds keep Ren'Py disabled.
+
+The official Ren'Py 8.5.3 Android and iOS support inputs can be downloaded and
+staged with `tools/install_renpy_mobile_support.sh`. This verifies the
+published RAPT and Renios SHA-256 values and stages the native package
+templates, libraries, and project support files under a separate mobile root.
+Staging these inputs does not enable mobile gameplay: the Android JNI/Activity
+bootstrap, iOS in-process adapter, Godot rendering/input bridge, and
+device/simulator E2E remain required before a mobile provider can be enabled.
+
+When `AETHERKIRI_ENABLE_RENPY=ON`, `scripts/build_android.sh` copies the
+official RAPT arm64 `librenpython.so`, Java/resource templates, and any
+`AETHERKIRI_RENPY_ANDROID_PRIVATE_ASSETS` into the existing Godot Android
+template. The RAPT launcher is packaged as assets rather than merged into the
+manifest, and `RenPyMobileBridge` only binds the Activity Godot already owns.
+This is a package/JNI smoke milestone; Ren'Py mobile open remains explicitly
+`ENGINE_RESULT_NOT_SUPPORTED` until lifecycle, SDL surface, input, and render
+handoff are implemented.
+
+For an iOS link/bundle smoke, set `AETHERKIRI_ENABLE_RENPY=ON` and
+`AETHERKIRI_RENPY_MOBILE_ROOT` to the staged root before running
+`scripts/build_ios.sh`. The build folds the official Renios static dependency
+closure into the Godot extension and bundles its resources and MetalANGLE
+framework, while deliberately omitting the prototype application entrypoint
+and retaining `ENGINE_RESULT_NOT_SUPPORTED` until lifecycle, rendering, and
+input integration are complete.
+Provide `AETHERKIRI_RENPY_RENIOS_BASE` when a generated game `base/` directory
+should be included in that smoke bundle.

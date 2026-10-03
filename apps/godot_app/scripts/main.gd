@@ -1727,6 +1727,7 @@ const POINTER_MOD_CANCEL := 1 << 30
 const KEY_MOD_CONTROL := 0x04
 const RUNTIME_KIRIKIRI := "kirikiri"
 const RUNTIME_ONSCRIPTER := "onscripter"
+const RUNTIME_RENPY := "renpy"
 const RUNTIME_MINORI := "minori"
 const RUNTIME_CATSYSTEM2 := "catsystem2"
 const RUNTIME_SIGLUS := "siglus"
@@ -10345,6 +10346,9 @@ func _game_info_from_path(path: String) -> Dictionary:
 
 func _game_runtime_root(path: String) -> String:
     var resolved := _resolve_game_path(path)
+    var renpy_root := GameMetadata.renpy_project_root(resolved)
+    if not renpy_root.is_empty():
+        return renpy_root
     if FileAccess.file_exists(resolved):
         return resolved.get_base_dir()
     return resolved
@@ -11590,6 +11594,7 @@ func _switch_runtime_player(runtime_kind: String) -> bool:
     var normalized := runtime_kind
     if normalized not in [
         RUNTIME_ONSCRIPTER,
+        RUNTIME_RENPY,
         RUNTIME_MINORI,
         RUNTIME_CATSYSTEM2,
         RUNTIME_SIGLUS,
@@ -11624,6 +11629,8 @@ func _switch_runtime_player(runtime_kind: String) -> bool:
         if normalized == RUNTIME_ONSCRIPTER
         else "MinoriRust"
         if normalized == RUNTIME_MINORI
+        else "Ren'Py"
+        if normalized == RUNTIME_RENPY
         else "CatSystem2"
         if normalized == RUNTIME_CATSYSTEM2
         else "Siglus"
@@ -11862,6 +11869,7 @@ func _ensure_player_initialized() -> bool:
     var runtime_id := "auto"
     if current_player_runtime_kind in [
         RUNTIME_ONSCRIPTER,
+        RUNTIME_RENPY,
         RUNTIME_MINORI,
         RUNTIME_CATSYSTEM2,
         RUNTIME_SIGLUS,
@@ -11882,6 +11890,8 @@ func _ensure_player_initialized() -> bool:
         if current_player_runtime_kind == RUNTIME_ONSCRIPTER
         else "MinoriRust"
         if current_player_runtime_kind == RUNTIME_MINORI
+        else "Ren'Py"
+        if current_player_runtime_kind == RUNTIME_RENPY
         else "CatSystem2"
         if current_player_runtime_kind == RUNTIME_CATSYSTEM2
         else "Siglus"
@@ -12547,12 +12557,16 @@ func _probe_open_game(config: Dictionary, target_game_path: String, backend_env:
             player.set_engine_option(String(key), String(engine_options[key]))
     var surface_size := ProbeConfig.surface_size(config)
     _write_probe_marker("probe_open_game surface=%dx%d fps_limit=%d" % [surface_size.x, surface_size.y, fps_limit])
-    var surface_result: int = int(player.set_surface_size(surface_size.x, surface_size.y))
+    var surface_result: int = ENGINE_RESULT_OK
+    # Ren'Py publishes its own frame dimensions; host resize is unsupported.
+    if runtime_kind != RUNTIME_RENPY:
+        surface_result = int(player.set_surface_size(surface_size.x, surface_size.y))
     if surface_result != ENGINE_RESULT_OK:
         _write_probe_marker("probe_open_game set_surface_failed error=%s" % player.get_last_error())
         printerr("set_surface_size failed: %s" % player.get_last_error())
         return false
-    current_surface_size = surface_size
+    if runtime_kind != RUNTIME_RENPY:
+        current_surface_size = surface_size
     game_path.text = target_game_path
     var result: int = int(player.open_game(target_game_path, true))
     if result != ENGINE_RESULT_OK:
@@ -12822,13 +12836,22 @@ func _probe_run_actions(config: Dictionary, step: int) -> int:
         elif kind == "click_stream":
             step = await _probe_run_click_stream(config, step, label, action)
             continue
+        elif kind == "wait_ms":
+            # Ren'Py starts in a separate SDK process. A frame-count-only
+            # warmup can finish before that process has initialized its
+            # renderer, so permit probes to wait on wall-clock time while
+            # continuing to pump the runtime and transport.
+            var duration_ms: int = max(0, int(action.get("duration_ms", action.get("milliseconds", 0))))
+            if not await _probe_advance_for_ms(duration_ms):
+                return -1
         elif kind == "wait" or kind == "capture":
             pass
         else:
             print("skip unknown action: %s" % kind)
             continue
 
-        var after_frames := int(action.get("after_frames", ProbeConfig.int_value(config, "after_click_frames", _runtime_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180))))
+        var default_after_frames := 0 if kind == "wait_ms" else ProbeConfig.int_value(config, "after_click_frames", _runtime_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180))
+        var after_frames := int(action.get("after_frames", default_after_frames))
         if not await _probe_advance(after_frames):
             return -1
         if bool(action.get("capture", true)):
@@ -14578,6 +14601,8 @@ func _env_vector2i(key: String, fallback: Vector2i) -> Vector2i:
 func _sync_player_surface_size(force: bool) -> void:
     if player == null:
         return
+    if active_runtime_kind == RUNTIME_RENPY:
+        return
     var target_size := _desired_render_surface_size()
     if not force and target_size == current_surface_size:
         return
@@ -14616,6 +14641,8 @@ func _sync_player_surface_size(force: bool) -> void:
     current_surface_size = target_size
 
 func _sync_game_surface_to_texture(texture_size: Vector2i) -> void:
+    if active_runtime_kind == RUNTIME_RENPY:
+        return
     if render_surface_mode != RENDER_SURFACE_MODE_GAME:
         return
     if not follow_texture_surface_size:

@@ -1295,6 +1295,14 @@ engine_result_t engine_set_option(engine_handle_t public_handle,
                                           option->value_utf8);
   }
   handle->pending_options[option->key_utf8] = option->value_utf8;
+  // Runtime-specific options are configured before open_game selects the
+  // provider. Keep them queued for provider creation instead of falling
+  // through to the legacy backend while the handle is still undecided.
+  if (handle->backend == BackendKind::kUndecided &&
+      key.rfind("renpy_", 0) == 0) {
+    SetThreadError(nullptr);
+    return ENGINE_RESULT_OK;
+  }
   if (handle->backend == BackendKind::kProvider) {
     if (!PROVIDER_HAS(handle->provider, set_option)) {
       return Unsupported(handle, "set_option");

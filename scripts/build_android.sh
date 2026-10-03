@@ -229,6 +229,42 @@ if [[ ! -f "$GODOT_APP_DIR/android/.build_version" || ! -f "$GODOT_APP_DIR/andro
     : > "$GODOT_APP_DIR/android/build/.gdignore"
 fi
 
+stage_renpy_android_support() {
+    local renpy_enabled="${AETHERKIRI_ENABLE_RENPY:-OFF}"
+    local renpy_enabled_lower
+    renpy_enabled_lower="$(printf '%s' "$renpy_enabled" | tr '[:upper:]' '[:lower:]')"
+    case "$renpy_enabled_lower" in
+        off|false|0|no|"")
+            return 0
+            ;;
+        on|true|1|yes)
+            ;;
+        *)
+            echo "Error: AETHERKIRI_ENABLE_RENPY must be ON/OFF or true/false" >&2
+            exit 1
+            ;;
+    esac
+
+    local mobile_root="${AETHERKIRI_RENPY_MOBILE_ROOT:-${RENPY_MOBILE_ROOT:-}}"
+    if [[ -z "$mobile_root" ]]; then
+        echo "Error: AETHERKIRI_ENABLE_RENPY=ON requires AETHERKIRI_RENPY_MOBILE_ROOT or RENPY_MOBILE_ROOT" >&2
+        echo "       Stage official RAPT inputs with tools/install_renpy_mobile_support.sh first." >&2
+        exit 1
+    fi
+
+    local stage_args=(
+        --mobile-root "$mobile_root"
+        --godot-build "$GODOT_APP_DIR/android/build"
+    )
+    if [[ -n "${AETHERKIRI_RENPY_ANDROID_PRIVATE_ASSETS:-}" ]]; then
+        stage_args+=(--private-assets "$AETHERKIRI_RENPY_ANDROID_PRIVATE_ASSETS")
+    fi
+    echo "==> Staging official Ren'Py RAPT Android support into the Godot export"
+    bash "$PROJECT_ROOT/tools/stage_renpy_android_support.sh" "${stage_args[@]}"
+}
+
+stage_renpy_android_support
+
 command -v cmake >/dev/null
 NINJA_BIN="${CMAKE_MAKE_PROGRAM:-$(command -v ninja || command -v ninja-build || true)}"
 if [[ -z "$NINJA_BIN" ]]; then
@@ -324,6 +360,11 @@ build_abi() {
     local cmake_config_args=(
         -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM"
         -D "AETHERKIRI_ENABLE_INTERNAL=${AETHERKIRI_ENABLE_INTERNAL:-ON}"
+        # Android links the Ren'Py mobile registration stub.  It deliberately
+        # returns NOT_SUPPORTED until the RAPT/JNI bootstrap is wired; keeping
+        # this opt-in here makes mobile CI compile the guard instead of only
+        # staging archives.
+        -D "AETHERKIRI_ENABLE_RENPY=${AETHERKIRI_ENABLE_RENPY:-OFF}"
     )
 
     case "$abi" in

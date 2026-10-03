@@ -1,6 +1,9 @@
 #include "engine_api.h"
 #include "engine_options.h"
 #include "engine_runtime_provider.h"
+#if defined(AETHERKIRI_WITH_RENPY)
+#include "renpy_runtime.h"
+#endif
 #if defined(AETHERKIRI_WITH_RFVP)
 #include "rfvp_runtime_provider.h"
 #endif
@@ -12620,6 +12623,9 @@ void InitializeAetherRuntime(ModuleInitializationLevel level) {
 #endif
 #if defined(AETHERKIRI_WITH_RFVP)
     aetherkiri::rfvp::RegisterRuntimeProvider();
+#endif
+#if defined(AETHERKIRI_WITH_RENPY)
+    aetherkiri::renpy::RegisterRuntimeProvider();
 #endif
     const engine_result_t shader_result =
         engine_set_runtime_fragment_shader_executor(

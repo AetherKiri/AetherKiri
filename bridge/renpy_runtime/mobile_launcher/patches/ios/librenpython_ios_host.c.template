@@ -1,0 +1,73 @@
+/*
+ * Contract-only Renios native fork template.
+ *
+ * Start from renpy-build/runtime/librenpython.c and factor its
+ * preinitialize(), search_python_home(), Python config, and Ren'Py bootstrap
+ * code into renpy_mobile_init(). The UIKit prototype main.c must remain out
+ * of the Godot target. This file is compiled only by the scaffold source
+ * test; it is never packaged as librenpython.a.
+ */
+#define AETHERKIRI_RENPY_LIFECYCLE_STUB 1
+#if defined(__GNUC__)
+__attribute__((used))
+#endif
+static const char kAetherkiriLifecycleStubMarker[] = "AETHERKIRI_RENPY_LIFECYCLE_STUB";
+#include "renpy_mobile_launcher.h"
+
+static int lifecycle_started;
+
+int renpy_mobile_init(const renpy_mobile_config_t *config,
+                      const renpy_mobile_host_t *host) {
+    if (config == 0 || host == 0 || config->struct_size < sizeof(*config) ||
+        host->struct_size < sizeof(*host) ||
+        config->abi_version != RENPY_MOBILE_LAUNCHER_ABI_VERSION ||
+        host->abi_version != RENPY_MOBILE_LAUNCHER_ABI_VERSION) {
+        return RENPY_MOBILE_INVALID_ARGUMENT;
+    }
+    if (lifecycle_started) return RENPY_MOBILE_INVALID_STATE;
+
+    /* TODO(real fork):
+     *   - initialize Python/Ren'Py without launcher_main or Py_RunMain
+     *   - use the existing Godot Metal/SDL surface instead of
+     *     SDL_RunApp, SDL_UIKitRunApp, or UIApplicationMain
+     *   - drive one bounded display/input step from renpy.display.core.Interface
+     */
+    return RENPY_MOBILE_NOT_IMPLEMENTED;
+}
+
+int renpy_mobile_tick(uint32_t budget_ms) {
+    (void)budget_ms;
+    return lifecycle_started ? RENPY_MOBILE_NOT_IMPLEMENTED
+                             : RENPY_MOBILE_INVALID_STATE;
+}
+
+int renpy_mobile_frame(renpy_mobile_frame_t *out_frame) {
+    if (out_frame == 0 || out_frame->struct_size < sizeof(*out_frame)) {
+        return RENPY_MOBILE_INVALID_ARGUMENT;
+    }
+    return lifecycle_started ? RENPY_MOBILE_NOT_IMPLEMENTED
+                             : RENPY_MOBILE_INVALID_STATE;
+}
+
+int renpy_mobile_input(const renpy_mobile_input_t *event) {
+    if (event == 0 || event->struct_size < sizeof(*event)) {
+        return RENPY_MOBILE_INVALID_ARGUMENT;
+    }
+    return lifecycle_started ? RENPY_MOBILE_NOT_IMPLEMENTED
+                             : RENPY_MOBILE_INVALID_STATE;
+}
+
+int renpy_mobile_pause(void) {
+    return lifecycle_started ? RENPY_MOBILE_NOT_IMPLEMENTED
+                             : RENPY_MOBILE_INVALID_STATE;
+}
+
+int renpy_mobile_resume(void) {
+    return lifecycle_started ? RENPY_MOBILE_NOT_IMPLEMENTED
+                             : RENPY_MOBILE_INVALID_STATE;
+}
+
+void renpy_mobile_shutdown(void) {
+    /* TODO(real fork): stop/finalize Python and Ren'Py on the owning thread. */
+    lifecycle_started = 0;
+}

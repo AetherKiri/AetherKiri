@@ -1,0 +1,133 @@
+diff --git a/renpy/display/core.py b/renpy/display/core.py
+index 93b0aba..2998a93 100644
+--- a/renpy/display/core.py
++++ b/renpy/display/core.py
+@@ -1605,6 +1605,21 @@ class Interface:
+ 
+         return ev
+ 
++    def event_poll_cooperative(self):
++        """Poll one event without sleeping for an embedding host tick.
++
++        This is an opt-in primitive for the native lifecycle fork. It does not
++        replace interact_core's blocking event loop or claim to render a full
++        Ren'Py frame by itself.
++        """
++        if self.pushed_event:
++            rv = self.pushed_event
++            self.pushed_event = None
++        else:
++            rv = pygame.event.poll()
++        self.last_event = rv
++        return rv
++
+     def event_poll(self):
+         """
+         Called to busy-wait for an event while we're waiting to
+@@ -2119,6 +2134,14 @@ class Interface:
+         else:
+             self.maximum_framerate_time = max(self.maximum_framerate_time, get_time() + t)
+ 
++    def cooperative_event_poll(self):
++        """Expose one non-blocking event poll to an embedding host.
++
++        Input dispatch, display redraw, and script execution still require a
++        follow-up Ren'Py fork; this hook only provides the non-blocking poll.
++        """
++        return self.event_poll_cooperative()
++
+     def interact(self, clear=True, suppress_window=False, trans_pause=False, pause=None, pause_modal=False, **kwargs):
+         """
+         This handles an interaction, restarting it if necessary. All of the
+diff --git a/renpy/execution.py b/renpy/execution.py
+index 056c11e..97e56d6 100644
+--- a/renpy/execution.py
++++ b/renpy/execution.py
+@@ -1040,7 +1040,15 @@ class RestartTopContext(BaseException):
+     """
+ 
+ 
+-def run_context(top):
++class CooperativeYield(BaseException):
++    """Opt-in yield from a bounded host tick.
++
++    The default run_context path never raises this. An embedding fork must
++    catch it at its native tick boundary and resume the same Ren'Py context.
++    """
++
++
++def run_context(top, cooperative=False):
+     """
+     Runs the current context until it can't be run anymore, while handling
+     various exceptions.
+@@ -1057,6 +1065,8 @@ def run_context(top):
+ 
+         try:
+             try:
++                if cooperative and renpy.main.cooperative_tick_expired():
++                    raise CooperativeYield()
+                 context.run()
+ 
+                 rv = renpy.store._return
+diff --git a/renpy/main.py b/renpy/main.py
+index bd0d6f7..79e8384 100644
+--- a/renpy/main.py
++++ b/renpy/main.py
+@@ -54,6 +54,57 @@ def reset_clock():
+     last_clock = time.time()
+ 
+ 
++# AetherKiri cooperative host hook skeleton. This state is deliberately opt-in:
++# the normal Ren'Py launcher remains unchanged until a native/mobile fork calls
++# these helpers and handles CooperativeYield.
++_cooperative_deadline = None
++
++
++def cooperative_begin_tick(budget_ms):
++    """Start an opt-in bounded host tick and return its monotonic deadline."""
++    global _cooperative_deadline
++    if budget_ms is None or budget_ms < 0:
++        _cooperative_deadline = None
++    else:
++        _cooperative_deadline = time.monotonic() + (budget_ms / 1000.0)
++    return _cooperative_deadline
++
++
++def cooperative_tick_expired():
++    """Return true when the opt-in host tick budget has elapsed."""
++    return _cooperative_deadline is not None and time.monotonic() >= _cooperative_deadline
++
++
++def cooperative_end_tick():
++    """Clear the opt-in host tick deadline."""
++    global _cooperative_deadline
++    _cooperative_deadline = None
++
++
++def cooperative_shutdown():
++    """Release Ren'Py resources without terminating the host process.
++
++    This is a shutdown *hook* for an embedding fork. It intentionally does not
++    call the Android ``finishAndRemoveTask``/``System.exit`` path in bootstrap.
++    The native fork must call it only after the Python interpreter is quiescent.
++    """
++    try:
++        renpy.display.tts.tts(None)
++    except Exception:
++        pass
++    try:
++        if renpy.display.draw:
++            renpy.display.im.cache.quit()
++            renpy.display.draw.quit()
++    except Exception:
++        pass
++    try:
++        renpy.audio.audio.quit()
++    except Exception:
++        pass
++    cooperative_end_tick()
++
++
+ def run(restart):
+     """
+     This is called during a single run of the script. Restarting the script

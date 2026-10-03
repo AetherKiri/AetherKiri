@@ -143,6 +143,27 @@ func _init() -> void:
         spaced_root.path_join("cs2.exe"),
         "launch file inside trailing-space directory"
     )
+    _expect_equal(
+        GameLaunchEntry.resolve_for_runtime(
+            {"path": root, GameLaunchEntry.FIELD: "launcher.exe"}, "renpy"
+        ), root, "Ren'Py ignores legacy launcher selection"
+    )
+    var renpy_root := ProjectSettings.globalize_path("user://renpy_launch_%d" % Time.get_ticks_usec())
+    DirAccess.make_dir_recursive_absolute(renpy_root.path_join("game"))
+    var renpy_script := renpy_root.path_join("game/script.rpy")
+    var script_file := FileAccess.open(renpy_script, FileAccess.WRITE)
+    script_file.store_string("label start:\n    return\n")
+    script_file.close()
+    var renpy_launcher := renpy_root.path_join("launcher.exe")
+    var launcher_file := FileAccess.open(renpy_launcher, FileAccess.WRITE)
+    launcher_file.store_string("launcher")
+    launcher_file.close()
+    for selected in [renpy_root, renpy_root + "/", renpy_root.path_join("game"), renpy_script, renpy_launcher]:
+        _expect_equal(GameLaunchEntry.resolve_for_runtime({"path": selected}, "renpy"), renpy_root, "Ren'Py normalized launch root")
+    DirAccess.remove_absolute(renpy_script)
+    DirAccess.remove_absolute(renpy_launcher)
+    DirAccess.remove_absolute(renpy_root.path_join("game"))
+    DirAccess.remove_absolute(renpy_root)
     if failures == 0:
         print("game_launch_entry_test: PASS")
         quit(0)

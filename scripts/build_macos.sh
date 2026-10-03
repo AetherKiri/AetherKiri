@@ -136,6 +136,29 @@ strip_macos_runtime_symbols() {
     "$PROJECT_ROOT/tools/strip_runtime_symbols.sh" macho "$@"
 }
 
+stage_renpy_overlay() {
+    [[ "${renpy_enabled_normalized:-OFF}" == "ON" ]] || return 0
+    local destination="$1"
+    local source="$PROJECT_ROOT/bridge/renpy_runtime/python/aether_renpy_overlay.py"
+    [[ -f "$source" ]] || {
+        echo "Error: Ren'Py overlay source is missing: $source" >&2
+        exit 1
+    }
+    cp -f "$source" "$destination/aetherkiri-renpy-overlay.py"
+}
+
+stage_renpy_sdk() {
+    [[ "${renpy_enabled_normalized:-OFF}" == "ON" ]] || return 0
+    local destination="$1/renpy-sdk"
+    [[ -d "${renpy_sdk_root:-}" ]] || {
+        echo "Error: Ren'Py SDK root is missing: ${renpy_sdk_root:-}" >&2
+        exit 1
+    }
+    rm -rf "$destination"
+    mkdir -p "$(dirname "$destination")"
+    cp -a "$renpy_sdk_root" "$destination"
+}
+
 thin_macos_executable_to_arch() {
     local executable="$1"
     local architectures
@@ -161,6 +184,29 @@ cmake_config_args=(
     -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM"
     -D "AETHERKIRI_ENABLE_INTERNAL=${AETHERKIRI_ENABLE_INTERNAL:-ON}"
 )
+renpy_enabled="${AETHERKIRI_ENABLE_RENPY:-OFF}"
+renpy_enabled_normalized="$(printf '%s' "$renpy_enabled" | tr '[:lower:]' '[:upper:]')"
+case "$renpy_enabled_normalized" in
+    ON|TRUE|YES|1)
+        renpy_enabled_normalized="ON"
+        renpy_sdk_root="${AETHERKIRI_RENPY_SDK_ROOT:-}"
+        if [[ -z "$renpy_sdk_root" || ! -d "$renpy_sdk_root" ]]; then
+            echo "Error: AETHERKIRI_ENABLE_RENPY requires AETHERKIRI_RENPY_SDK_ROOT" >&2
+            exit 1
+        fi
+        cmake_config_args+=(
+            -D "AETHERKIRI_ENABLE_RENPY=ON"
+            -D "AETHERKIRI_RENPY_SDK_ROOT=$renpy_sdk_root"
+        )
+        ;;
+    OFF|FALSE|NO|0|'')
+        cmake_config_args+=( -D "AETHERKIRI_ENABLE_RENPY=OFF" )
+        ;;
+    *)
+        echo "Error: AETHERKIRI_ENABLE_RENPY must be ON/OFF or true/false" >&2
+        exit 1
+        ;;
+esac
 if [[ "${SKIP_VCPKG_INSTALL:-}" == "1" ]]; then
     if [[ ! -d "$VCPKG_ROOT/installed/$VCPKG_TRIPLET" ]]; then
         echo "Error: SKIP_VCPKG_INSTALL=1 but prebuilt vcpkg triplet is missing: $VCPKG_ROOT/installed/$VCPKG_TRIPLET" >&2
@@ -181,6 +227,7 @@ cmake --build --preset "$CMAKE_BUILD_PRESET" -- -j"$PARALLEL_JOBS"
 mkdir -p "$GODOT_BIN_DIR"
 cp -f "$CMAKE_BUILD_DIR/abi/libengine_api.dylib" "$GODOT_BIN_DIR/"
 cp -f "$CMAKE_BUILD_DIR/bridge/godot_extension/libaether_kiri_godot.dylib" "$GODOT_BIN_DIR/"
+stage_renpy_overlay "$GODOT_BIN_DIR"
 if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
     echo "==> Removing non-runtime symbols from staged macOS Release libraries"
     strip_macos_runtime_symbols \
@@ -231,6 +278,8 @@ else
         fi
         cp -f "$GODOT_BIN_DIR/libengine_api.dylib" "$GODOT_EXPORT_APP/Contents/Frameworks/"
         cp -f "$GODOT_BIN_DIR/libaether_kiri_godot.dylib" "$GODOT_EXPORT_APP/Contents/Frameworks/"
+        stage_renpy_overlay "$GODOT_EXPORT_APP/Contents/Frameworks"
+        stage_renpy_sdk "$GODOT_EXPORT_APP/Contents/Resources"
         echo "==> Thinning exported macOS executable to $MACOS_ARCH"
         thin_macos_executable_to_arch "$GODOT_EXPORT_APP/Contents/MacOS/Aether"
         if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then

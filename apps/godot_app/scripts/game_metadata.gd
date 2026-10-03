@@ -4,14 +4,18 @@ extends RefCounted
 const RUNTIME_KIRIKIRI := "kirikiri"
 const RUNTIME_ONSCRIPTER := "onscripter"
 const RUNTIME_RFVP := "rfvp"
+const RUNTIME_RENPY := "renpy"
 const RUNTIME_ARTEMIS := "artemis"
 const RUNTIME_SIGLUS := "siglus"
 const RUNTIME_CATSYSTEM2 := "catsystem2"
 
 static func inspect(path: String) -> Dictionary:
-    var root := path
+    var root := path.replace("\\", "/")
     if FileAccess.file_exists(root):
         root = root.get_base_dir()
+    var renpy_root := renpy_project_root(root)
+    if not renpy_root.is_empty():
+        root = renpy_root
     var result := {
         "engine": RUNTIME_KIRIKIRI,
         "title": "",
@@ -39,6 +43,11 @@ static func inspect(path: String) -> Dictionary:
     ):
         result.engine = RUNTIME_ONSCRIPTER
         result.signals.append("onscript-marker")
+    elif not renpy_root.is_empty():
+        # Scripts must be in a project game/ directory. Loose Python files,
+        # launcher names, and archive extensions alone are not sufficient.
+        result.engine = RUNTIME_RENPY
+        result.signals.append("renpy-package")
     elif _is_catsystem2_package(files):
         # CatSystem2 titles commonly ship a Windows launcher beside loose or
         # packed INT resources.  Keep the directory as the launch path so the
@@ -191,6 +200,48 @@ static func _first_file(root: String, extensions: Array) -> String:
 static func _has_prefix(values: PackedStringArray, prefix: String) -> bool:
     for value in values:
         if value.begins_with(prefix):
+            return true
+    return false
+
+static func renpy_project_root(path: String) -> String:
+    var root := path.replace("\\", "/").simplify_path()
+    if FileAccess.file_exists(root):
+        root = root.get_base_dir()
+    if _is_renpy_project(root):
+        return root
+    # A picker may return game/ or one of its script/archive files. Only
+    # promote it when the parent passes the same project validation.
+    if root.get_file() == "game" and _is_renpy_project(root.get_base_dir()):
+        return root.get_base_dir()
+    return ""
+
+static func _is_renpy_project(root: String) -> bool:
+    return not root.is_empty() and _has_renpy_scripts(root.path_join("game"))
+
+static func _has_renpy_scripts(root: String, depth: int = 0) -> bool:
+    var dir := DirAccess.open(root)
+    if dir == null or depth > 8:
+        return false
+    for entry in dir.get_files():
+        var extension := entry.get_extension().to_lower()
+        if extension not in ["rpy", "rpyc", "rpa"]:
+            continue
+        var file := FileAccess.open(root.path_join(entry), FileAccess.READ)
+        if file == null or file.get_length() == 0:
+            continue
+        if extension == "rpy":
+            return true
+        # Compiled scripts and archives carry signatures. Do not claim
+        # unrelated files merely because their extension is suggestive.
+        var signature := file.get_buffer(10).get_string_from_ascii()
+        if extension == "rpyc" and signature == "RENPY RPC2":
+            return true
+        if extension == "rpa" and (signature.begins_with("RPA-2.0 ") \
+                or signature.begins_with("RPA-3.0 ")):
+            return true
+    for entry in dir.get_directories():
+        if entry not in ["saves", "cache"] \
+                and _has_renpy_scripts(root.path_join(entry), depth + 1):
             return true
     return false
 

@@ -117,6 +117,10 @@ static ANativeWindow* g_native_window = nullptr;
 static uint32_t g_surface_width = 0;
 static uint32_t g_surface_height = 0;
 static std::mutex g_surface_mutex;
+// Keep the Java Surface alongside ANativeWindow so the host-owned RAPT shim
+// can return the exact Surface already attached by Godot's EngineBridge.
+static jobject g_host_surface = nullptr;  // global ref
+static std::mutex g_host_surface_mutex;
 
 // ---------------------------------------------------------------------------
 // Global Application Context
@@ -128,9 +132,21 @@ static std::mutex g_surface_mutex;
 static jobject g_app_context = nullptr;  // global ref
 static std::mutex g_context_mutex;
 
+// The host Activity is optional during the staging milestone.  When the
+// generated Godot Activity calls RenPyMobileBridge.bindHostActivity, keep a
+// global JNI reference so a future in-process adapter can attach without
+// constructing a second Activity.
+static jobject g_host_activity = nullptr;  // global ref
+static std::mutex g_host_activity_mutex;
+
 __attribute__((visibility("default"))) jobject krkr_GetApplicationContext() {
     std::lock_guard<std::mutex> lock(g_context_mutex);
     return g_app_context;
+}
+
+__attribute__((visibility("default"))) jobject krkr_GetHostActivity() {
+    std::lock_guard<std::mutex> lock(g_host_activity_mutex);
+    return g_host_activity;
 }
 
 __attribute__((visibility("default"))) ANativeWindow* krkr_GetNativeWindow() {
@@ -177,6 +193,17 @@ extern "C" JNIEXPORT void JNICALL
 Java_org_github_krkr2_aetherkiri_EngineBridge_nativeSetSurface(
     JNIEnv* env, jobject /* thiz */, jobject surface, jint width, jint height) {
 
+    {
+        std::lock_guard<std::mutex> surface_ref_lock(g_host_surface_mutex);
+        if (g_host_surface) {
+            env->DeleteGlobalRef(g_host_surface);
+            g_host_surface = nullptr;
+        }
+        if (surface) {
+            g_host_surface = env->NewGlobalRef(surface);
+        }
+    }
+
     std::lock_guard<std::mutex> lock(g_surface_mutex);
 
     // Release previous window if any
@@ -203,7 +230,15 @@ Java_org_github_krkr2_aetherkiri_EngineBridge_nativeSetSurface(
 
 extern "C" JNIEXPORT void JNICALL
 Java_org_github_krkr2_aetherkiri_EngineBridge_nativeDetachSurface(
-    JNIEnv* /* env */, jobject /* thiz */) {
+    JNIEnv* env, jobject /* thiz */) {
+
+    {
+        std::lock_guard<std::mutex> surface_ref_lock(g_host_surface_mutex);
+        if (g_host_surface) {
+            env->DeleteGlobalRef(g_host_surface);
+            g_host_surface = nullptr;
+        }
+    }
 
     std::lock_guard<std::mutex> lock(g_surface_mutex);
     if (g_native_window) {
@@ -213,6 +248,26 @@ Java_org_github_krkr2_aetherkiri_EngineBridge_nativeDetachSurface(
         g_surface_height = 0;
         LOGI("nativeDetachSurface: ANativeWindow released");
     }
+}
+
+// ---------------------------------------------------------------------------
+// JNI bridge: host-owned RAPT SDL callback shims
+// Returns the existing Godot Surface/Context; never creates a View, Surface,
+// or Activity. The official RAPT SDLActivity remains an asset-only template.
+// ---------------------------------------------------------------------------
+
+extern "C" JNIEXPORT jobject JNICALL
+Java_org_libsdl_app_SDLActivity_getNativeSurface(JNIEnv* env,
+                                                  jclass /* clazz */) {
+    std::lock_guard<std::mutex> lock(g_host_surface_mutex);
+    return g_host_surface ? env->NewLocalRef(g_host_surface) : nullptr;
+}
+
+extern "C" JNIEXPORT jobject JNICALL
+Java_org_libsdl_app_SDLActivity_getContext(JNIEnv* env,
+                                            jclass /* clazz */) {
+    std::lock_guard<std::mutex> lock(g_context_mutex);
+    return g_app_context ? env->NewLocalRef(g_app_context) : nullptr;
 }
 
 // ---------------------------------------------------------------------------
@@ -238,5 +293,27 @@ Java_org_github_krkr2_aetherkiri_EngineBridge_nativeSetApplicationContext(
         LOGI("nativeSetApplicationContext: Application Context stored");
     } else {
         LOGW("nativeSetApplicationContext: null context passed");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// JNI bridge: host-owned Ren'Py handoff
+// ---------------------------------------------------------------------------
+
+extern "C" JNIEXPORT void JNICALL
+Java_org_github_krkr2_aetherkiri_RenPyMobileBridge_nativeSetHostActivity(
+    JNIEnv* env, jclass /* clazz */, jobject activity) {
+    std::lock_guard<std::mutex> lock(g_host_activity_mutex);
+
+    if (g_host_activity) {
+        env->DeleteGlobalRef(g_host_activity);
+        g_host_activity = nullptr;
+    }
+
+    if (activity) {
+        g_host_activity = env->NewGlobalRef(activity);
+        LOGI("RenPyMobileBridge: host Activity bound");
+    } else {
+        LOGI("RenPyMobileBridge: host Activity cleared");
     }
 }

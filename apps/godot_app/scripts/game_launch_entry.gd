@@ -1,5 +1,7 @@
 extends RefCounted
 
+const GameMetadata = preload("res://scripts/game_metadata.gd")
+
 const FIELD := "launchFile"
 const SUPPORTED_EXTENSIONS := ["exe", "xp3", "hcb"]
 const DIRECTORY_RUNTIME_KINDS := [
@@ -7,6 +9,7 @@ const DIRECTORY_RUNTIME_KINDS := [
     "catsystem2",
     "minori",
     "onscripter",
+    "renpy",
     "siglus",
     "wa2",
 ]
@@ -59,6 +62,10 @@ static func resolve_for_runtime(
     # Runtime providers and directory-based runtimes consume the game root. A
     # selected EXE/XP3 is only a legacy KiriKiri entry point and must not
     # replace the root passed to a provider probe/open pair.
+    if runtime_kind.to_lower() == "renpy":
+        var path := _normalize_path(String(game.get("path", "")))
+        var project_root := GameMetadata.renpy_project_root(path)
+        return project_root if not project_root.is_empty() else path
     if requires_game_root or runtime_uses_directory(runtime_kind):
         # Preserve valid trailing spaces from native file-picker paths.
         return _normalize_path(String(game.get("path", "")))

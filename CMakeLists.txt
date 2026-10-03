@@ -111,6 +111,10 @@ option(BUILD_TOOLS "build tools execute build(exclude android ios)" ON)
 option(BUILD_ENGINE_API "build engine_api bridge shared library" ON)
 option(BUILD_GODOT_EXTENSION "build Godot GDExtension host library" ON)
 option(AETHERKIRI_ENABLE_RFVP "build the experimental native FVP runtime (requires Rust)" OFF)
+option(AETHERKIRI_ENABLE_RENPY
+       "build the opt-in official Ren'Py SDK subprocess provider" OFF)
+set(AETHERKIRI_RENPY_SDK_ROOT "" CACHE PATH
+    "official desktop Ren'Py SDK directory for the embedded provider")
 option(BUILD_GPU_BRIDGE "build legacy external GPU bridge renderer" OFF)
 option(AETHERKIRI_ENABLE_ONSCRIPTER
        "enable the bundled OnscripterYuri runtime" ON)
@@ -272,7 +276,8 @@ endif()
 # krkr2core/krkr2plugin linkage; the Godot extension host links the glue and
 # installs its engine_legacy_* surface into engine_api through the legacy
 # services table (Phase 2d link flip — engine_api itself never links it).
-if(BUILD_ENGINE_API OR AETHERKIRI_BUILD_NATIVE_ONSCRIPTER_TESTS OR AETHERKIRI_ENABLE_RFVP)
+# Build the ABI whenever a provider (including Ren'Py) needs the registry.
+if(BUILD_ENGINE_API OR AETHERKIRI_BUILD_NATIVE_ONSCRIPTER_TESTS OR AETHERKIRI_ENABLE_RFVP OR AETHERKIRI_ENABLE_RENPY)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/krkr2_runtime)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/abi)
 endif()
@@ -296,6 +301,9 @@ if(AETHERKIRI_ENABLE_MINORI AND BUILD_GODOT_EXTENSION AND
 endif()
 if(AETHERKIRI_ENABLE_RFVP)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/rfvp_runtime)
+endif()
+if(AETHERKIRI_ENABLE_RENPY)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/renpy_runtime)
 endif()
 if(BUILD_GODOT_EXTENSION)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/godot_extension)
