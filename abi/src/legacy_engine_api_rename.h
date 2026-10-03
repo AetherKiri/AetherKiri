@@ -21,6 +21,7 @@
 #define engine_media_pause engine_legacy_media_pause
 #define engine_media_seek engine_legacy_media_seek
 #define engine_media_set_rate engine_legacy_media_set_rate
+#define engine_media_set_volume engine_legacy_media_set_volume
 #define engine_media_get_state engine_legacy_media_get_state
 #define engine_media_get_subtitle_tracks_json \
   engine_legacy_media_get_subtitle_tracks_json

@@ -18,6 +18,9 @@
 #if defined(AETHERKIRI_WITH_MINORI)
 extern "C" engine_result_t aetherkiri_minori_register_runtime_provider();
 #endif
+#if defined(AETHERKIRI_WITH_SOFTPAL)
+extern "C" void AetherSoftPalRegisterRuntime(void);
+#endif
 #if defined(__APPLE__)
 #include "apple_external_texture.h"
 #if !defined(IOS_ENABLED)
@@ -12620,6 +12623,9 @@ void InitializeAetherRuntime(ModuleInitializationLevel level) {
 #endif
 #if defined(AETHERKIRI_WITH_RFVP)
     aetherkiri::rfvp::RegisterRuntimeProvider();
+#endif
+#if defined(AETHERKIRI_WITH_SOFTPAL)
+    AetherSoftPalRegisterRuntime();
 #endif
     const engine_result_t shader_result =
         engine_set_runtime_fragment_shader_executor(

@@ -79,6 +79,7 @@ Godot App Shell
 | | `packages/OnscripterYuri/` | 公开 OnscripterYuri submodule。 |
 | | `packages/AetherSiglus/` | 公开 siglus_rs submodule（保持只读）。 |
 | | `packages/AetherInternal/` | 可选私有 E-mote package；公开构建不依赖它。 |
+| | `packages/AetherSoftPal/` | 可选私有原生 SoftPal 运行时 submodule。 |
 | 支撑 | `demos/aetherkiri-kag3/` | 内置 KAG3 Demo 源码。 |
 | | `tests/` | 单元测试、fixture 与可移植 probe profile。 |
 | | `tools/` | 开发与兼容工具（xp3 归档工具等）。 |
@@ -114,7 +115,7 @@ git submodule update --init \
 
 这五个公开 runtime submodule 是默认构建的最小集合（引擎仓是 configure
 硬依赖；Siglus 与 Minori 在无 Rust 工具链时会优雅降级，但检出必须存在）。
-`AetherInternal`、`tjs2Decompiler` 与 `rfvp` 为可选——见
+`AetherInternal`、`AetherSoftPal`、`tjs2Decompiler` 与 `rfvp` 为可选——见
 [可选组件](#可选组件)。`AetherKrkr`、`psdfile`、`AetherMinori` 在
 `.gitmodules` 中记录为 SSH URL；无 SSH 凭据时做一次 HTTPS 映射即可，与
 GitHub 托管 runner 自动应用的重写一致：
@@ -142,10 +143,22 @@ git config --global url."https://github.com/".insteadOf git@github.com:
   只读 SSH 密钥；fork 与 Dependabot 运行走公开 fallback。可用
   `-DAETHERKIRI_ENABLE_INTERNAL=OFF` 显式验证公开 fallback。
 
+- **SoftPal 运行时**——有私仓权限的维护者在原生构建前检出固定版本：
+
+  ```bash
+  git submodule update --init packages/AetherSoftPal
+  ```
+
+  `build.sh` 检测到检出后自动启用；设置
+  `AETHERKIRI_ENABLE_SOFTPAL_RUNTIME=OFF` 可验证禁用后的构建。可信 CI 使用
+  只读 `AETHER_SOFTPAL_DEPLOY_KEY` 密钥检出固定提交并编译 provider；fork 与
+  Dependabot 构建保持禁用。
+
 - **Runtime 检出覆盖**——每个 submodule 都接受本地检出路径，便于引擎侧热
   迭代而无需提交 gitlink：`AETHERKIRI_KRKR_DIR`、
   `AETHERKIRI_ONSCRIPTERYURI_DIR`、`AETHERKIRI_SIGLUS_DIR`、
-  `AETHERKIRI_MINORI_DIR`、`AETHERKIRI_RFVP_DIR`、`AETHERKIRI_INTERNAL_DIR`。
+  `AETHERKIRI_MINORI_DIR`、`AETHERKIRI_RFVP_DIR`、`AETHERKIRI_INTERNAL_DIR`、
+  `AETHERKIRI_SOFTPAL_DIR`。
 
 - **TJS2 分析辅助**——`git submodule update --init packages/tjs2Decompiler`
   （见 [development.zh-CN.md](doc/development.zh-CN.md#编译后-tjs2-分析)）。

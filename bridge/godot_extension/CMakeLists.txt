@@ -113,14 +113,16 @@ if(APPLE)
     set_source_files_properties(src/apple_external_texture.mm
         PROPERTIES LANGUAGE CXX COMPILE_FLAGS "-x objective-c++")
     if(IOS)
-        # The Godot iOS exporter links this archive straight into the app, so
-        # the Swift sources must live inside it; CMake compiles them with its
-        # Swift static-library rules (the same rules a standalone Swift static
-        # library target uses).
-        target_sources(aether_kiri_godot PRIVATE
+        # Provider include paths contain third-party C headers (including a
+        # uuid/uuid.h that shadows the iOS SDK header). Compile Swift in its
+        # own target so the Darwin module sees only SDK headers, then merge
+        # the Swift objects into the archive consumed by the Godot exporter.
+        add_library(aether_kiri_godot_swift STATIC
             src/apple_native_file_picker.swift
             src/apple_storekit.swift)
-        set_property(TARGET aether_kiri_godot PROPERTY Swift_LANGUAGE_VERSION 5)
+        set_property(TARGET aether_kiri_godot_swift PROPERTY
+            Swift_LANGUAGE_VERSION 5)
+        add_dependencies(aether_kiri_godot aether_kiri_godot_swift)
     else()
         # Keep the macOS dylib itself free of Swift sources so CMake links it
         # with clang++. Linking the dylib through swiftc runs into Xcode 16.2's
@@ -196,6 +198,14 @@ if(AETHERKIRI_INTERNAL_ENABLED AND
         "${CMAKE_CURRENT_SOURCE_DIR}/src")
 endif()
 
+if(AETHERKIRI_ENABLE_SOFTPAL_RUNTIME)
+    # The provider registers alongside the other independent runtimes in the
+    # Godot host. Its private sources stay in the AetherSoftPal submodule.
+    aethersoftpal_extend_engine_api(aether_kiri_godot)
+    target_compile_definitions(aether_kiri_godot PRIVATE
+        AETHERKIRI_WITH_SOFTPAL=1)
+endif()
+
 if(TARGET engine_api)
     target_link_libraries(aether_kiri_godot PRIVATE engine_api)
 endif()
@@ -225,24 +235,33 @@ if(TARGET aether_minori_runtime)
         aether_minori_runtime)
     target_compile_definitions(aether_kiri_godot PRIVATE
         AETHERKIRI_WITH_MINORI=1)
-    if(IOS)
-        # Godot's iOS exporter links this static extension archive directly
-        # into the app and does not propagate CMake archive dependencies.
-        # Merge Minori's Rust archive so its provider registration symbol is
-        # present in the final Xcode link.
-        find_program(AETHERKIRI_LIBTOOL_EXECUTABLE libtool REQUIRED)
-        set(AETHERKIRI_MERGED_GODOT_ARCHIVE
-            "${CMAKE_CURRENT_BINARY_DIR}/libaether_kiri_godot_merged.a")
-        add_custom_command(TARGET aether_kiri_godot POST_BUILD
-            COMMAND "${AETHERKIRI_LIBTOOL_EXECUTABLE}" -static
-                -o "${AETHERKIRI_MERGED_GODOT_ARCHIVE}"
-                "$<TARGET_FILE:aether_kiri_godot>"
-                "$<TARGET_FILE:aether_minori_runtime>"
-            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-                "${AETHERKIRI_MERGED_GODOT_ARCHIVE}"
-                "$<TARGET_FILE:aether_kiri_godot>"
-            VERBATIM)
+endif()
+if(IOS)
+    # Godot links this static extension archive directly into the app; it
+    # does not follow CMake target dependencies. Include the isolated Swift
+    # objects and optional native provider archives in that one archive.
+    find_program(AETHERKIRI_LIBTOOL_EXECUTABLE libtool REQUIRED)
+    set(AETHERKIRI_MERGED_GODOT_ARCHIVE
+        "${CMAKE_CURRENT_BINARY_DIR}/libaether_kiri_godot_merged.a")
+    set(AETHERKIRI_IOS_ARCHIVES
+        "$<TARGET_FILE:aether_kiri_godot>"
+        "$<TARGET_FILE:aether_kiri_godot_swift>")
+    if(TARGET aether_minori_runtime)
+        list(APPEND AETHERKIRI_IOS_ARCHIVES
+            "$<TARGET_FILE:aether_minori_runtime>")
     endif()
+    if(TARGET softpal_runtime)
+        list(APPEND AETHERKIRI_IOS_ARCHIVES
+            "$<TARGET_FILE:softpal_runtime>")
+    endif()
+    add_custom_command(TARGET aether_kiri_godot POST_BUILD
+        COMMAND "${AETHERKIRI_LIBTOOL_EXECUTABLE}" -static
+            -o "${AETHERKIRI_MERGED_GODOT_ARCHIVE}"
+            ${AETHERKIRI_IOS_ARCHIVES}
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${AETHERKIRI_MERGED_GODOT_ARCHIVE}"
+            "$<TARGET_FILE:aether_kiri_godot>"
+        VERBATIM)
 endif()
 if(TARGET aether_rfvp_runtime)
     target_link_libraries(aether_kiri_godot PRIVATE aether_rfvp_runtime)

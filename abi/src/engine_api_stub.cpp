@@ -568,6 +568,14 @@ engine_result_t engine_media_set_rate(engine_media_handle_t media,
                                  "media playback is unavailable");
 }
 
+engine_result_t engine_media_set_volume(engine_media_handle_t media,
+                                        double volume) {
+  (void)media;
+  (void)volume;
+  return SetThreadErrorAndReturn(ENGINE_RESULT_NOT_SUPPORTED,
+                                 "media playback is unavailable");
+}
+
 engine_result_t engine_media_get_state(engine_media_handle_t media,
                                        engine_media_state_t* out_state) {
   (void)media;

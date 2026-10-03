@@ -135,6 +135,10 @@ typedef struct engine_legacy_services_v1_t {
    * Idempotent, called on every engine_create exactly like the direct
    * AetherInternalRegister*Runtime() calls it replaces. */
   void (*register_private_runtimes)(void);
+
+  /* Optional v1 tail extension for host-owned video audio gain. */
+  engine_result_t (*media_set_volume)(engine_media_handle_t media,
+                                      double volume);
 } engine_legacy_services_v1_t;
 
 #define ENGINE_LEGACY_SERVICES_V1_FULL_SIZE \

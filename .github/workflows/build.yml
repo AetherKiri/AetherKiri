@@ -84,9 +84,15 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v6
         with:
-          submodules: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && 'recursive' || 'false' }}
-          ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
+          submodules: false
           persist-credentials: false
+
+      - name: Initialize private runtime submodules
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        env:
+          AETHER_INTERNAL_DEPLOY_KEY: ${{ secrets.AETHERSECRET }}
+          AETHER_SOFTPAL_DEPLOY_KEY: ${{ secrets.AETHER_SOFTPAL_DEPLOY_KEY }}
+        run: .github/scripts/initialize-private-runtime-submodules.sh
 
       - name: Set up Rust for Minori
         uses: dtolnay/rust-toolchain@stable
@@ -132,11 +138,14 @@ jobs:
             --build-number "$release_build_number" \
             --github-env "$GITHUB_ENV"
 
-      - name: Verify AetherInternal package
+      - name: Verify private runtime packages
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
         run: |
           set -euo pipefail
           test -f packages/AetherInternal/cmake/AetherInternalConfig.cmake
+          test -f packages/AetherSoftPal/cmake/AetherSoftPalConfig.cmake
+          test "$(git -C packages/AetherSoftPal rev-parse HEAD)" = \
+            "$(git rev-parse HEAD:packages/AetherSoftPal)"
           git submodule status --recursive
 
       - name: Install Build Systems
@@ -321,6 +330,12 @@ jobs:
           export CMAKE_CXX_COMPILER_LAUNCHER=ccache
           export NDK_CCACHE=ccache
           ./build.sh android release --jobs=4
+          if [[ "$AETHERKIRI_WITH_INTERNAL" == "true" ]]; then
+            grep -Fx 'AETHERKIRI_ENABLE_SOFTPAL_RUNTIME:BOOL=ON' \
+              out/android/arm64-v8a/release/CMakeCache.txt
+            grep -Fq 'packages/AetherSoftPal/aether_runtime/provider/SoftPalRuntimeProvider.cpp' \
+              out/android/arm64-v8a/release/compile_commands.json
+          fi
 
       - name: Build Android Debug
         run: |
@@ -365,9 +380,15 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v6
         with:
-          submodules: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && 'recursive' || 'false' }}
-          ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
+          submodules: false
           persist-credentials: false
+
+      - name: Initialize private runtime submodules
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        env:
+          AETHER_INTERNAL_DEPLOY_KEY: ${{ secrets.AETHERSECRET }}
+          AETHER_SOFTPAL_DEPLOY_KEY: ${{ secrets.AETHER_SOFTPAL_DEPLOY_KEY }}
+        run: .github/scripts/initialize-private-runtime-submodules.sh
 
       - name: Set up Rust for Minori
         uses: dtolnay/rust-toolchain@stable
@@ -443,11 +464,14 @@ jobs:
           fi
           echo "IOS_APP_STORE_SIGNING=1" >> "$GITHUB_ENV"
 
-      - name: Verify AetherInternal package
+      - name: Verify private runtime packages
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
         run: |
           set -euo pipefail
           test -f packages/AetherInternal/cmake/AetherInternalConfig.cmake
+          test -f packages/AetherSoftPal/cmake/AetherSoftPalConfig.cmake
+          test "$(git -C packages/AetherSoftPal rev-parse HEAD)" = \
+            "$(git rev-parse HEAD:packages/AetherSoftPal)"
           git submodule status --recursive
 
       - name: Install Build Systems
@@ -522,6 +546,12 @@ jobs:
           export CMAKE_C_COMPILER_LAUNCHER=ccache
           export CMAKE_CXX_COMPILER_LAUNCHER=ccache
           ./build.sh ios release --jobs=4 --package-ipa 2>&1 | tee "${RUNNER_TEMP}/ios-release-build.log"
+          if [[ "$AETHERKIRI_WITH_INTERNAL" == "true" ]]; then
+            grep -Fx 'AETHERKIRI_ENABLE_SOFTPAL_RUNTIME:BOOL=ON' \
+              out/ios/release/CMakeCache.txt
+            grep -Fq 'packages/AetherSoftPal/aether_runtime/provider/SoftPalRuntimeProvider.cpp' \
+              out/ios/release/compile_commands.json
+          fi
           if grep -E "SCRIPT ERROR|Failed to load script|Can't open GDExtension|Can't open dynamic library" "${RUNNER_TEMP}/ios-release-build.log"; then
             echo "Godot iOS release export logged script or GDExtension load errors." >&2
             exit 1
@@ -666,9 +696,15 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v6
         with:
-          submodules: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && 'recursive' || 'false' }}
-          ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
+          submodules: false
           persist-credentials: false
+
+      - name: Initialize private runtime submodules
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        env:
+          AETHER_INTERNAL_DEPLOY_KEY: ${{ secrets.AETHERSECRET }}
+          AETHER_SOFTPAL_DEPLOY_KEY: ${{ secrets.AETHER_SOFTPAL_DEPLOY_KEY }}
+        run: .github/scripts/initialize-private-runtime-submodules.sh
 
       - name: Set up Rust for Minori
         uses: dtolnay/rust-toolchain@stable
@@ -735,11 +771,14 @@ jobs:
           fi
           echo "MACOS_APP_STORE_SIGNING=1" >> "$GITHUB_ENV"
 
-      - name: Verify AetherInternal package
+      - name: Verify private runtime packages
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
         run: |
           set -euo pipefail
           test -f packages/AetherInternal/cmake/AetherInternalConfig.cmake
+          test -f packages/AetherSoftPal/cmake/AetherSoftPalConfig.cmake
+          test "$(git -C packages/AetherSoftPal rev-parse HEAD)" = \
+            "$(git rev-parse HEAD:packages/AetherSoftPal)"
           git submodule status --recursive
 
       - name: Install Build Systems
@@ -823,6 +862,12 @@ jobs:
           export CMAKE_C_COMPILER_LAUNCHER=ccache
           export CMAKE_CXX_COMPILER_LAUNCHER=ccache
           ./build.sh macos release --jobs=4
+          if [[ "$AETHERKIRI_WITH_INTERNAL" == "true" ]]; then
+            grep -Fx 'AETHERKIRI_ENABLE_SOFTPAL_RUNTIME:BOOL=ON' \
+              out/macos/release/CMakeCache.txt
+            grep -Fq 'packages/AetherSoftPal/aether_runtime/provider/SoftPalRuntimeProvider.cpp' \
+              out/macos/release/compile_commands.json
+          fi
 
       - name: Save vcpkg source cache
         if: always() && steps.restore-vcpkg-downloads.outputs.cache-hit != 'true'

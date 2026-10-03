@@ -469,6 +469,10 @@ ENGINE_API_EXPORT engine_result_t engine_media_seek(
 ENGINE_API_EXPORT engine_result_t engine_media_set_rate(
     engine_media_handle_t media, double playback_rate);
 
+/* Sets standalone media audio gain in the inclusive 0.0 to 1.0 range. */
+ENGINE_API_EXPORT engine_result_t engine_media_set_volume(
+    engine_media_handle_t media, double volume);
+
 ENGINE_API_EXPORT engine_result_t engine_media_get_state(
     engine_media_handle_t media, engine_media_state_t* out_state);
 

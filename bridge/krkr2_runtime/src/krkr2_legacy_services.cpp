@@ -80,6 +80,7 @@ const engine_legacy_services_v1_t kKrkr2LegacyServices = {
     &engine_legacy_activate_audio_session_for_host,
     &engine_legacy_drain_texture_recycle,
     &RegisterPrivateRuntimes,
+    &engine_legacy_media_set_volume,
 };
 
 }  // namespace

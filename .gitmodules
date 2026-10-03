@@ -31,3 +31,7 @@
 	path = packages/AetherKrkr
 	url = git@github.com:AetherKiri/AetherKrkr.git
 	ignore = dirty
+[submodule "packages/AetherSoftPal"]
+	path = packages/AetherSoftPal
+	url = git@github.com:AetherKiri/AetherSoftPal.git
+	ignore = dirty

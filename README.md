@@ -86,6 +86,7 @@ runtimes unrestricted for compatibility development and testing.
 | | `packages/OnscripterYuri/` | Public OnscripterYuri submodule. |
 | | `packages/AetherSiglus/` | Public siglus_rs submodule (kept pristine). |
 | | `packages/AetherInternal/` | Optional private E-mote package; public builds work without it. |
+| | `packages/AetherSoftPal/` | Optional private native SoftPal runtime submodule. |
 | Support | `demos/aetherkiri-kag3/` | Source of the built-in KAG3 demo. |
 | | `tests/` | Unit tests, fixtures, and portable probe profiles. |
 | | `tools/` | Developer and compatibility tools (xp3 archive tools). |
@@ -122,8 +123,9 @@ git submodule update --init \
 These five public runtime submodules are the minimum for a default build
 (the engine repository is a hard configure requirement; Siglus and Minori
 degrade gracefully without a Rust toolchain, but the checkouts must be
-present). `AetherInternal`, `tjs2Decompiler`, and `rfvp` are optional — see
-[Optional Components](#optional-components). `AetherKrkr`, `psdfile`, and
+present). `AetherInternal`, `AetherSoftPal`, `tjs2Decompiler`, and `rfvp` are
+optional — see [Optional Components](#optional-components). `AetherKrkr`,
+`psdfile`, and
 `AetherMinori` are recorded with SSH URLs in `.gitmodules`; without SSH
 credentials, map them to HTTPS once, the same rewrite GitHub-hosted runners
 apply automatically:
@@ -153,11 +155,24 @@ executable.
   read-only SSH key; fork and Dependabot runs use the public fallback. Use
   `-DAETHERKIRI_ENABLE_INTERNAL=OFF` to test the public fallback explicitly.
 
+- **SoftPal runtime** — maintainers with access to the private provider can
+  initialize its pinned submodule before a native build:
+
+  ```bash
+  git submodule update --init packages/AetherSoftPal
+  ```
+
+  `build.sh` enables it when checked out; an explicit
+  `AETHERKIRI_ENABLE_SOFTPAL_RUNTIME=OFF` tests the build without it. Trusted
+  CI checks out the pinned commit with the read-only
+  `AETHER_SOFTPAL_DEPLOY_KEY` secret and builds the provider, while fork and
+  Dependabot builds leave it disabled.
+
 - **Runtime checkout overrides** — each submodule accepts a local checkout
   path for engine-side hot iteration without committing a gitlink bump:
   `AETHERKIRI_KRKR_DIR`, `AETHERKIRI_ONSCRIPTERYURI_DIR`,
   `AETHERKIRI_SIGLUS_DIR`, `AETHERKIRI_MINORI_DIR`, `AETHERKIRI_RFVP_DIR`,
-  and `AETHERKIRI_INTERNAL_DIR`.
+  `AETHERKIRI_INTERNAL_DIR`, and `AETHERKIRI_SOFTPAL_DIR`.
 
 - **TJS2 analysis helper** — `git submodule update --init
   packages/tjs2Decompiler` (see

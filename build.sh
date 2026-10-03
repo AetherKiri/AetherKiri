@@ -55,6 +55,30 @@ case "$(printf '%s' "$internal_setting" | tr '[:upper:]' '[:lower:]')" in
 esac
 export AETHERKIRI_ENABLE_INTERNAL
 
+# SoftPal follows the same private-submodule build boundary as AetherInternal.
+# Trusted CI enables it explicitly; local builds enable a checked-out package.
+softpal_setting="${AETHERKIRI_ENABLE_SOFTPAL_RUNTIME:-}"
+if [[ -z "$softpal_setting" && -n "${AETHERKIRI_WITH_INTERNAL:-}" ]]; then
+    softpal_setting="$AETHERKIRI_WITH_INTERNAL"
+fi
+if [[ -z "$softpal_setting" ]]; then
+    softpal_package_dir="${AETHERKIRI_SOFTPAL_DIR:-$SCRIPT_DIR/packages/AetherSoftPal}"
+    if [[ -f "$softpal_package_dir/cmake/AetherSoftPalConfig.cmake" ]]; then
+        softpal_setting="ON"
+    else
+        softpal_setting="OFF"
+    fi
+fi
+case "$(printf '%s' "$softpal_setting" | tr '[:upper:]' '[:lower:]')" in
+    1|on|true|yes) AETHERKIRI_ENABLE_SOFTPAL_RUNTIME="ON" ;;
+    0|off|false|no) AETHERKIRI_ENABLE_SOFTPAL_RUNTIME="OFF" ;;
+    *)
+        echo "[ERROR] AETHERKIRI_ENABLE_SOFTPAL_RUNTIME must be ON/OFF or true/false, got: $softpal_setting" >&2
+        exit 1
+        ;;
+esac
+export AETHERKIRI_ENABLE_SOFTPAL_RUNTIME
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
