@@ -38,7 +38,7 @@ jobs:
       HAS_AETHERSECRET: ${{ secrets.AETHERSECRET != '' }}
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: ${{ (inputs.target_commit != '' && inputs.target_commit != 'HEAD') && 0 || 2 }}
           persist-credentials: true
